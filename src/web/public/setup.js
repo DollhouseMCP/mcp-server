@@ -120,8 +120,9 @@
         const mcpbSection = document.getElementById('setup-mcpb-section');
         if (mcpbSection) mcpbSection.hidden = method !== 'global';
 
-        // Update all config snippets and re-evaluate detection matches
+        // Update all config snippets, button labels, and detection matches
         updateAllConfigs(method);
+        updateInstallButtonLabels();
         updateDetectionState();
       });
     });
@@ -244,6 +245,20 @@
     });
   };
 
+  // ── Update install button labels based on method ────────────────────────
+
+  const updateInstallButtonLabels = () => {
+    document.querySelectorAll('.setup-install-btn').forEach((btn) => {
+      // Skip buttons that are already in success or match state
+      if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
+      if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
+        btn.textContent = `Install v${pinnedVersion}`;
+      } else {
+        btn.textContent = 'Install Now';
+      }
+    });
+  };
+
   // ── Install buttons ────────────────────────────────────────────────────
 
   const initInstallButtons = () => {
@@ -264,10 +279,16 @@
         }
 
         try {
+          // Pass version when in pinned mode
+          const payload = { client };
+          if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
+            payload.version = pinnedVersion;
+          }
+
           const res = await fetch('/api/setup/install', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client }),
+            body: JSON.stringify(payload),
           });
 
           const data = await res.json();
@@ -491,7 +512,8 @@
           installBtn.disabled = true;
           installBtn.classList.add('is-match');
         } else {
-          installBtn.textContent = 'Install Now';
+          const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
+          installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
           installBtn.disabled = false;
           installBtn.classList.remove('is-match');
         }

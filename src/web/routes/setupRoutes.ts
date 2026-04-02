@@ -265,10 +265,16 @@ export function createSetupRoutes(): {
       return;
     }
 
-    const { client } = req.body as { client?: string };
+    const { client, version } = req.body as { client?: string; version?: string };
 
     if (!client || typeof client !== 'string') {
       res.status(400).json({ error: 'Missing required field: client' });
+      return;
+    }
+
+    // Validate version if provided — must be semver-like (no shell injection)
+    if (version && !/^\d+\.\d+\.\d+/.test(version)) {
+      res.status(400).json({ error: 'Invalid version format' });
       return;
     }
 
@@ -281,12 +287,13 @@ export function createSetupRoutes(): {
       return;
     }
 
-    logger.info(`[Setup] Installing DollhouseMCP to client: ${normalizedClient}`);
+    const tag = version ? `@${version}` : '@latest';
+    logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await runInstallMcp(normalizedClient);
+      const output = await runInstallMcp(normalizedClient, version);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
-      res.json({ success: true, output, client: normalizedClient });
+      res.json({ success: true, output, client: normalizedClient, version: version || 'latest' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn(`[Setup] Install failed for ${normalizedClient}: ${message}`);
@@ -378,12 +385,13 @@ function resolveInstallMcpBin(): { cmd: string; prefixArgs: string[] } {
  * Command arguments are fully hardcoded — no user input reaches the shell.
  * execFile is used (not exec) to prevent shell injection.
  */
-function runInstallMcp(client: string): Promise<string> {
+function runInstallMcp(client: string, version?: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const { cmd, prefixArgs } = resolveInstallMcpBin();
+    const tag = version ? `@${version}` : '@latest';
     const args = [
       ...prefixArgs,
-      '@dollhousemcp/mcp-server@latest',
+      `@dollhousemcp/mcp-server${tag}`,
       '--client', client,
       '--name', 'dollhousemcp',
       '--yes',

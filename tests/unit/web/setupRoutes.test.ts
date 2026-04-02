@@ -94,6 +94,27 @@ describe('Setup Routes — API Endpoints', () => {
       }
     });
 
+    it('accepts version parameter for pinned installs', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', version: '2.0.2' });
+
+      // Should not get 400 — version format is valid
+      expect(res.status).not.toBe(400);
+    });
+
+    it('rejects invalid version format', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', version: '../../../etc' });
+
+      // May get 429 if rate limited from prior tests, but should never succeed
+      expect([400, 429]).toContain(res.status);
+      if (res.status === 400) {
+        expect(res.body.error).toMatch(/Invalid version/);
+      }
+    });
+
     it('normalizes client name to lowercase', async () => {
       const res = await request(app)
         .post('/api/setup/install')
@@ -792,6 +813,15 @@ describe('Setup Tab — Regressions', () => {
     it('JS re-enables Install button when config differs', () => {
       expect(js).toContain("installBtn.disabled = false");
       expect(js).toContain("installBtn.classList.remove('is-match')");
+    });
+
+    it('JS passes version to install API when in pinned mode', () => {
+      expect(js).toContain('payload.version = pinnedVersion');
+    });
+
+    it('JS updates button label to show pinned version', () => {
+      expect(js).toContain('updateInstallButtonLabels');
+      expect(js).toContain('Install v${pinnedVersion}');
     });
   });
 
