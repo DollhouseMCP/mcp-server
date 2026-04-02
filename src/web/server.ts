@@ -168,9 +168,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
   app.use(express.json({ limit: '1kb', type: 'application/json' }));
-  const { installHandler, openConfigHandler } = createSetupRoutes();
+  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler } = createSetupRoutes();
   app.post('/api/setup/install', installHandler);
   app.post('/api/setup/open-config', openConfigHandler);
+  app.get('/api/setup/version', versionHandler);
+  app.get('/api/setup/mcpb', mcpbRedirectHandler);
   logger.info('[WebUI] Setup routes mounted at /api/setup');
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)

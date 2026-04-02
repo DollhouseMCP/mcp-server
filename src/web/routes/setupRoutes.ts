@@ -19,6 +19,10 @@ import { homedir, platform } from 'node:os';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
+
+const GITHUB_REPO = 'DollhouseMCP/mcp-server';
+const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 
 /** Allowed client identifiers — must match install-mcp's --client values */
@@ -109,6 +113,8 @@ const OPENABLE_CLIENTS = new Set([
 export function createSetupRoutes(): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
+  versionHandler: (req: Request, res: Response) => Promise<void>;
+  mcpbRedirectHandler: (req: Request, res: Response) => Promise<void>;
 } {
   // ── Open config file in editor ──────────────────────────────────────
   const openConfigHandler = async (req: Request, res: Response): Promise<void> => {
@@ -194,7 +200,66 @@ export function createSetupRoutes(): {
     }
   };
 
-  return { installHandler, openConfigHandler };
+  // ── Version info ─────────────────────────────────────────────────────
+  const versionHandler = async (_req: Request, res: Response): Promise<void> => {
+    const local = {
+      version: PACKAGE_VERSION,
+      mcpbUrl: `https://github.com/${GITHUB_REPO}/releases/download/v${PACKAGE_VERSION}/dollhousemcp-${PACKAGE_VERSION}.mcpb`,
+    };
+
+    // Query GitHub for the actual latest release
+    let latest = local;
+    try {
+      const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'DollhouseMCP-Setup' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (ghRes.ok) {
+        const release = await ghRes.json() as { tag_name: string; assets: Array<{ name: string; browser_download_url: string }> };
+        const mcpbAsset = release.assets.find(a => MCPB_ASSET_PATTERN.test(a.name));
+        latest = {
+          version: release.tag_name.replace(/^v/, ''),
+          mcpbUrl: mcpbAsset?.browser_download_url ||
+            `https://github.com/${GITHUB_REPO}/releases/download/${release.tag_name}/dollhousemcp-${release.tag_name.replace(/^v/, '')}.mcpb`,
+        };
+      }
+    } catch {
+      // GitHub unreachable — use local version info
+    }
+
+    res.json({
+      running: local,
+      latest,
+      isLatest: local.version === latest.version,
+    });
+  };
+
+  // ── .mcpb download redirect ─────────────────────────────────────────
+  const mcpbRedirectHandler = async (_req: Request, res: Response): Promise<void> => {
+    // Try GitHub API for the actual latest .mcpb asset URL
+    try {
+      const ghRes = await fetch(`https://api.github.com/repos/${GITHUB_REPO}/releases/latest`, {
+        headers: { 'Accept': 'application/vnd.github+json', 'User-Agent': 'DollhouseMCP-Setup' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (ghRes.ok) {
+        const release = await ghRes.json() as { tag_name: string; assets: Array<{ name: string; browser_download_url: string }> };
+        const mcpbAsset = release.assets.find(a => MCPB_ASSET_PATTERN.test(a.name));
+        if (mcpbAsset) {
+          res.redirect(mcpbAsset.browser_download_url);
+          return;
+        }
+      }
+    } catch {
+      // Fall through to constructed URL
+    }
+
+    // Fallback: construct URL from running version
+    const url = `https://github.com/${GITHUB_REPO}/releases/download/v${PACKAGE_VERSION}/dollhousemcp-${PACKAGE_VERSION}.mcpb`;
+    res.redirect(url);
+  };
+
+  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler };
 }
 
 /**

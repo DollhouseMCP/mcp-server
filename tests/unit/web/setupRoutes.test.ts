@@ -25,12 +25,14 @@ describe('Setup Routes — API Endpoints', () => {
   beforeEach(async () => {
     // Dynamic import to avoid module caching issues
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
-    const { installHandler, openConfigHandler } = createSetupRoutes();
+    const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler } = createSetupRoutes();
 
     app = express();
     app.use(express.json());
     app.post('/api/setup/install', installHandler);
     app.post('/api/setup/open-config', openConfigHandler);
+    app.get('/api/setup/version', versionHandler);
+    app.get('/api/setup/mcpb', mcpbRedirectHandler);
   });
 
   describe('POST /api/setup/install', () => {
@@ -97,6 +99,38 @@ describe('Setup Routes — API Endpoints', () => {
 
       // Should not reject as unsupported
       expect(res.status).not.toBe(400);
+    });
+  });
+
+  describe('GET /api/setup/version', () => {
+    it('returns running version info', async () => {
+      const res = await request(app)
+        .get('/api/setup/version')
+        .expect(200);
+
+      expect(res.body.running).toBeDefined();
+      expect(res.body.running.version).toBeDefined();
+      expect(res.body.running.mcpbUrl).toContain('dollhousemcp-');
+      expect(res.body.running.mcpbUrl).toContain('.mcpb');
+      expect(res.body.latest).toBeDefined();
+      expect(typeof res.body.isLatest).toBe('boolean');
+    });
+
+    it('mcpb URL contains the running version', async () => {
+      const res = await request(app).get('/api/setup/version');
+      expect(res.body.running.mcpbUrl).toContain(res.body.running.version);
+    });
+  });
+
+  describe('GET /api/setup/mcpb', () => {
+    it('returns a redirect (302)', async () => {
+      const res = await request(app)
+        .get('/api/setup/mcpb')
+        .redirects(0);
+
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toContain('github.com/DollhouseMCP/mcp-server/releases');
+      expect(res.headers.location).toContain('.mcpb');
     });
   });
 
@@ -318,12 +352,16 @@ describe('Setup Tab — HTML Content Integrity', () => {
   });
 
   describe('External links', () => {
-    it('GitHub releases link points to latest release', () => {
-      expect(html).toContain('href="https://github.com/DollhouseMCP/mcp-server/releases/latest"');
+    it('.mcpb button uses local redirect endpoint', () => {
+      expect(html).toContain('href="/api/setup/mcpb"');
     });
 
     it('does not contain broken .mcpb direct download link', () => {
       expect(html).not.toContain('/download/dollhousemcp.mcpb');
+    });
+
+    it('does not hardcode .mcpb version in URL', () => {
+      expect(html).not.toContain('dollhousemcp-2.');
     });
 
     it('quick start guide link points to main branch', () => {
