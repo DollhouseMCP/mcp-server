@@ -374,7 +374,8 @@ function registerPortfolioRoutes(
   });
 
   router.get('/elements/:type/:name', async (req, res) => {
-    const { type, name } = req.params;
+    const type = req.params.type;
+    const name = normalizeInput(req.params.name);
     if (!ELEMENT_TYPES.includes(type as typeof ELEMENT_TYPES[number])) {
       res.status(400).json({ error: `Invalid element type: ${type}` });
       return;
@@ -672,14 +673,14 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
    * codeql[js/missing-rate-limiting] — Rate-limited by router.use() middleware above.
    */
   router.get('/collection/content/:prefix/:type/:name', async (req, res) => {
-    const elementPath = `${req.params.prefix}/${req.params.type}/${req.params.name}`;
+    const prefix = normalizeInput(req.params.prefix);
+    const elementType = normalizeInput(req.params.type);
+    const filename = normalizeInput(req.params.name);
+    const elementPath = `${prefix}/${elementType}/${filename}`;
     if (!elementPath || elementPath.includes('..') || elementPath.includes('\\')) {
       res.status(400).json({ error: 'Invalid element path' });
       return;
     }
-
-    const elementType = req.params.type;
-    const filename = req.params.name;
 
     // Validate element type against known types to prevent arbitrary path construction
     if (!ELEMENT_TYPES.includes(elementType as typeof ELEMENT_TYPES[number])) {
