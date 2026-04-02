@@ -248,13 +248,29 @@
   // ── Update install button labels based on method ────────────────────────
 
   const updateInstallButtonLabels = () => {
+    const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
+
+    // Update Install buttons
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
-      // Skip buttons that are already in success or match state
       if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
-      if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
-        btn.textContent = `Install v${pinnedVersion}`;
+      btn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+    });
+
+    // Update auto-install badges and descriptions
+    document.querySelectorAll('.setup-method-badge').forEach((badge) => {
+      badge.textContent = isPinned ? 'pinned version' : 'auto-updating';
+    });
+    document.querySelectorAll('.setup-method-desc').forEach((desc) => {
+      if (isPinned) {
+        desc.textContent = `Installs DollhouseMCP v${pinnedVersion}. This version will not auto-update.`;
       } else {
-        btn.textContent = 'Install Now';
+        // Restore original text based on which panel it's in
+        const panel = desc.closest('.setup-panel');
+        if (panel?.id === 'setup-panel-claude-desktop') {
+          desc.innerHTML = 'Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.';
+        } else if (panel?.id === 'setup-panel-claude-code') {
+          desc.textContent = 'Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.';
+        }
       }
     });
   };
