@@ -12,17 +12,19 @@
 
   const PKG = '@dollhousemcp/mcp-server';
 
-  /** Platform registry — drives config generation for all platforms */
+  /** Platform registry — drives config generation AND panel rendering */
   const PLATFORMS = [
+    // Claude Desktop & Claude Code panels are handwritten in HTML (unique structure)
     { id: 'claude-desktop', rootKey: 'mcpServers' },
-    { id: 'cursor',         rootKey: 'mcpServers' },
-    { id: 'windsurf',       rootKey: 'mcpServers' },
-    { id: 'cline',          rootKey: 'mcpServers' },
-    { id: 'gemini',         rootKey: 'mcpServers' },
-    { id: 'lmstudio',       rootKey: 'mcpServers' },
-    { id: 'vscode',         rootKey: 'servers' },
     { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude' },
-    { id: 'codex',          rootKey: 'mcpServers', cli: 'codex', toml: true },
+    // These panels are generated from this data by renderGeneratedPanels()
+    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.' },
+    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.' },
+    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)' },
+    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
+    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.' },
+    { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      configPath: '<code>cline_mcp_settings.json</code> via Cline\'s top nav &gt; Configure &gt; Advanced MCP Settings' },
+    { id: 'lmstudio',  rootKey: 'mcpServers', openClient: 'lmstudio',     configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
 
   /** Build a JSON config block for a given npx command string */
@@ -612,9 +614,92 @@
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
 
+  // ── Generate platform panels from registry ─────────────────────────────
+
+  const renderGeneratedPanels = () => {
+    const container = document.getElementById('setup-generated-panels');
+    if (!container) return;
+
+    for (const p of PLATFORMS) {
+      // Skip platforms without configPath — they have handwritten HTML panels
+      if (!p.configPath && !p.tomlPath) continue;
+
+      const section = document.createElement('section');
+      section.className = 'setup-panel';
+      section.setAttribute('role', 'tabpanel');
+      section.id = 'setup-panel-' + p.id;
+      section.setAttribute('aria-labelledby', 'setup-tab-' + p.id);
+      section.hidden = true;
+
+      let html = '';
+
+      // Install Now button (if installClient is set)
+      if (p.installClient) {
+        html += '<div class="setup-method setup-method-primary">';
+        html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
+        html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
+      }
+
+      // CLI terminal command (if cli is set)
+      if (p.cli) {
+        const cmd = `${p.cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`;
+        if (!p.installClient) html += '<div class="setup-method setup-method-primary">';
+        html += `<h3>Or run in your terminal</h3><p>Run this in your terminal:</p>`;
+        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${cmd}" aria-label="Copy command">Copy</button>`;
+        html += `<pre><code>${cmd}</code></pre></div>`;
+        if (!p.configPath && !p.tomlPath) html += '</div>';
+      }
+
+      // Close primary method div if we opened it for install button
+      if (p.installClient && !p.cli) {
+        // JSON config goes in the same primary block
+      }
+
+      // JSON config block
+      if (p.configPath) {
+        const config = configs[p.id]?.npx;
+        const configCode = config?.code || '';
+        const copyText = config?.copyText || configCode;
+        const openBtn = p.openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${p.openClient}">Open config file</button>` : '';
+
+        if (p.installClient || p.cli) {
+          // Second method block
+          html += '</div><div class="setup-method">';
+          html += `<h3>Or add config manually${openBtn}</h3>`;
+        } else {
+          // Primary method block (no install button, e.g., LM Studio)
+          html += '<div class="setup-method setup-method-primary">';
+          html += `<h3>Config${openBtn}</h3>`;
+        }
+        html += `<p>Add to ${p.configPath}:</p>`;
+        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${copyText}' aria-label="Copy config">Copy</button>`;
+        html += `<pre><code>${configCode}</code></pre></div>`;
+        if (p.hint) html += `<p class="setup-hint">${p.hint}</p>`;
+        html += '</div>';
+      } else if (p.installClient && !p.cli) {
+        html += '</div>';
+      }
+
+      // TOML config block (Codex)
+      if (p.tomlPath) {
+        const tomlConfig = configs[p.id]?.npxToml;
+        const tomlCode = tomlConfig?.code || '';
+        const openBtn = p.openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${p.openClient}">Open config file</button>` : '';
+        html += `<div class="setup-method"><h3>Or add to config${openBtn}</h3>`;
+        html += `<p>Add to ${p.tomlPath}:</p>`;
+        html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${tomlCode}' aria-label="Copy config">Copy</button>`;
+        html += `<pre><code>${tomlCode}</code></pre></div></div>`;
+      }
+
+      section.innerHTML = html;
+      container.appendChild(section);
+    }
+  };
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
+  renderGeneratedPanels();
   highlightOSPaths(os);
   initMethodToggle();
   initPlatformTabs();

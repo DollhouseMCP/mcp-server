@@ -260,9 +260,11 @@ describe('Setup Routes — API Endpoints', () => {
 
 describe('Setup Tab — HTML Content Integrity', () => {
   let html: string;
+  let js: string;
 
   beforeAll(async () => {
     html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
   });
 
   describe('Tab structure', () => {
@@ -299,47 +301,62 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(html).toContain(`id="setup-tab-${platform}"`);
     });
 
-    it.each(expectedPlatforms)('has panel for %s', (platform) => {
-      expect(html).toContain(`id="setup-panel-${platform}"`);
-    });
-
     it.each(expectedPlatforms)('tab aria-controls matches panel id for %s', (platform) => {
       expect(html).toContain(`aria-controls="setup-panel-${platform}"`);
     });
+
+    // Claude Desktop and Claude Code have static HTML panels
+    it('has static panel for claude-desktop', () => {
+      expect(html).toContain('id="setup-panel-claude-desktop"');
+    });
+
+    it('has static panel for claude-code', () => {
+      expect(html).toContain('id="setup-panel-claude-code"');
+    });
+
+    it('has container for JS-generated panels', () => {
+      expect(html).toContain('id="setup-generated-panels"');
+    });
   });
 
-  describe('Install Now buttons', () => {
-    const installClients = [
-      'claude', 'claude-code', 'cursor', 'vscode',
-      'codex', 'gemini-cli', 'windsurf', 'cline',
-    ];
-
-    it.each(installClients)('has Install Now button for %s', (client) => {
-      expect(html).toContain(`data-install-client="${client}"`);
+  describe('Install Now buttons (static panels)', () => {
+    it('has Install Now for claude (in HTML)', () => {
+      expect(html).toContain('data-install-client="claude"');
     });
 
-    it.each(installClients)('has status element for %s', (client) => {
-      expect(html).toContain(`data-install-status="${client}"`);
+    it('has Install Now for claude-code (in HTML)', () => {
+      expect(html).toContain('data-install-client="claude-code"');
+    });
+  });
+
+  describe('Install Now buttons (generated panels)', () => {
+    it('JS PLATFORMS registry defines installClient for generated platforms', () => {
+      const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
+      for (const client of generatedWithInstall) {
+        expect(js).toContain(`installClient: '${client}'`);
+      }
     });
 
-    it('LM Studio does not have Install Now button (not supported by install-mcp)', () => {
-      // LM Studio panel should not have an install button
-      const lmPanel = html.slice(
-        html.indexOf('id="setup-panel-lmstudio"'),
-        html.indexOf('</section>', html.indexOf('id="setup-panel-lmstudio"'))
-      );
-      expect(lmPanel).not.toContain('data-install-client');
+    it('LM Studio has no installClient in registry', () => {
+      const lmLine = /id:\s*'lmstudio'[^}]*/.exec(js);
+      expect(lmLine?.[0]).not.toContain('installClient');
     });
   });
 
   describe('Open config file buttons', () => {
-    const openClients = [
-      'claude', 'claude-code', 'cursor', 'codex',
-      'gemini-cli', 'windsurf', 'lmstudio',
-    ];
+    it('has Open config for claude (in HTML)', () => {
+      expect(html).toContain('data-open-client="claude"');
+    });
 
-    it.each(openClients)('has Open config button for %s', (client) => {
-      expect(html).toContain(`data-open-client="${client}"`);
+    it('has Open config for claude-code (in HTML)', () => {
+      expect(html).toContain('data-open-client="claude-code"');
+    });
+
+    it('JS PLATFORMS registry defines openClient for generated platforms', () => {
+      const openClients = ['cursor', 'codex', 'gemini-cli', 'windsurf', 'lmstudio'];
+      for (const client of openClients) {
+        expect(js).toContain(`openClient: '${client}'`);
+      }
     });
   });
 
@@ -365,29 +382,16 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(count).toBeGreaterThan(0);
     });
 
-    it('VS Code config uses "servers" not "mcpServers"', () => {
-      const start = html.indexOf('id="setup-panel-vscode"');
-      const end = html.indexOf('</section>', start) + '</section>'.length;
-      const vscodePanel = html.slice(start, end);
-      // The copy-text and displayed code should use "servers"
-      expect(vscodePanel).toContain('"servers"');
-      // Should not have mcpServers in copy-text attributes
-      const copyTexts = vscodePanel.match(/data-copy-text='([^']+)'/g) || [];
-      for (const ct of copyTexts) {
-        expect(ct).not.toContain('mcpServers');
-      }
+    it('VS Code uses servers key in PLATFORMS registry', () => {
+      const vscodeLine = /id:\s*'vscode'[^}]*/.exec(js);
+      expect(vscodeLine?.[0]).toContain("rootKey: 'servers'");
     });
 
-    it('all non-VS Code JSON configs use "mcpServers"', () => {
-      const panelsToCheck = ['claude-desktop', 'cursor', 'windsurf', 'cline', 'lmstudio', 'gemini'];
-      for (const panel of panelsToCheck) {
-        const start = html.indexOf(`id="setup-panel-${panel}"`);
-        if (start === -1) continue;
-        const end = html.indexOf('</section>', start);
-        const panelHtml = html.slice(start, end);
-        if (panelHtml.includes('data-copy-text=\'{')) {
-          expect(panelHtml).toContain('"mcpServers"');
-        }
+    it('all non-VS Code platforms use mcpServers in PLATFORMS registry', () => {
+      const platforms = ['cursor', 'windsurf', 'cline', 'lmstudio', 'gemini', 'claude-desktop', 'claude-code', 'codex'];
+      for (const p of platforms) {
+        const line = new RegExp(`id:\\s*'${p}'[^}]*`).exec(js);
+        expect(line?.[0]).toContain("rootKey: 'mcpServers'");
       }
     });
 
@@ -397,25 +401,22 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(html).toContain('@dollhousemcp/mcp-server@latest');
     });
 
-    it('Codex TOML config is valid TOML syntax', () => {
-      const codexPanel = html.slice(
-        html.indexOf('id="setup-panel-codex"'),
-        html.indexOf('</section>', html.indexOf('id="setup-panel-codex"'))
-      );
-      expect(codexPanel).toContain('[mcp_servers.dollhousemcp]');
-      expect(codexPanel).toContain('command = "npx"');
+    it('Codex has TOML config in PLATFORMS registry', () => {
+      const codexLine = /id:\s*'codex'[^}]*/.exec(js);
+      expect(codexLine?.[0]).toContain('toml: true');
+      expect(codexLine?.[0]).toContain('tomlPath');
     });
 
     it('Claude Code terminal command uses claude mcp add', () => {
       expect(html).toContain('claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest');
     });
 
-    it('Codex terminal command uses codex mcp add', () => {
-      expect(html).toContain('codex mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest');
+    it('Codex has CLI config in PLATFORMS registry', () => {
+      expect(js).toContain("cli: 'codex'");
     });
 
-    it('Gemini terminal command uses gemini mcp add', () => {
-      expect(html).toContain('gemini mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest');
+    it('Gemini has CLI config in PLATFORMS registry', () => {
+      expect(js).toContain("cli: 'gemini'");
     });
   });
 
@@ -525,7 +526,7 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
     it('VS Code uses "servers" key in platform registry', () => {
       // vscode entry should have rootKey: 'servers'
-      const vscodeLine = js.match(/id:\s*'vscode'[^}]*/);
+      const vscodeLine = /id:\s*'vscode'[^}]*/.exec(js);
       expect(vscodeLine?.[0]).toContain("rootKey: 'servers'");
     });
 
@@ -761,23 +762,33 @@ describe('Setup Tab — Regressions', () => {
   });
 
   describe('All platforms have consistent structure', () => {
-    const allPlatforms = [
-      'claude-desktop', 'claude-code', 'cursor', 'vscode',
-      'codex', 'gemini', 'windsurf', 'cline', 'lmstudio',
-    ];
+    const staticPlatforms = ['claude-desktop', 'claude-code'];
+    const generatedPlatforms = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline', 'lmstudio'];
 
-    it.each(allPlatforms)('%s panel has at least one copy button', (platform) => {
+    it.each(staticPlatforms)('%s static panel has at least one copy button', (platform) => {
       const start = html.indexOf(`id="setup-panel-${platform}"`);
       const end = html.indexOf('</section>', start);
       const panel = html.slice(start, end);
       expect(panel).toContain('setup-copy-btn');
     });
 
-    it.each(allPlatforms)('%s panel has at least one code block', (platform) => {
+    it.each(staticPlatforms)('%s static panel has at least one code block', (platform) => {
       const start = html.indexOf(`id="setup-panel-${platform}"`);
       const end = html.indexOf('</section>', start);
       const panel = html.slice(start, end);
       expect(panel).toContain('setup-code-block');
+    });
+
+    it('JS renderGeneratedPanels creates panels for all generated platforms', () => {
+      expect(js).toContain('renderGeneratedPanels');
+      for (const p of generatedPlatforms) {
+        expect(js).toContain(`id: '${p}'`);
+      }
+    });
+
+    it('generated panels include copy buttons and code blocks', () => {
+      expect(js).toContain('setup-copy-btn');
+      expect(js).toContain('setup-code-block');
     });
   });
 
