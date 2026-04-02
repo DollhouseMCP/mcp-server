@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="metrics.css">
   <link rel="stylesheet" href="permissions.css">
   <link rel="stylesheet" href="sessions.css">
+  <link rel="stylesheet" href="setup.css">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -27,6 +28,7 @@
     </div>
     <div class="header-right">
       <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
+        <button class="console-tab" data-tab="setup">Setup</button>
         <button class="console-tab active" data-tab="portfolio">Portfolio</button>
         <button class="console-tab" data-tab="logs">Logs</button>
         <button class="console-tab" data-tab="metrics">Metrics</button>
@@ -40,6 +42,178 @@
       </button>
     </div>
   </header>
+
+  <!-- Tab: Setup -->
+  <div id="tab-setup" class="tab-panel" hidden>
+    <div class="setup-page">
+      <div class="setup-hero">
+        <div class="setup-hero-status">
+          <span class="setup-status-dot"></span>
+          <span>DollhouseMCP is running on your machine</span>
+        </div>
+        <h2 class="setup-hero-title">Connect your AI client</h2>
+        <p class="setup-hero-sub">Pick your platform below. Click <strong>Install Now</strong> to auto-configure, or copy the config manually.</p>
+      </div>
+
+      <fieldset class="setup-method-toggle" id="setup-method-toggle">
+        <legend class="sr-only">Installation method</legend>
+        <button class="setup-method-btn is-active" data-method="npx" aria-pressed="true">
+          <strong>Auto-updating</strong>
+          <span>Always pulls the latest version on startup</span>
+        </button>
+        <button class="setup-method-btn" data-method="global" aria-pressed="false">
+          <strong>Pinned version</strong>
+          <span>Lock to a specific version, update when you choose</span>
+        </button>
+      </fieldset>
+
+      <!-- Pinned install prereq (hidden by default, shown when pinned selected) -->
+      <div class="setup-pinned-prereq" id="setup-pinned-prereq" hidden>
+        <div class="setup-method">
+          <h3>Pinned version: <code id="pinned-version-label">loading...</code></h3>
+          <p>The platform configs below will use this exact version. Choose how you want it installed:</p>
+
+          <h4>npx with pinned version <span class="setup-badge">no install needed</span></h4>
+          <p>Same as auto-updating but locked to a specific version. No extra install step.</p>
+          <p class="setup-hint">The platform configs below already use the pinned version &mdash; just copy and go.</p>
+
+          <h4>Global install</h4>
+          <p>Puts the <code>dollhousemcp</code> command on your PATH. Faster startup.</p>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" id="pinned-global-copy" data-copy-text="npm install -g @dollhousemcp/mcp-server" aria-label="Copy global install command">Copy</button>
+            <pre><code id="pinned-global-cmd">npm install -g @dollhousemcp/mcp-server</code></pre>
+          </div>
+          <p class="setup-hint">Update later by re-running with the new version number.</p>
+
+          <h4>Project-local install</h4>
+          <p>Installs into a directory you choose. Good for running multiple versions side by side.</p>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" id="pinned-local-copy" data-copy-text="mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install @dollhousemcp/mcp-server" aria-label="Copy local install command">Copy</button>
+            <pre><code id="pinned-local-cmd">mkdir -p ~/mcp-servers && cd ~/mcp-servers
+npm install @dollhousemcp/mcp-server</code></pre>
+          </div>
+          <p class="setup-hint">Then point your client config at: <code>node ~/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js</code></p>
+
+        </div>
+      </div>
+
+      <div class="setup-platforms" id="setup-platforms" role="tablist" aria-label="Platform install instructions">
+        <button class="setup-platform-tab is-active" role="tab" aria-selected="true"  aria-controls="setup-panel-claude-desktop" id="setup-tab-claude-desktop">Claude Desktop</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-claude-code"    id="setup-tab-claude-code">Claude Code</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-cursor"         id="setup-tab-cursor">Cursor</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-vscode"         id="setup-tab-vscode">VS Code</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-codex"          id="setup-tab-codex">Codex</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-gemini"         id="setup-tab-gemini">Gemini CLI</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-windsurf"       id="setup-tab-windsurf">Windsurf</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-cline"          id="setup-tab-cline">Cline</button>
+        <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-lmstudio"       id="setup-tab-lmstudio">LM Studio</button>
+      </div>
+
+      <!-- Claude Desktop -->
+      <section class="setup-panel is-active" role="tabpanel" id="setup-panel-claude-desktop" aria-labelledby="setup-tab-claude-desktop">
+        <div class="setup-method setup-method-primary">
+          <h3>Auto-install <span class="setup-method-badge setup-badge">auto-updating</span></h3>
+          <p class="setup-method-desc">Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.</p>
+          <div class="setup-install-row">
+            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude">Install Now</button>
+            <span class="setup-install-status" data-install-status="claude"></span>
+          </div>
+        </div>
+        <div class="setup-method setup-mcpb-option" id="setup-mcpb-section" hidden>
+          <h3>Or install via Desktop Extension <span class="setup-badge">pinned version</span></h3>
+          <p>Download the <code>.mcpb</code> bundle and double-click it to install. Claude Desktop handles everything automatically &mdash; no terminal, no config editing. This installs a pinned copy that won't auto-update.</p>
+          <a class="setup-btn setup-btn-secondary" href="/api/setup/mcpb" id="pinned-mcpb-btn">Download .mcpb <span id="pinned-mcpb-version"></span></a>
+        </div>
+        <div class="setup-method">
+          <h3>Or add manually
+            <button class="setup-open-btn" type="button" data-open-client="claude">Open config file</button>
+          </h3>
+          <p>Add to your config file:</p>
+          <ul class="setup-paths" id="claude-desktop-paths">
+            <li><strong>macOS:</strong> <code>~/Library/Application Support/Claude/claude_desktop_config.json</code></li>
+            <li><strong>Windows:</strong> <code>%APPDATA%\Claude\claude_desktop_config.json</code></li>
+            <li><strong>Linux:</strong> <code>~/.config/Claude/claude_desktop_config.json</code></li>
+          </ul>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" data-copy-text='{"mcpServers":{"dollhousemcp":{"command":"npx","args":["-y","@dollhousemcp/mcp-server@latest"]}}}' aria-label="Copy config">Copy</button>
+            <pre><code>{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["-y", "@dollhousemcp/mcp-server@latest"]
+    }
+  }
+}</code></pre>
+          </div>
+          <p class="setup-hint">Restart Claude Desktop after saving.</p>
+        </div>
+      </section>
+
+      <!-- Claude Code -->
+      <section class="setup-panel" role="tabpanel" id="setup-panel-claude-code" aria-labelledby="setup-tab-claude-code" hidden>
+        <div class="setup-method setup-method-primary">
+          <h3>Auto-install <span class="setup-method-badge setup-badge">auto-updating</span></h3>
+          <p class="setup-method-desc">Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.</p>
+          <div class="setup-install-row">
+            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude-code">Install Now</button>
+            <span class="setup-install-status" data-install-status="claude-code"></span>
+          </div>
+        </div>
+        <div class="setup-method">
+          <h3>Or run in your terminal</h3>
+          <p>Start a new conversation and you're ready.</p>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" data-copy-text="claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest" aria-label="Copy command">Copy</button>
+            <pre><code>claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest</code></pre>
+          </div>
+        </div>
+        <div class="setup-method">
+          <h3>Or add manually
+            <button class="setup-open-btn" type="button" data-open-client="claude-code">Open config file</button>
+          </h3>
+          <p>Add to <code>~/.claude.json</code>:</p>
+          <div class="setup-code-block">
+            <button class="setup-copy-btn" type="button" data-copy-text='{"mcpServers":{"dollhousemcp":{"command":"npx","args":["-y","@dollhousemcp/mcp-server@latest"]}}}' aria-label="Copy config">Copy</button>
+            <pre><code>{
+  "mcpServers": {
+    "dollhousemcp": {
+      "command": "npx",
+      "args": ["-y", "@dollhousemcp/mcp-server@latest"]
+    }
+  }
+}</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Panels for Cursor, VS Code, Codex, Gemini CLI, Windsurf, Cline, LM Studio -->
+      <!-- Generated by setup.js from PLATFORMS registry to eliminate HTML duplication -->
+      <div id="setup-generated-panels"></div>
+
+      <!-- Verify section -->
+      <div class="setup-verify">
+        <h3>Verify it's working</h3>
+        <p>After connecting, start a conversation and ask:</p>
+        <div class="setup-code-block setup-code-block-sm">
+          <button class="setup-copy-btn" type="button" data-copy-text="What DollhouseMCP tools do you have available?" aria-label="Copy prompt">Copy</button>
+          <pre><code>What DollhouseMCP tools do you have available?</code></pre>
+        </div>
+        <p>You should see MCP-AQL endpoints. Then try:</p>
+        <div class="setup-try-prompts">
+          <code>List all available Dollhouse personas</code>
+          <code>Activate the debug detective persona</code>
+          <code>Open the portfolio browser</code>
+        </div>
+      </div>
+
+      <div class="setup-footer">
+        <p>Full documentation for all platforms (Continue, Docker, local LLMs) in the
+          <a href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/quick-start.md" target="_blank" rel="noopener">quick start guide</a>.
+        </p>
+        <p>Auto-install powered by <a href="https://github.com/supermemoryai/install-mcp" target="_blank" rel="noopener">install-mcp</a> by <a href="https://github.com/dhravyashah" target="_blank" rel="noopener">Dhravya Shah</a>.</p>
+      </div>
+    </div>
+  </div>
 
   <!-- Tab: Portfolio -->
   <div id="tab-portfolio" class="tab-panel active">
@@ -181,6 +355,7 @@
         id="hljs-theme-dark" disabled>
   <!-- uPlot for metrics charts -->
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
+  <script src="setup.js"></script>
   <script src="app.js"></script>
   <script src="logs.js"></script>
   <script src="metrics.js"></script>

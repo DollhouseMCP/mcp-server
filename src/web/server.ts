@@ -21,6 +21,7 @@ import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
+import { createSetupRoutes } from './routes/setupRoutes.js';
 import { logger } from '../utils/logger.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
@@ -164,6 +165,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     ].join('; '));
     next();
   });
+
+  // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
+  app.use(express.json({ limit: '1kb', type: 'application/json' }));
+  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
+  app.post('/api/setup/install', installHandler);
+  app.post('/api/setup/open-config', openConfigHandler);
+  app.get('/api/setup/version', versionHandler);
+  app.get('/api/setup/mcpb', mcpbRedirectHandler);
+  app.get('/api/setup/detect', detectHandler);
+  logger.info('[WebUI] Setup routes mounted at /api/setup');
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {

@@ -1,14 +1,24 @@
 # Quick Start Guide
 
-DollhouseMCP works with any MCP-compatible AI client. Pick your platform below.
+DollhouseMCP works with any MCP-compatible AI client. Pick your platform below — or use the interactive setup wizard.
 
 > **v2.0.0**: DollhouseMCP v2 is now the default release. Install via npm/npx with `@dollhousemcp/mcp-server`. The Desktop Extension (.mcpb) always installs the latest release.
 
 ---
 
+## Interactive Setup (Any Platform)
+
+```bash
+npx @dollhousemcp/mcp-server@latest --web
+```
+
+Opens a browser-based setup wizard with one-click install for all supported platforms. Detects existing installations, shows your current config, and supports both auto-updating and pinned version installs. Covers everything below in a single UI.
+
+---
+
 ## Claude Desktop (One-Click Install)
 
-Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0) (`.mcpb` file) and open it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
+Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/latest) (`.mcpb` file) and double-click it. Claude Desktop installs everything automatically — no terminal, no configuration file editing.
 
 The `.mcpb` format is an [MCP Bundle](https://github.com/modelcontextprotocol/mcpb) — a portable package containing the server and all dependencies. Node.js ships with Claude Desktop, so DollhouseMCP works out-of-the-box.
 
