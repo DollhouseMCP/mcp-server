@@ -31,6 +31,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 3939;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
+/** Max JSON body for setup routes (install/open-config). Ingest routes use their own 1mb limit. */
+const SETUP_BODY_LIMIT = '1kb';
 
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
@@ -174,7 +176,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
   // Body limit scoped to setup routes only — ingest routes need 1mb for follower log forwarding
-  const setupJsonParser = express.json({ limit: '1kb', type: 'application/json' });
+  const setupJsonParser = express.json({ limit: SETUP_BODY_LIMIT, type: 'application/json' });
   const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
   app.post('/api/setup/install', setupJsonParser, installHandler);
   app.post('/api/setup/open-config', setupJsonParser, openConfigHandler);

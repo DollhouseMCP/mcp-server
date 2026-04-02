@@ -278,7 +278,16 @@ export class ContentValidator {
    * Security documentation patterns exempt for CODE_EXEMPT_CONTEXTS.
    * Skills/agents that teach penetration testing, threat modeling, etc.
    * legitimately reference shell commands, file paths, and credential names.
-   * Actual token formats (ghp_, gho_) and prompt injection remain active.
+   *
+   * DISTINCTION FROM ACTIVE THREAT PATTERNS:
+   * These patterns describe attacks (educational) — they appear in element
+   * definitions that an author wrote, not in runtime user input. Patterns
+   * that remain active even in exempt contexts are actual threats:
+   * - Prompt injection (system/admin override, instruction manipulation)
+   * - Real token formats (ghp_*, gho_* — not just the word "GITHUB_TOKEN")
+   * - Data exfiltration commands (export/send all credentials)
+   * - HTML/XSS injection (renders in the web console)
+   *
    * @since Issue #1725
    */
   private static readonly SECURITY_DOC_PATTERNS = new Set([
