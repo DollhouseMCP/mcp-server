@@ -282,11 +282,12 @@ export class UnicodeValidator {
 
     // Consider it suspicious if:
     // 1. More than 3 scripts are mixed (legitimate text rarely mixes >3 scripts)
-    // 2. Content contains Latin + dangerous confusable scripts (Cyrillic/Greek - common attack pattern)
+    // 2. Content contains Latin + Cyrillic (homoglyph attack — Cyrillic а/о/р look identical to Latin)
     // Note: Latin + CJK is common and legitimate (e.g., Chinese with English)
-    const isSuspicious = detectedScripts.length > 3 || 
-      (detectedScripts.includes('LATIN') && detectedScripts.length > 1 && 
-       (detectedScripts.includes('CYRILLIC') || detectedScripts.includes('GREEK')));
+    // Note: Latin + Greek is common and legitimate (e.g., α, β, γ, π, Σ, Δ in math/science)
+    const isSuspicious = detectedScripts.length > 3 ||
+      (detectedScripts.includes('LATIN') && detectedScripts.length > 1 &&
+       detectedScripts.includes('CYRILLIC'));
 
     return { isSuspicious, scripts: detectedScripts };
   }

@@ -157,13 +157,15 @@ describe('UnicodeValidator', () => {
       expect(result.severity).toBe('high');
     });
 
-    test('should detect Latin + Greek mixing', () => {
+    test('should allow Latin + Greek mixing (legitimate in math/science)', () => {
       const mixedScript = 'adminπassword'; // Latin + Greek π
       const result = UnicodeValidator.normalize(mixedScript);
-      
-      expect(result.isValid).toBe(false);
-      expect(result.detectedIssues).toContain('Mixed script usage detected: LATIN, GREEK');
-      expect(result.severity).toBe('high');
+
+      // Latin+Greek is not suspicious — Greek letters (α, β, π, Σ) are standard
+      // in technical content. Only Latin+Cyrillic is a homoglyph attack vector.
+      // The confusable character (π→p) is still normalized, but no mixed script alert.
+      expect(result.isValid).toBe(false); // Still invalid due to confusable normalization
+      expect(result.detectedIssues).not.toContain('Mixed script usage detected: LATIN, GREEK');
     });
 
     test('should allow single script usage', () => {
