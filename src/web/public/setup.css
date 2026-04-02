@@ -602,7 +602,8 @@
   border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 0.78rem;
-  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 [data-theme="dark"] .setup-installed-notice pre {
