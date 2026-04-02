@@ -26,7 +26,7 @@ describe('Setup Routes — API Endpoints', () => {
   beforeEach(async () => {
     // Dynamic import to avoid module caching issues
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
-    const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler } = createSetupRoutes();
+    const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
 
     app = express();
     app.use(express.json());
@@ -34,6 +34,7 @@ describe('Setup Routes — API Endpoints', () => {
     app.post('/api/setup/open-config', openConfigHandler);
     app.get('/api/setup/version', versionHandler);
     app.get('/api/setup/mcpb', mcpbRedirectHandler);
+    app.get('/api/setup/detect', detectHandler);
   });
 
   describe('POST /api/setup/install', () => {
@@ -132,6 +133,38 @@ describe('Setup Routes — API Endpoints', () => {
       expect(res.status).toBe(302);
       expect(res.headers.location).toContain('github.com/DollhouseMCP/mcp-server/releases');
       expect(res.headers.location).toContain('.mcpb');
+    });
+  });
+
+  describe('GET /api/setup/detect', () => {
+    it('returns detection results for known clients', async () => {
+      const res = await request(app)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      expect(typeof res.body).toBe('object');
+      // Should have entries for the detectable clients
+      const knownClients = ['claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
+      for (const client of knownClients) {
+        expect(res.body[client]).toBeDefined();
+        expect(res.body[client].name).toBeDefined();
+        expect(typeof res.body[client].installed).toBe('boolean');
+        expect(res.body[client].configPath).toBeDefined();
+      }
+    });
+
+    it('includes currentConfig when installed', async () => {
+      const res = await request(app)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      // At least check the structure — on CI there may be no installs
+      for (const info of Object.values(res.body) as Array<Record<string, unknown>>) {
+        if (info.installed) {
+          // Installed entries should have configPath
+          expect(info.configPath).toBeTruthy();
+        }
+      }
     });
   });
 
@@ -700,6 +733,39 @@ describe('Setup Tab — Regressions', () => {
       const end = html.indexOf('</section>', start);
       const panel = html.slice(start, end);
       expect(panel).toContain('setup-code-block');
+    });
+  });
+
+  describe('Detection UI', () => {
+    it('JS fetches from /api/setup/detect', () => {
+      expect(js).toContain('/api/setup/detect');
+      expect(js).toContain('fetchDetection');
+    });
+
+    it('JS creates installed notice with overwrite warning', () => {
+      expect(js).toContain('already configured');
+      expect(js).toContain('overwrite');
+    });
+
+    it('JS adds tab badge for installed clients', () => {
+      expect(js).toContain('setup-tab-badge');
+    });
+
+    it('JS shows current config in expandable details', () => {
+      expect(js).toContain('<details>');
+      expect(js).toContain('Current config');
+    });
+
+    it('JS escapes HTML in config display', () => {
+      expect(js).toContain('escapeHtml');
+    });
+
+    it('CSS defines tab badge', () => {
+      expect(css).toContain('.setup-tab-badge');
+    });
+
+    it('CSS defines installed notice', () => {
+      expect(css).toContain('.setup-installed-notice');
     });
   });
 

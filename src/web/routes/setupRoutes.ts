@@ -11,7 +11,7 @@
 import type { Request, Response } from 'express';
 import { execFile } from 'node:child_process';
 import { accessSync, constants as fsConstants } from 'node:fs';
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
@@ -110,12 +110,86 @@ const OPENABLE_CLIENTS = new Set([
 /**
  * Create setup handlers (Express 5 compatible — plain handler functions, not Router).
  */
+/**
+ * Check a single client config file for an existing DollhouseMCP entry.
+ * Returns null if the file doesn't exist or can't be parsed.
+ */
+async function detectClient(client: string): Promise<{
+  installed: boolean;
+  configPath: string | null;
+  currentConfig?: Record<string, unknown>;
+  serverKey?: string;
+} | null> {
+  const configPath = getConfigPath(client);
+  if (!configPath) return null;
+
+  try {
+    await access(configPath);
+  } catch {
+    return { installed: false, configPath };
+  }
+
+  try {
+    const raw = await readFile(configPath, 'utf-8');
+
+    // TOML (Codex) — simple string search
+    if (configPath.endsWith('.toml')) {
+      const hasDollhouse = raw.includes('dollhousemcp');
+      return { installed: hasDollhouse, configPath };
+    }
+
+    // JSON configs
+    const parsed = JSON.parse(raw);
+
+    // Check mcpServers.dollhousemcp or servers.dollhousemcp
+    for (const key of ['mcpServers', 'servers']) {
+      if (parsed[key]?.dollhousemcp) {
+        return {
+          installed: true,
+          configPath,
+          currentConfig: parsed[key].dollhousemcp,
+          serverKey: key,
+        };
+      }
+    }
+
+    return { installed: false, configPath };
+  } catch {
+    // File exists but can't parse — report path but no config
+    return { installed: false, configPath };
+  }
+}
+
 export function createSetupRoutes(): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
   versionHandler: (req: Request, res: Response) => Promise<void>;
   mcpbRedirectHandler: (req: Request, res: Response) => Promise<void>;
+  detectHandler: (req: Request, res: Response) => Promise<void>;
 } {
+  // ── Detect existing installations ───────────────────────────────────
+  const detectHandler = async (_req: Request, res: Response): Promise<void> => {
+    const clients = [
+      { id: 'claude', name: 'Claude Desktop' },
+      { id: 'claude-code', name: 'Claude Code' },
+      { id: 'cursor', name: 'Cursor' },
+      { id: 'windsurf', name: 'Windsurf' },
+      { id: 'lmstudio', name: 'LM Studio' },
+      { id: 'gemini-cli', name: 'Gemini CLI' },
+      { id: 'codex', name: 'Codex' },
+    ];
+
+    const results: Record<string, unknown> = {};
+    await Promise.all(clients.map(async ({ id, name }) => {
+      const detection = await detectClient(id);
+      if (detection) {
+        results[id] = { name, ...detection };
+      }
+    }));
+
+    res.json(results);
+  };
+
   // ── Open config file in editor ──────────────────────────────────────
   const openConfigHandler = async (req: Request, res: Response): Promise<void> => {
     const { client } = req.body as { client?: string };
@@ -259,7 +333,7 @@ export function createSetupRoutes(): {
     res.redirect(url);
   };
 
-  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler };
+  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler };
 }
 
 /**

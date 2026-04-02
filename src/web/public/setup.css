@@ -519,6 +519,68 @@
   text-decoration: underline;
 }
 
+/* ── Detection: installed notice + tab badge ────────────────────────────── */
+
+.setup-tab-badge {
+  display: inline-block;
+  margin-left: 0.3rem;
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, #22c55e 18%, var(--surface-1));
+  color: #16a34a;
+  vertical-align: middle;
+}
+
+[data-theme="dark"] .setup-tab-badge {
+  color: #4ade80;
+}
+
+.setup-installed-notice {
+  padding: 0.8rem 1rem;
+  margin-bottom: 0.8rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--line));
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-2));
+  font-size: var(--step--1);
+  color: var(--ink-700);
+  line-height: 1.5;
+}
+
+.setup-installed-notice strong {
+  color: var(--accent);
+}
+
+.setup-installed-notice details {
+  margin-top: 0.5rem;
+}
+
+.setup-installed-notice summary {
+  cursor: pointer;
+  color: var(--signal);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+
+.setup-installed-notice pre {
+  margin: 0.4rem 0 0;
+  padding: 0.6rem 0.8rem;
+  background: var(--ink-950);
+  color: #e2e8f0;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  overflow-x: auto;
+}
+
+[data-theme="dark"] .setup-installed-notice pre {
+  background: #0a0e18;
+  border: 1px solid var(--line);
+}
+
 /* ── Responsive ────────────────────────────────────────────────────────── */
 
 @media (max-width: 640px) {

@@ -374,6 +374,70 @@
     }
   };
 
+  // ── Detect existing installations ──────────────────────────────────────
+
+  // Map from detect API client IDs to platform panel IDs
+  const clientToPlatform = {
+    'claude': 'claude-desktop',
+    'claude-code': 'claude-code',
+    'cursor': 'cursor',
+    'windsurf': 'windsurf',
+    'lmstudio': 'lmstudio',
+    'gemini-cli': 'gemini',
+    'codex': 'codex',
+  };
+
+  const fetchDetection = async () => {
+    try {
+      const res = await fetch('/api/setup/detect');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      for (const [clientId, info] of Object.entries(data)) {
+        const platformId = clientToPlatform[clientId];
+        if (!platformId || !info) continue;
+
+        const { installed, currentConfig } = info;
+
+        // Add badge to the platform tab button
+        const tabBtn = document.getElementById('setup-tab-' + platformId);
+        if (tabBtn && installed) {
+          const badge = document.createElement('span');
+          badge.className = 'setup-tab-badge';
+          badge.textContent = 'installed';
+          badge.title = 'DollhouseMCP is already configured for this client';
+          tabBtn.appendChild(badge);
+        }
+
+        // Add warning to the platform panel
+        const panel = document.getElementById('setup-panel-' + platformId);
+        if (panel && installed) {
+          const notice = document.createElement('div');
+          notice.className = 'setup-installed-notice';
+
+          let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
+          html += 'Installing again will overwrite the existing configuration.';
+
+          if (currentConfig) {
+            const configStr = JSON.stringify(currentConfig, null, 2);
+            html += `<details><summary>Current config</summary><pre><code>${escapeHtml(configStr)}</code></pre></details>`;
+          }
+
+          notice.innerHTML = html;
+          panel.insertBefore(notice, panel.firstChild);
+        }
+      }
+    } catch {
+      // Offline or no API — skip detection
+    }
+  };
+
+  const escapeHtml = (str) => str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
@@ -384,4 +448,5 @@
   initInstallButtons();
   initOpenButtons();
   fetchVersion();
+  fetchDetection();
 })();
