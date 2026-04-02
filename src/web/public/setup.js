@@ -96,35 +96,35 @@
 
   // ── Method toggle ─────────────────────────────────────────────────────
 
+  /** Handle method toggle button click */
+  const handleMethodToggle = (btn, buttons) => {
+    const method = btn.dataset.method;
+    if (!method || method === currentMethod) return;
+
+    currentMethod = method;
+
+    buttons.forEach((b) => {
+      b.classList.toggle('is-active', b.dataset.method === method);
+      b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
+    });
+
+    const prereq = document.getElementById('setup-pinned-prereq');
+    const mcpbSection = document.getElementById('setup-mcpb-section');
+    if (prereq) prereq.hidden = method !== 'global';
+    if (mcpbSection) mcpbSection.hidden = method !== 'global';
+
+    updateAllConfigs(method);
+    updateInstallButtonLabels();
+    updateDetectionState();
+  };
+
   const initMethodToggle = () => {
     const toggle = document.getElementById('setup-method-toggle');
-    const prereq = document.getElementById('setup-pinned-prereq');
     if (!toggle) return;
 
     const buttons = toggle.querySelectorAll('.setup-method-btn');
-
     buttons.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const method = btn.dataset.method;
-        if (!method || method === currentMethod) return;
-
-        currentMethod = method;
-
-        buttons.forEach((b) => {
-          b.classList.toggle('is-active', b.dataset.method === method);
-          b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
-        });
-
-        // Show/hide pinned install prereq step and .mcpb section
-        if (prereq) prereq.hidden = method !== 'global';
-        const mcpbSection = document.getElementById('setup-mcpb-section');
-        if (mcpbSection) mcpbSection.hidden = method !== 'global';
-
-        // Update all config snippets, button labels, and detection matches
-        updateAllConfigs(method);
-        updateInstallButtonLabels();
-        updateDetectionState();
-      });
+      btn.addEventListener('click', () => handleMethodToggle(btn, buttons));
     });
   };
 
@@ -277,102 +277,99 @@
 
   // ── Install buttons ────────────────────────────────────────────────────
 
+  /** Handle Install Now button click */
+  const handleInstallClick = async (btn) => {
+    const client = btn.dataset.installClient;
+    if (!client) return;
+
+    const status = document.querySelector(`[data-install-status="${client}"]`);
+    const originalText = btn.textContent;
+
+    btn.disabled = true;
+    btn.textContent = 'Installing...';
+    btn.classList.add('is-loading');
+    if (status) {
+      status.textContent = '';
+      status.className = 'setup-install-status';
+    }
+
+    try {
+      const payload = { client };
+      if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
+        payload.version = pinnedVersion;
+      }
+
+      const res = await fetch('/api/setup/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!data.success) throw new Error(data.error || 'Installation failed');
+
+      btn.textContent = 'Installed';
+      btn.classList.remove('is-loading');
+      btn.classList.add('is-success');
+      if (status) {
+        status.textContent = 'Restart the application to activate.';
+        status.classList.add('is-success');
+      }
+      reDetect();
+    } catch (err) {
+      btn.textContent = originalText;
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      if (status) {
+        status.textContent = err.message || 'Installation failed. Try the manual config below.';
+        status.classList.add('is-error');
+      }
+    }
+  };
+
   const initInstallButtons = () => {
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const client = btn.dataset.installClient;
-        if (!client) return;
-
-        const status = document.querySelector(`[data-install-status="${client}"]`);
-        const originalText = btn.textContent;
-
-        btn.disabled = true;
-        btn.textContent = 'Installing...';
-        btn.classList.add('is-loading');
-        if (status) {
-          status.textContent = '';
-          status.className = 'setup-install-status';
-        }
-
-        try {
-          // Pass version when in pinned mode
-          const payload = { client };
-          if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
-            payload.version = pinnedVersion;
-          }
-
-          const res = await fetch('/api/setup/install', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-
-          const data = await res.json();
-
-          if (data.success) {
-            btn.textContent = 'Installed';
-            btn.classList.remove('is-loading');
-            btn.classList.add('is-success');
-            if (status) {
-              status.textContent = 'Restart the application to activate.';
-              status.classList.add('is-success');
-            }
-            // Re-run detection to update badges and notices
-            reDetect();
-          } else {
-            throw new Error(data.error || 'Installation failed');
-          }
-        } catch (err) {
-          btn.textContent = originalText;
-          btn.disabled = false;
-          btn.classList.remove('is-loading');
-          if (status) {
-            status.textContent = err.message || 'Installation failed. Try the manual config below.';
-            status.classList.add('is-error');
-          }
-        }
-      });
+      btn.addEventListener('click', () => handleInstallClick(btn));
     });
   };
 
   // ── Open config file buttons ───────────────────────────────────────────
 
+  /** Handle Open config file button click */
+  const handleOpenClick = async (btn) => {
+    const client = btn.dataset.openClient;
+    if (!client) return;
+
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Opening...';
+
+    const resetBtn = () => {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    };
+
+    try {
+      const res = await fetch('/api/setup/open-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Could not open file');
+
+      btn.textContent = 'Opened';
+      setTimeout(resetBtn, 2000);
+    } catch {
+      btn.textContent = 'Failed';
+      setTimeout(resetBtn, 2000);
+    }
+  };
+
   const initOpenButtons = () => {
     document.querySelectorAll('.setup-open-btn').forEach((btn) => {
-      btn.addEventListener('click', async () => {
-        const client = btn.dataset.openClient;
-        if (!client) return;
-
-        const originalText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = 'Opening...';
-
-        try {
-          const res = await fetch('/api/setup/open-config', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ client }),
-          });
-
-          const data = await res.json();
-
-          if (data.success) {
-            btn.textContent = 'Opened';
-            setTimeout(() => {
-              btn.textContent = originalText;
-              btn.disabled = false;
-            }, 2000);
-          } else {
-            throw new Error(data.error || 'Could not open file');
-          }
-        } catch (err) {
-          btn.textContent = 'Failed';
-          setTimeout(() => {
-            btn.textContent = originalText;
-            btn.disabled = false;
-          }, 2000);
-        }
-      });
+      btn.addEventListener('click', () => handleOpenClick(btn));
     });
   };
 
@@ -442,7 +439,7 @@
    */
   const configsMatch = (platformId, method) => {
     const detected = detectedConfigs[platformId];
-    if (!detected || !detected.installed || !detected.currentConfig) return false;
+    if (!detected?.installed || !detected?.currentConfig) return false;
 
     const current = detected.currentConfig;
 
@@ -491,57 +488,94 @@
    * Called on init and whenever the method toggle changes.
    */
   const updateDetectionState = () => {
-    for (const [clientId, platformId] of Object.entries(clientToPlatform)) {
-      const detected = detectedConfigs[platformId];
-      if (!detected) continue;
-
-      const panel = document.getElementById('setup-panel-' + platformId);
-      const tabBtn = document.getElementById('setup-tab-' + platformId);
-      const notice = panel?.querySelector('.setup-installed-notice');
-      const installBtn = panel?.querySelector('.setup-install-btn');
-      const badge = tabBtn?.querySelector('.setup-tab-badge');
-
-      if (!detected.installed) continue;
-
-      const matches = configsMatch(platformId, currentMethod);
-
-      // Update notice
-      if (notice) {
-        if (matches) {
-          notice.className = 'setup-installed-notice is-match';
-          const strong = notice.querySelector('strong');
-          if (strong) strong.textContent = 'DollhouseMCP is configured and matches these settings.';
-          const msg = notice.querySelector('.setup-notice-msg');
-          if (msg) msg.textContent = 'No changes would be made.';
-        } else {
-          notice.className = 'setup-installed-notice';
-          const strong = notice.querySelector('strong');
-          if (strong) strong.textContent = 'DollhouseMCP is already configured for this client.';
-          const msg = notice.querySelector('.setup-notice-msg');
-          if (msg) msg.textContent = 'Installing will overwrite the existing configuration.';
-        }
-      }
-
-      // Update badge
-      if (badge) {
-        badge.className = matches ? 'setup-tab-badge is-match' : 'setup-tab-badge';
-        badge.textContent = matches ? 'configured' : 'installed';
-      }
-
-      // Update install button
-      if (installBtn && !installBtn.classList.contains('is-success')) {
-        if (matches) {
-          installBtn.textContent = 'Already configured';
-          installBtn.disabled = true;
-          installBtn.classList.add('is-match');
-        } else {
-          const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
-          installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
-          installBtn.disabled = false;
-          installBtn.classList.remove('is-match');
-        }
-      }
+    for (const platformId of Object.values(clientToPlatform)) {
+      updatePlatformDetectionState(platformId);
     }
+  };
+
+  /** Update notice, badge, and button for a single platform based on detection match */
+  const updatePlatformDetectionState = (platformId) => {
+    const detected = detectedConfigs[platformId];
+    if (!detected?.installed) return;
+
+    const matches = configsMatch(platformId, currentMethod);
+    const panel = document.getElementById('setup-panel-' + platformId);
+    const tabBtn = document.getElementById('setup-tab-' + platformId);
+
+    updateDetectionNotice(panel?.querySelector('.setup-installed-notice'), matches);
+    updateDetectionBadge(tabBtn?.querySelector('.setup-tab-badge'), matches);
+    updateDetectionButton(panel?.querySelector('.setup-install-btn'), matches);
+  };
+
+  const updateDetectionNotice = (notice, matches) => {
+    if (!notice) return;
+    notice.className = matches ? 'setup-installed-notice is-match' : 'setup-installed-notice';
+    const strong = notice.querySelector('strong');
+    const msg = notice.querySelector('.setup-notice-msg');
+    if (strong) strong.textContent = matches
+      ? 'DollhouseMCP is configured and matches these settings.'
+      : 'DollhouseMCP is already configured for this client.';
+    if (msg) msg.textContent = matches
+      ? 'No changes would be made.'
+      : 'Installing will overwrite the existing configuration.';
+  };
+
+  const updateDetectionBadge = (badge, matches) => {
+    if (!badge) return;
+    badge.className = matches ? 'setup-tab-badge is-match' : 'setup-tab-badge';
+    badge.textContent = matches ? 'configured' : 'installed';
+  };
+
+  const updateDetectionButton = (installBtn, matches) => {
+    if (!installBtn || installBtn.classList.contains('is-success')) return;
+    if (matches) {
+      installBtn.textContent = 'Already configured';
+      installBtn.disabled = true;
+      installBtn.classList.add('is-match');
+    } else {
+      const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
+      installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      installBtn.disabled = false;
+      installBtn.classList.remove('is-match');
+    }
+  };
+
+  /** Create a badge element for an installed platform tab */
+  const createTabBadge = (tabBtn) => {
+    const badge = document.createElement('span');
+    badge.className = 'setup-tab-badge';
+    badge.textContent = 'installed';
+    badge.title = 'DollhouseMCP is already configured for this client';
+    tabBtn.appendChild(badge);
+  };
+
+  /** Create a notice element for an installed platform panel */
+  const createPanelNotice = (panel, currentConfig) => {
+    const notice = document.createElement('div');
+    notice.className = 'setup-installed-notice';
+    let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
+    html += '<span class="setup-notice-msg">Installing will overwrite the existing configuration.</span>';
+    if (currentConfig) {
+      const configStr = JSON.stringify(currentConfig, null, 2);
+      html += `<details><summary>Current config</summary><pre><code>${escapeHtml(configStr)}</code></pre></details>`;
+    }
+    notice.innerHTML = html;
+    panel.insertBefore(notice, panel.firstChild);
+  };
+
+  /** Process detection results for a single client */
+  const applyDetectionResult = (clientId, info) => {
+    const platformId = clientToPlatform[clientId];
+    if (!platformId || !info) return;
+
+    detectedConfigs[platformId] = info;
+    if (!info.installed) return;
+
+    const tabBtn = document.getElementById('setup-tab-' + platformId);
+    if (tabBtn && !tabBtn.querySelector('.setup-tab-badge')) createTabBadge(tabBtn);
+
+    const panel = document.getElementById('setup-panel-' + platformId);
+    if (panel && !panel.querySelector('.setup-installed-notice')) createPanelNotice(panel, info.currentConfig);
   };
 
   const fetchDetection = async () => {
@@ -551,44 +585,8 @@
       const data = await res.json();
 
       for (const [clientId, info] of Object.entries(data)) {
-        const platformId = clientToPlatform[clientId];
-        if (!platformId || !info) continue;
-
-        // Store for comparison
-        detectedConfigs[platformId] = info;
-
-        const { installed, currentConfig } = info;
-
-        // Add badge to the platform tab button
-        const tabBtn = document.getElementById('setup-tab-' + platformId);
-        if (tabBtn && installed) {
-          const badge = document.createElement('span');
-          badge.className = 'setup-tab-badge';
-          badge.textContent = 'installed';
-          badge.title = 'DollhouseMCP is already configured for this client';
-          tabBtn.appendChild(badge);
-        }
-
-        // Add notice to the platform panel
-        const panel = document.getElementById('setup-panel-' + platformId);
-        if (panel && installed) {
-          const notice = document.createElement('div');
-          notice.className = 'setup-installed-notice';
-
-          let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
-          html += '<span class="setup-notice-msg">Installing will overwrite the existing configuration.</span>';
-
-          if (currentConfig) {
-            const configStr = JSON.stringify(currentConfig, null, 2);
-            html += `<details><summary>Current config</summary><pre><code>${escapeHtml(configStr)}</code></pre></details>`;
-          }
-
-          notice.innerHTML = html;
-          panel.insertBefore(notice, panel.firstChild);
-        }
+        applyDetectionResult(clientId, info);
       }
-
-      // Run comparison after all notices are in the DOM
       updateDetectionState();
     } catch {
       // Offline or no API — skip detection
@@ -601,46 +599,18 @@
       const res = await fetch('/api/setup/detect');
       if (!res.ok) return;
       const data = await res.json();
-
       for (const [clientId, info] of Object.entries(data)) {
-        const platformId = clientToPlatform[clientId];
-        if (!platformId || !info) continue;
-        detectedConfigs[platformId] = info;
-
-        // If this platform didn't have a notice before but now it's installed, add one
-        const panel = document.getElementById('setup-panel-' + platformId);
-        const tabBtn = document.getElementById('setup-tab-' + platformId);
-        if (panel && info.installed && !panel.querySelector('.setup-installed-notice')) {
-          const notice = document.createElement('div');
-          notice.className = 'setup-installed-notice';
-          let html = '<strong>DollhouseMCP is already configured for this client.</strong> ';
-          html += '<span class="setup-notice-msg">Installing will overwrite the existing configuration.</span>';
-          if (info.currentConfig) {
-            const configStr = JSON.stringify(info.currentConfig, null, 2);
-            html += `<details><summary>Current config</summary><pre><code>${escapeHtml(configStr)}</code></pre></details>`;
-          }
-          notice.innerHTML = html;
-          panel.insertBefore(notice, panel.firstChild);
-        }
-
-        // Add badge if not already there
-        if (tabBtn && info.installed && !tabBtn.querySelector('.setup-tab-badge')) {
-          const badge = document.createElement('span');
-          badge.className = 'setup-tab-badge';
-          badge.textContent = 'installed';
-          tabBtn.appendChild(badge);
-        }
+        applyDetectionResult(clientId, info);
       }
-
       updateDetectionState();
-    } catch { /* ignore */ }
+    } catch { /* offline — skip */ }
   };
 
   const escapeHtml = (str) => str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
 
   // ── Init ──────────────────────────────────────────────────────────────
 

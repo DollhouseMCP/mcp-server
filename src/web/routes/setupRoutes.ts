@@ -110,16 +110,50 @@ const OPENABLE_CLIENTS = new Set([
 /**
  * Create setup handlers (Express 5 compatible — plain handler functions, not Router).
  */
-/**
- * Check a single client config file for an existing DollhouseMCP entry.
- * Returns null if the file doesn't exist or can't be parsed.
- */
-async function detectClient(client: string): Promise<{
+interface DetectResult {
   installed: boolean;
   configPath: string | null;
   currentConfig?: Record<string, unknown>;
   serverKey?: string;
-} | null> {
+}
+
+/** Parse a TOML config file for a DollhouseMCP server entry */
+function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
+  if (!raw.toLowerCase().includes('dollhousemcp')) {
+    return { installed: false };
+  }
+
+  const tomlConfig: Record<string, unknown> = {};
+  const sectionMatch = raw.match(/\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i);
+  if (!sectionMatch) return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+
+  tomlConfig.serverName = sectionMatch[1];
+  const sectionStart = sectionMatch.index! + sectionMatch[0].length;
+  const nextSection = raw.indexOf('\n[', sectionStart);
+  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+
+  const commandMatch = sectionContent.match(/command\s*=\s*"([^"]+)"/);
+  const argsMatch = sectionContent.match(/args\s*=\s*\[([^\]]*)\]/);
+  if (commandMatch) tomlConfig.command = commandMatch[1];
+  if (argsMatch) {
+    tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replaceAll('"', ''));
+  }
+  return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+}
+
+/** Parse a JSON config file for a DollhouseMCP server entry */
+function parseJsonConfig(raw: string): Omit<DetectResult, 'configPath'> {
+  const parsed = JSON.parse(raw);
+  for (const key of ['mcpServers', 'servers']) {
+    if (parsed[key]?.dollhousemcp) {
+      return { installed: true, currentConfig: parsed[key].dollhousemcp, serverKey: key };
+    }
+  }
+  return { installed: false };
+}
+
+/** Check a single client config file for an existing DollhouseMCP entry */
+async function detectClient(client: string): Promise<DetectResult | null> {
   const configPath = getConfigPath(client);
   if (!configPath) return null;
 
@@ -131,51 +165,9 @@ async function detectClient(client: string): Promise<{
 
   try {
     const raw = await readFile(configPath, 'utf-8');
-
-    // TOML (Codex) — extract command and args from any dollhousemcp section
-    if (configPath.endsWith('.toml')) {
-      const hasDollhouse = raw.toLowerCase().includes('dollhousemcp');
-      if (!hasDollhouse) return { installed: false, configPath };
-
-      // Find the section header (case-insensitive) and extract config
-      const tomlConfig: Record<string, unknown> = {};
-      const sectionMatch = raw.match(/\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i);
-      if (sectionMatch) {
-        const sectionName = sectionMatch[1];
-        tomlConfig.serverName = sectionName;
-        // Extract content between this section and the next section header
-        const sectionStart = sectionMatch.index! + sectionMatch[0].length;
-        const nextSection = raw.indexOf('\n[', sectionStart);
-        const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
-
-        const commandMatch = sectionContent.match(/command\s*=\s*"([^"]+)"/);
-        const argsMatch = sectionContent.match(/args\s*=\s*\[([^\]]*)\]/);
-        if (commandMatch) tomlConfig.command = commandMatch[1];
-        if (argsMatch) {
-          tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replace(/^"|"$/g, ''));
-        }
-      }
-      return { installed: true, configPath, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
-    }
-
-    // JSON configs
-    const parsed = JSON.parse(raw);
-
-    // Check mcpServers.dollhousemcp or servers.dollhousemcp
-    for (const key of ['mcpServers', 'servers']) {
-      if (parsed[key]?.dollhousemcp) {
-        return {
-          installed: true,
-          configPath,
-          currentConfig: parsed[key].dollhousemcp,
-          serverKey: key,
-        };
-      }
-    }
-
-    return { installed: false, configPath };
+    const result = configPath.endsWith('.toml') ? parseTomlConfig(raw) : parseJsonConfig(raw);
+    return { configPath, ...result };
   } catch {
-    // File exists but can't parse — report path but no config
     return { installed: false, configPath };
   }
 }

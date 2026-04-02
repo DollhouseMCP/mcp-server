@@ -6,7 +6,7 @@
  * Tests install-mcp dependency resolution.
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { readFileSync } from 'node:fs';
@@ -422,7 +422,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('.mcpb section is hidden by default (shown only for pinned method)', () => {
-      const mcpbSection = html.match(/id="setup-mcpb-section"[^>]*/);
+      const mcpbSection = /id="setup-mcpb-section"[^>]*/.exec(html);
       expect(mcpbSection?.[0]).toContain('hidden');
     });
 
@@ -450,7 +450,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
 
     it('npx is active by default', () => {
       // The button with data-method="npx" should have is-active class
-      const npxBtn = html.match(/class="[^"]*is-active[^"]*"[^>]*data-method="npx"/);
+      const npxBtn = /class="[^"]*is-active[^"]*"[^>]*data-method="npx"/.exec(html);
       expect(npxBtn).not.toBeNull();
     });
 
@@ -459,7 +459,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('pinned prereq is hidden by default', () => {
-      const prereq = html.match(/id="setup-pinned-prereq"[^>]*/);
+      const prereq = /id="setup-pinned-prereq"[^>]*/.exec(html);
       expect(prereq?.[0]).toContain('hidden');
     });
 
