@@ -10,9 +10,14 @@
 
 import type { Request, Response } from 'express';
 import { execFile } from 'node:child_process';
+import { accessSync, constants as fsConstants } from 'node:fs';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 
@@ -193,20 +198,39 @@ export function createSetupRoutes(): {
 }
 
 /**
- * Run `npx install-mcp` to configure a specific MCP client.
- * The command is fully hardcoded — no user input reaches the shell.
+ * Resolve the install-mcp binary path.
+ * Uses the local dependency (node_modules/.bin/install-mcp) first,
+ * falls back to npx if not found.
+ */
+function resolveInstallMcpBin(): { cmd: string; prefixArgs: string[] } {
+  const localBin = join(dirname(dirname(dirname(__dirname))), 'node_modules', '.bin', 'install-mcp');
+  try {
+    accessSync(localBin, fsConstants.X_OK);
+    return { cmd: localBin, prefixArgs: [] };
+  } catch {
+    return { cmd: 'npx', prefixArgs: ['install-mcp'] };
+  }
+}
+
+/**
+ * Run install-mcp to configure a specific MCP client.
+ *
+ * Uses the bundled install-mcp dependency (MIT, https://github.com/supermemoryai/install-mcp).
+ * Command arguments are fully hardcoded — no user input reaches the shell.
+ * execFile is used (not exec) to prevent shell injection.
  */
 function runInstallMcp(client: string): Promise<string> {
   return new Promise((resolve, reject) => {
+    const { cmd, prefixArgs } = resolveInstallMcpBin();
     const args = [
-      'install-mcp',
+      ...prefixArgs,
       '@dollhousemcp/mcp-server@latest',
       '--client', client,
       '--name', 'dollhousemcp',
       '--yes',
     ];
 
-    execFile('npx', args, { timeout: 30_000 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { timeout: 30_000 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr || err.message));
         return;
