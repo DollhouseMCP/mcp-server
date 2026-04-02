@@ -332,6 +332,10 @@ Element operations:
 { operation: "render", params: { element_name: "meeting-notes", variables: { date: "2026-03-03" } } }
 { operation: "export_element", element_type: "persona", params: { element_name: "Tech-Writer" } }
 { operation: "open_portfolio_browser" }
+{ operation: "open_logs" }
+{ operation: "open_metrics" }
+{ operation: "open_permissions" }
+{ operation: "open_setup" }
 
 Memory-specific search (filter by tags):
 { operation: "search", params: { query: "*", type: "memory", filters: { tags: ["important"] } } }
