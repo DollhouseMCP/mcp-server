@@ -9,7 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
-import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { readFile as readFileAsync } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -194,7 +195,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
   let html: string;
 
   beforeAll(async () => {
-    html = await readFile(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
   });
 
   describe('Tab structure', () => {
@@ -426,7 +427,7 @@ describe('Setup Tab — JavaScript Integrity', () => {
   let js: string;
 
   beforeAll(async () => {
-    js = await readFile(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
   });
 
   describe('Config data', () => {
@@ -504,7 +505,7 @@ describe('Setup Tab — CSS Integrity', () => {
   let css: string;
 
   beforeAll(async () => {
-    css = await readFile(join(PUBLIC_DIR, 'setup.css'), 'utf-8');
+    css = await readFileAsync(join(PUBLIC_DIR, 'setup.css'), 'utf-8');
   });
 
   it('defines setup-page layout', () => {
@@ -546,13 +547,197 @@ describe('Setup Tab — CSS Integrity', () => {
   });
 });
 
+// ── Regression tests ──────────────────────────────────────────────────
+// Lock down fixes and refinements to prevent backsliding.
+
+describe('Setup Tab — Regressions', () => {
+  let html: string;
+  let js: string;
+  let css: string;
+
+  beforeAll(async () => {
+    html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    css = await readFileAsync(join(PUBLIC_DIR, 'setup.css'), 'utf-8');
+  });
+
+  describe('No @rc references anywhere', () => {
+    it('HTML has no @rc package references', () => {
+      expect(html).not.toContain('@dollhousemcp/mcp-server@rc');
+    });
+
+    it('JS has no @rc package references', () => {
+      expect(js).not.toContain('@dollhousemcp/mcp-server@rc');
+    });
+  });
+
+  describe('.mcpb link never hardcoded', () => {
+    it('no direct /download/dollhousemcp.mcpb URL', () => {
+      expect(html).not.toContain('/download/dollhousemcp.mcpb');
+    });
+
+    it('no hardcoded versioned .mcpb filename in HTML', () => {
+      // Should never have dollhousemcp-X.Y.Z.mcpb in the HTML
+      expect(html).not.toMatch(/dollhousemcp-\d+\.\d+\.\d+\.mcpb/);
+    });
+
+    it('uses /api/setup/mcpb endpoint for download', () => {
+      expect(html).toContain('href="/api/setup/mcpb"');
+    });
+  });
+
+  describe('UX copy quality', () => {
+    it('auto-install leads with action not mechanism', () => {
+      // "Pulls the latest version" should come before "Uses npx"
+      const pullsIdx = html.indexOf('Pulls the latest version');
+      const usesNpxIdx = html.indexOf('Uses <code>npx @latest</code>');
+      expect(pullsIdx).toBeGreaterThan(-1);
+      expect(usesNpxIdx).toBeGreaterThan(-1);
+      expect(pullsIdx).toBeLessThan(usesNpxIdx);
+    });
+
+    it('method toggle says "Auto-updating" not "npx"', () => {
+      // The toggle button label should lead with the benefit
+      const toggleSection = html.slice(
+        html.indexOf('setup-method-toggle'),
+        html.indexOf('setup-pinned-prereq')
+      );
+      expect(toggleSection).toContain('<strong>Auto-updating</strong>');
+      expect(toggleSection).toContain('<strong>Pinned version</strong>');
+    });
+  });
+
+  describe('Pinned version has all three sub-options', () => {
+    it('shows npx pinned option (no install needed badge)', () => {
+      expect(html).toContain('no install needed');
+    });
+
+    it('shows global install option', () => {
+      expect(html).toContain('id="pinned-global-cmd"');
+    });
+
+    it('shows project-local install option', () => {
+      expect(html).toContain('id="pinned-local-cmd"');
+    });
+
+    it('has version label that gets populated dynamically', () => {
+      expect(html).toContain('id="pinned-version-label"');
+    });
+  });
+
+  describe('Version fetching in JS', () => {
+    it('fetches from /api/setup/version', () => {
+      expect(js).toContain("fetch('/api/setup/version')");
+    });
+
+    it('updates pinned-version-label element', () => {
+      expect(js).toContain('pinned-version-label');
+    });
+
+    it('updates pinned-global-cmd element', () => {
+      expect(js).toContain('pinned-global-cmd');
+    });
+
+    it('updates pinned-local-cmd element', () => {
+      expect(js).toContain('pinned-local-cmd');
+    });
+
+    it('rebuilds configs with fetched version', () => {
+      expect(js).toContain('configs = buildConfigs(pinnedVersion)');
+    });
+  });
+
+  describe('Tab persistence', () => {
+    it('saves active tab to localStorage on click', () => {
+      // app.js should store tab in localStorage
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('dollhousemcp-active-tab');
+      expect(appJs).toContain("localStorage.setItem(TAB_KEY, tab)");
+    });
+
+    it('restores saved tab on page load', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain("localStorage.getItem(TAB_KEY)");
+    });
+
+    it('first visit defaults to setup tab', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain("switchToTab('setup')");
+      expect(appJs).toContain('dollhousemcp-setup-seen');
+    });
+  });
+
+  describe('Claude Code has manual config option', () => {
+    it('Claude Code panel has Open config file button', () => {
+      expect(html).toContain('data-open-client="claude-code"');
+    });
+
+    it('Claude Code panel has manual JSON config block', () => {
+      const panel = html.slice(
+        html.indexOf('id="setup-panel-claude-code"'),
+        html.indexOf('</section>', html.indexOf('id="setup-panel-claude-code"'))
+      );
+      expect(panel).toContain('~/.claude.json');
+      expect(panel).toContain('Or add manually');
+    });
+  });
+
+  describe('All platforms have consistent structure', () => {
+    const allPlatforms = [
+      'claude-desktop', 'claude-code', 'cursor', 'vscode',
+      'codex', 'gemini', 'windsurf', 'cline', 'lmstudio',
+    ];
+
+    it.each(allPlatforms)('%s panel has at least one copy button', (platform) => {
+      const start = html.indexOf(`id="setup-panel-${platform}"`);
+      const end = html.indexOf('</section>', start);
+      const panel = html.slice(start, end);
+      expect(panel).toContain('setup-copy-btn');
+    });
+
+    it.each(allPlatforms)('%s panel has at least one code block', (platform) => {
+      const start = html.indexOf(`id="setup-panel-${platform}"`);
+      const end = html.indexOf('</section>', start);
+      const panel = html.slice(start, end);
+      expect(panel).toContain('setup-code-block');
+    });
+  });
+
+  describe('CSS covers all interactive states', () => {
+    it('has hover state for platform tabs', () => {
+      expect(css).toContain('.setup-platform-tab:hover');
+    });
+
+    it('has disabled state for open button', () => {
+      expect(css).toContain('.setup-open-btn[disabled]');
+    });
+
+    it('has success state for install button', () => {
+      expect(css).toContain('.setup-install-btn.is-success');
+    });
+
+    it('has loading state for install button', () => {
+      expect(css).toContain('.setup-install-btn.is-loading');
+    });
+
+    it('has success/error states for install status', () => {
+      expect(css).toContain('.setup-install-status.is-success');
+      expect(css).toContain('.setup-install-status.is-error');
+    });
+
+    it('has h4 styling for pinned sub-options', () => {
+      expect(css).toContain('.setup-method h4');
+    });
+  });
+});
+
 // ── Dependency check ──────────────────────────────────────────────────
 
 describe('Setup Tab — Dependencies', () => {
   let packageJson: Record<string, unknown>;
 
   beforeAll(async () => {
-    const raw = await readFile(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8');
+    const raw = await readFileAsync(join(__dirname, '..', '..', '..', 'package.json'), 'utf-8');
     packageJson = JSON.parse(raw);
   });
 
