@@ -248,8 +248,9 @@ export class ContentValidator {
    * Content contexts where code execution patterns are legitimate and should
    * not trigger security blocks. Skills contain exemplar code; templates contain
    * code snippets that are rendered, never executed; agent definitions describe
-   * technical workflows that may reference code. Prompt injection, credential,
-   * and path traversal patterns remain active for ALL contexts.
+   * technical workflows that may reference code. Prompt injection, actual token
+   * exposure (ghp_/gho_), data exfiltration, and HTML/XSS patterns remain
+   * active for ALL contexts.
    * @since Issue #456
    */
   private static readonly CODE_EXEMPT_CONTEXTS = new Set<ContentValidatorOptions['contentContext']>([
@@ -271,6 +272,38 @@ export class ContentValidator {
     'Code execution',
     'System command execution',
     'Subprocess execution',
+  ]);
+
+  /**
+   * Security documentation patterns exempt for CODE_EXEMPT_CONTEXTS.
+   * Skills/agents that teach penetration testing, threat modeling, etc.
+   * legitimately reference shell commands, file paths, and credential names.
+   *
+   * DISTINCTION FROM ACTIVE THREAT PATTERNS:
+   * These patterns describe attacks (educational) — they appear in element
+   * definitions that an author wrote, not in runtime user input. Patterns
+   * that remain active even in exempt contexts are actual threats:
+   * - Prompt injection (system/admin override, instruction manipulation)
+   * - Real token formats (ghp_*, gho_* — not just the word "GITHUB_TOKEN")
+   * - Data exfiltration commands (export/send all credentials)
+   * - HTML/XSS injection (renders in the web console)
+   *
+   * @since Issue #1725
+   */
+  private static readonly SECURITY_DOC_PATTERNS = new Set([
+    'Command substitution',
+    'External command execution',
+    'Sensitive file access',
+    'Path traversal attempt',
+    'SSH key access attempt',
+    'Token reference',
+    'Dangerous shell command in backticks',
+    'Sensitive file access in backticks',
+    'Shell execution in backticks',
+    'Dangerous command in backticks',
+    'Pipe to shell in backticks',
+    'Sensitive file or privilege escalation in backticks',
+    'Script interpreter with dangerous function in backticks',
   ]);
 
   /**
@@ -353,8 +386,11 @@ export class ContentValidator {
     let highestSeverity = currentSeverity;
 
     for (const { pattern, severity, description } of this.INJECTION_PATTERNS) {
-      // Fix #456: Skip code execution patterns for element types that legitimately contain code
-      if (contentContext && this.CODE_EXEMPT_CONTEXTS.has(contentContext) && this.CODE_EXECUTION_PATTERNS.has(description)) {
+      // Fix #456/#1725: Skip code execution and security documentation patterns
+      // for element types that legitimately contain code and attack descriptions.
+      // Prompt injection, actual token exposure, and HTML/XSS remain active.
+      if (contentContext && this.CODE_EXEMPT_CONTEXTS.has(contentContext) &&
+          (this.CODE_EXECUTION_PATTERNS.has(description) || this.SECURITY_DOC_PATTERNS.has(description))) {
         continue;
       }
       // Fix #803: Skip HTML section tag patterns for templates (use <script>/<style> as section delimiters)

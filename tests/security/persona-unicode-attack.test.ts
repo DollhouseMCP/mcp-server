@@ -67,18 +67,20 @@ describe('PersonaManager - Unicode Attack Prevention', () => {
       ).rejects.toThrow(/Validation failed.*Mixed script/);
     });
 
-    it('should reject Greek lookalikes as mixed script attack', async () => {
+    it('should normalize Greek lookalikes instead of rejecting', async () => {
       // Greek 'ο' (U+03BF) looks like Latin 'o' (U+006F)
       const greekName = 'Cοding'; // 'o' is Greek omicron
 
-      // DMCP-SEC-004: Mixed script (Greek + Latin) = high severity homograph attack
-      await expect(
-        personaManager.create({
-          name: greekName,
-          description: 'A test persona',
-          instructions: 'Test instructions'
-        })
-      ).rejects.toThrow(/Validation failed.*Mixed script/);
+      // Latin+Greek is no longer a mixed script rejection (legitimate in math/science).
+      // The confusable character (ο→o) is still normalized, so the persona is created
+      // with the normalized name. This prevents homoglyph spoofing without blocking
+      // legitimate Greek character usage.
+      const persona = await personaManager.create({
+        name: greekName,
+        description: 'A test persona',
+        instructions: 'Test instructions'
+      });
+      expect(persona.metadata.name).toBe('Coding'); // ο normalized to o
     });
 
     it('should normalize fullwidth characters', async () => {

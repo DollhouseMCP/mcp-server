@@ -31,6 +31,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 3939;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
+/** Max JSON body for setup routes (install/open-config). Ingest routes use their own 1mb limit. */
+const SETUP_BODY_LIMIT = '1kb';
 
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
@@ -173,10 +175,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   });
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
-  app.use(express.json({ limit: '1kb', type: 'application/json' }));
+  // Body limit scoped to setup routes only — ingest routes need 1mb for follower log forwarding
+  const setupJsonParser = express.json({ limit: SETUP_BODY_LIMIT, type: 'application/json' });
   const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
-  app.post('/api/setup/install', installHandler);
-  app.post('/api/setup/open-config', openConfigHandler);
+  app.post('/api/setup/install', setupJsonParser, installHandler);
+  app.post('/api/setup/open-config', setupJsonParser, openConfigHandler);
   app.get('/api/setup/version', versionHandler);
   app.get('/api/setup/mcpb', mcpbRedirectHandler);
   app.get('/api/setup/detect', detectHandler);
@@ -269,6 +272,18 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       return;
     }
     res.sendFile(join(publicDir, 'index.html'));
+  });
+
+  // Global error handler — catch Express errors and route to logger instead of terminal.
+  // Without this, Express dumps stack traces to stderr (visible in --web terminal).
+  // All errors still appear in the management console's Logs tab via MemoryLogSink.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: Error, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
+    const status = (err as any).status || (err as any).statusCode || 500;
+    logger.warn(`[WebUI] ${err.name}: ${err.message}`);
+    if (!res.headersSent) {
+      res.status(status).json({ error: err.message });
+    }
   });
 
   // Bind to localhost only — handle port conflicts gracefully

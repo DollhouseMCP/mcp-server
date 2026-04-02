@@ -466,10 +466,20 @@ This has a path like ../../../ but is otherwise safe.`;
       expect(result.detectedPatterns).toContain('GitHub token exposure');
     });
 
-    it('should still block path traversal in skill content', () => {
+    it('should allow path traversal references in skill content (security documentation)', () => {
+      // Issue #1725: Skills describing penetration testing or threat modeling
+      // legitimately reference path traversal, /etc/passwd, etc.
       const result = ContentValidator.validateAndSanitize(
         'Read from ../../../etc/passwd for credentials',
         { contentContext: 'skill' }
+      );
+      expect(result.isValid).toBe(true);
+    });
+
+    it('should still block path traversal in persona content', () => {
+      const result = ContentValidator.validateAndSanitize(
+        'Read from ../../../etc/passwd for credentials',
+        { contentContext: 'persona' }
       );
       expect(result.isValid).toBe(false);
     });
