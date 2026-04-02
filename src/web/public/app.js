@@ -1941,13 +1941,31 @@ function safeParseYaml(content) {
       });
     };
 
-    const savedTab = localStorage.getItem(TAB_KEY);
-    if (savedTab) {
-      switchToTab(savedTab);
-    } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
-      localStorage.setItem(SETUP_SEEN_KEY, '1');
-      switchToTab('setup');
+    // Tab selection priority: URL hash > localStorage > first-visit setup > portfolio default
+    function applyHashTab() {
+      const hashTab = globalThis.location.hash.replace('#', '');
+      if (hashTab && document.getElementById('tab-' + hashTab)) {
+        switchToTab(hashTab);
+        lazyInitTab(hashTab, tabInits);
+        localStorage.setItem(TAB_KEY, hashTab);
+        history.replaceState(null, '', globalThis.location.pathname);
+        return true;
+      }
+      return false;
     }
+
+    if (!applyHashTab()) {
+      const savedTab = localStorage.getItem(TAB_KEY);
+      if (savedTab) {
+        switchToTab(savedTab);
+      } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
+        localStorage.setItem(SETUP_SEEN_KEY, '1');
+        switchToTab('setup');
+      }
+    }
+
+    // Handle hash changes for deep-linking (e.g., open_logs operation)
+    globalThis.addEventListener('hashchange', () => applyHashTab());
 
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {

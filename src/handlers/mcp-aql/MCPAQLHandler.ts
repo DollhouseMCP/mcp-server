@@ -959,11 +959,14 @@ export class MCPAQLHandler {
         return this.failure(`Unknown operation: ${operation}`, startTime);
       }
 
-      // Step 4: Dispatch to handler
+      // Step 4: Dispatch to handler (merge implicitParams from route, user params take precedence)
+      const mergedParams = route.implicitParams
+        ? { ...route.implicitParams, ...params }
+        : params ?? {};
       const rawData = await this.dispatch(route.handler, {
         operation,
         elementType,
-        params: params || {},
+        params: mergedParams,
       });
 
       // Step 5: Apply field selection (Issue #202)
@@ -1245,7 +1248,7 @@ export class MCPAQLHandler {
 
     // Browser operations (Issue #774: open portfolio browser)
     if (module === 'Browser') {
-      return this.dispatchBrowser(method);
+      return this.dispatchBrowser(method, params as Record<string, unknown>);
     }
 
     throw new Error(`Unknown handler module: ${module}`);
@@ -3101,7 +3104,7 @@ export class MCPAQLHandler {
    * @returns MCP response with URL and optional warning
    * @see Issue #774
    */
-  private async dispatchBrowser(method: string): Promise<unknown> {
+  private async dispatchBrowser(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (method !== 'open') {
       throw new Error(`Unknown Browser method: ${method}`);
     }
@@ -3110,17 +3113,21 @@ export class MCPAQLHandler {
     const { homedir } = await import('node:os');
     const portfolioDir = homedir() + '/.dollhouse/portfolio';
 
+    // Tab parameter for deep-linking to a specific console tab (logs, metrics, etc.)
+    const tab = typeof params?.tab === 'string' ? params.tab : undefined;
+
     // Issue #796: Pass MCPAQLHandler to web server for gateway routing
-    const result = await openPortfolioBrowser(portfolioDir, undefined, this);
+    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab);
 
     const status = result.alreadyRunning ? 'already running' : 'started';
     const browserStatus = result.browserOpened ? 'opened' : 'could not open automatically';
     const warning = result.warning ? `\n\n⚠️ ${result.warning}` : '';
+    const tabNote = tab ? ` (${tab} tab)` : '';
 
     return {
       content: [{
         type: 'text',
-        text: `Portfolio browser ${status} at ${result.url} — browser ${browserStatus}${warning}`,
+        text: `Portfolio browser ${status} at ${result.url}${tabNote} — browser ${browserStatus}${warning}`,
       }],
     };
   }

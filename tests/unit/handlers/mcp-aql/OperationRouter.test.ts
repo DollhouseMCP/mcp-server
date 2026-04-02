@@ -11,6 +11,7 @@ import {
   OPERATION_ROUTES,
   getRoute,
   getOperationsForEndpoint,
+  resolveOperationName,
 } from '../../../../src/handlers/mcp-aql/OperationRouter.js';
 
 describe('OperationRouter', () => {
@@ -45,6 +46,10 @@ describe('OperationRouter', () => {
         'activate_element',
         'deactivate_element',
         'open_portfolio_browser',
+        'open_logs',
+        'open_metrics',
+        'open_permissions',
+        'open_setup',
         'introspect',
         'browse_collection',
         'search_collection',
@@ -485,6 +490,86 @@ describe('OperationRouter', () => {
       expect(route.endpoint).toBe('READ');
       expect(route.handler).toBe('Test.handler');
       expect(route.description).toBeUndefined();
+    });
+  });
+
+  describe('resolveOperationName() alias resolution', () => {
+    it('should return canonical name for direct operations', () => {
+      expect(resolveOperationName('open_portfolio_browser')).toBe('open_portfolio_browser');
+      expect(resolveOperationName('create_element')).toBe('create_element');
+    });
+
+    it('should resolve aliases to canonical operation names', () => {
+      expect(resolveOperationName('open_console')).toBe('open_portfolio_browser');
+      expect(resolveOperationName('open_management_console')).toBe('open_portfolio_browser');
+      expect(resolveOperationName('open_dollhouse_mcp')).toBe('open_portfolio_browser');
+      expect(resolveOperationName('open_dollhouse_mcp_console')).toBe('open_portfolio_browser');
+    });
+
+    it('should resolve tab-specific aliases', () => {
+      expect(resolveOperationName('open_dollhouse_logs')).toBe('open_logs');
+      expect(resolveOperationName('open_dollhouse_mcp_metrics')).toBe('open_metrics');
+      expect(resolveOperationName('open_dollhouse_permissions')).toBe('open_permissions');
+      expect(resolveOperationName('open_dollhouse_setup')).toBe('open_setup');
+    });
+
+    it('should return input unchanged for unknown operations', () => {
+      expect(resolveOperationName('nonexistent_op')).toBe('nonexistent_op');
+    });
+
+    it('should make getRoute work with aliases', () => {
+      const route = getRoute('open_console');
+      expect(route).toBeDefined();
+      expect(route?.handler).toBe('Browser.open');
+    });
+  });
+
+  describe('console tab deep-link operations', () => {
+    it('should route open_logs to Browser.open with implicitParams', () => {
+      const route = OPERATION_ROUTES.open_logs;
+      expect(route.endpoint).toBe('READ');
+      expect(route.handler).toBe('Browser.open');
+      expect(route.implicitParams).toEqual({ tab: 'logs' });
+    });
+
+    it('should route open_metrics to Browser.open with implicitParams', () => {
+      const route = OPERATION_ROUTES.open_metrics;
+      expect(route.endpoint).toBe('READ');
+      expect(route.handler).toBe('Browser.open');
+      expect(route.implicitParams).toEqual({ tab: 'metrics' });
+    });
+
+    it('should route open_permissions to Browser.open with implicitParams', () => {
+      const route = OPERATION_ROUTES.open_permissions;
+      expect(route.endpoint).toBe('READ');
+      expect(route.handler).toBe('Browser.open');
+      expect(route.implicitParams).toEqual({ tab: 'permissions' });
+    });
+
+    it('should route open_setup to Browser.open with implicitParams', () => {
+      const route = OPERATION_ROUTES.open_setup;
+      expect(route.endpoint).toBe('READ');
+      expect(route.handler).toBe('Browser.open');
+      expect(route.implicitParams).toEqual({ tab: 'setup' });
+    });
+
+    it('should not have aliases that collide with existing operations', () => {
+      const allAliases: string[] = [];
+      for (const route of Object.values(OPERATION_ROUTES)) {
+        if (route.aliases) allAliases.push(...route.aliases);
+      }
+      const canonicals = Object.keys(OPERATION_ROUTES);
+      const collisions = allAliases.filter(a => canonicals.includes(a));
+      expect(collisions).toEqual([]);
+    });
+
+    it('should not have duplicate aliases across operations', () => {
+      const allAliases: string[] = [];
+      for (const route of Object.values(OPERATION_ROUTES)) {
+        if (route.aliases) allAliases.push(...route.aliases);
+      }
+      const unique = new Set(allAliases);
+      expect(allAliases.length).toBe(unique.size);
     });
   });
 });
