@@ -390,15 +390,19 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(html).toContain('href="/api/setup/mcpb"');
     });
 
-    it('.mcpb download is in the pinned prereq section, not auto-updating', () => {
-      const pinnedSection = html.slice(
-        html.indexOf('id="setup-pinned-prereq"'),
-        html.indexOf('id="setup-platforms"')
+    it('.mcpb download is inside Claude Desktop panel only', () => {
+      const claudePanel = html.slice(
+        html.indexOf('id="setup-panel-claude-desktop"'),
+        html.indexOf('<!-- Claude Code -->')
       );
-      expect(pinnedSection).toContain('/api/setup/mcpb');
-      expect(pinnedSection).toContain('.mcpb');
-      expect(pinnedSection).toContain('double-click');
-      expect(pinnedSection).toContain('Claude Desktop only');
+      expect(claudePanel).toContain('/api/setup/mcpb');
+      expect(claudePanel).toContain('double-click');
+      expect(claudePanel).toContain('pinned version');
+    });
+
+    it('.mcpb section is hidden by default (shown only for pinned method)', () => {
+      const mcpbSection = html.match(/id="setup-mcpb-section"[^>]*/);
+      expect(mcpbSection?.[0]).toContain('hidden');
     });
 
     it('does not contain broken .mcpb direct download link', () => {

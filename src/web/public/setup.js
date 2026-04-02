@@ -115,8 +115,10 @@
           b.setAttribute('aria-pressed', b.dataset.method === method ? 'true' : 'false');
         });
 
-        // Show/hide pinned install prereq step
+        // Show/hide pinned install prereq step and .mcpb section
         if (prereq) prereq.hidden = method !== 'global';
+        const mcpbSection = document.getElementById('setup-mcpb-section');
+        if (mcpbSection) mcpbSection.hidden = method !== 'global';
 
         // Update all config snippets and re-evaluate detection matches
         updateAllConfigs(method);
