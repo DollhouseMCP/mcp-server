@@ -59,33 +59,37 @@
         <legend class="sr-only">Installation method</legend>
         <button class="setup-method-btn is-active" data-method="npx" aria-pressed="true">
           <strong>Auto-updating</strong>
-          <span>npx &mdash; always pulls the latest version on startup</span>
+          <span>Always pulls the latest version on startup</span>
         </button>
         <button class="setup-method-btn" data-method="global" aria-pressed="false">
-          <strong>Local copy</strong>
-          <span>npm install &mdash; faster startup, doesn't auto-update</span>
+          <strong>Pinned version</strong>
+          <span>Lock to a specific version, update when you choose</span>
         </button>
       </fieldset>
 
       <!-- Pinned install prereq (hidden by default, shown when pinned selected) -->
       <div class="setup-pinned-prereq" id="setup-pinned-prereq" hidden>
         <div class="setup-method">
-          <h3>Step 1: Install a local copy</h3>
-          <p>This installs a copy that stays at the version you install. To update, re-run the install command. Then choose your platform below to connect it.</p>
+          <h3>Pinned version: <code id="pinned-version-label">loading...</code></h3>
+          <p>The platform configs below will use this exact version. Choose how you want it installed:</p>
 
-          <h4>Global install <span class="setup-badge">recommended</span></h4>
-          <p>Puts the <code>dollhousemcp</code> command on your PATH.</p>
+          <h4>npx with pinned version <span class="setup-badge">no install needed</span></h4>
+          <p>Same as auto-updating but locked to a specific version. No extra install step.</p>
+          <p class="setup-hint">The platform configs below already use the pinned version &mdash; just copy and go.</p>
+
+          <h4>Global install</h4>
+          <p>Puts the <code>dollhousemcp</code> command on your PATH. Faster startup.</p>
           <div class="setup-code-block">
-            <button class="setup-copy-btn" type="button" data-copy-text="npm install -g @dollhousemcp/mcp-server" aria-label="Copy global install command">Copy</button>
-            <pre><code>npm install -g @dollhousemcp/mcp-server</code></pre>
+            <button class="setup-copy-btn" type="button" id="pinned-global-copy" data-copy-text="npm install -g @dollhousemcp/mcp-server" aria-label="Copy global install command">Copy</button>
+            <pre><code id="pinned-global-cmd">npm install -g @dollhousemcp/mcp-server</code></pre>
           </div>
-          <p class="setup-hint">Update later: <code>npm update -g @dollhousemcp/mcp-server</code></p>
+          <p class="setup-hint">Update later by re-running with the new version number.</p>
 
           <h4>Project-local install</h4>
           <p>Installs into a directory you choose. Good for running multiple versions side by side.</p>
           <div class="setup-code-block">
-            <button class="setup-copy-btn" type="button" data-copy-text="mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install @dollhousemcp/mcp-server" aria-label="Copy local install command">Copy</button>
-            <pre><code>mkdir -p ~/mcp-servers && cd ~/mcp-servers
+            <button class="setup-copy-btn" type="button" id="pinned-local-copy" data-copy-text="mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install @dollhousemcp/mcp-server" aria-label="Copy local install command">Copy</button>
+            <pre><code id="pinned-local-cmd">mkdir -p ~/mcp-servers && cd ~/mcp-servers
 npm install @dollhousemcp/mcp-server</code></pre>
           </div>
           <p class="setup-hint">Then point your client config at: <code>node ~/mcp-servers/node_modules/@dollhousemcp/mcp-server/dist/index.js</code></p>

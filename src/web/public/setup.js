@@ -8,83 +8,58 @@
 (() => {
   'use strict';
 
-  // ── Config data for both install methods ──────────────────────────────
+  // ── Config builders ────────────────────────────────────────────────────
 
-  const NPX_CMD = 'npx -y @dollhousemcp/mcp-server@latest';
-  const GLOBAL_CMD = 'dollhousemcp';
+  const PKG = '@dollhousemcp/mcp-server';
 
-  /**
-   * Per-platform config snippets for each install method.
-   * Keys match the setup-panel IDs (minus the "setup-panel-" prefix).
-   * Each entry has { npx, global } with { code, copyText } for the config block.
-   * Platforms with terminal commands get { termNpx, termGlobal } instead.
-   */
-  const configs = {
-    // JSON configs — mcpServers key
-    'claude-desktop': {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    cursor: {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    windsurf: {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    cline: {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    gemini: {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    lmstudio: {
-      npx: json('mcpServers', NPX_CMD),
-      global: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    // VS Code uses "servers" not "mcpServers"
-    vscode: {
-      npx: json('servers', NPX_CMD),
-      global: jsonGlobal('servers', GLOBAL_CMD),
-    },
-    // Terminal commands
-    'claude-code': {
-      npx: { code: 'claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest', isTerminal: true },
-      global: { code: 'claude mcp add dollhousemcp -- dollhousemcp', isTerminal: true },
-      // Second code block is the manual JSON config
-      npxJson: json('mcpServers', NPX_CMD),
-      globalJson: jsonGlobal('mcpServers', GLOBAL_CMD),
-    },
-    codex: {
-      npx: { code: 'codex mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest', isTerminal: true },
-      global: { code: 'codex mcp add dollhousemcp -- dollhousemcp', isTerminal: true },
-      // Codex also has a TOML config
-      npxToml: {
-        code: '[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "@dollhousemcp/mcp-server@latest"]',
-      },
-      globalToml: {
-        code: '[mcp_servers.dollhousemcp]\ncommand = "dollhousemcp"',
-      },
-    },
-  };
-
-  /** Build a JSON config block for npx (command + args) */
-  function json(rootKey, npxCmd) {
+  /** Build a JSON config block from an npx-style command string */
+  function jsonConfig(rootKey, npxCmd) {
     const parts = npxCmd.split(' ');
     const obj = {};
     obj[rootKey] = { dollhousemcp: { command: parts[0], args: parts.slice(1) } };
     return { code: JSON.stringify(obj, null, 2), copyText: JSON.stringify(obj) };
   }
 
-  /** Build a JSON config block for global install (command only, no args) */
-  function jsonGlobal(rootKey, cmd) {
-    const obj = {};
-    obj[rootKey] = { dollhousemcp: { command: cmd } };
-    return { code: JSON.stringify(obj, null, 2), copyText: JSON.stringify(obj) };
+  /** Build configs for a platform that uses JSON (mcpServers or servers) */
+  function platformJson(rootKey, version) {
+    return {
+      npx: jsonConfig(rootKey, `npx -y ${PKG}@latest`),
+      global: jsonConfig(rootKey, `npx -y ${PKG}@${version}`),
+    };
   }
+
+  /** Build configs for a CLI platform (terminal command + JSON fallback) */
+  function platformCli(cli, rootKey, version) {
+    return {
+      npx: { code: `${cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`, isTerminal: true },
+      global: { code: `${cli} mcp add dollhousemcp -- npx -y ${PKG}@${version}`, isTerminal: true },
+      npxJson: jsonConfig(rootKey, `npx -y ${PKG}@latest`),
+      globalJson: jsonConfig(rootKey, `npx -y ${PKG}@${version}`),
+    };
+  }
+
+  /** Build all platform configs for a given version */
+  function buildConfigs(version) {
+    return {
+      'claude-desktop': platformJson('mcpServers', version),
+      cursor: platformJson('mcpServers', version),
+      windsurf: platformJson('mcpServers', version),
+      cline: platformJson('mcpServers', version),
+      gemini: platformJson('mcpServers', version),
+      lmstudio: platformJson('mcpServers', version),
+      vscode: platformJson('servers', version),
+      'claude-code': platformCli('claude', 'mcpServers', version),
+      codex: {
+        ...platformCli('codex', 'mcpServers', version),
+        npxToml: { code: `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@latest"]` },
+        globalToml: { code: `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${version}"]` },
+      },
+    };
+  }
+
+  // Start with a placeholder version, update once we fetch from server
+  let pinnedVersion = 'latest';
+  let configs = buildConfigs(pinnedVersion);
 
   // ── Current method state ──────────────────────────────────────────────
 
@@ -359,6 +334,46 @@
     });
   };
 
+  // ── Fetch version and update pinned configs ────────────────────────────
+
+  const fetchVersion = async () => {
+    try {
+      const res = await fetch('/api/setup/version');
+      if (!res.ok) return;
+      const data = await res.json();
+
+      // Use latest from GitHub if available, otherwise running version
+      pinnedVersion = data.latest?.version || data.running?.version || pinnedVersion;
+      if (pinnedVersion === 'latest') return;
+
+      // Rebuild configs with real version
+      configs = buildConfigs(pinnedVersion);
+
+      // Update prereq section
+      const versionLabel = document.getElementById('pinned-version-label');
+      if (versionLabel) versionLabel.textContent = `v${pinnedVersion}`;
+
+      // Update global install command
+      const globalCmd = document.getElementById('pinned-global-cmd');
+      const globalCopy = document.getElementById('pinned-global-copy');
+      if (globalCmd) globalCmd.textContent = `npm install -g ${PKG}@${pinnedVersion}`;
+      if (globalCopy) globalCopy.dataset.copyText = `npm install -g ${PKG}@${pinnedVersion}`;
+
+      // Update local install command
+      const localCmd = document.getElementById('pinned-local-cmd');
+      const localCopy = document.getElementById('pinned-local-copy');
+      if (localCmd) localCmd.textContent = `mkdir -p ~/mcp-servers && cd ~/mcp-servers\nnpm install ${PKG}@${pinnedVersion}`;
+      if (localCopy) localCopy.dataset.copyText = `mkdir -p ~/mcp-servers && cd ~/mcp-servers && npm install ${PKG}@${pinnedVersion}`;
+
+      // If currently showing pinned method, refresh all config snippets
+      if (currentMethod === 'global') {
+        updateAllConfigs('global');
+      }
+    } catch {
+      // Offline or no API — keep defaults
+    }
+  };
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
@@ -368,4 +383,5 @@
   initCopyButtons();
   initInstallButtons();
   initOpenButtons();
+  fetchVersion();
 })();

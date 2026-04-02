@@ -451,8 +451,8 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
 
     it('VS Code uses "servers" key', () => {
-      // The json() call for vscode should use 'servers'
-      expect(js).toContain("json('servers'");
+      // The platformJson/platformCli call for vscode should use 'servers'
+      expect(js).toContain("vscode: platformJson('servers'");
     });
 
     it('references @latest not @rc', () => {
@@ -460,8 +460,14 @@ describe('Setup Tab — JavaScript Integrity', () => {
       expect(js).toContain('@latest');
     });
 
-    it('global method uses dollhousemcp command', () => {
-      expect(js).toContain("'dollhousemcp'");
+    it('builds pinned configs with version parameter', () => {
+      expect(js).toContain('buildConfigs');
+      expect(js).toContain('pinnedVersion');
+    });
+
+    it('fetches version from API', () => {
+      expect(js).toContain('/api/setup/version');
+      expect(js).toContain('fetchVersion');
     });
   });
 
