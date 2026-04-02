@@ -58,23 +58,25 @@ Your **portfolio** (`~/.dollhouse/portfolio/`) is a local folder that holds all 
 
 DollhouseMCP installs on any MCP-compatible AI client — Claude Code, Claude Desktop, Cursor, Gemini, Codex, and local LLMs. Core element management (create, activate, search, browse) works across all platforms. Advanced features (Gatekeeper confirmation flows, agentic loop execution) have been tested extensively on Claude Code and should work on any client that supports standard MCP tool call/response patterns.
 
-**Claude Desktop** (one-click install):
+**Interactive Setup** (any platform):
 
-Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/tag/v2.0.0) (`.mcpb` file) and open it. Claude Desktop handles the rest — no terminal required.
+```bash
+npx @dollhousemcp/mcp-server@latest --web
+```
+
+Opens a browser-based setup wizard with one-click install for Claude Desktop, Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Cline, and LM Studio. Detects existing installations, supports auto-updating and pinned versions.
 
 **Claude Code** (one command):
 
-All projects (recommended):
 ```bash
 claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
-Current project only:
-```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
-```
+**Claude Desktop** (one-click install):
 
-**Other platforms** — see the [Quick Start Guide](docs/guides/quick-start.md) for Claude Desktop manual config, Gemini, Cursor, Codex, local LLMs, and more.
+Download the [DollhouseMCP Desktop Extension](https://github.com/DollhouseMCP/mcp-server/releases/latest) (`.mcpb` file) and double-click it. Claude Desktop handles the rest — no terminal required.
+
+**Other platforms** — see the [Quick Start Guide](docs/guides/quick-start.md) or run the interactive setup above.
 
 Then start a conversation:
 

@@ -337,47 +337,22 @@ Assistant: "I've saved 'Hard SciFi Writer' to your portfolio. You can activate i
 
 ## 📦 Installation
 
-### Choose Your Installation Method
+### Interactive Setup (Recommended)
 
-<table>
-<tr>
-<th>Method</th>
-<th>Best For</th>
-<th>Pros</th>
-<th>Cons</th>
-</tr>
-<tr>
-<td><strong>Local Install</strong><br>(Recommended)</td>
-<td>Most users, multiple configs, customization</td>
-<td>✅ Multiple setups<br>✅ Easy backup<br>✅ No permissions</td>
-<td>❌ Longer path in config</td>
-</tr>
-<tr>
-<td><strong>npx</strong></td>
-<td>Quick testing, always latest</td>
-<td>✅ No install<br>✅ Always updated</td>
-<td>❌ Slower startup<br>❌ Needs internet</td>
-</tr>
-<tr>
-<td><strong>Global Install</strong></td>
-<td>Single shared instance</td>
-<td>✅ Short command</td>
-<td>❌ Only one version<br>❌ Needs sudo/admin</td>
-</tr>
-</table>
+One command opens a browser-based setup wizard with one-click install for 9 MCP clients:
+
+```bash
+npx @dollhousemcp/mcp-server@latest --web
+```
+
+Supports Claude Desktop, Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Cline, and LM Studio. Detects existing installations, auto-updating and pinned version options.
 
 ---
 
 ### Claude Code
 
-All projects (recommended):
 ```bash
 claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server
-```
-
-Current project only:
-```bash
-claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
 ---
