@@ -16,6 +16,8 @@ import { EvictingQueue } from './EvictingQueue.js';
 class MCPLogger implements ILogger {
   private logs = new EvictingQueue<LogEntry>(1000);
   private isMCPConnected = false;
+  private minLevel: 'debug' | 'info' | 'warn' | 'error' = 'debug';
+  private static readonly LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
   private logListener?: (entry: LogEntry) => void;
 
   addLogListener(fn: (entry: LogEntry) => void): () => void {
@@ -90,6 +92,14 @@ class MCPLogger implements ILogger {
    */
   public setMCPConnected(): void {
     this.isMCPConnected = true;
+  }
+
+  /**
+   * Set minimum log level for console output.
+   * Entries below this level are still stored in memory but not printed.
+   */
+  public setMinLevel(level: 'debug' | 'info' | 'warn' | 'error'): void {
+    this.minLevel = level;
   }
 
   /**
@@ -271,11 +281,12 @@ class MCPLogger implements ILogger {
     this.logs.push(entry);
     this.logListener?.(entry);
 
-    // Only write to console during initialization
+    // Only write to console during initialization, respecting minimum level
     if (!this.isMCPConnected) {
       // Check NODE_ENV inside the method to ensure it's evaluated at runtime
       const isTest = process.env.NODE_ENV === 'test';
-      if (!isTest) {
+      const meetsLevel = MCPLogger.LEVEL_ORDER[level] >= MCPLogger.LEVEL_ORDER[this.minLevel];
+      if (!isTest && meetsLevel) {
         const prefix = `[${entry.timestamp.toISOString()}] [${level.toUpperCase()}]`;
         // Security fix: Use sanitized message to prevent sensitive information disclosure
         // Both message and data are sanitized before any output

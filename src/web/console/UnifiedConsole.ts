@@ -20,6 +20,8 @@ import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js
 import { logger } from '../../utils/logger.js';
 import {
   electLeader,
+  isLeaderWebConsoleReachable,
+  forceClaimLeadership,
   startHeartbeat,
   registerLeaderCleanup,
   type ElectionResult,
@@ -72,7 +74,17 @@ export interface UnifiedConsoleResult {
  * or sets up event forwarding (follower).
  */
 export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promise<UnifiedConsoleResult> {
-  const election = await electLeader(options.sessionId, CONSOLE_PORT);
+  let election = await electLeader(options.sessionId, CONSOLE_PORT);
+
+  // If we lost the election, check if the leader is actually running a web console.
+  // An MCP stdio process may hold leadership but not serve web routes.
+  // In that case, force a takeover so the web console works properly.
+  if (election.role === 'follower') {
+    const reachable = await isLeaderWebConsoleReachable(election.leaderInfo);
+    if (!reachable) {
+      election = await forceClaimLeadership(options.sessionId, CONSOLE_PORT);
+    }
+  }
 
   if (election.role === 'leader') {
     return startAsLeader(options, election);
