@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.0.4] - 2026-04-02
+
+### Hotfix: npm package missing web assets
+
+- **Fix**: `package.json` `files` field now includes `dist/web/public/**` and `dist/seed-elements/**`
+- v2.0.3 was missing `.html`, `.css`, and font files from the web console, causing `--web` mode to crash with `NotFoundError`
+- Also missing seed element `.yaml` files, causing seed memory installation to fail
+- Added package inclusion tests to prevent regression
+
 ## [2.0.3] - 2026-04-02
 
 ### Setup Tab — Interactive Installer
