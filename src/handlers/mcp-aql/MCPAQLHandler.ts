@@ -961,8 +961,8 @@ export class MCPAQLHandler {
 
       // Step 4: Dispatch to handler (merge implicitParams from route, user params take precedence)
       const mergedParams = route.implicitParams
-        ? { ...route.implicitParams, ...(params || {}) }
-        : (params || {});
+        ? { ...route.implicitParams, ...params }
+        : params ?? {};
       const rawData = await this.dispatch(route.handler, {
         operation,
         elementType,

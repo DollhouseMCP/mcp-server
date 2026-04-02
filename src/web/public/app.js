@@ -1943,12 +1943,12 @@ function safeParseYaml(content) {
 
     // Tab selection priority: URL hash > localStorage > first-visit setup > portfolio default
     function applyHashTab() {
-      const hashTab = window.location.hash.replace('#', '');
+      const hashTab = globalThis.location.hash.replace('#', '');
       if (hashTab && document.getElementById('tab-' + hashTab)) {
         switchToTab(hashTab);
         lazyInitTab(hashTab, tabInits);
         localStorage.setItem(TAB_KEY, hashTab);
-        history.replaceState(null, '', window.location.pathname);
+        history.replaceState(null, '', globalThis.location.pathname);
         return true;
       }
       return false;
@@ -1965,7 +1965,7 @@ function safeParseYaml(content) {
     }
 
     // Handle hash changes for deep-linking (e.g., open_logs operation)
-    window.addEventListener('hashchange', () => applyHashTab());
+    globalThis.addEventListener('hashchange', () => applyHashTab());
 
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {
