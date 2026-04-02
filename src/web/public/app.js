@@ -1922,19 +1922,31 @@ function safeParseYaml(content) {
     const consoleTabs = document.getElementById('console-tabs');
     const tabInits = { logs: false, metrics: false, permissions: false };
 
-    // Show Setup tab on first visit (localStorage flag)
+    const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
-    if (consoleTabs && !localStorage.getItem(SETUP_SEEN_KEY)) {
+
+    // Determine which tab to show on load:
+    // 1. Saved tab from last visit (localStorage)
+    // 2. Setup tab on first-ever visit
+    // 3. Portfolio (HTML default)
+    const switchToTab = (tabName) => {
+      if (!consoleTabs) return;
+      const btn = consoleTabs.querySelector(`[data-tab="${tabName}"]`);
+      if (!btn) return;
+      consoleTabs.querySelectorAll('.console-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      document.querySelectorAll('.tab-panel').forEach(p => {
+        p.hidden = p.id !== 'tab-' + tabName;
+        p.classList.toggle('active', p.id === 'tab-' + tabName);
+      });
+    };
+
+    const savedTab = localStorage.getItem(TAB_KEY);
+    if (savedTab) {
+      switchToTab(savedTab);
+    } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
       localStorage.setItem(SETUP_SEEN_KEY, '1');
-      const setupBtn = consoleTabs.querySelector('[data-tab="setup"]');
-      if (setupBtn) {
-        consoleTabs.querySelectorAll('.console-tab').forEach(b => b.classList.remove('active'));
-        setupBtn.classList.add('active');
-        document.querySelectorAll('.tab-panel').forEach(p => {
-          p.hidden = p.id !== 'tab-setup';
-          p.classList.toggle('active', p.id === 'tab-setup');
-        });
-      }
+      switchToTab('setup');
     }
 
     if (consoleTabs) {
@@ -1944,16 +1956,8 @@ function safeParseYaml(content) {
         const tab = btn.dataset.tab;
         if (!tab) return;
 
-        // Update active tab button
-        consoleTabs.querySelectorAll('.console-tab').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-
-        // Show/hide panels
-        document.querySelectorAll('.tab-panel').forEach(p => {
-          p.hidden = p.id !== 'tab-' + tab;
-          if (p.id === 'tab-' + tab) p.classList.add('active');
-          else p.classList.remove('active');
-        });
+        switchToTab(tab);
+        localStorage.setItem(TAB_KEY, tab);
 
         lazyInitTab(tab, tabInits);
       });
