@@ -16,7 +16,11 @@ import { EvictingQueue } from './EvictingQueue.js';
 class MCPLogger implements ILogger {
   private logs = new EvictingQueue<LogEntry>(1000);
   private isMCPConnected = false;
-  private minLevel: 'debug' | 'info' | 'warn' | 'error' = 'debug';
+  // In --web mode, default to error-only so bootstrap logs don't flood the terminal.
+  // All levels still go to MemoryLogSink (visible in the Logs tab).
+  private minLevel: 'debug' | 'info' | 'warn' | 'error' =
+    (process.argv.includes('--web') && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG)
+      ? 'error' : 'debug';
   private static readonly LEVEL_ORDER = { debug: 0, info: 1, warn: 2, error: 3 };
   private logListener?: (entry: LogEntry) => void;
 

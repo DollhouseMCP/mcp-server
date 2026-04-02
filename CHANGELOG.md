@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.0.7] - 2026-04-02
+
+### Clean terminal output for `--web` mode
+
+Running `npx @dollhousemcp/mcp-server --web` now shows only the console URL:
+
+```
+  DollhouseMCP Management Console
+  http://dollhouse.localhost:3939
+  http://127.0.0.1:3939 (fallback)
+```
+
+Previously, startup dumped ~80 lines of internal log output (dotenv injection, persona loading, memory seeding, cache stats, leader election, etc.) that looked like errors to new users. All of that output is still captured and visible in the management console's **Logs** tab — it's just no longer printed to the terminal.
+
+Set `DOLLHOUSE_DEBUG=1` to restore verbose terminal output for troubleshooting.
+
+## [2.0.6] - 2026-04-02
+
+### Web console logs & metrics fix + operation aliases
+
+- **Fix**: Standalone `--web` mode now starts with log and metrics sinks — Logs and Metrics tabs work on first use
+- **Fix**: Port 3939 conflicts handled gracefully (opens existing console instead of crashing)
+- **Feature**: Operation aliases — `open_console`, `open_dollhouse_mcp`, `open_logs`, `open_metrics`, `open_setup`, and 15+ more
+- **Feature**: Console tab deep-linking via URL hash (`/#logs`, `/#metrics`, etc.)
+- **Feature**: Aliases surfaced in `introspect` responses for LLM discovery
+
 ## [2.0.5] - 2026-04-02
 
 ### Hotfix: `--web` mode UX improvements
