@@ -409,8 +409,8 @@
         + ` and <strong>${installedClients[installedClients.length - 1]}</strong>`;
 
     const restartList = installedClients.length === 1
-      ? `Restart <strong>${installedClients[0]}</strong> to activate the MCP connection`
-      : `Restart ${clientList} to activate the MCP connections`;
+      ? `Restart <strong>${installedClients[0]}</strong> to activate DollhouseMCP`
+      : `Restart any of your configured clients to activate DollhouseMCP`;
 
     const configuredWord = installedClients.length === 1 ? 'has' : 'have';
 
