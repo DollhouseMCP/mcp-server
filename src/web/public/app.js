@@ -1961,77 +1961,84 @@ function safeParseYaml(content) {
     globalThis.DollhouseConsole.getUrlParams = () => getTabAndParams().params;
 
     /**
+     * Map sort + order URL params to the select value format used by the UI.
+     */
+    function mapSortParams(sort, order) {
+      const sortVal = sort || 'name';
+      const orderVal = order || 'asc';
+      if (sortVal === 'name') return `name-${orderVal}`;
+      if (sortVal === 'updated' || sortVal === 'created') return `date-${orderVal}`;
+      return `${sortVal}-${orderVal}`;
+    }
+
+    /**
      * Apply URL params to the portfolio tab.
      * Reads q, type, name, sort, order, active, category, author, page.
      */
     function applyPortfolioParams(params) {
       if (!params || params.toString() === '') return;
 
-      // q — pre-populate search
-      const q = params.get('q');
-      if (q) {
-        const searchInput = document.getElementById('search-input');
-        if (searchInput) {
-          searchInput.value = q;
-          searchQuery = q.toLowerCase();
-        }
-      }
-
-      // type — activate type filter
-      const type = params.get('type');
-      if (type) {
-        activeTypes.clear();
-        activeTypes.add(type);
-        // Update filter button UI
-        document.querySelectorAll('.type-btn').forEach(btn => {
-          const btnType = btn.dataset.type;
-          btn.classList.toggle('active', btnType === type);
-        });
-      }
-
-      // sort/order
-      const sort = params.get('sort');
-      const order = params.get('order');
-      if (sort || order) {
-        const sortSelect = document.getElementById('sort-select');
-        if (sortSelect) {
-          // Map sort+order to the select value format used by the UI
-          const sortVal = sort || 'name';
-          const orderVal = order || 'asc';
-          const mapped = sortVal === 'name' && orderVal === 'asc' ? 'name-asc'
-            : sortVal === 'name' && orderVal === 'desc' ? 'name-desc'
-            : sortVal === 'updated' || sortVal === 'created' ? `date-${orderVal}`
-            : `${sortVal}-${orderVal}`;
-          sortSelect.value = mapped;
-          activeSort = mapped;
-        }
-      }
+      applyPortfolioSearch(params);
+      applyPortfolioTypeFilter(params);
+      applyPortfolioSort(params);
 
       // active — filter to active elements only
       if (params.get('active') === 'true') {
-        activeSource = 'portfolio'; // Active elements are always local
+        activeSource = 'portfolio';
       }
 
       // page
       const page = params.get('page');
       if (page) {
-        currentPage = Math.max(1, parseInt(page, 10) || 1);
+        currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
       }
 
-      // Apply all filters now
       applyFilters();
+      applyPortfolioNameNavigation(params);
+    }
 
-      // name — navigate to element detail (after filters applied, with slight delay for render)
-      const name = params.get('name');
-      if (name) {
-        requestAnimationFrame(() => {
-          const card = document.querySelector(`[data-element-name="${CSS.escape(name)}"]`);
-          if (card) {
-            card.click();
-            card.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          }
-        });
+    function applyPortfolioSearch(params) {
+      const q = params.get('q');
+      if (!q) return;
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.value = q;
+        searchQuery = q.toLowerCase();
       }
+    }
+
+    function applyPortfolioTypeFilter(params) {
+      const type = params.get('type');
+      if (!type) return;
+      activeTypes.clear();
+      activeTypes.add(type);
+      document.querySelectorAll('.type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+      });
+    }
+
+    function applyPortfolioSort(params) {
+      const sort = params.get('sort');
+      const order = params.get('order');
+      if (!sort && !order) return;
+      const sortSelect = document.getElementById('sort-select');
+      if (sortSelect) {
+        const mapped = mapSortParams(sort, order);
+        sortSelect.value = mapped;
+        activeSort = mapped;
+      }
+    }
+
+    function applyPortfolioNameNavigation(params) {
+      const name = params.get('name');
+      if (!name) return;
+      requestAnimationFrame(() => {
+        const card = document.querySelector(`[data-element-name="${CSS.escape(name)}"]`);
+        if (card) {
+          card.click();
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
     }
 
     // Tab selection priority: URL hash > localStorage > first-visit setup > portfolio default

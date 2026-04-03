@@ -64,7 +64,7 @@
 
     const refresh = params.get('refresh');
     if (refresh) {
-      const interval = parseInt(refresh, 10);
+      const interval = Number.parseInt(refresh, 10);
       if (interval > 0) {
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = setInterval(fetchLatest, interval * 1000);

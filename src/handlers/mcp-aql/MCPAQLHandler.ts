@@ -3123,7 +3123,8 @@ export class MCPAQLHandler {
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (key !== 'tab' && value !== undefined && value !== null && value !== '') {
-          urlParams[key] = String(value);
+          // Only serialize primitives — objects would produce "[object Object]"
+          urlParams[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
         }
       }
     }

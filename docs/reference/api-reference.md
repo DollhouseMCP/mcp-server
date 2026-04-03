@@ -615,7 +615,38 @@ Get statistics about Enhanced Index relationships. No parameters.
 
 ### open_portfolio_browser
 
-Start the portfolio web UI and open it in the system browser (localhost:3939). No parameters.
+Start the portfolio web UI and open it in the system browser (localhost:3939). Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `tab` | string | Tab to open: portfolio, logs, metrics, permissions, setup |
+| `q` | string | Pre-populate search query on the target tab |
+| `type` | string | Filter by element type (persona, skill, template, agent, memory, ensemble) |
+| `name` | string | Navigate directly to element detail view |
+| `level` | string | Filter by log level (debug, info, warn, error) on logs tab |
+| `category` | string | Filter by category on logs tab |
+| `since` | string | Time range filter (ISO 8601 or relative: 5m, 1h, 24h, 7d) |
+
+### open_logs
+
+Open the management console on the logs tab with optional filters.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `level` | string | Minimum log level (debug, info, warn, error) |
+| `category` | string | Log category (application, security, performance) |
+| `source` | string | Log source component filter |
+| `q` | string | Search log messages |
+| `since` | string | Time range (ISO 8601 or relative: 5m, 1h, 24h, 7d) |
+
+### open_metrics
+
+Open the management console on the metrics tab with optional filters.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `since` | string | Time range (15m, 30m, 1h) |
+| `refresh` | number | Auto-refresh interval in seconds (0 disables) |
 
 ---
 
