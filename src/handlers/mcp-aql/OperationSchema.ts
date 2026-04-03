@@ -891,6 +891,8 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       '{ operation: "create_element", element_type: "memory", params: { element_name: "session-context", description: "Shared context accessible to all active elements" } }',
       // project-{name}-{purpose}: Project-scoped knowledge
       '{ operation: "create_element", element_type: "memory", params: { element_name: "project-webapp-decisions", description: "Architecture decisions for the webapp project" } }',
+      // Issue #1767: Ensemble example with valid roles (primary, support, override, monitor, core)
+      '{ operation: "create_element", element_type: "ensemble", params: { element_name: "my-ensemble", description: "Combined element set", metadata: { elements: [{ element_name: "expert", element_type: "persona", role: "primary" }, { element_name: "analysis", element_type: "skill", role: "support" }] } } }',
     ],
   },
   list_elements: {

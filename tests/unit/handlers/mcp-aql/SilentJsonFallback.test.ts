@@ -435,4 +435,186 @@ describe('describeInvalidInput (Issue #1656)', () => {
     const result = describeInvalidInput(largeObj);
     expect(result).toContain('15 keys total');
   });
+
+  // Issue #1768: Content-aware diagnostics for markdown/special character failures
+  it('should include content length hint when params.content is large', () => {
+    const result = describeInvalidInput({
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: '## LLM-as-Judge\n' + 'x'.repeat(200),
+      },
+    });
+    expect(result).toContain('content field is');
+    expect(result).toContain('chars');
+    expect(result).toContain('markdown');
+  });
+
+  it('should not include content hint for short content', () => {
+    const result = describeInvalidInput({
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: 'short note',
+      },
+    });
+    expect(result).not.toContain('content field is');
+  });
+
+  it('should not include content hint when params is missing', () => {
+    const result = describeInvalidInput({ operation: 'addEntry' });
+    expect(result).not.toContain('content field is');
+  });
+});
+
+// ==========================================================================
+// Regression tests for Issue #1768 — markdown content in addEntry
+// ==========================================================================
+
+describe('parseOperationInput with markdown content (Issue #1768)', () => {
+  it('should accept addEntry with simple markdown headers', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: '## Research Notes\n\n### Section 1\nSome findings.',
+        tags: ['research'],
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.operation).toBe('addEntry');
+    expect(result!.params!.content).toContain('## Research Notes');
+  });
+
+  it('should accept addEntry with bold and italic markdown', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: 'This is **bold** and *italic* text with __underline__.',
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.params!.content).toContain('**bold**');
+  });
+
+  it('should accept addEntry with markdown lists', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: '- Item 1\n- Item 2\n  - Nested item\n1. Ordered\n2. List',
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.params!.content).toContain('- Item 1');
+  });
+
+  it('should accept addEntry with pipe characters (markdown tables)', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: '| Header | Value |\n|--------|-------|\n| Row 1  | Data  |',
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.params!.content).toContain('| Header |');
+  });
+
+  it('should accept addEntry with code blocks', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: '```typescript\nconst x = 42;\nconsole.log(x);\n```',
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.params!.content).toContain('```typescript');
+  });
+
+  it('should accept addEntry with URLs and links', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'test-memory',
+        content: 'See [JudgeBench](https://arxiv.org/abs/2410.12784) and https://github.com/ScalerLab/JudgeBench',
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.params!.content).toContain('arxiv.org');
+  });
+
+  it('should accept the exact markdown content from the bug report', () => {
+    const input = {
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: '## LLM-as-Judge Advances\n\n### JudgeBench (ICLR 2025)\nBenchmark for LLM judges on *difficult* response pairs requiring advanced reasoning. Even GPT-4o performs only slightly better than random on hard pairs (64% accuracy).\n- Metrics: Pairwise accuracy on factually verifiable pairs\n- Source: arXiv 2410.12784 | github.com/ScalerLab/JudgeBench',
+        tags: ['llm-judge', 'benchmarks'],
+      },
+    };
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
+    expect(result!.operation).toBe('addEntry');
+    expect(result!.params!.content).toContain('## LLM-as-Judge');
+    expect(result!.params!.content).toContain('| github.com');
+  });
+});
+
+// ==========================================================================
+// Regression tests for Issue #1767 — ensemble example in tool description
+// ==========================================================================
+
+describe('Ensemble example in tool descriptions (Issue #1767)', () => {
+  it('should have ensemble in create_element examples in the schema', () => {
+    // getAnyOperationSchema is already imported at top of file via types.ts re-export
+    // Use the parseOperationInput path to verify ensemble is a valid create_element input
+    const ensembleInput = {
+      operation: 'create_element',
+      element_type: 'ensemble',
+      params: {
+        element_name: 'my-ensemble',
+        description: 'Test ensemble',
+        metadata: {
+          elements: [
+            { element_name: 'expert', element_type: 'persona', role: 'primary' },
+            { element_name: 'analysis', element_type: 'skill', role: 'support' },
+          ],
+        },
+      },
+    };
+    const result = parseOperationInput(ensembleInput);
+    expect(result).not.toBeNull();
+    expect(result!.operation).toBe('create_element');
+    expect(result!.elementType).toBe('ensemble');
+  });
+
+  it('should accept all valid ensemble roles', () => {
+    const validRoles = ['primary', 'support', 'override', 'monitor', 'core'];
+    for (const role of validRoles) {
+      const input = {
+        operation: 'create_element',
+        element_type: 'ensemble',
+        params: {
+          element_name: `test-${role}`,
+          description: `Ensemble role test: ${role}`,
+          metadata: {
+            elements: [
+              { element_name: 'elem', element_type: 'skill', role },
+            ],
+          },
+        },
+      };
+      const result = parseOperationInput(input);
+      expect(result).not.toBeNull();
+    }
+  });
 });
