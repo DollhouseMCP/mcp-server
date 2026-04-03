@@ -84,6 +84,7 @@ import { getOperationsForEndpoint, type CRUDEndpoint } from '../../handlers/mcp-
 import { ElementType } from '../../handlers/mcp-aql/types.js';
 import type { ToolDefinition, ToolHandler } from '../../handlers/types/ToolTypes.js';
 import { env } from '../../config/env.js';
+import { ELEMENT_ROLES } from '../../elements/ensembles/constants.js';
 
 // ============================================================================
 // Dynamic Description Generation
@@ -258,7 +259,10 @@ Quick start examples:
 { operation: "create_element", element_type: "persona", params: { element_name: "MyPersona", description: "A helpful assistant", instructions: "You ARE a helpful assistant. ALWAYS provide clear, accurate responses." } }
 { operation: "create_element", element_type: "agent", params: { element_name: "MyAgent", description: "Task executor", instructions: "Execute goals methodically. Report progress at each step.", goal: { template: "Complete: {objective}", parameters: [{ name: "objective", type: "string", required: true }] } } }
 { operation: "create_element", element_type: "memory", params: { element_name: "session-notes", description: "Session context and notes" } }
+{ operation: "create_element", element_type: "ensemble", params: { element_name: "my-ensemble", description: "Combined element set", metadata: { elements: [{ element_name: "expert", element_type: "persona", role: "primary" }, { element_name: "analysis", element_type: "skill", role: "support" }] } } }
+Valid ensemble roles: ${ELEMENT_ROLES.join(', ')}
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
+Note: addEntry content supports markdown (headers, lists, bold, tables, code blocks). Ensure markdown content is properly JSON-escaped — use ${String.raw`\n`} for newlines, ${String.raw`\"`} for quotes, and ${String.raw`\\`} for backslashes within the JSON string value.
 
 Execution lifecycle — record agent progress (appends step records, like addEntry):
 { operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Analyzed files", outcome: "success", findings: "Found 3 issues" } }
