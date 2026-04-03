@@ -58,12 +58,16 @@
     },
   };
 
-  function initLogViewer() {
+  function initLogViewer(urlParams) {
     const container = document.getElementById('log-viewer-root');
     if (!container || container.dataset.initialized === 'true') return;
     container.dataset.initialized = 'true';
 
     buildDOM(container);
+
+    // Apply URL params before binding events and connecting SSE
+    if (urlParams) applyLogUrlParams(urlParams);
+
     bindEvents();
     connectSSE();
 
@@ -71,6 +75,56 @@
       renderViewport();
       if (autoScroll) scrollToBottom();
     });
+  }
+
+  /**
+   * Apply URL parameters to log viewer state.
+   * Supports: level, category, source, q (message search), correlationId, tail
+   * @param {URLSearchParams} params
+   */
+  function applyLogUrlParams(params) {
+    if (!params || params.toString() === '') return;
+
+    const level = params.get('level');
+    if (level) {
+      // Take the first level if comma-separated (e.g., "error,warn" → use "warn" as minimum)
+      const levels = level.split(',').map(l => l.trim().toLowerCase());
+      const levelOrder = ['debug', 'info', 'warn', 'error'];
+      // Use the lowest level specified as the minimum filter
+      const minLevel = levels.reduce((min, l) =>
+        levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
+      , levels[0]);
+      filterLevel = minLevel;
+      if (levelSelect) levelSelect.value = minLevel;
+    }
+
+    const category = params.get('category');
+    if (category) {
+      filterCategory = category;
+      if (categorySelect) categorySelect.value = category;
+    }
+
+    const source = params.get('source');
+    if (source) {
+      filterSource = source;
+      if (sourceInput) sourceInput.value = source;
+    }
+
+    const q = params.get('q');
+    if (q) {
+      filterMessage = q;
+      if (searchInput) searchInput.value = q;
+    }
+
+    const correlationId = params.get('correlationId');
+    if (correlationId) {
+      filterCorrelationId = correlationId;
+    }
+
+    const tail = params.get('tail');
+    if (tail === 'false') {
+      autoScroll = false;
+    }
   }
 
   function destroyLogViewer() {

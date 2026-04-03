@@ -3116,8 +3116,21 @@ export class MCPAQLHandler {
     // Tab parameter for deep-linking to a specific console tab (logs, metrics, etc.)
     const tab = typeof params?.tab === 'string' ? params.tab : undefined;
 
+    // URL query parameters for deep-linking with filters/search state.
+    // Extract all params except 'tab' (which is the hash fragment) and pass as URL query params.
+    // @see Issue #1765 - URL parameter support for portfolio browser
+    const urlParams: Record<string, string> = {};
+    if (params) {
+      for (const [key, value] of Object.entries(params)) {
+        if (key !== 'tab' && value !== undefined && value !== null && value !== '') {
+          urlParams[key] = String(value);
+        }
+      }
+    }
+    const hasUrlParams = Object.keys(urlParams).length > 0;
+
     // Issue #796: Pass MCPAQLHandler to web server for gateway routing
-    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab);
+    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab, hasUrlParams ? urlParams : undefined);
 
     const status = result.alreadyRunning ? 'already running' : 'started';
     const browserStatus = result.browserOpened ? 'opened' : 'could not open automatically';

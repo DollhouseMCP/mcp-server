@@ -166,7 +166,9 @@ p, li { max-width: 69ch; }
   pointer-events: none;
 }
 
-.header-brand { display: flex; flex-direction: column; gap: 0.05rem; }
+.header-brand { display: flex; flex-direction: row; align-items: center; gap: 0.6rem; }
+.header-brand-text { display: flex; flex-direction: column; gap: 0.05rem; }
+.header-logo { width: 32px; height: 32px; flex-shrink: 0; }
 
 .site-title {
   font-family: var(--font-heading);
