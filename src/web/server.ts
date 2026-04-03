@@ -298,6 +298,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const fallbackUrl = `http://127.0.0.1:${port}`;
       logger.info(`[WebUI] Management console running at ${url}`);
       console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+      console.error(`  Type "q" or "quit" to exit.\n`);
 
       if (options.openBrowser) {
         openInBrowser(url);
