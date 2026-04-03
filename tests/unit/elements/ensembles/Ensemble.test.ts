@@ -879,17 +879,23 @@ describe('Ensemble Element', () => {
         getElement: jest.fn()
       };
 
-      // Mock element managers with proper structure
+      // Mock element managers with proper structure.
+      // Each manager needs both the generic methods (list, get) AND the
+      // type-specific activation method (activateSkill, activatePersona, etc.)
+      // which registers the element in the manager's active set.
+      // @see Issue #1769 — tests must verify manager activation, not just instance.activate()
       mockManagers = {
         skillManager: {
           list: jest.fn().mockResolvedValue([]),
           get: jest.fn(),
-          activate: jest.fn().mockResolvedValue(undefined)
+          activate: jest.fn().mockResolvedValue(undefined),
+          activateSkill: jest.fn().mockResolvedValue({ success: true, message: 'activated' }),
         },
         personaManager: {
           list: jest.fn().mockResolvedValue([]),
           get: jest.fn(),
-          activate: jest.fn().mockResolvedValue(undefined)
+          activate: jest.fn().mockResolvedValue(undefined),
+          activatePersona: jest.fn().mockResolvedValue({ success: true, message: 'activated' }),
         },
         templateManager: {
           list: jest.fn().mockResolvedValue([]),
@@ -899,12 +905,14 @@ describe('Ensemble Element', () => {
         agentManager: {
           list: jest.fn().mockResolvedValue([]),
           get: jest.fn(),
-          activate: jest.fn().mockResolvedValue(undefined)
+          activate: jest.fn().mockResolvedValue(undefined),
+          activateAgent: jest.fn().mockResolvedValue({ success: true, message: 'activated' }),
         },
         memoryManager: {
           list: jest.fn().mockResolvedValue([]),
           get: jest.fn(),
-          activate: jest.fn().mockResolvedValue(undefined)
+          activate: jest.fn().mockResolvedValue(undefined),
+          activateMemory: jest.fn().mockResolvedValue({ success: true, message: 'activated' }),
         }
       };
     });
@@ -971,6 +979,15 @@ describe('Ensemble Element', () => {
       result.elementResults.forEach(r => {
         expect(r.success).toBe(true);
       });
+
+      // Issue #1769: Verify type manager activation was called for each element.
+      // This is the critical assertion that was missing — the ensemble must call
+      // the manager's activation method (e.g., activateSkill), not just instance.activate().
+      // Without this, get_active_elements returns empty results.
+      expect(mockManagers.skillManager.activateSkill).toHaveBeenCalledTimes(3);
+      expect(mockManagers.skillManager.activateSkill).toHaveBeenCalledWith('skill-1');
+      expect(mockManagers.skillManager.activateSkill).toHaveBeenCalledWith('skill-2');
+      expect(mockManagers.skillManager.activateSkill).toHaveBeenCalledWith('skill-3');
     });
 
     it('should respect dependency order with "sequential" strategy', async () => {
@@ -1036,6 +1053,11 @@ describe('Ensemble Element', () => {
       mockManagers.skillManager.list.mockResolvedValue(mockSkills);
       mockManagers.skillManager.get.mockImplementation((name: string) => {
         return Promise.resolve(mockSkills.find(s => s.metadata.name === name));
+      });
+      // activateSkill is called by activateViaManager — track order there
+      mockManagers.skillManager.activateSkill.mockImplementation(async (name: string) => {
+        activationOrder.push(name);
+        return { success: true, message: 'activated' };
       });
 
       // Activate ensemble
@@ -1108,6 +1130,11 @@ describe('Ensemble Element', () => {
       mockManagers.skillManager.list.mockResolvedValue(mockSkills);
       mockManagers.skillManager.get.mockImplementation((name: string) => {
         return Promise.resolve(mockSkills.find(s => s.metadata.name === name));
+      });
+      // activateSkill is called by activateViaManager — track order there
+      mockManagers.skillManager.activateSkill.mockImplementation(async (name: string) => {
+        activationOrder.push(name);
+        return { success: true, message: 'activated' };
       });
 
       // Activate ensemble
@@ -1349,6 +1376,64 @@ describe('Ensemble Element', () => {
 
       // Ensure no errors thrown (test passes if we get here)
       expect(result.totalDuration).toBeGreaterThanOrEqual(0);
+    });
+
+    // Issue #1769: Verify ensemble activation registers elements with type managers
+    it('should register multi-type elements with their respective type managers', async () => {
+      const multiTypeEnsemble = new Ensemble({
+        name: 'Multi-Type Registration Test',
+        activationStrategy: 'all'
+      }, [
+        { element_name: 'my-persona', element_type: 'persona', role: 'primary', activation: 'always' },
+        { element_name: 'my-skill', element_type: 'skill', role: 'support', activation: 'always' },
+        { element_name: 'my-agent', element_type: 'agent', role: 'core', activation: 'always' },
+        { element_name: 'my-memory', element_type: 'memory', role: 'monitor', activation: 'always' },
+      ], metadataService);
+
+      // PersonaManager uses findPersona, not list+find
+      mockManagers.personaManager.findPersona = jest.fn().mockImplementation((name: string) =>
+        ({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) })
+      );
+      // Other managers use list() → find by metadata.name
+      const mkElement = (name: string) => ({ metadata: { name }, id: name, activate: jest.fn().mockResolvedValue(undefined) });
+      mockManagers.skillManager.list.mockResolvedValue([mkElement('my-skill')]);
+      mockManagers.agentManager.list.mockResolvedValue([mkElement('my-agent')]);
+      mockManagers.memoryManager.list.mockResolvedValue([mkElement('my-memory')]);
+
+      const result = await multiTypeEnsemble.activateEnsemble(mockPortfolioManager, mockManagers);
+
+      expect(result.success).toBe(true);
+      expect(result.activatedElements).toHaveLength(4);
+      expect(result.failedElements).toHaveLength(0);
+
+      // Critical: each type manager's activation method must have been called.
+      // This is what was missing before #1769 — the ensemble called instance.activate()
+      // which only set a status flag, never registering with the manager's active set.
+      expect(mockManagers.personaManager.activatePersona).toHaveBeenCalledWith('my-persona');
+      expect(mockManagers.skillManager.activateSkill).toHaveBeenCalledWith('my-skill');
+      expect(mockManagers.agentManager.activateAgent).toHaveBeenCalledWith('my-agent');
+      expect(mockManagers.memoryManager.activateMemory).toHaveBeenCalledWith('my-memory');
+    });
+
+    it('should fall back to instance.activate() when manager method is unavailable', async () => {
+      const fallbackEnsemble = new Ensemble({
+        name: 'Fallback Test',
+        activationStrategy: 'all'
+      }, [
+        { element_name: 'my-template', element_type: 'template', role: 'support', activation: 'always' },
+      ], metadataService);
+
+      const mockActivate = jest.fn().mockResolvedValue(undefined);
+      mockManagers.templateManager.list.mockResolvedValue([
+        { metadata: { name: 'my-template' }, id: 'my-template', activate: mockActivate }
+      ]);
+
+      const result = await fallbackEnsemble.activateEnsemble(mockPortfolioManager, mockManagers);
+
+      expect(result.success).toBe(true);
+      expect(result.activatedElements).toContain('my-template');
+      // Templates don't have activateTemplate — should fall back to instance.activate()
+      expect(mockActivate).toHaveBeenCalled();
     });
   });
 
