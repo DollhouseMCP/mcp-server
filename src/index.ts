@@ -841,9 +841,13 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       if (process.stdin.isTTY) {
         process.stdin.setEncoding('utf-8');
         process.stdin.resume();
+        let quitDebounce: ReturnType<typeof setTimeout> | null = null;
         process.stdin.on('data', (data: string) => {
           const cmd = data.trim().toLowerCase();
           if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
+            // Debounce rapid inputs (e.g., accidental double-tap)
+            if (quitDebounce) return;
+            quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
             console.error('\n  Shutting down DollhouseMCP...\n');
             process.exit(0);
           }
