@@ -1261,7 +1261,7 @@ describe('IntrospectionResolver', () => {
         const result = IntrospectionResolver.getCapabilities({});
         const categories = result.categories as Record<string, { description: string; capabilities: unknown[] }>;
 
-        for (const [name, cat] of Object.entries(categories)) {
+        for (const cat of Object.values(categories)) {
           expect(cat.description).toBeTruthy();
           expect(cat.capabilities.length).toBeGreaterThan(0);
         }
