@@ -594,7 +594,7 @@ describe('Ensemble example in tool descriptions (Issue #1767)', () => {
     const result = parseOperationInput(ensembleInput);
     expect(result).not.toBeNull();
     expect(result!.operation).toBe('create_element');
-    expect(result!.elementType).toBe('ensemble');
+    expect(result!.element_type).toBe('ensemble');
   });
 
   it('should accept all valid ensemble roles', () => {

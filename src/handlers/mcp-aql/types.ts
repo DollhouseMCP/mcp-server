@@ -589,10 +589,13 @@ export function describeInvalidInput(input: unknown): string {
     hints.push(`"operation" is ${typeof obj.operation}, expected string`);
   }
 
-  // Check for content that may have caused parsing issues
+  // Check for content that may have caused parsing issues.
+  // Threshold: content over this length is more likely to have JSON-encoding
+  // issues with markdown/special characters. Not a limit — just a diagnostic signal.
+  const CONTENT_DIAGNOSTIC_THRESHOLD = 80;
   if (obj.params && typeof obj.params === 'object') {
     const params = obj.params as Record<string, unknown>;
-    if (typeof params.content === 'string' && params.content.length > 100) {
+    if (typeof params.content === 'string' && params.content.length > CONTENT_DIAGNOSTIC_THRESHOLD) {
       hints.push(`content field is ${params.content.length} chars — if content contains markdown or special characters, ensure it is properly JSON-encoded`);
     }
   }
