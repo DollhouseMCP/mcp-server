@@ -15,6 +15,8 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { Console } from 'node:console';
+import { Writable } from 'node:stream';
 
 const SERVER_SRC_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -125,9 +127,6 @@ describe('MCP stdio safety — web server', () => {
     it('console.error routes to stderr, console.log routes to stdout', () => {
       // This test validates the Node.js behavior our fix relies on.
       // If this ever fails, the fix approach needs to be reconsidered.
-      const { Console } = require('node:console');
-      const { Writable } = require('node:stream');
-
       const stdoutChunks: string[] = [];
       const stderrChunks: string[] = [];
 
