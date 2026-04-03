@@ -98,6 +98,14 @@
    * Supports: level, category, source, q (message search), correlationId, tail
    * @param {URLSearchParams} params
    */
+  /** Apply a single string URL param to a filter variable and optional DOM element. */
+  function applyStringParam(params, key, setter, element) {
+    const val = params.get(key);
+    if (!val) return;
+    setter(val);
+    if (element) element.value = val;
+  }
+
   function applyLogUrlParams(params) {
     if (!params || params.toString() === '') return;
 
@@ -110,17 +118,14 @@
       }
     }
 
-    const category = params.get('category');
-    if (category) { filterCategory = category; if (categorySelect) categorySelect.value = category; }
+    applyStringParam(params, 'category', v => { filterCategory = v; }, categorySelect);
+    applyStringParam(params, 'source', v => { filterSource = v; }, sourceInput);
+    applyStringParam(params, 'q', v => { filterMessage = v; }, searchInput);
 
-    const source = params.get('source');
-    if (source) { filterSource = source; if (sourceInput) sourceInput.value = source; }
+    const cid = params.get('correlationId');
+    if (cid) filterCorrelationId = cid;
 
-    const q = params.get('q');
-    if (q) { filterMessage = q; if (searchInput) searchInput.value = q; }
-
-    if (params.get('correlationId')) { filterCorrelationId = params.get('correlationId'); }
-    if (params.get('tail') === 'false') { autoScroll = false; }
+    if (params.get('tail') === 'false') autoScroll = false;
   }
 
   function destroyLogViewer() {

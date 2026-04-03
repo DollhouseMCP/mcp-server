@@ -3113,9 +3113,16 @@ export class MCPAQLHandler {
     const urlParams: Record<string, string> = {};
     for (const [key, value] of Object.entries(params)) {
       if (key === 'tab' || value === undefined || value === null || value === '') continue;
-      urlParams[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
+      urlParams[key] = MCPAQLHandler.serializeParamValue(value);
     }
     return Object.keys(urlParams).length > 0 ? urlParams : undefined;
+  }
+
+  /** Serialize a param value to a URL-safe string. */
+  private static serializeParamValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return value.toString();
+    return JSON.stringify(value);
   }
 
   private async dispatchBrowser(method: string, params?: Record<string, unknown>): Promise<unknown> {

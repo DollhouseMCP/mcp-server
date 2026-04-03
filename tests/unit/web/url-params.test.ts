@@ -8,22 +8,62 @@
  * @see Issue #1765 - URL parameter support for portfolio browser
  */
 
-describe('URL parameter parsing', () => {
-  /**
-   * Extracted getTabAndParams logic — mirrors src/web/public/app.js.
-   * We test the parsing function rather than wiring up actual window.location.
-   */
-  function getTabAndParams(hash: string): { tab: string; params: URLSearchParams } {
-    const raw = hash.replace('#', '');
-    if (raw.length > 2048) return { tab: '', params: new URLSearchParams() };
-    const qIdx = raw.indexOf('?');
-    if (qIdx === -1) return { tab: raw, params: new URLSearchParams() };
-    return {
-      tab: raw.substring(0, qIdx),
-      params: new URLSearchParams(raw.substring(qIdx + 1)),
-    };
-  }
+/**
+ * Extracted getTabAndParams logic — mirrors src/web/public/app.js.
+ */
+function getTabAndParams(hash: string): { tab: string; params: URLSearchParams } {
+  const raw = hash.replace('#', '');
+  if (raw.length > 2048) return { tab: '', params: new URLSearchParams() };
+  const qIdx = raw.indexOf('?');
+  if (qIdx === -1) return { tab: raw, params: new URLSearchParams() };
+  return {
+    tab: raw.substring(0, qIdx),
+    params: new URLSearchParams(raw.substring(qIdx + 1)),
+  };
+}
 
+/**
+ * Extracted mapSortParams logic — mirrors src/web/public/app.js.
+ */
+function mapSortParams(sort = 'name', order = 'asc'): string {
+  if (sort === 'name') return `name-${order}`;
+  if (sort === 'updated' || sort === 'created') return `date-${order}`;
+  return `${sort}-${order}`;
+}
+
+/**
+ * Extracted parseMinLevel logic — mirrors src/web/public/logs.js.
+ */
+function parseMinLevel(levelParam: string): string | null {
+  const levelOrder = ['debug', 'info', 'warn', 'error'];
+  const levels = levelParam.split(',')
+    .map(l => l.trim().toLowerCase())
+    .filter(l => levelOrder.includes(l));
+  if (levels.length === 0) return null;
+  return levels.reduce((min, l) =>
+    levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
+  , levels[0]);
+}
+
+/**
+ * Extracted extractUrlParams logic — mirrors MCPAQLHandler.extractUrlParams.
+ */
+function serializeParamValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value.toString();
+  return JSON.stringify(value);
+}
+
+function extractUrlParams(params: Record<string, unknown>): Record<string, string> | undefined {
+  const urlParams: Record<string, string> = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (key === 'tab' || value === undefined || value === null || value === '') continue;
+    urlParams[key] = serializeParamValue(value);
+  }
+  return Object.keys(urlParams).length > 0 ? urlParams : undefined;
+}
+
+describe('URL parameter parsing', () => {
   describe('getTabAndParams', () => {
     it('should parse tab name from hash', () => {
       const { tab, params } = getTabAndParams('#portfolio');
@@ -84,15 +124,6 @@ describe('URL parameter parsing', () => {
 });
 
 describe('Sort parameter mapping', () => {
-  /**
-   * Extracted mapSortParams logic — mirrors src/web/public/app.js.
-   */
-  function mapSortParams(sort = 'name', order = 'asc'): string {
-    if (sort === 'name') return `name-${order}`;
-    if (sort === 'updated' || sort === 'created') return `date-${order}`;
-    return `${sort}-${order}`;
-  }
-
   it('should map name+asc to name-asc', () => {
     expect(mapSortParams('name', 'asc')).toBe('name-asc');
   });
@@ -119,20 +150,6 @@ describe('Sort parameter mapping', () => {
 });
 
 describe('Log level parsing', () => {
-  /**
-   * Extracted parseMinLevel logic — mirrors src/web/public/logs.js.
-   */
-  function parseMinLevel(levelParam: string): string | null {
-    const levelOrder = ['debug', 'info', 'warn', 'error'];
-    const levels = levelParam.split(',')
-      .map(l => l.trim().toLowerCase())
-      .filter(l => levelOrder.includes(l));
-    if (levels.length === 0) return null;
-    return levels.reduce((min, l) =>
-      levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
-    , levels[0]);
-  }
-
   it('should return single level as-is', () => {
     expect(parseMinLevel('error')).toBe('error');
   });
@@ -168,18 +185,6 @@ describe('Log level parsing', () => {
 });
 
 describe('Server-side URL param extraction', () => {
-  /**
-   * Extracted extractUrlParams logic — mirrors MCPAQLHandler.extractUrlParams.
-   */
-  function extractUrlParams(params: Record<string, unknown>): Record<string, string> | undefined {
-    const urlParams: Record<string, string> = {};
-    for (const [key, value] of Object.entries(params)) {
-      if (key === 'tab' || value === undefined || value === null || value === '') continue;
-      urlParams[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
-    }
-    return Object.keys(urlParams).length > 0 ? urlParams : undefined;
-  }
-
   it('should extract string params', () => {
     const result = extractUrlParams({ tab: 'logs', level: 'error', since: '1h' });
     expect(result).toEqual({ level: 'error', since: '1h' });
