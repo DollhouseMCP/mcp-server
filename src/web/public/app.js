@@ -1796,6 +1796,17 @@ function safeParseYaml(content) {
     }
   }
 
+  // ── URL parameter helpers ────────────────────────────────────────────────
+
+  /**
+   * Map sort + order URL params to the select value format used by the UI.
+   */
+  function mapSortParams(sort = 'name', order = 'asc') {
+    if (sort === 'name') return `name-${order}`;
+    if (sort === 'updated' || sort === 'created') return `date-${order}`;
+    return `${sort}-${order}`;
+  }
+
   // ── Event wiring ───────────────────────────────────────────────────────────
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1941,14 +1952,114 @@ function safeParseYaml(content) {
       });
     };
 
+    /**
+     * Parse the URL hash into tab name and query parameters.
+     * Supports fragment-query pattern: #tab?key=value&key=value
+     * @returns {{ tab: string, params: URLSearchParams }}
+     */
+    function getTabAndParams() {
+      const raw = globalThis.location.hash.replace('#', '');
+      // Guard against excessively long URLs (browser limit ~2048 chars)
+      if (raw.length > 2048) return { tab: '', params: new URLSearchParams() };
+      const qIdx = raw.indexOf('?');
+      if (qIdx === -1) return { tab: raw, params: new URLSearchParams() };
+      return {
+        tab: raw.substring(0, qIdx),
+        params: new URLSearchParams(raw.substring(qIdx + 1)),
+      };
+    }
+
+    // Expose for other scripts (logs.js, metrics.js, permissions.js)
+    globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
+    globalThis.DollhouseConsole.getUrlParams = () => getTabAndParams().params;
+
+    /**
+     * Apply URL params to the portfolio tab.
+     * Reads q, type, name, sort, order, active, category, author, page.
+     */
+    function applyPortfolioParams(params) {
+      if (!params || params.toString() === '') return;
+
+      applyPortfolioSearch(params);
+      applyPortfolioTypeFilter(params);
+      applyPortfolioSort(params);
+
+      // active — filter to active elements only
+      if (params.get('active') === 'true') {
+        activeSource = 'portfolio';
+      }
+
+      // page
+      const page = params.get('page');
+      if (page) {
+        currentPage = Math.max(1, Number.parseInt(page, 10) || 1);
+      }
+
+      applyFilters();
+      applyPortfolioNameNavigation(params);
+    }
+
+    function applyPortfolioSearch(params) {
+      const q = params.get('q');
+      if (!q) return;
+      const searchInput = document.getElementById('search-input');
+      if (searchInput) {
+        searchInput.value = q;
+        searchQuery = q.toLowerCase();
+      }
+    }
+
+    function applyPortfolioTypeFilter(params) {
+      const type = params.get('type');
+      if (!type) return;
+      activeTypes.clear();
+      activeTypes.add(type);
+      document.querySelectorAll('.type-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+      });
+    }
+
+    function applyPortfolioSort(params) {
+      const sort = params.get('sort');
+      const order = params.get('order');
+      if (!sort && !order) return;
+      const sortSelect = document.getElementById('sort-select');
+      if (sortSelect) {
+        const mapped = mapSortParams(sort, order);
+        sortSelect.value = mapped;
+        activeSort = mapped;
+      }
+    }
+
+    function applyPortfolioNameNavigation(params) {
+      const name = params.get('name');
+      if (!name) return;
+      requestAnimationFrame(() => {
+        const card = document.querySelector(`[data-element-name="${CSS.escape(name)}"]`);
+        if (card) {
+          card.click();
+          card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      });
+    }
+
     // Tab selection priority: URL hash > localStorage > first-visit setup > portfolio default
     function applyHashTab() {
-      const hashTab = globalThis.location.hash.replace('#', '');
+      const { tab: hashTab, params } = getTabAndParams();
       if (hashTab && document.getElementById('tab-' + hashTab)) {
         switchToTab(hashTab);
-        lazyInitTab(hashTab, tabInits);
+        lazyInitTab(hashTab, tabInits, params);
         localStorage.setItem(TAB_KEY, hashTab);
-        history.replaceState(null, '', globalThis.location.pathname);
+
+        // Apply tab-specific URL params
+        if (hashTab === 'portfolio') {
+          applyPortfolioParams(params);
+        }
+
+        // Clean hash but preserve it for bookmarkability if params were present
+        if (params.toString() === '') {
+          history.replaceState(null, '', globalThis.location.pathname);
+        }
         return true;
       }
       return false;
@@ -1981,18 +2092,18 @@ function safeParseYaml(content) {
       });
     }
 
-    function lazyInitTab(tab, tabInits) {
+    function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
       if (tab === 'logs' && dc?.logs) {
-        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(); }
+        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(params); }
         else if (dc.logs.refresh) { dc.logs.refresh(); }
       }
       if (tab === 'metrics' && dc?.metrics) {
-        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(); }
+        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(params); }
         else if (dc.metrics.refresh) { dc.metrics.refresh(); }
       }
       if (tab === 'permissions' && dc?.permissions) {
-        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(); }
+        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(params); }
         else if (dc.permissions.refresh) { dc.permissions.refresh(); }
       }
     }

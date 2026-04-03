@@ -1209,4 +1209,161 @@ describe('IntrospectionResolver', () => {
       });
     });
   });
+
+  // ==========================================================================
+  // getCapabilities() tests (Issue #1760)
+  // ==========================================================================
+
+  describe('getCapabilities()', () => {
+    describe('unfiltered results', () => {
+      it('should return all categories when no filter specified', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        expect(result.categories).toBeDefined();
+        expect(Object.keys(result.categories as object).length).toBeGreaterThan(0);
+        expect(result.totalCapabilities).toBeGreaterThan(0);
+        expect(result.sources).toEqual(['server']);
+        expect(result.hint).toBeDefined();
+      });
+
+      it('should include all expected categories', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categoryNames = Object.keys(result.categories as object);
+
+        const expectedCategories = [
+          'Activation',
+          'Agent Execution',
+          'Community Collection',
+          'Configuration & Diagnostics',
+          'Element Discovery',
+          'Element Lifecycle',
+          'GitHub Authentication',
+          'Intelligence',
+          'Management Console',
+          'Memory',
+          'Portfolio Management',
+          'Security & Permissions',
+          'System Introspection',
+          'Template Rendering',
+        ];
+
+        for (const expected of expectedCategories) {
+          expect(categoryNames).toContain(expected);
+        }
+      });
+
+      it('should not have an "Other" category when all operations are categorized', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categoryNames = Object.keys(result.categories as object);
+        expect(categoryNames).not.toContain('Other');
+      });
+
+      it('every category should have a description and non-empty capabilities array', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categories = result.categories as Record<string, { description: string; capabilities: unknown[] }>;
+
+        for (const cat of Object.values(categories)) {
+          expect(cat.description).toBeTruthy();
+          expect(cat.capabilities.length).toBeGreaterThan(0);
+        }
+      });
+
+      it('each capability entry should have name, brief, source, and status', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categories = result.categories as Record<string, { capabilities: Array<{ name: string; brief: string; source: string; status: string }> }>;
+
+        for (const cat of Object.values(categories)) {
+          for (const entry of cat.capabilities) {
+            expect(entry.name).toBeTruthy();
+            expect(entry.brief).toBeTruthy();
+            expect(entry.source).toBe('server');
+            expect(entry.status).toBe('active');
+            expect(entry.endpoint).toBeTruthy();
+          }
+        }
+      });
+
+      it('capabilities within each category should be sorted alphabetically', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
+
+        for (const cat of Object.values(categories)) {
+          const names = cat.capabilities.map(c => c.name);
+          const sorted = [...names].sort((a, b) => a.localeCompare(b));
+          expect(names).toEqual(sorted);
+        }
+      });
+
+      it('categories should be sorted alphabetically', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const names = Object.keys(result.categories as object);
+        const sorted = [...names].sort((a, b) => a.localeCompare(b));
+        expect(names).toEqual(sorted);
+      });
+
+      it('get_capabilities should include itself in System Introspection', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
+        const introspectionCat = categories['System Introspection'];
+        expect(introspectionCat).toBeDefined();
+        const names = introspectionCat.capabilities.map(c => c.name);
+        expect(names).toContain('get_capabilities');
+        expect(names).toContain('introspect');
+      });
+    });
+
+    describe('category filter', () => {
+      it('should return only the matching category when filtered', () => {
+        const result = IntrospectionResolver.getCapabilities({ category: 'Memory' });
+        const categories = result.categories as Record<string, { capabilities: Array<{ name: string }> }>;
+        expect(Object.keys(categories)).toEqual(['Memory']);
+        const names = categories['Memory'].capabilities.map(c => c.name);
+        expect(names).toContain('addEntry');
+        expect(names).toContain('clear');
+      });
+
+      it('should be case-insensitive', () => {
+        const result = IntrospectionResolver.getCapabilities({ category: 'memory' });
+        const categories = result.categories as Record<string, unknown>;
+        expect(Object.keys(categories)).toEqual(['Memory']);
+      });
+
+      it('should return empty categories with availableCategories for unknown filter', () => {
+        const result = IntrospectionResolver.getCapabilities({ category: 'Nonexistent' });
+        const categories = result.categories as Record<string, unknown>;
+        expect(Object.keys(categories)).toEqual([]);
+        expect(result.availableCategories).toBeDefined();
+        expect((result.availableCategories as string[]).length).toBeGreaterThan(0);
+        expect(result.hint).toContain('Nonexistent');
+      });
+    });
+
+    describe('brief descriptions', () => {
+      it('should truncate long descriptions to one sentence', () => {
+        const result = IntrospectionResolver.getCapabilities({});
+        const categories = result.categories as Record<string, { capabilities: Array<{ brief: string }> }>;
+
+        for (const cat of Object.values(categories)) {
+          for (const entry of cat.capabilities) {
+            expect(entry.brief.length).toBeLessThanOrEqual(120);
+          }
+        }
+      });
+    });
+
+    describe('introspect includes get_capabilities', () => {
+      it('should list get_capabilities in the operations list', () => {
+        const result = IntrospectionResolver.resolve({ query: 'operations' });
+        const opNames = result.operations!.map(o => o.name);
+        expect(opNames).toContain('get_capabilities');
+      });
+
+      it('should return valid details for get_capabilities', () => {
+        const result = IntrospectionResolver.resolve({ query: 'operations', name: 'get_capabilities' });
+        expect(result.operation).toBeDefined();
+        expect(result.operation!.name).toBe('get_capabilities');
+        expect(result.operation!.endpoint).toBe('READ');
+        expect(result.operation!.parameters.length).toBeGreaterThan(0);
+      });
+    });
+  });
 });

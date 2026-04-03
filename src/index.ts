@@ -835,6 +835,24 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
 
       const { startWebServer } = await import('./web/server.js');
       await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink });
+
+      // Listen for quit commands on stdin (standalone --web mode only).
+      // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.
+      if (process.stdin.isTTY) {
+        process.stdin.setEncoding('utf-8');
+        process.stdin.resume();
+        let quitDebounce: ReturnType<typeof setTimeout> | null = null;
+        process.stdin.on('data', (data: string) => {
+          const cmd = data.trim().toLowerCase();
+          if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
+            // Debounce rapid inputs (e.g., accidental double-tap)
+            if (quitDebounce) return;
+            quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
+            console.error('\n  Shutting down DollhouseMCP...\n');
+            process.exit(0);
+          }
+        });
+      }
     })().catch(err => {
       console.error("[DollhouseMCP] Web UI failed to start:", err);
       process.exit(1);

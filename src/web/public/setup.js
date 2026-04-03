@@ -358,6 +358,9 @@
           : 'Restart the application to activate.';
         status.classList.add('is-success');
       }
+
+      // Show the completion banner after any successful install
+      showCompletionBanner(client);
     } catch (err) {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -367,6 +370,93 @@
         status.classList.add('is-error');
       }
     }
+  };
+
+  // ── Completion banner ────────────────────────────────────────────────
+
+  /** Friendly display names for install clients */
+  const CLIENT_DISPLAY_NAMES = {
+    'claude-desktop': 'Claude Desktop',
+    'claude-code': 'Claude Code',
+    'cursor': 'Cursor',
+    'vscode': 'VS Code',
+    'codex': 'Codex',
+    'gemini-cli': 'Gemini CLI',
+    'windsurf': 'Windsurf',
+    'cline': 'Cline',
+    'lmstudio': 'LM Studio',
+  };
+
+  /** Track which clients have been successfully installed this session */
+  const installedClients = [];
+
+  /**
+   * Show or update the completion banner after successful install.
+   * Tracks all installed clients and updates the banner text to reflect
+   * every client that was configured in this session.
+   */
+  const showCompletionBanner = (client) => {
+    const clientName = CLIENT_DISPLAY_NAMES[client] || client;
+
+    // Track this client (avoid duplicates from re-installs)
+    if (!installedClients.includes(clientName)) {
+      installedClients.push(clientName);
+    }
+
+    const clientList = installedClients.length === 1
+      ? `<strong>${installedClients[0]}</strong>`
+      : installedClients.slice(0, -1).map(c => `<strong>${c}</strong>`).join(', ')
+        + ` and <strong>${installedClients.at(-1)}</strong>`;
+
+    const restartList = installedClients.length === 1
+      ? `Restart <strong>${installedClients[0]}</strong> to activate DollhouseMCP`
+      : `Restart any of your configured clients to activate DollhouseMCP`;
+
+    const configuredWord = installedClients.length === 1 ? 'has' : 'have';
+
+    const bannerHTML = `
+      <div class="setup-completion-icon">&#10003;</div>
+      <h3>You're all set!</h3>
+      <p>${clientList} ${configuredWord} been configured with DollhouseMCP.</p>
+      <div class="setup-completion-steps">
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">1</span>
+          <span>Close this browser tab</span>
+        </div>
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">2</span>
+          <span>${restartList}</span>
+        </div>
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">3</span>
+          <span>Start a conversation and ask: <em>"What DollhouseMCP tools do you have?"</em></span>
+        </div>
+      </div>
+      <p class="setup-completion-terminal-hint">In the terminal, type <code>q</code> to exit the installer.</p>
+    `;
+
+    const existing = document.getElementById('setup-completion-banner');
+    if (existing) {
+      // Update the existing banner with the new client list
+      existing.innerHTML = bannerHTML;
+      return;
+    }
+
+    // First install — create and insert the banner
+    const banner = document.createElement('div');
+    banner.id = 'setup-completion-banner';
+    banner.className = 'setup-completion-banner';
+    banner.innerHTML = bannerHTML;
+
+    const setupContent = document.querySelector('.setup-content');
+    const heroSection = setupContent?.querySelector('.setup-hero');
+    if (setupContent && heroSection) {
+      heroSection.after(banner);
+    } else if (setupContent) {
+      setupContent.prepend(banner);
+    }
+
+    banner.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const initInstallButtons = () => {

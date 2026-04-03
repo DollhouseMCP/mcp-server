@@ -646,3 +646,82 @@
     flex-direction: column;
   }
 }
+
+/* ── Completion banner ────────────────────────────────────────────────── */
+
+.setup-completion-banner {
+  margin: 1.5rem 0 2rem;
+  padding: 1.5rem 2rem;
+  border-radius: 12px;
+  background: color-mix(in srgb, #22c55e 8%, var(--surface-1));
+  border: 2px solid color-mix(in srgb, #22c55e 40%, var(--line));
+  text-align: center;
+  animation: completionFadeIn 0.4s ease-out;
+}
+
+@keyframes completionFadeIn {
+  from { opacity: 0; transform: translateY(-10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.setup-completion-icon {
+  font-size: 2.5rem;
+  color: #22c55e;
+  line-height: 1;
+  margin-bottom: 0.5rem;
+}
+
+.setup-completion-banner h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.3rem;
+  color: var(--text-1);
+}
+
+.setup-completion-banner > p {
+  margin: 0 0 1rem;
+  color: var(--text-2);
+}
+
+.setup-completion-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 28rem;
+  margin: 1.25rem auto;
+  text-align: left;
+}
+
+.setup-completion-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--text-1);
+}
+
+.setup-completion-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border-radius: 50%;
+  background: color-mix(in srgb, #22c55e 20%, var(--surface-1));
+  border: 1px solid color-mix(in srgb, #22c55e 40%, var(--line));
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: #22c55e;
+  flex-shrink: 0;
+}
+
+.setup-completion-terminal-hint {
+  margin-top: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--text-3);
+}
+
+.setup-completion-terminal-hint code {
+  background: var(--surface-2);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+}

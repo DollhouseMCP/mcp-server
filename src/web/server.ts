@@ -298,6 +298,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const fallbackUrl = `http://127.0.0.1:${port}`;
       logger.info(`[WebUI] Management console running at ${url}`);
       console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+      console.error(`  Type "q" or "quit" to exit.\n`);
 
       if (options.openBrowser) {
         openInBrowser(url);
@@ -335,10 +336,21 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
  * @param port - Port to bind to (default: 3939)
  * @returns Result with URL, server status, and browser open status
  */
-export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string): Promise<BrowserOpenResult> {
+export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string, urlParams?: Record<string, string>): Promise<BrowserOpenResult> {
   const targetPort = port || DEFAULT_PORT;
   const baseUrl = `http://${CONSOLE_HOST}:${targetPort}`;
-  const url = tab ? `${baseUrl}/#${tab}` : baseUrl;
+
+  // Build URL with optional tab hash and query parameters
+  // Format: http://host:port/#tab?key=value&key=value
+  let url = baseUrl;
+  if (tab) {
+    const qs = urlParams ? new URLSearchParams(urlParams).toString() : '';
+    url = `${baseUrl}/#${tab}${qs ? '?' + qs : ''}`;
+  } else if (urlParams && Object.keys(urlParams).length > 0) {
+    const qs = new URLSearchParams(urlParams).toString();
+    url = `${baseUrl}/#portfolio?${qs}`;
+  }
+
   const alreadyRunning = serverRunning;
 
   if (!serverRunning) {
