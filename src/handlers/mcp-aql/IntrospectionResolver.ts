@@ -1347,7 +1347,7 @@ const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   'GitHub Authentication': 'Set up, check, and manage GitHub authentication and OAuth configuration.',
   'Intelligence': 'Find similar elements, discover relationships, and search by action verbs using the capability index.',
   'Configuration & Diagnostics': 'Manage server configuration, convert formats, query logs, metrics, and system info.',
-  'Management Console': 'Open the portfolio web UI and navigate to specific tabs (logs, metrics, permissions, setup).',
+  'Management Console': 'Open the portfolio web UI with optional deep-linking. Supports URL parameters to pre-populate search, filter by type or log level, and navigate directly to specific elements or tabs.',
   'System Introspection': 'Discover available operations, types, capabilities, and element format specifications.',
 };
 
