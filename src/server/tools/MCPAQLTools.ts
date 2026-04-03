@@ -261,6 +261,7 @@ Quick start examples:
 { operation: "create_element", element_type: "ensemble", params: { element_name: "my-ensemble", description: "Combined element set", metadata: { elements: [{ element_name: "expert", element_type: "persona", role: "primary" }, { element_name: "analysis", element_type: "skill", role: "support" }] } } }
 Valid ensemble roles: primary, support, override, monitor, core
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
+Note: addEntry content supports markdown (headers, lists, bold, tables, code blocks). Ensure markdown content is properly JSON-escaped — use \\n for newlines, \\" for quotes, and \\\\ for backslashes within the JSON string value.
 
 Execution lifecycle — record agent progress (appends step records, like addEntry):
 { operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Analyzed files", outcome: "success", findings: "Found 3 issues" } }
