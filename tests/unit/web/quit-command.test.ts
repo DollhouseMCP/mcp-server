@@ -7,16 +7,16 @@
  * @see Issue #1764 - Setup completion flow with quit command
  */
 
-describe('Terminal quit command', () => {
-  /**
-   * Extracted quit command matching logic — mirrors src/index.ts stdin handler.
-   * We test the matching function rather than wiring up actual stdin/process.exit.
-   */
-  function isQuitCommand(input: string): boolean {
-    const cmd = input.trim().toLowerCase();
-    return cmd === 'q' || cmd === 'quit' || cmd === 'exit';
-  }
+/**
+ * Extracted quit command matching logic — mirrors src/index.ts stdin handler.
+ * We test the matching function rather than wiring up actual stdin/process.exit.
+ */
+function isQuitCommand(input: string): boolean {
+  const cmd = input.trim().toLowerCase();
+  return cmd === 'q' || cmd === 'quit' || cmd === 'exit';
+}
 
+describe('Terminal quit command', () => {
   describe('recognized quit commands', () => {
     it('should recognize "q"', () => {
       expect(isQuitCommand('q')).toBe(true);
@@ -62,7 +62,7 @@ describe('Terminal quit command', () => {
       expect(isQuitCommand('  exit  ')).toBe(true);
     });
 
-    it('should handle newline (stdin sends \\n after Enter)', () => {
+    it(String.raw`should handle newline (stdin sends \n after Enter)`, () => {
       expect(isQuitCommand('q\n')).toBe(true);
     });
 
