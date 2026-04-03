@@ -225,6 +225,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Introspection.resolve',
     description: 'Query available operations and types for discovery',
   },
+  get_capabilities: {
+    endpoint: 'READ',
+    handler: 'Introspection.getCapabilities',
+    description: 'Get a high-level map of all server capabilities grouped by user intent',
+  },
 
   // ===== UPDATE endpoint (readOnly: false, destructive: true) =====
   edit_element: {

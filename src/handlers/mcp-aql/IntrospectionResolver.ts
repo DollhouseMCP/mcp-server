@@ -31,6 +31,7 @@ import {
   getOperationSchema,
   getAnyOperationSchema,
   schemaToParameterInfo,
+  ALL_OPERATION_SCHEMAS,
   type OperationDef,
 } from './OperationSchema.js';
 
@@ -1117,4 +1118,238 @@ export class IntrospectionResolver {
 
     return lines.join('\n');
   }
+
+  // ==========================================================================
+  // Capabilities (Issue #1760)
+  // ==========================================================================
+
+  /**
+   * Get server capabilities grouped by user-intent category.
+   * Reads category from each operation's schema definition at runtime.
+   * Designed for extensibility — additional CapabilitySources (e.g. portfolio
+   * elements from the capability index) can be registered via registerSource().
+   *
+   * @param params - Optional parameters
+   * @param params.category - Filter to a specific category
+   * @returns CapabilitiesResult with categorized operations
+   * @see Issue #1760 - get_capabilities operation
+   */
+  static getCapabilities(params: Record<string, unknown>): Record<string, unknown> {
+    const filterCategory = params.category as string | undefined;
+    const { categories, sortedCategories, sourceTypes } = this.buildCategoryMap();
+
+    // Apply category filter if requested
+    if (filterCategory) {
+      return this.filterByCategory(filterCategory, categories, sortedCategories, sourceTypes);
+    }
+
+    const totalCapabilities = Object.values(categories).reduce(
+      (sum, cat) => sum + cat.capabilities.length, 0
+    );
+
+    return {
+      categories,
+      totalCapabilities,
+      sources: sourceTypes,
+      hint: 'Use introspect with { query: "operations", name: "<operation>" } for full parameter details, examples, and permissions.',
+    };
+  }
+
+  /**
+   * Build the full category map from all registered capability sources.
+   * Returns sorted categories with descriptions and merged entries.
+   */
+  private static buildCategoryMap() {
+    const mergedMap: Record<string, CapabilityEntry[]> = {};
+    const sourceTypes: string[] = [];
+
+    for (const source of capabilitySources) {
+      sourceTypes.push(source.sourceType);
+      const caps = source.getCapabilities();
+      for (const [cat, entries] of Object.entries(caps)) {
+        if (!mergedMap[cat]) mergedMap[cat] = [];
+        mergedMap[cat].push(...entries);
+      }
+    }
+
+    // Sort entries within each category alphabetically
+    for (const entries of Object.values(mergedMap)) {
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    // Sort categories alphabetically ("Other" last)
+    const sortedCategories = Object.keys(mergedMap).sort((a, b) => {
+      if (a === 'Other') return 1;
+      if (b === 'Other') return -1;
+      return a.localeCompare(b);
+    });
+
+    const categories: Record<string, { description: string; capabilities: CapabilityEntry[] }> = {};
+    for (const cat of sortedCategories) {
+      categories[cat] = {
+        description: CATEGORY_DESCRIPTIONS[cat] || `${cat} operations`,
+        capabilities: mergedMap[cat],
+      };
+    }
+
+    return { categories, sortedCategories, sourceTypes };
+  }
+
+  /**
+   * Filter the category map to a single matching category (case-insensitive).
+   */
+  private static filterByCategory(
+    filterCategory: string,
+    categories: Record<string, { description: string; capabilities: CapabilityEntry[] }>,
+    sortedCategories: string[],
+    sourceTypes: string[],
+  ): Record<string, unknown> {
+    const lowerFilter = filterCategory.toLowerCase();
+    const filtered: Record<string, typeof categories[string]> = {};
+    for (const [catName, catData] of Object.entries(categories)) {
+      if (catName.toLowerCase() === lowerFilter) {
+        filtered[catName] = catData;
+      }
+    }
+    if (Object.keys(filtered).length === 0) {
+      return {
+        categories: {},
+        availableCategories: sortedCategories,
+        hint: `No category matching "${filterCategory}". Use get_capabilities without a filter to see all categories.`,
+      };
+    }
+    return {
+      categories: filtered,
+      sources: sourceTypes,
+      hint: 'Use introspect with { query: "operations", name: "<operation>" } for full details on any operation.',
+    };
+  }
+
+  /**
+   * Register an additional capability source.
+   * Future element sources (reading from the capability index) can be
+   * plugged in here without modifying the get_capabilities handler.
+   * @see Issue #1760 - extensibility for portfolio element capabilities
+   */
+  static registerSource(source: CapabilitySource): void {
+    capabilitySources.push(source);
+  }
+
+  /**
+   * Truncate a description to a brief one-liner.
+   * Takes the first sentence (up to first period followed by space or end).
+   */
+  private static toBrief(description: string): string {
+    if (!description || typeof description !== 'string') {
+      return 'No description available';
+    }
+    const match = /^[^.]*\./.exec(description);
+    if (match && match[0].length <= 120) {
+      return match[0];
+    }
+    if (description.length <= 120) return description;
+    return description.slice(0, 117) + '...';
+  }
 }
+
+// ============================================================================
+// Capability Source System (Issue #1760)
+// ============================================================================
+
+/**
+ * A single capability entry — represents one thing a user can do.
+ */
+export interface CapabilityEntry {
+  /** Operation or capability name */
+  name: string;
+  /** One-line description */
+  brief: string;
+  /** Origin: 'server' for built-in operations, or 'skill:name', 'agent:name', etc. */
+  source: string;
+  /** CRUDE endpoint (for server operations) */
+  endpoint?: string;
+  /** Whether this capability is currently active or available to activate */
+  status: 'active' | 'available';
+}
+
+/**
+ * Interface for pluggable capability providers.
+ * Implement this to contribute capabilities from new sources (e.g. portfolio elements).
+ * @see Issue #1760 - extensibility for portfolio element capabilities
+ */
+export interface CapabilitySource {
+  readonly sourceType: string;
+  getCapabilities(): Record<string, CapabilityEntry[]>;
+}
+
+/**
+ * Built-in capability source that reads from the operation registry.
+ * Groups operations by their schema-declared category field.
+ */
+class ServerOperationsSource implements CapabilitySource {
+  readonly sourceType = 'server';
+
+  getCapabilities(): Record<string, CapabilityEntry[]> {
+    const map: Record<string, CapabilityEntry[]> = {};
+
+    // Collect from OPERATION_ROUTES (the complete operation list)
+    for (const [opName, route] of Object.entries(OPERATION_ROUTES)) {
+      const schema = getAnyOperationSchema(opName);
+      const category = schema?.category || 'Other';
+      const brief = IntrospectionResolver['toBrief'](
+        schema?.description || route.description || `${opName} operation`
+      );
+
+      if (!map[category]) map[category] = [];
+      map[category].push({
+        name: opName,
+        brief,
+        source: 'server',
+        endpoint: route.endpoint,
+        status: 'active',
+      });
+    }
+
+    // Add schema-only operations not in OPERATION_ROUTES (e.g., introspect, get_capabilities)
+    for (const [opName, schema] of Object.entries(ALL_OPERATION_SCHEMAS)) {
+      if (opName in OPERATION_ROUTES) continue;
+      const category = schema.category || 'Other';
+      const brief = IntrospectionResolver['toBrief'](schema.description);
+
+      if (!map[category]) map[category] = [];
+      map[category].push({
+        name: opName,
+        brief,
+        source: 'server',
+        endpoint: schema.endpoint,
+        status: 'active',
+      });
+    }
+
+    return map;
+  }
+}
+
+/**
+ * Human-readable descriptions for each capability category.
+ * @see Issue #1760 - get_capabilities operation
+ */
+const CATEGORY_DESCRIPTIONS: Record<string, string> = {
+  'Element Lifecycle': 'Create, read, edit, delete, import, export, and validate elements (personas, skills, templates, agents, memories, ensembles).',
+  'Element Discovery': 'Search, list, query, and filter elements across your portfolio and connected sources.',
+  'Activation': 'Activate and deactivate elements for use in the current session.',
+  'Memory': 'Add entries to and clear memory elements.',
+  'Template Rendering': 'Render templates with variable substitution.',
+  'Agent Execution': 'Execute agents, track progress, record steps, manage handoffs, and control the execution lifecycle.',
+  'Security & Permissions': 'Confirm operations, verify challenges, evaluate CLI permissions, and manage approval workflows.',
+  'Community Collection': 'Browse, search, install from, and submit to the DollhouseMCP community collection.',
+  'Portfolio Management': 'Initialize, sync, configure, and manage your local and GitHub portfolio.',
+  'GitHub Authentication': 'Set up, check, and manage GitHub authentication and OAuth configuration.',
+  'Intelligence': 'Find similar elements, discover relationships, and search by action verbs using the capability index.',
+  'Configuration & Diagnostics': 'Manage server configuration, convert formats, query logs, metrics, and system info.',
+  'Management Console': 'Open the portfolio web UI with optional deep-linking. Supports URL parameters to pre-populate search, filter by type or log level, and navigate directly to specific elements or tabs.',
+  'System Introspection': 'Discover available operations, types, capabilities, and element format specifications.',
+};
+
+/** Registered capability sources. ServerOperationsSource is always present. */
+const capabilitySources: CapabilitySource[] = [new ServerOperationsSource()];
