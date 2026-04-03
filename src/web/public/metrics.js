@@ -65,9 +65,11 @@
     const refresh = params.get('refresh');
     if (refresh) {
       const interval = Number.parseInt(refresh, 10);
+      // Cap between 1-300 seconds to prevent excessive or unreasonable polling
       if (interval > 0) {
+        const capped = Math.min(Math.max(interval, 1), 300);
         if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(fetchLatest, interval * 1000);
+        pollTimer = setInterval(fetchLatest, capped * 1000);
       } else if (interval === 0 && pollTimer) {
         clearInterval(pollTimer);
         pollTimer = null;

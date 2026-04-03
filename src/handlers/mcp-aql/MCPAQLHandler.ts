@@ -3104,6 +3104,20 @@ export class MCPAQLHandler {
    * @returns MCP response with URL and optional warning
    * @see Issue #774
    */
+  /**
+   * Extract URL query parameters from operation params.
+   * Serializes all params except 'tab' as string key-value pairs.
+   * @see Issue #1765 - URL parameter support for portfolio browser
+   */
+  private static extractUrlParams(params: Record<string, unknown>): Record<string, string> | undefined {
+    const urlParams: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'tab' || value === undefined || value === null || value === '') continue;
+      urlParams[key] = typeof value === 'object' ? JSON.stringify(value as object) : String(value as string | number | boolean);
+    }
+    return Object.keys(urlParams).length > 0 ? urlParams : undefined;
+  }
+
   private async dispatchBrowser(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (method !== 'open') {
       throw new Error(`Unknown Browser method: ${method}`);
@@ -3113,25 +3127,11 @@ export class MCPAQLHandler {
     const { homedir } = await import('node:os');
     const portfolioDir = homedir() + '/.dollhouse/portfolio';
 
-    // Tab parameter for deep-linking to a specific console tab (logs, metrics, etc.)
     const tab = typeof params?.tab === 'string' ? params.tab : undefined;
-
-    // URL query parameters for deep-linking with filters/search state.
-    // Extract all params except 'tab' (which is the hash fragment) and pass as URL query params.
-    // @see Issue #1765 - URL parameter support for portfolio browser
-    const urlParams: Record<string, string> = {};
-    if (params) {
-      for (const [key, value] of Object.entries(params)) {
-        if (key !== 'tab' && value !== undefined && value !== null && value !== '') {
-          // Only serialize primitives — objects would produce "[object Object]"
-          urlParams[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        }
-      }
-    }
-    const hasUrlParams = Object.keys(urlParams).length > 0;
+    const urlParams = params ? MCPAQLHandler.extractUrlParams(params) : undefined;
 
     // Issue #796: Pass MCPAQLHandler to web server for gateway routing
-    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab, hasUrlParams ? urlParams : undefined);
+    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab, urlParams);
 
     const status = result.alreadyRunning ? 'already running' : 'started';
     const browserStatus = result.browserOpened ? 'opened' : 'could not open automatically';

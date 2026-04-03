@@ -87,15 +87,19 @@
 
     const level = params.get('level');
     if (level) {
-      // Take the first level if comma-separated (e.g., "error,warn" → use "warn" as minimum)
-      const levels = level.split(',').map(l => l.trim().toLowerCase());
       const levelOrder = ['debug', 'info', 'warn', 'error'];
-      // Use the lowest level specified as the minimum filter
-      const minLevel = levels.reduce((min, l) =>
-        levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
-      , levels[0]);
-      filterLevel = minLevel;
-      if (levelSelect) levelSelect.value = minLevel;
+      // Filter to only valid level names, ignore unknown values
+      const levels = level.split(',')
+        .map(l => l.trim().toLowerCase())
+        .filter(l => levelOrder.includes(l));
+      if (levels.length > 0) {
+        // Use the lowest valid level specified as the minimum filter
+        const minLevel = levels.reduce((min, l) =>
+          levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
+        , levels[0]);
+        filterLevel = minLevel;
+        if (levelSelect) levelSelect.value = minLevel;
+      }
     }
 
     const category = params.get('category');

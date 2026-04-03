@@ -1796,6 +1796,17 @@ function safeParseYaml(content) {
     }
   }
 
+  // ── URL parameter helpers ────────────────────────────────────────────────
+
+  /**
+   * Map sort + order URL params to the select value format used by the UI.
+   */
+  function mapSortParams(sort = 'name', order = 'asc') {
+    if (sort === 'name') return `name-${order}`;
+    if (sort === 'updated' || sort === 'created') return `date-${order}`;
+    return `${sort}-${order}`;
+  }
+
   // ── Event wiring ───────────────────────────────────────────────────────────
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1959,17 +1970,6 @@ function safeParseYaml(content) {
     // Expose for other scripts (logs.js, metrics.js, permissions.js)
     globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
     globalThis.DollhouseConsole.getUrlParams = () => getTabAndParams().params;
-
-    /**
-     * Map sort + order URL params to the select value format used by the UI.
-     */
-    function mapSortParams(sort, order) {
-      const sortVal = sort || 'name';
-      const orderVal = order || 'asc';
-      if (sortVal === 'name') return `name-${orderVal}`;
-      if (sortVal === 'updated' || sortVal === 'created') return `date-${orderVal}`;
-      return `${sortVal}-${orderVal}`;
-    }
 
     /**
      * Apply URL params to the portfolio tab.
