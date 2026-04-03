@@ -589,6 +589,14 @@ export function describeInvalidInput(input: unknown): string {
     hints.push(`"operation" is ${typeof obj.operation}, expected string`);
   }
 
+  // Check for content that may have caused parsing issues
+  if (obj.params && typeof obj.params === 'object') {
+    const params = obj.params as Record<string, unknown>;
+    if (typeof params.content === 'string' && params.content.length > 100) {
+      hints.push(`content field is ${params.content.length} chars — if content contains markdown or special characters, ensure it is properly JSON-encoded`);
+    }
+  }
+
   const hintStr = hints.length > 0 ? ` (${hints.join('; ')})` : '';
   return `Received: { ${keyPreview} }${hintStr}`;
 }

@@ -833,10 +833,14 @@ export class MCPAQLHandler {
     try {
       // Check if parsing succeeded
       if (!parsedInput) {
+        // Provide specific diagnostics depending on what went wrong
+        const diagnostic = describeInvalidInput(input);
+        const hasOperation = input && typeof input === 'object' && typeof (input as any).operation === 'string';
+        const hint = hasOperation
+          ? 'The input structure looks correct but validation failed. If content contains markdown or special characters, ensure the JSON is properly escaped.'
+          : 'Use format: { operation: "list_elements", params: { type: "personas" } }';
         return this.failure(
-          'Invalid input: expected OperationInput with "operation" and optional "params". ' +
-          describeInvalidInput(input) + '. ' +
-          'Use format: { operation: "list_elements", params: { type: "personas" } }',
+          `Invalid input: expected OperationInput with "operation" and optional "params". ${diagnostic}. ${hint}`,
           startTime
         );
       }

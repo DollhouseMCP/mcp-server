@@ -258,6 +258,8 @@ Quick start examples:
 { operation: "create_element", element_type: "persona", params: { element_name: "MyPersona", description: "A helpful assistant", instructions: "You ARE a helpful assistant. ALWAYS provide clear, accurate responses." } }
 { operation: "create_element", element_type: "agent", params: { element_name: "MyAgent", description: "Task executor", instructions: "Execute goals methodically. Report progress at each step.", goal: { template: "Complete: {objective}", parameters: [{ name: "objective", type: "string", required: true }] } } }
 { operation: "create_element", element_type: "memory", params: { element_name: "session-notes", description: "Session context and notes" } }
+{ operation: "create_element", element_type: "ensemble", params: { element_name: "my-ensemble", description: "Combined element set", metadata: { elements: [{ element_name: "expert", element_type: "persona", role: "primary" }, { element_name: "analysis", element_type: "skill", role: "support" }] } } }
+Valid ensemble roles: primary, support, override, monitor, core
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
 
 Execution lifecycle — record agent progress (appends step records, like addEntry):
