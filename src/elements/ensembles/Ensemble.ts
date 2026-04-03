@@ -1189,9 +1189,17 @@ export class Ensemble extends BaseElement implements IElement {
 
       const instance = this.elementInstances.get(elementName)!;
 
-      // Activate element if it has activate method
-      if (instance.activate) {
-        await instance.activate();
+      // Activate via the type manager's activation method, which both sets the
+      // instance status AND registers the element in the manager's active set.
+      // Using instance.activate() alone only sets the status flag — the manager
+      // won't know the element is active, so get_active_elements returns nothing.
+      // @see Issue #1769 - Ensemble activation not registering with type managers
+      const activated = await this.activateViaManager(elementName, elementConfig.element_type, managers);
+      if (!activated) {
+        // Fallback: activate the instance directly if no manager available
+        if (instance.activate) {
+          await instance.activate();
+        }
       }
 
       // If this is a nested ensemble, call activateEnsemble with incremented depth
@@ -1226,6 +1234,56 @@ export class Ensemble extends BaseElement implements IElement {
       });
 
       logger.error(`Failed to activate element ${elementName}:`, error);
+    }
+  }
+
+  /**
+   * Activate an element via its type manager's activation method.
+   * This registers the element in the manager's active set so that
+   * get_active_elements correctly reports it.
+   *
+   * @returns true if activation went through a manager, false if no manager available
+   * @see Issue #1769 - Ensemble activation not registering with type managers
+   */
+  private async activateViaManager(
+    elementName: string,
+    elementType: string,
+    managers: import('./types.js').ElementManagers
+  ): Promise<boolean> {
+    const normalized = this.normalizeElementType(elementType);
+
+    switch (normalized) {
+      case 'skill': {
+        const mgr = managers.skillManager as any;
+        if (mgr?.activateSkill) { await mgr.activateSkill(elementName); return true; }
+        return false;
+      }
+      case 'persona': {
+        const mgr = managers.personaManager;
+        if (mgr?.activatePersona) { await mgr.activatePersona(elementName); return true; }
+        return false;
+      }
+      case 'agent': {
+        const mgr = managers.agentManager as any;
+        if (mgr?.activateAgent) { await mgr.activateAgent(elementName); return true; }
+        return false;
+      }
+      case 'memory': {
+        const mgr = managers.memoryManager as any;
+        if (mgr?.activateMemory) { await mgr.activateMemory(elementName); return true; }
+        return false;
+      }
+      case 'ensemble': {
+        const mgr = managers.ensembleManager as any;
+        if (mgr?.activateEnsemble) { await mgr.activateEnsemble(elementName); return true; }
+        return false;
+      }
+      case 'template': {
+        // Templates don't have activation state — just activate the instance
+        return false;
+      }
+      default:
+        return false;
     }
   }
 
