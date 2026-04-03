@@ -34,16 +34,47 @@
     },
   };
 
-  function initMetrics() {
+  function initMetrics(urlParams) {
     const container = document.getElementById('metrics-dashboard-root');
     if (!container || container.dataset.initialized === 'true') return;
     container.dataset.initialized = 'true';
+
+    // Apply URL params before building DOM
+    if (urlParams) applyMetricsUrlParams(urlParams);
 
     uPlotAvailable = typeof globalThis.uPlot !== 'undefined'; // NOSONAR — typeof is the safe check for optional globals that may not be loaded
     buildDOM(container);
     bindEvents();
     fetchLatest();
     pollTimer = setInterval(fetchLatest, POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Apply URL parameters to metrics dashboard state.
+   * Supports: since (time range), refresh (poll interval)
+   * @param {URLSearchParams} params
+   */
+  function applyMetricsUrlParams(params) {
+    if (!params || params.toString() === '') return;
+
+    const since = params.get('since');
+    if (since && TIME_RANGES[since]) {
+      activeRange = since;
+    }
+
+    const refresh = params.get('refresh');
+    if (refresh) {
+      const interval = Number.parseInt(refresh, 10);
+      // Cap between 1-300 seconds to prevent excessive or unreasonable polling
+      if (interval > 0) {
+        const capped = Math.min(Math.max(interval, 1), 300);
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(fetchLatest, capped * 1000);
+      } else if (interval === 0 && pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
   }
 
   function destroyMetrics() {

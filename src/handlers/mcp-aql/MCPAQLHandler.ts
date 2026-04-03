@@ -3104,6 +3104,27 @@ export class MCPAQLHandler {
    * @returns MCP response with URL and optional warning
    * @see Issue #774
    */
+  /**
+   * Extract URL query parameters from operation params.
+   * Serializes all params except 'tab' as string key-value pairs.
+   * @see Issue #1765 - URL parameter support for portfolio browser
+   */
+  private static extractUrlParams(params: Record<string, unknown>): Record<string, string> | undefined {
+    const urlParams: Record<string, string> = {};
+    for (const [key, value] of Object.entries(params)) {
+      if (key === 'tab' || value === undefined || value === null || value === '') continue;
+      urlParams[key] = MCPAQLHandler.serializeParamValue(value);
+    }
+    return Object.keys(urlParams).length > 0 ? urlParams : undefined;
+  }
+
+  /** Serialize a param value to a URL-safe string. */
+  private static serializeParamValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (typeof value === 'number' || typeof value === 'boolean') return value.toString();
+    return JSON.stringify(value);
+  }
+
   private async dispatchBrowser(method: string, params?: Record<string, unknown>): Promise<unknown> {
     if (method !== 'open') {
       throw new Error(`Unknown Browser method: ${method}`);
@@ -3113,11 +3134,11 @@ export class MCPAQLHandler {
     const { homedir } = await import('node:os');
     const portfolioDir = homedir() + '/.dollhouse/portfolio';
 
-    // Tab parameter for deep-linking to a specific console tab (logs, metrics, etc.)
     const tab = typeof params?.tab === 'string' ? params.tab : undefined;
+    const urlParams = params ? MCPAQLHandler.extractUrlParams(params) : undefined;
 
     // Issue #796: Pass MCPAQLHandler to web server for gateway routing
-    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab);
+    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab, urlParams);
 
     const status = result.alreadyRunning ? 'already running' : 'started';
     const browserStatus = result.browserOpened ? 'opened' : 'could not open automatically';

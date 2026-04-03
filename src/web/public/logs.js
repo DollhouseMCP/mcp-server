@@ -58,12 +58,16 @@
     },
   };
 
-  function initLogViewer() {
+  function initLogViewer(urlParams) {
     const container = document.getElementById('log-viewer-root');
     if (!container || container.dataset.initialized === 'true') return;
     container.dataset.initialized = 'true';
 
     buildDOM(container);
+
+    // Apply URL params before binding events and connecting SSE
+    if (urlParams) applyLogUrlParams(urlParams);
+
     bindEvents();
     connectSSE();
 
@@ -71,6 +75,57 @@
       renderViewport();
       if (autoScroll) scrollToBottom();
     });
+  }
+
+  /**
+   * Parse a comma-separated level string and return the minimum valid level.
+   * @param {string} levelParam - e.g., "error,warn" or "info"
+   * @returns {string|null} The minimum valid level, or null if none valid
+   */
+  function parseMinLevel(levelParam) {
+    const levelOrder = ['debug', 'info', 'warn', 'error'];
+    const levels = levelParam.split(',')
+      .map(l => l.trim().toLowerCase())
+      .filter(l => levelOrder.includes(l));
+    if (levels.length === 0) return null;
+    return levels.reduce((min, l) =>
+      levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
+    , levels[0]);
+  }
+
+  /**
+   * Apply URL parameters to log viewer state.
+   * Supports: level, category, source, q (message search), correlationId, tail
+   * @param {URLSearchParams} params
+   */
+  /** Apply a single string URL param to a filter variable and optional DOM element. */
+  function applyStringParam(params, key, setter, element) {
+    const val = params.get(key);
+    if (!val) return;
+    setter(val);
+    if (element) element.value = val;
+  }
+
+  function applyLogUrlParams(params) {
+    if (!params || params.toString() === '') return;
+
+    const level = params.get('level');
+    if (level) {
+      const minLevel = parseMinLevel(level);
+      if (minLevel) {
+        filterLevel = minLevel;
+        if (levelSelect) levelSelect.value = minLevel;
+      }
+    }
+
+    applyStringParam(params, 'category', v => { filterCategory = v; }, categorySelect);
+    applyStringParam(params, 'source', v => { filterSource = v; }, sourceInput);
+    applyStringParam(params, 'q', v => { filterMessage = v; }, searchInput);
+
+    const cid = params.get('correlationId');
+    if (cid) filterCorrelationId = cid;
+
+    if (params.get('tail') === 'false') autoScroll = false;
   }
 
   function destroyLogViewer() {
