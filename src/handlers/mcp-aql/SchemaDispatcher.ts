@@ -689,6 +689,16 @@ async function handleIntrospection(
 }
 
 /**
+ * Handle get_capabilities operation (uses IntrospectionResolver directly)
+ * @see Issue #1760 - get_capabilities operation
+ */
+async function handleCapabilities(
+  params: Record<string, unknown>
+): Promise<unknown> {
+  return IntrospectionResolver.getCapabilities(params);
+}
+
+/**
  * Handle build info operation (formats output)
  */
 async function handleBuildInfo(
@@ -996,6 +1006,10 @@ export class SchemaDispatcher {
 
     if (schema.method === '__cacheBudget__') {
       return handleCacheBudgetReport(registry);
+    }
+
+    if (schema.method === '__capabilities__') {
+      return handleCapabilities(params);
     }
 
     // Map params according to schema (with input context and param style)

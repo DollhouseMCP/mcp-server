@@ -156,6 +156,13 @@ export interface OperationDef {
    */
   paramStyle?: 'snakeToCamel';
   /**
+   * Capability category for get_capabilities grouping.
+   * Operations are grouped by user-intent categories in the capabilities map.
+   * Operations without a category appear under "Other".
+   * @see Issue #1760 - get_capabilities operation
+   */
+  category?: string;
+  /**
    * Return type information for introspection
    * @see Issue #254 - Auto-generate introspection from schema
    */
@@ -206,6 +213,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'browseCollection',
+    category: 'Community Collection',
     description: 'Browse the DollhouseMCP community collection by section and type',
     optional: true,
     params: {
@@ -219,6 +227,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'searchCollection',
+    category: 'Community Collection',
     description: 'Search the community collection for elements by keywords',
     optional: true,
     params: {
@@ -231,6 +240,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'searchCollectionEnhanced',
+    category: 'Community Collection',
     description: 'Advanced search with pagination, filtering, and sorting',
     optional: true,
     argBuilder: 'spread',
@@ -244,6 +254,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'getCollectionContent',
+    category: 'Community Collection',
     description: 'Get detailed information about content from the collection',
     optional: true,
     params: {
@@ -256,6 +267,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'getCollectionCacheHealth',
+    category: 'Community Collection',
     description: 'Get health status and statistics for the collection cache',
     optional: true,
     params: {},
@@ -266,6 +278,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'collectionHandler',
     method: 'installContent',
+    category: 'Community Collection',
     description: 'Install an element from the collection to your local portfolio',
     optional: true,
     params: {
@@ -278,6 +291,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'collectionHandler',
     method: 'submitContent',
+    category: 'Community Collection',
     description: 'Submit a local element to the community collection via GitHub',
     optional: true,
     params: {
@@ -297,6 +311,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'authHandler',
     method: 'setupGitHubAuth',
+    category: 'GitHub Authentication',
     description: 'Set up GitHub authentication using device flow',
     optional: true,
     params: {},
@@ -307,6 +322,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'authHandler',
     method: 'checkGitHubAuth',
+    category: 'GitHub Authentication',
     description: 'Check current GitHub authentication status',
     optional: true,
     params: {},
@@ -317,6 +333,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'DELETE',
     handler: 'authHandler',
     method: 'clearGitHubAuth',
+    category: 'GitHub Authentication',
     description: 'Remove GitHub authentication and disconnect',
     optional: true,
     params: {},
@@ -327,6 +344,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'authHandler',
     method: 'configureOAuth',
+    category: 'GitHub Authentication',
     description: 'Configure GitHub OAuth client ID',
     optional: true,
     params: {
@@ -339,6 +357,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'authHandler',
     method: 'getOAuthHelperStatus',
+    category: 'GitHub Authentication',
     description: 'Get diagnostic information about OAuth helper process',
     optional: true,
     params: {
@@ -358,6 +377,7 @@ export const ENHANCED_INDEX_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'enhancedIndexHandler',
     method: 'findSimilarElements',
+    category: 'Intelligence',
     description: 'Find semantically similar elements using NLP scoring',
     optional: true,
     argBuilder: 'named',
@@ -374,6 +394,7 @@ export const ENHANCED_INDEX_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'enhancedIndexHandler',
     method: 'getElementRelationships',
+    category: 'Intelligence',
     description: 'Get all relationships for a specific element',
     optional: true,
     argBuilder: 'named',
@@ -389,6 +410,7 @@ export const ENHANCED_INDEX_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'enhancedIndexHandler',
     method: 'searchByVerb',
+    category: 'Intelligence',
     description: 'Search for elements that handle a specific action verb',
     optional: true,
     argBuilder: 'named',
@@ -403,6 +425,7 @@ export const ENHANCED_INDEX_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'enhancedIndexHandler',
     method: 'getRelationshipStats',
+    category: 'Intelligence',
     description: 'Get statistics about Enhanced Index relationships',
     optional: true,
     params: {},
@@ -420,6 +443,7 @@ export const TEMPLATE_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'templateRenderer',
     method: 'render',
+    category: 'Template Rendering',
     description: 'Render a template with provided variables. For section-format templates (<template>, <style>, <script>), renders the <template> section by default — variable substitution only applies there. Use section: "style" or "script" to retrieve raw passthrough sections where }} is safe.',
     params: {
       // Issue #290: Use element_name for consistency
@@ -446,6 +470,7 @@ export const INTROSPECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD', // Uses IntrospectionResolver directly
     method: '__introspect__', // Special marker for introspection
+    category: 'System Introspection',
     description: 'Query available operations, types, and element format specs for discovery',
     params: {
       query: { type: 'string', required: true, description: "What to introspect: 'operations' (list/detail operations), 'types' (list/detail type definitions), 'format' (element creation format specs — required/optional fields, syntax, examples), 'categories' (category format rules + how to discover existing categories via query_elements). Default: 'operations'" },
@@ -461,6 +486,21 @@ export const INTROSPECTION_OPERATIONS: OperationSchemaMap = {
       '{ operation: "introspect", params: { query: "categories" } }',
     ],
   },
+  get_capabilities: {
+    endpoint: 'READ',
+    handler: 'elementCRUD', // Uses IntrospectionResolver directly
+    method: '__capabilities__', // Special marker for capabilities
+    category: 'System Introspection',
+    description: 'Get a high-level map of all server capabilities grouped by user intent. Returns brief descriptions of every available operation organized by category. Use introspect for full details on any specific operation.',
+    params: {
+      category: { type: 'string', description: 'Filter to a specific category name. Omit to see all categories.' },
+    },
+    returns: { name: 'CapabilitiesResult', kind: 'object', description: 'Categorized capability map with brief descriptions, sources, and status' },
+    examples: [
+      '{ operation: "get_capabilities" }',
+      '{ operation: "get_capabilities", params: { category: "Element Lifecycle" } }',
+    ],
+  },
 } as const;
 
 // ============================================================================
@@ -472,6 +512,7 @@ export const PERSONA_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'personaHandler',
     method: 'importPersona',
+    category: 'Element Lifecycle',
     description: 'Import a persona from a file path or JSON string',
     optional: true,
     params: {
@@ -492,6 +533,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'configHandler',
     method: 'handleConfigOperation',
+    category: 'Configuration & Diagnostics',
     description: 'Manage DollhouseMCP configuration settings',
     optional: true,
     argBuilder: 'named',
@@ -513,6 +555,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'configHandler',
     method: 'convertSkillFormat',
+    category: 'Configuration & Diagnostics',
     description: 'Convert between current Agent Skill and Dollhouse Skill formats (both directions) with structured warnings and optional roundtrip state for lossless supported-field restoration',
     optional: true,
     argBuilder: 'named',
@@ -537,6 +580,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'buildInfoService',
     method: '__buildInfo__', // Special marker for build info
+    category: 'Configuration & Diagnostics',
     description: 'Get comprehensive build and runtime information',
     optional: true,
     params: {},
@@ -547,6 +591,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'cacheMemoryBudget',
     method: '__cacheBudget__',
+    category: 'Configuration & Diagnostics',
     description: 'Get global cache memory budget report with per-cache diagnostics',
     optional: true,
     params: {},
@@ -579,6 +624,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'portfolioStatus',
+    category: 'Portfolio Management',
     description: 'Check GitHub portfolio repository status and element counts',
     optional: true,
     argBuilder: 'single',
@@ -592,6 +638,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'portfolioHandler',
     method: 'initPortfolio',
+    category: 'Portfolio Management',
     description: 'Initialize a new GitHub portfolio repository',
     optional: true,
     argBuilder: 'named',
@@ -608,6 +655,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'portfolioConfig',
+    category: 'Portfolio Management',
     description: 'Configure portfolio settings (auto-sync, visibility, etc.)',
     optional: true,
     argBuilder: 'named',
@@ -625,6 +673,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'portfolioHandler',
     method: 'syncPortfolio',
+    category: 'Portfolio Management',
     description: 'Sync local portfolio with GitHub repository',
     optional: true,
     argBuilder: 'named',
@@ -656,6 +705,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchAll',
+    category: 'Element Discovery',
     description: 'Unified search across local, GitHub, and collection sources with flexible scope',
     optional: true,
     normalizer: 'searchParams',
@@ -689,6 +739,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchPortfolio',
+    category: 'Element Discovery',
     description: 'Search local portfolio by content name, keywords, or tags',
     optional: true,
     argBuilder: 'named',
@@ -717,6 +768,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchAll',
+    category: 'Element Discovery',
     description: 'Unified search across local, GitHub, and collection sources',
     optional: true,
     argBuilder: 'named',
@@ -743,6 +795,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'syncHandler',
     method: 'handleSyncOperation',
+    category: 'Portfolio Management',
     description: 'Manage individual elements between local and GitHub',
     optional: true,
     argBuilder: 'named',
@@ -781,6 +834,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'elementCRUD',
     method: 'createElement',
+    category: 'Element Lifecycle',
     description: 'Create a new element of any type. Note: Gatekeeper may return a confirmation prompt instead of creating immediately — use confirm_operation to approve, then retry.',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -843,6 +897,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'listElements',
+    category: 'Element Discovery',
     description: 'List elements with pagination, filtering, sorting, and aggregation. Returns structured JSON: { items, pagination, sorting, element_type }. Default: page 1, pageSize 20, sorted by name ascending.',
     needsFullInput: true,
     argBuilder: 'typeWithParams', // (type, fullParams) for pagination support
@@ -887,6 +942,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'getElementDetails',
+    category: 'Element Lifecycle',
     description: 'Get an element by name',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
@@ -919,6 +975,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'getElementDetails',
+    category: 'Element Lifecycle',
     description: 'Get detailed information about a specific element including extended metadata',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
@@ -946,6 +1003,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'UPDATE',
     handler: 'elementCRUD',
     method: 'editElement',
+    category: 'Element Lifecycle',
     description: 'Edit an element using GraphQL-aligned nested input objects',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -974,6 +1032,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'UPDATE',
     handler: 'elementCRUD',
     method: 'upgradeElement',
+    category: 'Element Lifecycle',
     description: 'Upgrade element from v1 single-body format to v2.0 dual-field format (instructions + content). Reads existing body text, assigns to instructions or content based on element type, saves in new format with instructions in YAML frontmatter.',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -1000,6 +1059,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'validateElement',
+    category: 'Element Lifecycle',
     description: 'Validate an existing element by name',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -1021,6 +1081,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'DELETE',
     handler: 'elementCRUD',
     method: 'deleteElement',
+    category: 'Element Lifecycle',
     description: 'Delete an element',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -1042,6 +1103,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: '__export__', // Special marker - uses internal handler
+    category: 'Element Lifecycle',
     description: 'Export an element to a portable format',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType, format)
@@ -1063,6 +1125,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'elementCRUD',
     method: '__import__', // Special marker - uses internal handler
+    category: 'Element Lifecycle',
     description: 'Import an element from exported data',
     argBuilder: 'named',
     params: {
@@ -1092,6 +1155,7 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchMemory',
+    category: 'Memory',
     description: 'Add a new entry to a memory element',
     params: {
       element_name: { type: 'string', required: true, description: 'Memory element name' },
@@ -1111,6 +1175,7 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
     endpoint: 'DELETE',
     handler: 'mcpAqlHandler',
     method: 'dispatchMemory',
+    category: 'Memory',
     description: 'Clear all entries from a memory element (irreversible)',
     params: {
       element_name: { type: 'string', required: true, description: 'Memory element name to clear' },
@@ -1142,6 +1207,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Start execution of an agent. The agent must have a goal.template defined (set during create_element). Pass values for the template placeholders in parameters. ' +
       'Lifecycle: Elements listed in the agent\'s activates field (e.g., activates: { personas: ["Reviewer"], skills: ["code-analysis"] }) are automatically activated when execution begins — their gatekeeper policies, instructions, and capabilities become active for the duration. ' +
       'Resilience: If the agent has a resilience policy, it governs automatic recovery during execution. onStepLimitReached (pause|continue|restart) controls what happens when maxAutonomousSteps is hit. onExecutionFailure (pause|retry|restart-fresh) controls recovery from step failures. Additional fields: maxRetries (default 3), maxContinuations (default 10), retryBackoff (linear|exponential). Without a resilience policy, execution pauses at step limits and failures (safe default).',
@@ -1161,6 +1227,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Query current execution state including progress and findings',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1176,6 +1243,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Record execution progress, step completion, or findings. Returns autonomy directive with continue/pause decision and notifications.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1196,6 +1264,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Signal that execution finished successfully with summary',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1212,6 +1281,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Resume execution from saved state',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1227,6 +1297,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Abort a running agent execution, rejecting further operations for the goalId',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name to abort' },
@@ -1242,6 +1313,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Get aggregated execution data (steps, decisions, findings, and summary statistics) for a specific goal',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name' },
@@ -1257,6 +1329,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Serialize goal progress into a portable handoff block for session transfer',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name to prepare handoff for' },
@@ -1274,6 +1347,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
+    category: 'Agent Execution',
     description: 'Resume agent execution from a handoff block with integrity validation',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name to resume (must match handoff block)' },
@@ -1305,6 +1379,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Confirm a pending operation that requires user approval (Gatekeeper flow)',
     params: {
       operation: { type: 'string', required: true, description: 'Operation name to confirm (e.g., "create_element")' },
@@ -1320,6 +1395,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Submit verification code to unblock a danger zone operation',
     params: {
       challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger' },
@@ -1335,6 +1411,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Safe-trigger the full danger zone verification pipeline for testing purposes',
     params: {
       agent_name: { type: 'string', description: 'Agent to block (defaults to "beetlejuice-test-agent")' },
@@ -1352,6 +1429,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Evaluate a CLI-level permission prompt (Bash, Edit, Write, MCP tools). Returns allow/deny decision for non-interactive Claude Code sessions using --permission-prompt-tool.',
     params: {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write", "mcp__server__tool")' },
@@ -1369,6 +1447,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex). Alternative to permission_prompt for interactive sessions using PreToolUse hooks.',
     params: {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write")' },
@@ -1386,6 +1465,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Get effective CLI-level permission policies across all active elements',
     params: {
       tool_name: { type: 'string', description: 'Optional: evaluate a specific tool (e.g., "Bash", "Edit:src/index.ts")' },
@@ -1402,6 +1482,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Approve a pending CLI tool permission request. Used by bridges (Zulip, Slack) to relay human approval for tools that require it.',
     params: {
       request_id: { type: 'string', required: true, description: 'Approval request ID from permission_prompt deny response (format: cli-<UUID>)' },
@@ -1417,6 +1498,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
     description: 'Get all pending CLI tool approval requests for this session. Returns unapproved requests that are waiting for human authorization.',
     params: {},
     returns: { name: 'PendingApprovals', kind: 'object', description: '{ pending: CliApprovalRecord[], count: number }' },
@@ -1443,6 +1525,7 @@ export const LOGGING_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchLogging',
+    category: 'Configuration & Diagnostics',
     description: 'Query recent log entries from the in-memory buffer. Returns filtered, paginated results sorted newest-first. Only queries the hot tier (in-memory); evicted entries exist only in disk log files.',
     params: {
       category: { type: 'string', description: "Log category filter: 'application', 'security', 'performance', 'telemetry', or 'all'. Default: 'all'" },
@@ -1480,6 +1563,7 @@ export const METRICS_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchMetrics',
+    category: 'Configuration & Diagnostics',
     description: 'Query collected metrics snapshots. Returns filtered, paginated results sorted newest-first. Supports filtering by metric name (prefix or exact), source, type, and time range.',
     params: {
       names: { type: 'string[]', description: "Metric name filters. Exact match or prefix match with trailing '.' or '.*' (e.g., 'system.memory.*')" },
@@ -1522,6 +1606,7 @@ export const ACTIVATION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchActivation',
+    category: 'Activation',
     description: 'Activate an element for use in the current session. Activation state is persisted per-session (DOLLHOUSE_SESSION_ID) and restored on server restart.',
     params: {
       element_name: { type: 'string', required: true, description: 'Name of the element to activate' },
@@ -1537,6 +1622,7 @@ export const ACTIVATION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchActivation',
+    category: 'Activation',
     description: 'Deactivate an element, removing it from the current session. Persisted activation state is updated.',
     params: {
       element_name: { type: 'string', required: true, description: 'Name of the element to deactivate' },
@@ -1551,6 +1637,7 @@ export const ACTIVATION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchActivation',
+    category: 'Activation',
     description: 'Get all currently active elements with rendered content, optionally filtered by type',
     params: {
       element_type: { type: 'string', description: 'Optional element type filter. Omit to get all active elements across all types.' },
@@ -1581,6 +1668,7 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchSearch',
+    category: 'Element Discovery',
     description: 'Full-text search across element names, descriptions, and content with pagination and sorting',
     params: {
       query: { type: 'string', required: true, description: 'Search query string (max 1000 characters)' },
@@ -1603,6 +1691,7 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchSearch',
+    category: 'Element Discovery',
     description: 'Query elements with filters, sorting, pagination, and count aggregation. Returns structured JSON.',
     params: {
       element_type: { type: 'string', required: true, description: 'Element type to query (required)' },
@@ -1665,6 +1754,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
+    category: 'Management Console',
     description: 'Start the portfolio web UI and open it in the system browser. The web server runs on localhost:3939 and shows all portfolio elements with search, filtering, and detail views. Aliases: open_console, open_management_console, open_dollhouse_mcp.',
     params: {
       tab: { type: 'string', description: 'Tab to open (portfolio, logs, metrics, permissions, setup). Default: last-used tab.', required: false },
@@ -1679,6 +1769,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
+    category: 'Management Console',
     description: 'Open the management console directly on the logs tab. Aliases: open_dollhouse_logs, open_dollhouse_mcp_logs.',
     params: {},
     returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
@@ -1688,6 +1779,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
+    category: 'Management Console',
     description: 'Open the management console directly on the metrics tab. Aliases: open_dollhouse_metrics, open_dollhouse_mcp_metrics.',
     params: {},
     returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
@@ -1697,6 +1789,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
+    category: 'Management Console',
     description: 'Open the management console directly on the permissions tab. Aliases: open_dollhouse_permissions.',
     params: {},
     returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
@@ -1706,6 +1799,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
+    category: 'Management Console',
     description: 'Open the management console directly on the setup/install tab. Aliases: open_dollhouse_setup, open_installer.',
     params: {},
     returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
