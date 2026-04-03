@@ -406,7 +406,7 @@
     const clientList = installedClients.length === 1
       ? `<strong>${installedClients[0]}</strong>`
       : installedClients.slice(0, -1).map(c => `<strong>${c}</strong>`).join(', ')
-        + ` and <strong>${installedClients[installedClients.length - 1]}</strong>`;
+        + ` and <strong>${installedClients.at(-1)}</strong>`;
 
     const restartList = installedClients.length === 1
       ? `Restart <strong>${installedClients[0]}</strong> to activate DollhouseMCP`
@@ -451,7 +451,7 @@
     const setupContent = document.querySelector('.setup-content');
     const heroSection = setupContent?.querySelector('.setup-hero');
     if (setupContent && heroSection) {
-      heroSection.insertAdjacentElement('afterend', banner);
+      heroSection.after(banner);
     } else if (setupContent) {
       setupContent.prepend(banner);
     }
