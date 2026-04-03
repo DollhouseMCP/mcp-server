@@ -78,6 +78,22 @@
   }
 
   /**
+   * Parse a comma-separated level string and return the minimum valid level.
+   * @param {string} levelParam - e.g., "error,warn" or "info"
+   * @returns {string|null} The minimum valid level, or null if none valid
+   */
+  function parseMinLevel(levelParam) {
+    const levelOrder = ['debug', 'info', 'warn', 'error'];
+    const levels = levelParam.split(',')
+      .map(l => l.trim().toLowerCase())
+      .filter(l => levelOrder.includes(l));
+    if (levels.length === 0) return null;
+    return levels.reduce((min, l) =>
+      levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
+    , levels[0]);
+  }
+
+  /**
    * Apply URL parameters to log viewer state.
    * Supports: level, category, source, q (message search), correlationId, tail
    * @param {URLSearchParams} params
@@ -87,48 +103,24 @@
 
     const level = params.get('level');
     if (level) {
-      const levelOrder = ['debug', 'info', 'warn', 'error'];
-      // Filter to only valid level names, ignore unknown values
-      const levels = level.split(',')
-        .map(l => l.trim().toLowerCase())
-        .filter(l => levelOrder.includes(l));
-      if (levels.length > 0) {
-        // Use the lowest valid level specified as the minimum filter
-        const minLevel = levels.reduce((min, l) =>
-          levelOrder.indexOf(l) < levelOrder.indexOf(min) ? l : min
-        , levels[0]);
+      const minLevel = parseMinLevel(level);
+      if (minLevel) {
         filterLevel = minLevel;
         if (levelSelect) levelSelect.value = minLevel;
       }
     }
 
     const category = params.get('category');
-    if (category) {
-      filterCategory = category;
-      if (categorySelect) categorySelect.value = category;
-    }
+    if (category) { filterCategory = category; if (categorySelect) categorySelect.value = category; }
 
     const source = params.get('source');
-    if (source) {
-      filterSource = source;
-      if (sourceInput) sourceInput.value = source;
-    }
+    if (source) { filterSource = source; if (sourceInput) sourceInput.value = source; }
 
     const q = params.get('q');
-    if (q) {
-      filterMessage = q;
-      if (searchInput) searchInput.value = q;
-    }
+    if (q) { filterMessage = q; if (searchInput) searchInput.value = q; }
 
-    const correlationId = params.get('correlationId');
-    if (correlationId) {
-      filterCorrelationId = correlationId;
-    }
-
-    const tail = params.get('tail');
-    if (tail === 'false') {
-      autoScroll = false;
-    }
+    if (params.get('correlationId')) { filterCorrelationId = params.get('correlationId'); }
+    if (params.get('tail') === 'false') { autoScroll = false; }
   }
 
   function destroyLogViewer() {

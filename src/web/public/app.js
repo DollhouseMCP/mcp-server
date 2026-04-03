@@ -1959,6 +1959,8 @@ function safeParseYaml(content) {
      */
     function getTabAndParams() {
       const raw = globalThis.location.hash.replace('#', '');
+      // Guard against excessively long URLs (browser limit ~2048 chars)
+      if (raw.length > 2048) return { tab: '', params: new URLSearchParams() };
       const qIdx = raw.indexOf('?');
       if (qIdx === -1) return { tab: raw, params: new URLSearchParams() };
       return {

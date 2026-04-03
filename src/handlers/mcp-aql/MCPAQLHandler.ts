@@ -3113,7 +3113,7 @@ export class MCPAQLHandler {
     const urlParams: Record<string, string> = {};
     for (const [key, value] of Object.entries(params)) {
       if (key === 'tab' || value === undefined || value === null || value === '') continue;
-      urlParams[key] = typeof value === 'object' ? JSON.stringify(value as object) : String(value as string | number | boolean);
+      urlParams[key] = typeof value === 'object' ? JSON.stringify(value) : String(value);
     }
     return Object.keys(urlParams).length > 0 ? urlParams : undefined;
   }
