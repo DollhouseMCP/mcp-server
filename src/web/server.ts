@@ -287,10 +287,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   });
 
   // Bind to localhost only — handle port conflicts gracefully
-  // NOTE: console.log is intentional here (not logger). In --web standalone mode,
-  // the user sees terminal output directly. logger.info writes to the structured
-  // log system (MemoryLogSink → SSE → web console). Both are needed: console.log
-  // for the human at the terminal, logger for the log viewer tab.
+  // NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
+  // is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
+  // stderr is safe for human-readable messages in both MCP and standalone modes.
   await new Promise<void>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
@@ -298,7 +297,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       const url = `http://${CONSOLE_HOST}:${port}`;
       const fallbackUrl = `http://127.0.0.1:${port}`;
       logger.info(`[WebUI] Management console running at ${url}`);
-      console.log(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+      console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
 
       if (options.openBrowser) {
         openInBrowser(url);
@@ -309,7 +308,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       if (err.code === 'EADDRINUSE') {
         const url = `http://${CONSOLE_HOST}:${port}`;
         logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
-        console.log(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
+        console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
         if (options.openBrowser) {
           openInBrowser(url);
         }
