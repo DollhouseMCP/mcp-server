@@ -385,6 +385,8 @@ Enhanced index:
 { operation: "get_relationship_stats" }
 
 Discover all operations and parameters:
+{ operation: "get_capabilities" }
+{ operation: "get_capabilities", params: { category: "Element Lifecycle" } }
 { operation: "introspect", params: { query: "operations" } }`,
         inputSchema: operationInputSchema,
         annotations: {

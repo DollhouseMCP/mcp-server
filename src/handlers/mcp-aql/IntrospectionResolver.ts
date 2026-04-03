@@ -1136,8 +1136,30 @@ export class IntrospectionResolver {
    */
   static getCapabilities(params: Record<string, unknown>): Record<string, unknown> {
     const filterCategory = params.category as string | undefined;
+    const { categories, sortedCategories, sourceTypes } = this.buildCategoryMap();
 
-    // Collect capabilities from all registered sources
+    // Apply category filter if requested
+    if (filterCategory) {
+      return this.filterByCategory(filterCategory, categories, sortedCategories, sourceTypes);
+    }
+
+    const totalCapabilities = Object.values(categories).reduce(
+      (sum, cat) => sum + cat.capabilities.length, 0
+    );
+
+    return {
+      categories,
+      totalCapabilities,
+      sources: sourceTypes,
+      hint: 'Use introspect with { query: "operations", name: "<operation>" } for full parameter details, examples, and permissions.',
+    };
+  }
+
+  /**
+   * Build the full category map from all registered capability sources.
+   * Returns sorted categories with descriptions and merged entries.
+   */
+  private static buildCategoryMap() {
     const mergedMap: Record<string, CapabilityEntry[]> = {};
     const sourceTypes: string[] = [];
 
@@ -1155,7 +1177,7 @@ export class IntrospectionResolver {
       entries.sort((a, b) => a.name.localeCompare(b.name));
     }
 
-    // Build final structure with descriptions, sorted categories ("Other" last)
+    // Sort categories alphabetically ("Other" last)
     const sortedCategories = Object.keys(mergedMap).sort((a, b) => {
       if (a === 'Other') return 1;
       if (b === 'Other') return -1;
@@ -1170,37 +1192,36 @@ export class IntrospectionResolver {
       };
     }
 
-    // Apply category filter if requested
-    if (filterCategory) {
-      const filtered: Record<string, typeof categories[string]> = {};
-      for (const [catName, catData] of Object.entries(categories)) {
-        if (catName.toLowerCase() === filterCategory.toLowerCase()) {
-          filtered[catName] = catData;
-        }
+    return { categories, sortedCategories, sourceTypes };
+  }
+
+  /**
+   * Filter the category map to a single matching category (case-insensitive).
+   */
+  private static filterByCategory(
+    filterCategory: string,
+    categories: Record<string, { description: string; capabilities: CapabilityEntry[] }>,
+    sortedCategories: string[],
+    sourceTypes: string[],
+  ): Record<string, unknown> {
+    const lowerFilter = filterCategory.toLowerCase();
+    const filtered: Record<string, typeof categories[string]> = {};
+    for (const [catName, catData] of Object.entries(categories)) {
+      if (catName.toLowerCase() === lowerFilter) {
+        filtered[catName] = catData;
       }
-      if (Object.keys(filtered).length === 0) {
-        return {
-          categories: {},
-          availableCategories: sortedCategories,
-          hint: `No category matching "${filterCategory}". Use get_capabilities without a filter to see all categories.`,
-        };
-      }
+    }
+    if (Object.keys(filtered).length === 0) {
       return {
-        categories: filtered,
-        sources: sourceTypes,
-        hint: 'Use introspect with { query: "operations", name: "<operation>" } for full details on any operation.',
+        categories: {},
+        availableCategories: sortedCategories,
+        hint: `No category matching "${filterCategory}". Use get_capabilities without a filter to see all categories.`,
       };
     }
-
-    const totalCapabilities = Object.values(categories).reduce(
-      (sum, cat) => sum + cat.capabilities.length, 0
-    );
-
     return {
-      categories,
-      totalCapabilities,
+      categories: filtered,
       sources: sourceTypes,
-      hint: 'Use introspect with { query: "operations", name: "<operation>" } for full parameter details, examples, and permissions.',
+      hint: 'Use introspect with { query: "operations", name: "<operation>" } for full details on any operation.',
     };
   }
 
@@ -1219,7 +1240,10 @@ export class IntrospectionResolver {
    * Takes the first sentence (up to first period followed by space or end).
    */
   private static toBrief(description: string): string {
-    const match = description.match(/^[^.]*\./);
+    if (!description || typeof description !== 'string') {
+      return 'No description available';
+    }
+    const match = /^[^.]*\./.exec(description);
     if (match && match[0].length <= 120) {
       return match[0];
     }

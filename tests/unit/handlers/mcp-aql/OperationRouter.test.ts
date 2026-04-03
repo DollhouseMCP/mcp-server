@@ -51,6 +51,7 @@ describe('OperationRouter', () => {
         'open_permissions',
         'open_setup',
         'introspect',
+        'get_capabilities',
         'browse_collection',
         'search_collection',
         'search_collection_enhanced',
