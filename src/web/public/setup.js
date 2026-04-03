@@ -387,23 +387,37 @@
     'lmstudio': 'LM Studio',
   };
 
+  /** Track which clients have been successfully installed this session */
+  const installedClients = [];
+
   /**
-   * Show a completion banner after successful install, encouraging the user
-   * to close this tab and start a session in their LLM client.
+   * Show or update the completion banner after successful install.
+   * Tracks all installed clients and updates the banner text to reflect
+   * every client that was configured in this session.
    */
   const showCompletionBanner = (client) => {
-    // Don't show duplicate banners
-    if (document.getElementById('setup-completion-banner')) return;
-
     const clientName = CLIENT_DISPLAY_NAMES[client] || client;
 
-    const banner = document.createElement('div');
-    banner.id = 'setup-completion-banner';
-    banner.className = 'setup-completion-banner';
-    banner.innerHTML = `
+    // Track this client (avoid duplicates from re-installs)
+    if (!installedClients.includes(clientName)) {
+      installedClients.push(clientName);
+    }
+
+    const clientList = installedClients.length === 1
+      ? `<strong>${installedClients[0]}</strong>`
+      : installedClients.slice(0, -1).map(c => `<strong>${c}</strong>`).join(', ')
+        + ` and <strong>${installedClients[installedClients.length - 1]}</strong>`;
+
+    const restartList = installedClients.length === 1
+      ? `Restart <strong>${installedClients[0]}</strong> to activate the MCP connection`
+      : `Restart ${clientList} to activate the MCP connections`;
+
+    const configuredWord = installedClients.length === 1 ? 'has' : 'have';
+
+    const bannerHTML = `
       <div class="setup-completion-icon">&#10003;</div>
       <h3>You're all set!</h3>
-      <p><strong>${clientName}</strong> has been configured with DollhouseMCP.</p>
+      <p>${clientList} ${configuredWord} been configured with DollhouseMCP.</p>
       <div class="setup-completion-steps">
         <div class="setup-completion-step">
           <span class="setup-completion-step-num">1</span>
@@ -411,7 +425,7 @@
         </div>
         <div class="setup-completion-step">
           <span class="setup-completion-step-num">2</span>
-          <span>Restart <strong>${clientName}</strong> to activate the MCP connection</span>
+          <span>${restartList}</span>
         </div>
         <div class="setup-completion-step">
           <span class="setup-completion-step-num">3</span>
@@ -421,7 +435,19 @@
       <p class="setup-completion-terminal-hint">In the terminal, type <code>q</code> to exit the installer.</p>
     `;
 
-    // Insert at the top of the setup content, after the hero section
+    const existing = document.getElementById('setup-completion-banner');
+    if (existing) {
+      // Update the existing banner with the new client list
+      existing.innerHTML = bannerHTML;
+      return;
+    }
+
+    // First install — create and insert the banner
+    const banner = document.createElement('div');
+    banner.id = 'setup-completion-banner';
+    banner.className = 'setup-completion-banner';
+    banner.innerHTML = bannerHTML;
+
     const setupContent = document.querySelector('.setup-content');
     const heroSection = setupContent?.querySelector('.setup-hero');
     if (setupContent && heroSection) {
@@ -430,7 +456,6 @@
       setupContent.prepend(banner);
     }
 
-    // Scroll to the banner
     banner.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
