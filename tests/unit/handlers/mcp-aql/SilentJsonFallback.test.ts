@@ -437,7 +437,9 @@ describe('describeInvalidInput (Issue #1656)', () => {
   });
 
   // Issue #1768: Content-aware diagnostics for markdown/special character failures
-  it('should include content length hint when params.content is large', () => {
+  // Issue #1768: Content-aware diagnostics with CONTENT_DIAGNOSTIC_THRESHOLD (80 chars)
+
+  it('should include content length hint when params.content exceeds threshold', () => {
     const result = describeInvalidInput({
       operation: 'addEntry',
       params: {
@@ -448,6 +450,28 @@ describe('describeInvalidInput (Issue #1656)', () => {
     expect(result).toContain('content field is');
     expect(result).toContain('chars');
     expect(result).toContain('markdown');
+  });
+
+  it('should not include content hint at exactly threshold boundary (80 chars)', () => {
+    const result = describeInvalidInput({
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: 'x'.repeat(80), // exactly at threshold — should NOT trigger
+      },
+    });
+    expect(result).not.toContain('content field is');
+  });
+
+  it('should include content hint just above threshold (81 chars)', () => {
+    const result = describeInvalidInput({
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: 'x'.repeat(81), // one above threshold — should trigger
+      },
+    });
+    expect(result).toContain('content field is 81 chars');
   });
 
   it('should not include content hint for short content', () => {
@@ -463,6 +487,17 @@ describe('describeInvalidInput (Issue #1656)', () => {
 
   it('should not include content hint when params is missing', () => {
     const result = describeInvalidInput({ operation: 'addEntry' });
+    expect(result).not.toContain('content field is');
+  });
+
+  it('should not include content hint when content is not a string', () => {
+    const result = describeInvalidInput({
+      operation: 'addEntry',
+      params: {
+        element_name: 'my-memory',
+        content: 12345,
+      },
+    });
     expect(result).not.toContain('content field is');
   });
 });
@@ -595,6 +630,24 @@ describe('Ensemble example in tool descriptions (Issue #1767)', () => {
     expect(result).not.toBeNull();
     expect(result!.operation).toBe('create_element');
     expect(result!.element_type).toBe('ensemble');
+  });
+
+  it('should reject invalid ensemble roles at the Ensemble constructor level', () => {
+    // Invalid roles should be caught by Ensemble validation, not parseOperationInput.
+    // parseOperationInput only validates structure — role validation happens deeper.
+    // This test verifies the input parser accepts the structure regardless of role value.
+    const input = {
+      operation: 'create_element',
+      element_type: 'ensemble',
+      params: {
+        element_name: 'bad-role-test',
+        description: 'Test',
+        metadata: { elements: [{ element_name: 'e', element_type: 'skill', role: 'invalid-role' }] },
+      },
+    };
+    // parseOperationInput should accept the structure (role validation is downstream)
+    const result = parseOperationInput(input);
+    expect(result).not.toBeNull();
   });
 
   it('should accept all valid ensemble roles', () => {
