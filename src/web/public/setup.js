@@ -358,6 +358,9 @@
           : 'Restart the application to activate.';
         status.classList.add('is-success');
       }
+
+      // Show the completion banner after any successful install
+      showCompletionBanner(client);
     } catch (err) {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -367,6 +370,68 @@
         status.classList.add('is-error');
       }
     }
+  };
+
+  // ── Completion banner ────────────────────────────────────────────────
+
+  /** Friendly display names for install clients */
+  const CLIENT_DISPLAY_NAMES = {
+    'claude-desktop': 'Claude Desktop',
+    'claude-code': 'Claude Code',
+    'cursor': 'Cursor',
+    'vscode': 'VS Code',
+    'codex': 'Codex',
+    'gemini-cli': 'Gemini CLI',
+    'windsurf': 'Windsurf',
+    'cline': 'Cline',
+    'lmstudio': 'LM Studio',
+  };
+
+  /**
+   * Show a completion banner after successful install, encouraging the user
+   * to close this tab and start a session in their LLM client.
+   */
+  const showCompletionBanner = (client) => {
+    // Don't show duplicate banners
+    if (document.getElementById('setup-completion-banner')) return;
+
+    const clientName = CLIENT_DISPLAY_NAMES[client] || client;
+
+    const banner = document.createElement('div');
+    banner.id = 'setup-completion-banner';
+    banner.className = 'setup-completion-banner';
+    banner.innerHTML = `
+      <div class="setup-completion-icon">&#10003;</div>
+      <h3>You're all set!</h3>
+      <p><strong>${clientName}</strong> has been configured with DollhouseMCP.</p>
+      <div class="setup-completion-steps">
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">1</span>
+          <span>Close this browser tab</span>
+        </div>
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">2</span>
+          <span>Restart <strong>${clientName}</strong> to activate the MCP connection</span>
+        </div>
+        <div class="setup-completion-step">
+          <span class="setup-completion-step-num">3</span>
+          <span>Start a conversation and ask: <em>"What DollhouseMCP tools do you have?"</em></span>
+        </div>
+      </div>
+      <p class="setup-completion-terminal-hint">In the terminal, type <code>q</code> to exit the installer.</p>
+    `;
+
+    // Insert at the top of the setup content, after the hero section
+    const setupContent = document.querySelector('.setup-content');
+    const heroSection = setupContent?.querySelector('.setup-hero');
+    if (setupContent && heroSection) {
+      heroSection.insertAdjacentElement('afterend', banner);
+    } else if (setupContent) {
+      setupContent.prepend(banner);
+    }
+
+    // Scroll to the banner
+    banner.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   const initInstallButtons = () => {
