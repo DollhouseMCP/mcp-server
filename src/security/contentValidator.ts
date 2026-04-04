@@ -71,7 +71,9 @@ export class ContentValidator {
    * The patterns below represent known attack vectors from security research
    * and real-world exploit attempts against AI systems.
    */
-  // Prompt injection patterns that could compromise AI assistants
+  // Prompt injection patterns that could compromise AI assistants.
+  // MAINTENANCE: Review periodically for false positives (run integration tests in
+  // tests/integration/security-audit-batch-a.integration.test.ts) and new attack vectors.
   private static readonly INJECTION_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'critical'; description: string }> = [
     // System prompt override attempts
     { pattern: /\[SYSTEM:\s*.*?\]/gi, severity: 'critical', description: 'System prompt override' },
