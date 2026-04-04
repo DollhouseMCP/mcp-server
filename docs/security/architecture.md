@@ -255,11 +255,13 @@ Multiple validators protect against injection attacks, Unicode exploits, and mal
 
 The `ContentValidator` class detects prompt injection attacks using deterministic pattern matching (not AI-based detection). This was a deliberate design choice -- pattern matching cannot be socially engineered. Detection covers:
 - System/admin/assistant prompt overrides (`[SYSTEM: ...]`, `[ADMIN: ...]`)
-- Role impersonation attempts
+- Role impersonation attempts (specific dangerous roles: admin, root, system, sudo, superuser, DAN)
 - Instruction override patterns
 - Code execution directives
+- External command execution (`curl`/`wget` with any URL, not just specific TLDs — #1782-1)
+- Jailbreak and guideline bypass patterns (`DAN mode`, `do anything now`, `pretend you have no guidelines` — #1782-4)
 
-Context-aware validation: Skills may legitimately contain code patterns (eval, exec, require) that would be blocked in other element types (Issue #456).
+Context-aware validation: Skills may legitimately contain code patterns (eval, exec, require) that would be blocked in other element types (Issue #456). Pattern maintenance guidance and false-positive regression tests are in `tests/integration/security-audit-batch-a.integration.test.ts`.
 
 ### 4.2 Unicode Validator
 
@@ -268,7 +270,7 @@ Context-aware validation: Skills may legitimately contain code patterns (eval, e
 The `UnicodeValidator` prevents Unicode-based bypass attacks:
 - **Direction override attacks**: Strips RLO/LRO/RLE/LRE and isolate formatting characters (U+202A-U+202E, U+2066-U+2069)
 - **Zero-width injection**: Removes zero-width spaces, joiners, and BOM characters
-- **Homograph attacks**: Maps confusable characters (Cyrillic-to-Latin, Greek-to-Latin) via `CONFUSABLE_MAPPINGS`
+- **Homograph attacks**: Maps ~110 confusable characters (Cyrillic-to-Latin, Greek lowercase and uppercase to Latin — #1782-2, fullwidth, mathematical) via `CONFUSABLE_MAPPINGS`
 - **Mixed script detection**: Identifies strings mixing multiple Unicode scripts
 - **Non-printable character stripping**: Removes C0/C1 control codes and non-characters
 
@@ -390,7 +392,7 @@ The `classifyTool()` function classifies CLI tools into four risk levels:
 |------------|----------|---------|
 | `safe` | Auto-allow | Read, Grep, Glob, WebFetch, git status, npm test |
 | `moderate` | Evaluate against policies | Edit, Write, Agent, unclassified bash |
-| `dangerous` | Auto-deny | rm -rf, sudo, eval, curl pipe to shell |
+| `dangerous` | Auto-deny | rm -rf, sudo, eval, curl pipe to shell, `python3 -c`, `node -e`, `perl -e`, `ruby -e` (#1782-3) |
 | `blocked` | Always denied | mkfs, dd if=, fork bombs |
 
 ### 6.2 Bash Command Classification
@@ -521,7 +523,10 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | Threat | Layer | Mitigation | Source File |
 |--------|-------|------------|-------------|
 | Prompt injection via element content | 4 | Pattern-based detection in `ContentValidator`, context-aware exemptions | `src/security/contentValidator.ts` |
-| Unicode bypass attacks (homograph, RTL, zero-width) | 4 | `UnicodeValidator` normalization at boundary, confusable mappings | `src/security/validators/unicodeValidator.ts` |
+| Unicode bypass attacks (homograph, RTL, zero-width) | 4 | `UnicodeValidator` normalization at boundary, ~110 confusable mappings (Cyrillic, Greek, fullwidth, math) | `src/security/validators/unicodeValidator.ts` |
+| Unicode homograph path traversal | 4, 5 | NFC normalization on `name` param before `..` / `\` checks (#1736) | `src/web/routes.ts` |
+| Consumed approval memory leak | 1 | `expireStaleApprovals` evicts consumed single-use records (#1782-5) | `src/handlers/mcp-aql/GatekeeperSession.ts` |
+| Inline interpreter code execution | 6 | `python -c`, `node -e`, `perl -e`, `ruby -e` classified as dangerous (#1782-3) | `src/handlers/mcp-aql/policies/ToolClassification.ts` |
 | YAML deserialization attacks | 4 | `CORE_SCHEMA` only, size limits, bomb detection | `src/security/secureYamlParser.ts` |
 | Path traversal / symlink attacks | 5 | `PathValidator` with symlink resolution, allowed directory list | `src/security/pathValidator.ts` |
 | Token exposure in logs/errors | 7 | AES-256-GCM encryption, token redaction, sanitized errors | `src/security/tokenManager.ts` |
@@ -589,6 +594,7 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | `RateLimiterSecurity.test.ts` | Rate limiting effectiveness |
 | `securityMonitor.test.ts` | Security event logging |
 | `metadata-security.test.ts` | Metadata injection |
+| `security-audit-batch-a.integration.test.ts` | End-to-end: curl/wget bypass, Greek confusables, interpreter patterns, injection precision + false positives |
 | `ensemble-security-audit.test.ts` | Ensemble security |
 | `mcp-sdk-security.test.ts` | MCP protocol security |
 
