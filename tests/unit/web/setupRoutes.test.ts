@@ -710,7 +710,10 @@ describe('Setup Tab — Regressions', () => {
 
   describe('Version fetching in JS', () => {
     it('fetches from /api/setup/version', () => {
-      expect(js).toContain("fetch('/api/setup/version')");
+      // Since #1780, fetches go through DollhouseAuth.apiFetch so they can
+      // attach the console token when auth is enforced. We just check that
+      // the URL is present — whether it's via native fetch or the wrapper.
+      expect(js).toContain("'/api/setup/version'");
     });
 
     it('updates pinned-version-label element', () => {

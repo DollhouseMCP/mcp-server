@@ -333,7 +333,7 @@
         payload.version = pinnedVersion;
       }
 
-      const res = await fetch('/api/setup/install', {
+      const res = await DollhouseAuth.apiFetch('/api/setup/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -490,7 +490,7 @@
     };
 
     try {
-      const res = await fetch('/api/setup/open-config', {
+      const res = await DollhouseAuth.apiFetch('/api/setup/open-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client }),
@@ -516,7 +516,7 @@
 
   const fetchVersion = async () => {
     try {
-      const res = await fetch('/api/setup/version');
+      const res = await DollhouseAuth.apiFetch('/api/setup/version');
       if (!res.ok) return;
       const data = await res.json();
 
@@ -727,7 +727,7 @@
   /** Fetch detection results from API and update all platform states */
   const fetchDetection = async () => {
     try {
-      const res = await fetch('/api/setup/detect');
+      const res = await DollhouseAuth.apiFetch('/api/setup/detect');
       if (!res.ok) return;
       const data = await res.json();
       for (const [clientId, info] of Object.entries(data)) {

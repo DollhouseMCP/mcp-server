@@ -460,6 +460,26 @@ The `TokenManager` class provides secure GitHub token management:
 - Token scope validation against required/optional scopes
 - Unicode validation on token strings via `UnicodeValidator`
 
+### 7.1b Console Session Token (#1780)
+
+**Source files:** `src/web/console/consoleToken.ts`, `src/web/middleware/authMiddleware.ts`
+
+The management console on port 3939 protects its API with a Bearer token stored at `~/.dollhouse/run/console-token.json` (0600 permissions, owner-only). The token is 32 bytes of cryptographic randomness (64 hex chars), generated on first leader election and persisted across restarts. Rotation is explicit-only — restarts do not cycle the token.
+
+**Middleware behavior:**
+- Gated on `DOLLHOUSE_WEB_AUTH_ENABLED` (default `false` during Phase 1 rollout, will flip to `true` in a follow-up PR)
+- Checks `Authorization: Bearer <token>` header, with a `?token=<token>` query fallback for SSE streams (EventSource cannot set headers)
+- Uses `crypto.timingSafeEqual` to prevent side-channel attacks on token comparison
+- Public path allowlist exempts `/api/health`, `/api/setup/version`, `/api/setup/mcpb`, `/api/setup/detect` — metadata endpoints that have no sensitive state
+
+**Forward-compatible schema:** Token entries include `scopes`, `elementBoundaries`, `tenant`, `platform`, and `labels` fields from day one. Phase 1 treats all tokens as admin-scoped; Phase 2 flips real scope enforcement on without schema migration. Phase 3 adds multi-tenant element boundary filtering for enterprise deployments.
+
+**Browser token delivery:** The server injects the current token into `index.html` via a `<meta name="dollhouse-console-token">` tag at request time. The client-side helper (`public/consoleAuth.js`) reads the tag and wraps all fetch/EventSource calls to attach the token automatically.
+
+**Follower token delivery:** Non-leader MCP processes read the token file directly on startup (`getPrimaryTokenFromFile`) and attach it to their ingest POSTs. The leader owns the file; followers are read-only consumers.
+
+**See also:** [Console Authentication guide](../guides/console-auth.md), [External API Access guide](../guides/external-api-access.md)
+
 ### 7.2 Rate Limiting
 
 Rate limiting is applied at multiple points:
@@ -530,6 +550,7 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | YAML deserialization attacks | 4 | `CORE_SCHEMA` only, size limits, bomb detection | `src/security/secureYamlParser.ts` |
 | Path traversal / symlink attacks | 5 | `PathValidator` with symlink resolution, allowed directory list | `src/security/pathValidator.ts` |
 | Token exposure in logs/errors | 7 | AES-256-GCM encryption, token redaction, sanitized errors | `src/security/tokenManager.ts` |
+| Unauthenticated access to web console API | 7 | Bearer token auth middleware, 0600 token file, localhost binding (#1780) | `src/web/middleware/authMiddleware.ts`, `src/web/console/consoleToken.ts` |
 | Brute force token validation | 7 | Rate-limited validation operations | `src/security/tokenManager.ts` |
 | ReDoS (regex denial of service) | 4 | `SafeRegex` with timeouts, input length limits, pattern caching | `src/security/dosProtection.ts` |
 | Unauthorized agent execution | 1 | `execute_agent` is `CONFIRM_SINGLE_USE` + `canBeElevated: false` | `src/handlers/mcp-aql/policies/OperationPolicies.ts` |
