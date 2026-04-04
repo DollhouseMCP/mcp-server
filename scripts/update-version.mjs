@@ -149,6 +149,17 @@ const updateConfigs = [
     optional: true // Don't fail if file doesn't exist
   },
   {
+    name: 'server.json',
+    updates: [
+      {
+        // Update both top-level and packages[0] version fields
+        pattern: /"version":\s*"[\d\.]+(-[\w\.]+)?"/g,
+        replacement: `"version": "${newVersion}"`
+      }
+    ],
+    required: true
+  },
+  {
     name: 'Dockerfile',
     updates: [
       {
