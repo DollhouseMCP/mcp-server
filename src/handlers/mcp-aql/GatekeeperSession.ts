@@ -416,7 +416,8 @@ export class GatekeeperSession {
     for (const [key, record] of this.state.cliApprovals) {
       const ttl = record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS;
       const age = now - new Date(record.requestedAt).getTime();
-      if (age > ttl && !record.approvedAt) {
+      // Evict stale pending requests AND consumed single-use approvals (#1782)
+      if (age > ttl && (!record.approvedAt || record.consumed)) {
         this.state.cliApprovals.delete(key);
       }
     }
