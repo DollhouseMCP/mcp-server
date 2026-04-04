@@ -149,6 +149,17 @@ const updateConfigs = [
     optional: true // Don't fail if file doesn't exist
   },
   {
+    name: 'server.json',
+    // MCP registry requires both top-level version and packages[0].version
+    updates: [
+      {
+        pattern: /"version":\s*"[\d.]+(-[\w.]+)?"/g,
+        replacement: `"version": "${newVersion}"`
+      }
+    ],
+    required: true
+  },
+  {
     name: 'Dockerfile',
     updates: [
       {
