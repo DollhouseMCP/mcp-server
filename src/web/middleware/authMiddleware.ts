@@ -53,7 +53,7 @@ function extractToken(req: Request): string | null {
     return q;
   }
   if (Array.isArray(q) && q.length > 0 && typeof q[0] === 'string') {
-    return q[0] as string;
+    return q[0];
   }
 
   return null;
@@ -112,12 +112,15 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHan
 
     const presented = extractToken(req);
     if (!presented) {
-      return respondUnauthorized(res, 'missing_token', label, store);
+      return respondUnauthorized(res, 'missing_token', label, store, 0);
     }
 
     const entry = store.verify(presented);
     if (!entry) {
-      return respondUnauthorized(res, 'invalid_token', label, store);
+      // Log presented-length only — never the presented value itself.
+      // Distinguishes "token missing" from "token wrong length" from
+      // "length matches but content differs" when troubleshooting.
+      return respondUnauthorized(res, 'invalid_token', label, store, presented.length);
     }
 
     // Stubbed authorization hook — Phase 2 flips real scope checks on here.
@@ -125,8 +128,9 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHan
       return respondForbidden(res, 'scope_denied', label, entry);
     }
 
-    // Stash the matched entry for downstream handlers.
+    // Stash the matched entry for downstream handlers and log success at debug.
     res.locals.tokenEntry = entry;
+    logger.debug(`[Auth:${label}] verified token id=${entry.id} name="${entry.name}" route=${req.method} ${req.originalUrl.split('?')[0]}`);
     return next();
   };
 }
@@ -145,14 +149,16 @@ function authorizeScope(_entry: ConsoleTokenEntry, _req: Request): boolean {
 
 /**
  * Respond with 401 Unauthorized and a helpful hint about where to find the token.
+ * Includes presented-token length at debug level for troubleshooting — never the value.
  */
 function respondUnauthorized(
   res: Response,
   reason: 'missing_token' | 'invalid_token',
   label: string,
   store: ConsoleTokenStore,
+  presentedLength: number,
 ): void {
-  logger.debug(`[Auth:${label}] 401 ${reason}`);
+  logger.debug(`[Auth:${label}] 401 ${reason} presentedLength=${presentedLength}`);
   res.status(401).json({
     error: 'Authentication required',
     reason,

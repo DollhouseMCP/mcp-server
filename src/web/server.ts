@@ -354,44 +354,78 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   });
 
-  // Bind to localhost only — handle port conflicts gracefully
-  // NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
-  // is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
-  // stderr is safe for human-readable messages in both MCP and standalone modes.
+  // Bind to localhost only — handle port conflicts gracefully.
+  // Extracted to a helper to keep startWebServer's cognitive complexity manageable.
+  await bindAndListen(app, port, options);
+
+  return result;
+}
+
+/**
+ * Print the startup banner to stderr.
+ *
+ * NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
+ * is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
+ * stderr is safe for human-readable messages in both MCP and standalone modes.
+ */
+function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefined): void {
+  const url = `http://${CONSOLE_HOST}:${port}`;
+  const fallbackUrl = `http://127.0.0.1:${port}`;
+  logger.info(`[WebUI] Management console running at ${url}`);
+  console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+  if (tokenStore) {
+    console.error(`  Session token: ${tokenStore.getFilePath()}\n`);
+  }
+  console.error(`  Type "q" or "quit" to exit.\n`);
+}
+
+/**
+ * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
+ * Resolves on either success or EADDRINUSE — the web console is optional
+ * and never blocks server startup on a port conflict.
+ */
+async function bindAndListen(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<void> {
   await new Promise<void>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
-      const url = `http://${CONSOLE_HOST}:${port}`;
-      const fallbackUrl = `http://127.0.0.1:${port}`;
-      logger.info(`[WebUI] Management console running at ${url}`);
-      console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
-      if (options.tokenStore) {
-        console.error(`  Session token: ${options.tokenStore.getFilePath()}\n`);
-      }
-      console.error(`  Type "q" or "quit" to exit.\n`);
-
+      printStartupBanner(port, options.tokenStore);
       if (options.openBrowser) {
-        openInBrowser(url);
+        openInBrowser(`http://${CONSOLE_HOST}:${port}`);
       }
       resolve();
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        const url = `http://${CONSOLE_HOST}:${port}`;
-        logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
-        console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
-        if (options.openBrowser) {
-          openInBrowser(url);
-        }
-      } else {
-        logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
-      }
-      resolve(); // Web console is optional — don't block startup
+      handleListenError(err, port, options.openBrowser);
+      resolve();
     });
   });
+}
 
-  return result;
+/**
+ * Handle errors from app.listen(). EADDRINUSE is treated as "another leader
+ * is already running" — we log and optionally open the existing console.
+ * Any other error is logged but does not throw.
+ */
+function handleListenError(
+  err: NodeJS.ErrnoException,
+  port: number,
+  openBrowser: boolean | undefined,
+): void {
+  if (err.code === 'EADDRINUSE') {
+    const url = `http://${CONSOLE_HOST}:${port}`;
+    logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
+    console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
+    if (openBrowser) {
+      openInBrowser(url);
+    }
+  } else {
+    logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+  }
 }
 
 /**

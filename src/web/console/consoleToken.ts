@@ -159,6 +159,24 @@ function defaultTokenName(puppetName: string): string {
 }
 
 /**
+ * Validate a single token entry object. Returns true if the entry has all
+ * required fields with the correct types. Extracted from validateTokenFile
+ * to keep the top-level validator's cognitive complexity manageable.
+ */
+function isValidTokenEntry(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const e = raw as Record<string, unknown>;
+  return (
+    typeof e.id === 'string' && e.id.length > 0 &&
+    typeof e.name === 'string' &&
+    typeof e.token === 'string' && e.token.length > 0 &&
+    typeof e.kind === 'string' &&
+    Array.isArray(e.scopes) &&
+    typeof e.createdAt === 'string'
+  );
+}
+
+/**
  * Validate that a parsed JSON object conforms to the expected token file schema.
  * Returns a typed ConsoleTokenFile or null if invalid.
  *
@@ -172,17 +190,7 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
   if (obj.version !== TOKEN_FILE_VERSION) return null;
   if (!Array.isArray(obj.tokens)) return null;
   if (!obj.totp || typeof obj.totp !== 'object') return null;
-
-  for (const entry of obj.tokens) {
-    if (!entry || typeof entry !== 'object') return null;
-    const e = entry as Record<string, unknown>;
-    if (typeof e.id !== 'string' || !e.id) return null;
-    if (typeof e.name !== 'string') return null;
-    if (typeof e.token !== 'string' || !e.token) return null;
-    if (typeof e.kind !== 'string') return null;
-    if (!Array.isArray(e.scopes)) return null;
-    if (typeof e.createdAt !== 'string') return null;
-  }
+  if (!obj.tokens.every(isValidTokenEntry)) return null;
 
   return raw as ConsoleTokenFile;
 }
@@ -196,9 +204,29 @@ function validateTokenFile(raw: unknown): ConsoleTokenFile | null {
 export class ConsoleTokenStore {
   private readonly filePath: string;
   private data: ConsoleTokenFile | null = null;
+  /**
+   * Pre-converted Buffer cache keyed by entry id. Populated whenever `this.data`
+   * is assigned (load, create, future rotation). Verify() reuses the stored
+   * buffers so the hot path doesn't re-allocate per-token on every request.
+   * Negligible win with 1 token today; meaningful with Phase 2 multi-token
+   * lookups. Not serialized — buffers are never written to disk.
+   */
+  private tokenBuffers = new Map<string, Buffer>();
 
   constructor(filePath: string = DEFAULT_TOKEN_FILE) {
     this.filePath = filePath;
+  }
+
+  /**
+   * Rebuild the token buffer cache after a data load, create, or mutation.
+   * Keeps the hot verify() path allocation-free for the stored side.
+   */
+  private rebuildTokenBuffers(): void {
+    this.tokenBuffers.clear();
+    if (!this.data) return;
+    for (const entry of this.data.tokens) {
+      this.tokenBuffers.set(entry.id, Buffer.from(entry.token, 'utf8'));
+    }
   }
 
   /**
@@ -214,6 +242,7 @@ export class ConsoleTokenStore {
     const existing = await this.read();
     if (existing && existing.tokens.length > 0) {
       this.data = existing;
+      this.rebuildTokenBuffers();
       logger.debug('[ConsoleToken] Loaded existing token file', {
         path: this.filePath,
         count: existing.tokens.length,
@@ -246,6 +275,7 @@ export class ConsoleTokenStore {
 
     await this.write(file);
     this.data = file;
+    this.rebuildTokenBuffers();
     logger.info('[ConsoleToken] Created new token file', {
       path: this.filePath,
       id: initial.id,
@@ -266,12 +296,13 @@ export class ConsoleTokenStore {
   verify(presented: string): ConsoleTokenEntry | null {
     if (!this.data || !presented) return null;
 
-    // Normalize length so timingSafeEqual doesn't throw on mismatched buffers
+    // Only the presented side is allocated per-request; stored buffers are
+    // pre-converted in the tokenBuffers cache so the hot loop is allocation-free.
     const presentedBuf = Buffer.from(presented, 'utf8');
 
     for (const entry of this.data.tokens) {
-      const storedBuf = Buffer.from(entry.token, 'utf8');
-      if (presentedBuf.length !== storedBuf.length) continue;
+      const storedBuf = this.tokenBuffers.get(entry.id);
+      if (!storedBuf || storedBuf.length !== presentedBuf.length) continue;
       if (timingSafeEqual(presentedBuf, storedBuf)) {
         entry.lastUsedAt = new Date().toISOString();
         return entry;
