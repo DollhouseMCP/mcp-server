@@ -86,8 +86,10 @@ export class ContentValidator {
     { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /you\s+are\s+now\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
-    { pattern: /act\s+as\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /you\s+are\s+now\s+(in\s+)?(admin|root|system|sudo|developer|debug|test|DAN)\s*(mode)?/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /act\s+as\s+\w+/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /pretend\s+you\s+have\s+no\s+(guidelines|restrictions|rules|limits)/gi, severity: 'critical', description: 'Guideline bypass attempt' },
+    { pattern: /\b(jailbreak|do\s+anything\s+now|DAN\s+mode)\b/gi, severity: 'critical', description: 'Jailbreak attempt' },
     
     // Data exfiltration attempts
     { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: 'critical', description: 'Data exfiltration' },
@@ -96,8 +98,8 @@ export class ContentValidator {
     { pattern: /show\s+me\s+all\s+(tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Credential disclosure' },
     
     // Command execution patterns
-    { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
-    { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
+    { pattern: /curl\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
+    { pattern: /wget\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
     // SECURITY: Backtick command detection with ReDoS mitigation
     // FIX (PR #1313): Fixed ReDoS vulnerabilities by replacing .* with [^`]*
