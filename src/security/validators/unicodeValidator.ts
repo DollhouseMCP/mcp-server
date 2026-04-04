@@ -52,7 +52,10 @@ export class UnicodeValidator {
   
   /**
    * Common homograph/confusable character mappings
-   * Maps visually similar Unicode characters to their ASCII equivalents
+   * Maps visually similar Unicode characters to their ASCII equivalents.
+   * Performance: ~110 entries; replaceConfusables() iterates the full map
+   * per call but uses Map.has() lookups (O(1) per char). Negligible at
+   * current size — profile before optimizing if the map grows beyond ~500.
    */
   private static readonly CONFUSABLE_MAPPINGS: Map<string, string> = new Map([
     // Cyrillic to Latin

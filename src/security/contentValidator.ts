@@ -9,6 +9,7 @@
 
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
@@ -87,7 +88,9 @@ export class ContentValidator {
     { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /you\s+are\s+now\s+(in\s+)?(admin|root|system|sudo|developer|debug|test|DAN)\s*(mode)?/gi, severity: 'critical', description: 'Role elevation attempt' },
-    { pattern: /act\s+as\s+\w+/gi, severity: 'critical', description: 'Role elevation attempt' },
+    // Specific dangerous roles only — "act as \w+" would false-positive on persona
+    // content like "act as a helpful teacher" (#1782-4, review feedback)
+    { pattern: /act\s+as\s+(admin|root|system|sudo|superuser|DAN)\b/gi, severity: 'critical', description: 'Role elevation attempt' },
     { pattern: /pretend\s+you\s+have\s+no\s+(guidelines|restrictions|rules|limits)/gi, severity: 'critical', description: 'Guideline bypass attempt' },
     { pattern: /\b(jailbreak|do\s+anything\s+now|DAN\s+mode)\b/gi, severity: 'critical', description: 'Jailbreak attempt' },
     
@@ -406,6 +409,7 @@ export class ContentValidator {
         logEvents: false
       })) {
         detectedPatterns.push(description);
+        logger.debug(`Content injection blocked: ${description} (${severity}) — pattern: ${pattern.source}`);
 
         // Update highest severity
         if (severity === 'critical' || (severity === 'high' && highestSeverity !== 'critical')) {
