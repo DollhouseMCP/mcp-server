@@ -20,7 +20,7 @@ describe('InputNormalizer', () => {
 
       expect(result.data).toBe('hello world');
       expect(result.hasIssues).toBe(false);
-      expect(result.hasCriticalIssues).toBe(false);
+      expect(result.hasHighOrCriticalIssues).toBe(false);
       expect(result.errors).toEqual([]);
       expect(result.warnings).toEqual([]);
     });
@@ -273,7 +273,7 @@ describe('InputNormalizer', () => {
       const result = InputNormalizer.normalize(input);
 
       expect(result.maxSeverity).toBe('high');
-      expect(result.hasCriticalIssues).toBe(true);
+      expect(result.hasHighOrCriticalIssues).toBe(true);
     });
 
     it('should categorize errors vs warnings by severity', () => {
@@ -286,7 +286,7 @@ describe('InputNormalizer', () => {
 
       expect(result.errors.length).toBeGreaterThan(0);
       expect(result.warnings.length).toBeGreaterThan(0);
-      expect(result.hasCriticalIssues).toBe(true);
+      expect(result.hasHighOrCriticalIssues).toBe(true);
     });
   });
 
@@ -445,7 +445,7 @@ describe('InputNormalizer', () => {
       const result = InputNormalizer.normalize(input);
 
       expect(result.data.systemPrompt).toBe('You are a helpful assistant');
-      expect(result.hasCriticalIssues).toBe(true);
+      expect(result.hasHighOrCriticalIssues).toBe(true);
       expect(result.errors.length).toBeGreaterThan(0);
     });
 
