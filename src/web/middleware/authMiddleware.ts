@@ -23,6 +23,7 @@
 
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import type { ConsoleTokenStore, ConsoleTokenEntry } from '../console/consoleToken.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 
 /** Query parameter name used as a fallback for SSE streams. */
@@ -35,25 +36,57 @@ const AUTH_HEADER = 'authorization';
 const BEARER_PREFIX = 'Bearer ';
 
 /**
+ * Strict format for console tokens — 64 lowercase hex characters (256 bits).
+ * Any presented token that does not match this pattern is rejected before it
+ * reaches the constant-time comparison. This blocks any non-ASCII Unicode
+ * payload (homographs, zero-width, bidi overrides, etc.) from ever touching
+ * the verify path. DMCP-SEC-004 mitigation.
+ */
+const TOKEN_FORMAT = /^[0-9a-f]{64}$/;
+
+/**
+ * Sanitize a raw token string pulled from a request.
+ *
+ * - Normalizes to NFC via UnicodeValidator (DMCP-SEC-004)
+ * - Validates against the strict hex format
+ * - Returns the cleaned value, or null if anything looks wrong
+ *
+ * Any failure here results in a 401 at the call site. Legitimate tokens are
+ * 64-char lowercase hex, so normalization and format validation are effectively
+ * no-ops for valid input and hard rejections for anything malicious.
+ */
+function sanitizePresentedToken(raw: string): string | null {
+  if (!raw) return null;
+  const normalized = UnicodeValidator.normalize(raw).normalizedContent;
+  if (!TOKEN_FORMAT.test(normalized)) return null;
+  return normalized;
+}
+
+/**
  * Extract a Bearer token from a request.
  * Checks Authorization header first, then query parameter.
- * Returns the raw token string, or null if none was found.
+ * Applies Unicode normalization and strict format validation before returning.
+ * Returns the sanitized token string, or null if none was found or the value
+ * failed validation.
  */
 function extractToken(req: Request): string | null {
   // Preferred: Authorization: Bearer <token>
   const header = req.headers[AUTH_HEADER];
   if (typeof header === 'string' && header.startsWith(BEARER_PREFIX)) {
     const value = header.slice(BEARER_PREFIX.length).trim();
-    if (value) return value;
+    if (value) {
+      const sanitized = sanitizePresentedToken(value);
+      if (sanitized) return sanitized;
+    }
   }
 
   // Fallback for EventSource: ?token=<token>
   const q = req.query[TOKEN_QUERY_PARAM];
   if (typeof q === 'string' && q.length > 0) {
-    return q;
+    return sanitizePresentedToken(q);
   }
   if (Array.isArray(q) && q.length > 0 && typeof q[0] === 'string') {
-    return q[0];
+    return sanitizePresentedToken(q[0]);
   }
 
   return null;

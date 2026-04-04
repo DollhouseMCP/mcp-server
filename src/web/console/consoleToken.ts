@@ -41,6 +41,7 @@ import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, readFile, rename, writeFile, chmod, unlink } from 'node:fs/promises';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 
 /** Directory for runtime state files — same as LeaderElection. */
@@ -57,6 +58,15 @@ const TOKEN_BYTES = 32;
 
 /** File mode for the token file — owner read/write only. */
 const TOKEN_FILE_MODE = 0o600;
+
+/**
+ * Strict format for console tokens — 64 lowercase hex characters.
+ * Used as a defense-in-depth check in verify(): even if the caller forgot
+ * to sanitize the presented value, we reject anything that isn't a legitimate
+ * 256-bit hex token before reaching the constant-time comparison.
+ * DMCP-SEC-004 mitigation.
+ */
+const TOKEN_FORMAT = /^[0-9a-f]{64}$/;
 
 /**
  * Element visibility boundary — Phase 3 enterprise feature.
@@ -211,7 +221,7 @@ export class ConsoleTokenStore {
    * Negligible win with 1 token today; meaningful with Phase 2 multi-token
    * lookups. Not serialized — buffers are never written to disk.
    */
-  private tokenBuffers = new Map<string, Buffer>();
+  private readonly tokenBuffers = new Map<string, Buffer>();
 
   constructor(filePath: string = DEFAULT_TOKEN_FILE) {
     this.filePath = filePath;
@@ -296,9 +306,17 @@ export class ConsoleTokenStore {
   verify(presented: string): ConsoleTokenEntry | null {
     if (!this.data || !presented) return null;
 
+    // DMCP-SEC-004: Normalize the presented token to NFC and validate the
+    // strict hex format before any comparison. This blocks Unicode abuse
+    // (homographs, zero-width, bidi overrides) from reaching timingSafeEqual.
+    // Defense-in-depth — the middleware already sanitizes, but verify() is a
+    // public API that any future caller could invoke directly.
+    const normalized = UnicodeValidator.normalize(presented).normalizedContent;
+    if (!TOKEN_FORMAT.test(normalized)) return null;
+
     // Only the presented side is allocated per-request; stored buffers are
     // pre-converted in the tokenBuffers cache so the hot loop is allocation-free.
-    const presentedBuf = Buffer.from(presented, 'utf8');
+    const presentedBuf = Buffer.from(normalized, 'utf8');
 
     for (const entry of this.data.tokens) {
       const storedBuf = this.tokenBuffers.get(entry.id);

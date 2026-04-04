@@ -247,33 +247,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.warn('[WebUI] API routes using direct filesystem access (no MCP-AQL handler available)');
   }
 
-  // Console routes: logs, metrics, health
-  let logRoutes: LogRoutesResult | undefined;
-  let metricsRoutes: MetricsRoutesResult | undefined;
-
-  if (options.memorySink) {
-    logRoutes = createLogRoutes(options.memorySink);
-    app.use('/api', logRoutes.router);
-    result.logBroadcast = logRoutes.broadcast;
-    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
-  }
-
-  if (options.metricsSink) {
-    metricsRoutes = createMetricsRoutes(options.metricsSink);
-    app.use('/api', metricsRoutes.router);
-    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
-    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
-  }
-
-  if (options.memorySink) {
-    const healthRouter = createHealthRoutes({
-      memorySink: options.memorySink,
-      metricsSink: options.metricsSink,
-      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
-      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
-    });
-    app.use('/api', healthRouter);
-  }
+  // Console routes: logs, metrics, health — extracted to keep cognitive
+  // complexity of startWebServer manageable.
+  mountConsoleRoutes(app, options, result);
 
   // Serve ~/.dollhouse/pages/ at /pages/ — dashboards, generated content, stack views
   const pagesDir = join(dirname(options.portfolioDir), 'pages');
@@ -359,6 +335,45 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   await bindAndListen(app, port, options);
 
   return result;
+}
+
+/**
+ * Mount the logs, metrics, and health routes. These are only mounted when the
+ * corresponding sinks are provided (memory log sink for logs+health, metrics
+ * sink for the metrics tab). Extracted from startWebServer to cap the main
+ * function's cognitive complexity.
+ */
+function mountConsoleRoutes(
+  app: import('express').Express,
+  options: WebServerOptions,
+  result: WebServerResult,
+): void {
+  let logRoutes: LogRoutesResult | undefined;
+  let metricsRoutes: MetricsRoutesResult | undefined;
+
+  if (options.memorySink) {
+    logRoutes = createLogRoutes(options.memorySink);
+    app.use('/api', logRoutes.router);
+    result.logBroadcast = logRoutes.broadcast;
+    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
+  }
+
+  if (options.metricsSink) {
+    metricsRoutes = createMetricsRoutes(options.metricsSink);
+    app.use('/api', metricsRoutes.router);
+    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
+    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
+  }
+
+  if (options.memorySink) {
+    const healthRouter = createHealthRoutes({
+      memorySink: options.memorySink,
+      metricsSink: options.metricsSink,
+      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
+      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
+    });
+    app.use('/api', healthRouter);
+  }
 }
 
 /**

@@ -23,17 +23,29 @@
   'use strict';
 
   /**
+   * Strict format for console tokens — 64 lowercase hex characters.
+   * We refuse to attach anything that doesn't match this pattern, so
+   * malformed meta values or Unicode-obfuscated content never reach the
+   * server or leak into request URLs. DMCP-SEC-004 mitigation.
+   */
+  var TOKEN_FORMAT = /^[0-9a-f]{64}$/;
+
+  /**
    * Read the console token from the meta tag in the document head.
-   * Returns an empty string if the tag is absent or the value is the
-   * raw placeholder (which happens if the HTML was served without template
-   * substitution — e.g., older server or file served by a dev static server).
+   * Normalizes the value to NFC and validates against the strict hex format.
+   * Returns an empty string if the tag is absent, empty, still the raw
+   * template placeholder, or fails validation.
    */
   function readTokenFromMeta() {
-    const meta = document.querySelector('meta[name="dollhouse-console-token"]');
+    var meta = document.querySelector('meta[name="dollhouse-console-token"]');
     if (!meta) return '';
-    const value = (meta.getAttribute('content') || '').trim();
-    if (!value || value === '{{CONSOLE_TOKEN}}') return '';
-    return value;
+    var raw = (meta.getAttribute('content') || '').trim();
+    if (!raw || raw === '{{CONSOLE_TOKEN}}') return '';
+    // Normalize to NFC — strips any zero-width / combining mark weirdness
+    // before the format check. For legitimate hex tokens this is a no-op.
+    var normalized = raw.normalize('NFC');
+    if (!TOKEN_FORMAT.test(normalized)) return '';
+    return normalized;
   }
 
   var consoleToken = readTokenFromMeta();

@@ -71,13 +71,37 @@ describe('createAuthMiddleware', () => {
       expect(res.body.reason).toBe('missing_token');
     });
 
-    it('rejects requests with a wrong token', async () => {
+    it('rejects requests with a wrong token (valid hex format, wrong content)', async () => {
       const app = await buildApp({ enabled: true, token, store });
+      // 64-char lowercase hex, but not the stored token — passes format validation,
+      // fails constant-time comparison.
+      const wrongToken = '0'.repeat(64);
       const res = await request(app)
         .get('/api/protected')
-        .set('Authorization', 'Bearer wrong-token-value-32-characters-long-at-least-here');
+        .set('Authorization', `Bearer ${wrongToken}`);
       expect(res.status).toBe(401);
       expect(res.body.reason).toBe('invalid_token');
+    });
+
+    it('rejects requests with a malformed token (wrong format)', async () => {
+      const app = await buildApp({ enabled: true, token, store });
+      // Non-hex content fails format validation in sanitizePresentedToken
+      // and the middleware treats it the same as a missing token.
+      const res = await request(app)
+        .get('/api/protected')
+        .set('Authorization', 'Bearer not-a-valid-hex-token');
+      expect(res.status).toBe(401);
+      expect(res.body.reason).toBe('missing_token');
+    });
+
+    it('rejects tokens containing Unicode confusables or zero-width chars (query param path)', async () => {
+      const app = await buildApp({ enabled: true, token, store });
+      // Token with a zero-width joiner embedded — DMCP-SEC-004 defense.
+      // Sent via ?token= because HTTP header values can't carry zero-width chars.
+      const attackToken = '0'.repeat(32) + '\u200B' + '0'.repeat(31);
+      const res = await request(app)
+        .get(`/api/protected?token=${encodeURIComponent(attackToken)}`);
+      expect(res.status).toBe(401);
     });
 
     it('accepts requests with a valid Bearer token', async () => {
