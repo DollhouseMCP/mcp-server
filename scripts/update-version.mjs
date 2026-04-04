@@ -150,10 +150,10 @@ const updateConfigs = [
   },
   {
     name: 'server.json',
+    // MCP registry requires both top-level version and packages[0].version
     updates: [
       {
-        // Update both top-level and packages[0] version fields
-        pattern: /"version":\s*"[\d\.]+(-[\w\.]+)?"/g,
+        pattern: /"version":\s*"[\d.]+(-[\w.]+)?"/g,
         replacement: `"version": "${newVersion}"`
       }
     ],
