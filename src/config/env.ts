@@ -204,6 +204,11 @@ const envSchema = z.object({
   DOLLHOUSE_DISABLE_ENCRYPTION: z.coerce.boolean().default(false),
   DOLLHOUSE_ENCRYPTION_SECRET: z.string().optional(),
   DOLLHOUSE_ENCRYPTION_SALT: z.string().optional(),
+
+  // Token encryption secret (SEC-01, #1735)
+  // When set, replaces the predictable machine-derived passphrase for token encryption.
+  // Strongly recommended for any shared or multi-user environment.
+  DOLLHOUSE_TOKEN_SECRET: z.string().optional(),
 });
 
 /**

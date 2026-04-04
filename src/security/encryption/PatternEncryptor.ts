@@ -76,8 +76,8 @@ const DEFAULT_CONFIG: EncryptionConfig = {
     : env.NODE_ENV === 'production',
   secret: env.DOLLHOUSE_ENCRYPTION_SECRET,
   iterations: 100000,
-  // SECURITY FIX: Configurable salt to prevent rainbow table attacks
-  // Falls back to default only if not configured
+  // SECURITY FIX: Configurable salt to prevent rainbow table attacks (#1733)
+  // Falls back to default with startup warning if not configured
   salt: env.DOLLHOUSE_ENCRYPTION_SALT || 'dollhouse-pattern-encryption-v1',
 };
 
@@ -134,6 +134,11 @@ export class PatternEncryptor {
       );
     }
 
+    // SEC-05 (#1733): Warn if using the static default salt
+    if (!env.DOLLHOUSE_ENCRYPTION_SALT) {
+      logger.warn('⚠️  Pattern encryption using default salt. Set DOLLHOUSE_ENCRYPTION_SALT for stronger protection.');
+    }
+
     logger.info('Initializing pattern encryption', {
       algorithm: this.ALGORITHM,
       iterations: this.config.iterations,
@@ -163,14 +168,14 @@ export class PatternEncryptor {
     }
 
     if (!this.config.enabled) {
-      // Encryption disabled - return mock encrypted structure
-      // This allows testing without encryption enabled
+      // Encryption disabled — return mock structure with MOCK: prefix (#1733)
+      // so it cannot be confused with real ciphertext
       logger.debug('Encryption disabled, returning mock structure');
       return {
-        encryptedData: Buffer.from(pattern).toString('base64'),
+        encryptedData: `MOCK:${Buffer.from(pattern).toString('base64')}`,
         algorithm: this.ALGORITHM,
-        iv: randomBytes(this.IV_LENGTH).toString('base64'),
-        authTag: randomBytes(this.AUTH_TAG_LENGTH).toString('base64'),
+        iv: '',
+        authTag: '',
       };
     }
 
@@ -231,9 +236,12 @@ export class PatternEncryptor {
     }
 
     if (!this.config.enabled) {
-      // Encryption disabled - decode the base64 mock data
+      // Encryption disabled — decode mock data, stripping MOCK: prefix (#1733)
       logger.debug('Encryption disabled, decoding mock structure');
-      return Buffer.from(encrypted.encryptedData, 'base64').toString('utf8');
+      const data = encrypted.encryptedData.startsWith('MOCK:')
+        ? encrypted.encryptedData.slice(5)
+        : encrypted.encryptedData;
+      return Buffer.from(data, 'base64').toString('utf8');
     }
 
     if (!this.encryptionKey) {

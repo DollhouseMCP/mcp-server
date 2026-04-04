@@ -439,11 +439,25 @@ export class TokenManager {
   }
 
   /**
-   * Get machine-specific passphrase for encryption
-   * Uses a combination of machine ID and user info for uniqueness
+   * Get passphrase for token encryption.
+   *
+   * Priority: DOLLHOUSE_TOKEN_SECRET env var → machine-derived passphrase (fallback).
+   * The machine-derived passphrase uses homedir + USER which is predictable (#1735).
+   * Set DOLLHOUSE_TOKEN_SECRET for stronger protection.
+   */
+  private getPassphrase(): string {
+    if (process.env.DOLLHOUSE_TOKEN_SECRET) {
+      return process.env.DOLLHOUSE_TOKEN_SECRET;
+    }
+    return this.getMachinePassphrase();
+  }
+
+  /**
+   * Machine-derived passphrase — kept for backward compatibility with tokens
+   * encrypted before DOLLHOUSE_TOKEN_SECRET was available.
+   * @deprecated Use DOLLHOUSE_TOKEN_SECRET env var instead
    */
   private getMachinePassphrase(): string {
-    // Use a combination of hostname, username, and a fixed app identifier.
     // codeql[js/insufficient-password-hashing] — These are NOT password hashes.
     // SHA-256 is used to derive a stable machine fingerprint from system identifiers
     // (home directory path, OS username). The actual token encryption uses pbkdf2Sync
@@ -453,6 +467,32 @@ export class TokenManager {
     const appId = 'DollhouseMCP-TokenStore-v1';
 
     return `${appId}-${hostname}-${username}`;
+  }
+
+  /**
+   * Attempt decryption with the primary passphrase, then fall back to the
+   * machine-derived passphrase for backward compatibility (#1735).
+   */
+  private decryptWithFallback(salt: Buffer, iv: Buffer, tag: Buffer, encrypted: Buffer): string {
+    const primaryPassphrase = this.getPassphrase();
+    try {
+      return this.decryptToken(primaryPassphrase, salt, iv, tag, encrypted);
+    } catch {
+      // If primary passphrase differs from machine passphrase, try fallback
+      const machinePassphrase = this.getMachinePassphrase();
+      if (machinePassphrase !== primaryPassphrase) {
+        logger.info('Primary passphrase failed, trying machine passphrase migration path');
+        return this.decryptToken(machinePassphrase, salt, iv, tag, encrypted);
+      }
+      throw new SecurityError('Token decryption failed');
+    }
+  }
+
+  private decryptToken(passphrase: string, salt: Buffer, iv: Buffer, tag: Buffer, encrypted: Buffer): string {
+    const key = this.deriveKey(passphrase, salt);
+    const decipher = crypto.createDecipheriv(TokenManager.ALGORITHM, key, iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
   }
 
   /**
@@ -480,7 +520,7 @@ export class TokenManager {
       // Generate encryption components
       const salt = crypto.randomBytes(TokenManager.SALT_LENGTH);
       const iv = crypto.randomBytes(TokenManager.IV_LENGTH);
-      const passphrase = this.getMachinePassphrase();
+      const passphrase = this.getPassphrase();
       const key = this.deriveKey(passphrase, salt);
 
       // Encrypt token
@@ -556,18 +596,9 @@ export class TokenManager {
       const tag = stored.subarray(TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH, TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH + TokenManager.TAG_LENGTH);
       const encrypted = stored.subarray(TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH + TokenManager.TAG_LENGTH);
 
-      // Derive decryption key
-      const passphrase = this.getMachinePassphrase();
-      const key = this.deriveKey(passphrase, salt);
-
-      // Decrypt token
-      const decipher = crypto.createDecipheriv(TokenManager.ALGORITHM, key, iv);
-      decipher.setAuthTag(tag);
-      
-      const decrypted = Buffer.concat([
-        decipher.update(encrypted),
-        decipher.final()
-      ]).toString('utf8');
+      // Decrypt with primary passphrase; fall back to machine passphrase for
+      // backward compatibility with tokens stored before DOLLHOUSE_TOKEN_SECRET (#1735)
+      const decrypted = this.decryptWithFallback(salt, iv, tag, encrypted);
 
       // Validate decrypted token
       if (!this.validateTokenFormat(decrypted)) {
