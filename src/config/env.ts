@@ -208,7 +208,8 @@ const envSchema = z.object({
   // Token encryption secret (SEC-01, #1735)
   // When set, replaces the predictable machine-derived passphrase for token encryption.
   // Strongly recommended for any shared or multi-user environment.
-  DOLLHOUSE_TOKEN_SECRET: z.string().optional(),
+  // Minimum 32 characters enforced to prevent weak passphrases.
+  DOLLHOUSE_TOKEN_SECRET: z.string().min(32).optional(),
 });
 
 /**

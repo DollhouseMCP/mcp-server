@@ -453,9 +453,10 @@ export class TokenManager {
   }
 
   /**
-   * Machine-derived passphrase — kept for backward compatibility with tokens
-   * encrypted before DOLLHOUSE_TOKEN_SECRET was available.
-   * @deprecated Use DOLLHOUSE_TOKEN_SECRET env var instead
+   * Machine-derived passphrase — fallback when DOLLHOUSE_TOKEN_SECRET is not
+   * set, and migration path for tokens encrypted before that env var existed.
+   * Not deprecated; still the default for installations that haven't opted in
+   * to an explicit secret.
    */
   private getMachinePassphrase(): string {
     // codeql[js/insufficient-password-hashing] — These are NOT password hashes.

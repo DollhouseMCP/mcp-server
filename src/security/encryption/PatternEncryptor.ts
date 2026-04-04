@@ -136,7 +136,10 @@ export class PatternEncryptor {
 
     // SEC-05 (#1733): Warn if using the static default salt
     if (!env.DOLLHOUSE_ENCRYPTION_SALT) {
-      logger.warn('⚠️  Pattern encryption using default salt. Set DOLLHOUSE_ENCRYPTION_SALT for stronger protection.');
+      logger.warn(
+        '⚠️  Pattern encryption using default salt. Set DOLLHOUSE_ENCRYPTION_SALT to a random 32+ character string ' +
+        '(e.g. `openssl rand -hex 32`) for stronger protection against rainbow table attacks.'
+      );
     }
 
     logger.info('Initializing pattern encryption', {
