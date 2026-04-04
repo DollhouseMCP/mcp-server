@@ -1164,7 +1164,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 3. Unicode normalization via InputNormalizer
     const normalized = InputNormalizer.normalize(parameters, '$.parameters');
-    if (normalized.hasCriticalIssues) {
+    if (normalized.hasHighOrCriticalIssues) {
       throw new Error(
         `Template parameter security validation failed: ${normalized.errors.join('; ')}`
       );

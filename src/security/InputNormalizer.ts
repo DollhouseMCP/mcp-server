@@ -20,7 +20,7 @@
  * // At the validation boundary (GenericElementValidator)
  * const normalized = InputNormalizer.normalize(data);
  *
- * if (normalized.hasCriticalIssues) {
+ * if (normalized.hasHighOrCriticalIssues) {
  *   return ValidatorHelpers.fail(normalized.errors);
  * }
  *
@@ -34,6 +34,7 @@
 
 import { UnicodeValidator } from './validators/unicodeValidator.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { escalateSeverity } from './constants.js';
 
 /**
  * Result from input normalization
@@ -43,8 +44,10 @@ export interface NormalizationResult<T = unknown> {
   data: T;
   /** Whether normalization detected any issues */
   hasIssues: boolean;
-  /** Whether critical issues were detected that should fail validation */
+  /** Whether critical-severity issues were detected */
   hasCriticalIssues: boolean;
+  /** Whether high-or-critical issues were detected that should fail validation (#1782-6) */
+  hasHighOrCriticalIssues: boolean;
   /** All errors detected during normalization (critical issues) */
   errors: string[];
   /** All warnings detected during normalization (non-critical issues) */
@@ -114,7 +117,7 @@ export class InputNormalizer {
 
           // Categorize by severity
           if (unicodeResult.severity) {
-            maxSeverity = this.escalateSeverity(maxSeverity, unicodeResult.severity);
+            maxSeverity = escalateSeverity(maxSeverity, unicodeResult.severity);
 
             if (unicodeResult.severity === 'critical' || unicodeResult.severity === 'high') {
               errors.push(...pathIssues);
@@ -152,12 +155,13 @@ export class InputNormalizer {
     // Normalize the input
     const normalizedData = normalizeValue(input, path) as T;
 
-    // Calculate aggregate status
+    // Calculate aggregate status (#1782-6: separate critical-only from high+critical)
     const hasIssues = errors.length > 0 || warnings.length > 0;
-    const hasCriticalIssues = maxSeverity === 'critical' || maxSeverity === 'high';
+    const hasCriticalIssues = maxSeverity === 'critical';
+    const hasHighOrCriticalIssues = maxSeverity === 'critical' || maxSeverity === 'high';
 
-    // Log if critical issues detected
-    if (hasCriticalIssues) {
+    // Log if high or critical issues detected
+    if (hasHighOrCriticalIssues) {
       SecurityMonitor.logSecurityEvent({
         type: 'UNICODE_VALIDATION_ERROR',
         severity: maxSeverity === 'critical' ? 'CRITICAL' : 'HIGH',
@@ -170,25 +174,12 @@ export class InputNormalizer {
       data: normalizedData,
       hasIssues,
       hasCriticalIssues,
+      hasHighOrCriticalIssues,
       errors,
       warnings,
       issuesByPath,
       maxSeverity
     };
-  }
-
-  /**
-   * Escalate severity level (higher severity takes precedence)
-   */
-  private static escalateSeverity(
-    current: 'low' | 'medium' | 'high' | 'critical' | undefined,
-    newSeverity: 'low' | 'medium' | 'high' | 'critical'
-  ): 'low' | 'medium' | 'high' | 'critical' {
-    const severityLevels = { low: 1, medium: 2, high: 3, critical: 4 };
-    const currentLevel = current ? severityLevels[current] : 0;
-    const newLevel = severityLevels[newSeverity];
-
-    return newLevel > currentLevel ? newSeverity : (current || 'low');
   }
 
   /**

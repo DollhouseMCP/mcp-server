@@ -39,6 +39,22 @@ export const SECURITY_LIMITS = {
   YAML_BOMB_AMPLIFICATION_THRESHOLD: 5
 };
 
+/** Shared severity type used across security validators (#1782-7) */
+export type SecuritySeverityLevel = 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * Escalate severity level — higher severity takes precedence.
+ * Extracted from UnicodeValidator and InputNormalizer to eliminate duplication (#1782-7).
+ */
+export function escalateSeverity(
+  current: SecuritySeverityLevel | undefined,
+  newSeverity: SecuritySeverityLevel
+): SecuritySeverityLevel {
+  const levels = { low: 1, medium: 2, high: 3, critical: 4 };
+  const currentLevel = current ? levels[current] : 0;
+  return levels[newSeverity] > currentLevel ? newSeverity : (current || 'low');
+}
+
 // Input validation patterns
 export const VALIDATION_PATTERNS = {
   SAFE_FILENAME: /^[a-zA-Z0-9][a-zA-Z0-9\-_.]{0,250}[a-zA-Z0-9]$/,
