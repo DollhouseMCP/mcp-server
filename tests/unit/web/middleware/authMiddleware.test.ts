@@ -36,7 +36,7 @@ describe('createAuthMiddleware', () => {
 
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'dollhouse-auth-mw-test-'));
-    store = new ConsoleTokenStore(join(testDir, 'console-token.json'));
+    store = new ConsoleTokenStore(join(testDir, 'console-token.auth.json'));
     const entry = await store.ensureInitialized('Kermit');
     token = entry.token;
   });

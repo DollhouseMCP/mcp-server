@@ -55,7 +55,7 @@ ls ~/.dollhouse/logs/
 
 ```bash
 export DOLLHOUSE_WEB_CONSOLE=true
-# Open http://dollhouse.localhost:3939 and click the Logs tab
+# Open http://dollhouse.localhost:5907 and click the Logs tab
 ```
 
 **4. Query logs via MCP:**
@@ -200,9 +200,9 @@ When a queue reaches capacity, the oldest entry is evicted to make room. These e
 
 ### Browser Viewer (Web Console)
 
-The management console at `http://dollhouse.localhost:3939` includes a real-time log viewer under the **Logs** tab. It is enabled by default via `DOLLHOUSE_WEB_CONSOLE=true`.
+The management console at `http://dollhouse.localhost:5907` includes a real-time log viewer under the **Logs** tab. It is enabled by default via `DOLLHOUSE_WEB_CONSOLE=true`.
 
-**API Endpoints (on port 3939):**
+**API Endpoints (on port 5907):**
 
 | Path | Method | Description |
 |------|--------|-------------|
@@ -219,7 +219,7 @@ The management console at `http://dollhouse.localhost:3939` includes a real-time
 |----------|---------|-------------|
 | `DOLLHOUSE_WEB_CONSOLE` | `true` | Enable the unified web console (logs + metrics) |
 | `DOLLHOUSE_LOG_VIEWER` | `false` | **Deprecated** — use `DOLLHOUSE_WEB_CONSOLE` instead |
-| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 3939 |
+| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 5907 |
 
 ---
 
@@ -325,13 +325,13 @@ When the browser viewer is enabled (`DOLLHOUSE_LOG_VIEWER=true`):
 
 ```bash
 # JSON query (same parameters as query_logs)
-curl "http://127.0.0.1:3939/api/logs?category=security&level=warn&limit=10"
+curl "http://127.0.0.1:5907/api/logs?category=security&level=warn&limit=10"
 
 # SSE stream with filters (-N disables output buffering for real-time streaming)
-curl -N "http://127.0.0.1:3939/api/logs/stream?category=security&level=error"
+curl -N "http://127.0.0.1:5907/api/logs/stream?category=security&level=error"
 
 # Health check
-curl "http://127.0.0.1:3939/api/health"
+curl "http://127.0.0.1:5907/api/health"
 ```
 
 ### Command-Line (grep, jq)
@@ -441,9 +441,9 @@ If you see `[REDACTED]` in your logs, this is expected and intentional. The orig
 | **Entry Size** | | |
 | `DOLLHOUSE_LOG_MAX_ENTRY_SIZE` | `16384` | Max serialized entry size (bytes, 16 KB); oversized `data` is truncated |
 | **Web Console** | | |
-| `DOLLHOUSE_WEB_CONSOLE` | `true` | Enable the unified web console (logs + metrics on port 3939) |
+| `DOLLHOUSE_WEB_CONSOLE` | `true` | Enable the unified web console (logs + metrics on port 5907) |
 | `DOLLHOUSE_LOG_VIEWER` | `false` | **Deprecated** — use `DOLLHOUSE_WEB_CONSOLE` instead |
-| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 3939 |
+| `DOLLHOUSE_LOG_VIEWER_PORT` | `9100` | **Deprecated** — console uses port 5907 |
 
 ---
 
@@ -534,7 +534,7 @@ Add environment variables to your Claude Desktop `claude_desktop_config.json`:
 ### Browser viewer not loading
 
 **Cause**: The web console is not enabled, or the port is in use.
-**Solution**: Ensure `DOLLHOUSE_WEB_CONSOLE=true` is set (default). Check that port 3939 is not already in use: `lsof -i :3939`. The console binds to `127.0.0.1` only — access it from the same machine. The Logs tab provides real-time log streaming.
+**Solution**: Ensure `DOLLHOUSE_WEB_CONSOLE=true` is set (default). Check that port 5907 is not already in use: `lsof -i :5907`. The console binds to `127.0.0.1` only — access it from the same machine. The Logs tab provides real-time log streaming.
 
 ### `[REDACTED]` appearing in log data
 

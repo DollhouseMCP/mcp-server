@@ -22,6 +22,7 @@
  */
 
 import type { CRUDEndpoint } from './OperationRouter.js';
+import { env } from '../../config/env.js';
 
 // ============================================================================
 // Parameter Schema Types
@@ -1757,7 +1758,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
     category: 'Management Console',
-    description: 'Start the portfolio web UI and open it in the system browser. The web server runs on localhost:3939 and shows all portfolio elements with search, filtering, and detail views. Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation. Aliases: open_console, open_management_console, open_dollhouse_mcp.',
+    description: `Start the portfolio web UI and open it in the system browser. The web server runs on localhost:${env.DOLLHOUSE_WEB_CONSOLE_PORT} and shows all portfolio elements with search, filtering, and detail views. Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation. Aliases: open_console, open_management_console, open_dollhouse_mcp.`,
     params: {
       tab: { type: 'string', description: 'Tab to open (portfolio, logs, metrics, permissions, setup). Default: last-used tab.', required: false },
       q: { type: 'string', description: 'Pre-populate search query on the target tab.' },

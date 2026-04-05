@@ -11,8 +11,9 @@
  * 4. Heartbeat updates (10s interval) so followers can detect hung leaders
  * 5. Cleanup on process exit
  *
- * The port 3939 binding is the ultimate tiebreaker: even if two processes
- * both write the lock file, only one can bind the port.
+ * The configured port binding is the ultimate tiebreaker: even if two
+ * processes both write the lock file, only one can bind the port (see
+ * `DOLLHOUSE_WEB_CONSOLE_PORT` in `src/config/env.ts`).
  *
  * @since v2.1.0 — Issue #1700
  */
@@ -21,13 +22,38 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
 /** Directory for runtime state files */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
 
-/** Path to the leader lock file */
-const LOCK_FILE = join(RUN_DIR, 'console-leader.lock');
+/**
+ * Built-in default filename for the authenticated console's leader lock.
+ *
+ * The `.auth` suffix isolates this from any legacy no-authentication
+ * DollhouseMCP installation that may also be running on the same
+ * machine. Those older installs use `console-leader.lock` (no suffix);
+ * the authenticated console uses `console-leader.auth.lock`. Combined
+ * with the port separation, this means the two generations of the
+ * console can coexist with zero interference — different port, different
+ * lock file, different token file, independent leader election spaces.
+ */
+const DEFAULT_LOCK_FILENAME = 'console-leader.auth.lock';
+
+/** Legacy lock filename from the pre-authentication console. Used only for detection. */
+const LEGACY_LOCK_FILENAME = 'console-leader.lock';
+
+/**
+ * Path to the leader lock file. Prefers the `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE`
+ * env var when set, otherwise uses `DEFAULT_LOCK_FILENAME` under RUN_DIR.
+ * The env var is the single source of truth when present, so a deployment
+ * can relocate the lock without code changes (see `src/config/env.ts`).
+ */
+const LOCK_FILE = env.DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE ?? join(RUN_DIR, DEFAULT_LOCK_FILENAME);
+
+/** Path to the legacy pre-auth lock file (used by `detectLegacyLeader` only). */
+const LEGACY_LOCK_FILE = join(RUN_DIR, LEGACY_LOCK_FILENAME);
 
 /** How often the leader updates its heartbeat (ms) */
 const HEARTBEAT_INTERVAL_MS = 10_000;
@@ -69,6 +95,56 @@ export function isProcessAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Result of a legacy-leader detection scan.
+ * `legacyRunning === true` means a pre-authentication DollhouseMCP console
+ * is currently running on this machine (its lock file exists and its pid
+ * is alive). Callers can surface this to the user as a warning.
+ */
+export interface LegacyLeaderInfo {
+  legacyRunning: boolean;
+  pid?: number;
+  port?: number;
+  lockPath: string;
+}
+
+/**
+ * Detect whether a legacy (pre-authentication) DollhouseMCP console is
+ * currently running on this machine (#1794).
+ *
+ * The pre-authentication console writes its lock to
+ * `~/.dollhouse/run/console-leader.lock` (no `.auth` suffix). An
+ * authenticated console on a different port will not interfere with
+ * it — they have fully independent ports, lock files, and token files —
+ * but the user probably wants to know the two exist simultaneously
+ * because the security posture of each console is different.
+ *
+ * Returns info about the legacy leader if one is detected, or
+ * `{ legacyRunning: false }` otherwise.
+ *
+ * @param lockPath - Optional override for the legacy lock file path.
+ *                   Defaults to the built-in legacy location. Primarily
+ *                   used by tests to point at a temp directory.
+ */
+export async function detectLegacyLeader(lockPath: string = LEGACY_LOCK_FILE): Promise<LegacyLeaderInfo> {
+  try {
+    const content = await readFile(lockPath, 'utf-8');
+    const data = JSON.parse(content) as ConsoleLeaderInfo;
+    if (!data.pid || !isProcessAlive(data.pid)) {
+      return { legacyRunning: false, lockPath };
+    }
+    return {
+      legacyRunning: true,
+      pid: data.pid,
+      port: data.port,
+      lockPath,
+    };
+  } catch {
+    // File missing, unreadable, or invalid JSON — no legacy leader detected
+    return { legacyRunning: false, lockPath };
   }
 }
 
@@ -140,7 +216,7 @@ export async function deleteLeaderLock(): Promise<void> {
  * 2. If lock exists with a live, responsive leader → become follower
  *
  * @param sessionId - This process's unique session identifier
- * @param port - The port this process would use as leader (typically 3939)
+ * @param port - The port this process would use as leader (see `DOLLHOUSE_WEB_CONSOLE_PORT`)
  * @returns Election result with role and leader info
  */
 export async function electLeader(sessionId: string, port: number): Promise<ElectionResult> {

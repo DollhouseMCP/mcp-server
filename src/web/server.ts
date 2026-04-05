@@ -22,6 +22,7 @@ import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes } from './routes/setupRoutes.js';
+import { createTotpRoutes } from './routes/totpRoutes.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
@@ -47,7 +48,13 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PORT = 3939;
+/**
+ * Default port for standalone `startWebServer` calls. Reads from the
+ * `DOLLHOUSE_WEB_CONSOLE_PORT` env var so there is a single source of
+ * truth (see `src/config/env.ts`). Callers passing an explicit `port` in
+ * `WebServerOptions` override this default.
+ */
+const DEFAULT_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
 /** Max JSON body for setup routes (install/open-config). Ingest routes use their own 1mb limit. */
@@ -66,7 +73,7 @@ export function isWebServerRunning(): boolean {
  * Options for starting the web server.
  */
 export interface WebServerOptions {
-  /** Port to bind to (default: 3939) */
+  /** Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`, see `src/config/env.ts`) */
   port?: number;
   /** Path to the portfolio directory (e.g., ~/.dollhouse/portfolio) */
   portfolioDir: string;
@@ -218,6 +225,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.info(
       `[WebUI] Console auth middleware mounted ${env.DOLLHOUSE_WEB_AUTH_ENABLED ? 'ENFORCING' : 'pass-through (flag off)'}`,
     );
+
+    // TOTP enrollment routes (#1794). Mounted AFTER the /api auth middleware
+    // because the router adds its own always-on auth guard — the global auth
+    // middleware at /api is a pass-through during Phase 1 rollout, but the
+    // TOTP router enforces regardless of DOLLHOUSE_WEB_AUTH_ENABLED so an
+    // attacker with local port access cannot pre-enroll a second factor and
+    // lock the legitimate user out.
+    app.use('/api/console/totp', createTotpRoutes({ store: options.tokenStore }));
+    logger.info('[WebUI] TOTP routes mounted at /api/console/totp (always-on auth)');
   }
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
@@ -462,7 +478,7 @@ function handleListenError(
  * Called by the `open_portfolio_browser` MCP-AQL operation (Issue #774).
  *
  * @param portfolioDir - Path to the portfolio directory (e.g., ~/.dollhouse/portfolio)
- * @param port - Port to bind to (default: 3939)
+ * @param port - Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`)
  * @returns Result with URL, server status, and browser open status
  */
 export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string, urlParams?: Record<string, string>): Promise<BrowserOpenResult> {

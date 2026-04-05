@@ -1,5 +1,34 @@
 # Changelog
 
+## [Unreleased] — Phase 2 authenticated console
+
+### Breaking: Web console default port moved from 3939 → 5907
+
+The authenticated web console (Phase 2 and later) binds to port **5907** by default, not 3939. The associated state files now live at:
+
+- `~/.dollhouse/run/console-leader.auth.lock` (was `console-leader.lock`)
+- `~/.dollhouse/run/console-token.auth.json` (was `console-token.json`)
+
+**Why:** Pre-authentication DollhouseMCP installations (≤ 2.0.x) continue to use port 3939 and the legacy file paths. The port + filename separation lets a legacy installation and an authenticated installation coexist on the same machine with zero interference — different ports, different lock files, different token files, independent leader-election spaces. This avoids a confusing "security popping on and off" UX when a user has both a pre-auth Claude Desktop install and an authenticated Claude Code install running simultaneously.
+
+**Configurability:** The port, lock file path, and token file path are now all driven by env vars with a single source of truth in `src/config/env.ts`. Changing any of them is a one-line edit — no hunt-and-peck across the codebase:
+
+| Env var | Default |
+|---|---|
+| `DOLLHOUSE_WEB_CONSOLE_PORT` | `5907` |
+| `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE` | `~/.dollhouse/run/console-leader.auth.lock` |
+| `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` |
+
+**5907 is a provisional default.** It's known to conflict with [Stellar Cyber's HTTP Google Kubernetes Engine log parser](https://docs.stellarcyber.ai/6.3.xs/Configure/Ports/Firewall-Ports-for-Parsers.htm). The permanent default will be selected in a follow-up tracking issue. The whole point of the new env-var architecture is that resolving a collision is a config change, not a code change.
+
+**Legacy detection:** When the authenticated console starts, it checks for an active legacy (pre-auth) DollhouseMCP process on port 3939 and logs a warning if one is found, explaining the coexistence and the differing security posture.
+
+**Consumer impact:**
+- **DollhouseBridge**: will need a matching port update when it consumes Phase 2 features — tracking issue filed
+- **User bookmarks / shell scripts**: update `localhost:3939` references to `localhost:5907` (or set `DOLLHOUSE_WEB_CONSOLE_PORT` to whatever you prefer)
+- **Docs**: all `docs/guides/*.md` references updated
+- **Nothing breaks silently**: the auth console simply isn't on 3939 anymore; the legacy console continues to work there untouched
+
 ## [2.0.7] - 2026-04-02
 
 ### Clean terminal output for `--web` mode
