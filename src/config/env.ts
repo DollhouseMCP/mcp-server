@@ -130,27 +130,53 @@ const envSchema = z.object({
   // ============================================================================
   // Web Console Configuration
   // ============================================================================
-  /** Enable the unified web console (logs + metrics tabs on port 3939) */
+  /** Enable the unified web console (logs + metrics tabs) */
   DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
 
   /**
+   * Port the web console leader binds to (#1794).
+   *
+   * This is the single source of truth for the console port. Every runtime
+   * reference (UnifiedConsole leader election, startWebServer default,
+   * port discovery) reads from this value, so the port can be changed in
+   * a single place — either by editing this default or by setting the
+   * environment variable at deploy time.
+   *
+   * The default is set to an unassigned port outside the ephemeral range
+   * (49152-65535) so `bind()` doesn't race with kernel-allocated ephemeral
+   * source ports. If a user's deployment has a collision, setting this env
+   * var to any other port in the 1024-49151 registered range is sufficient
+   * to resolve it — no code changes required.
+   */
+  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(3939),
+
+  /**
    * Issue #1780: Enforce Bearer token authentication on the web console API.
-   * When true, all protected endpoints on port 3939 require a valid token
-   * from ~/.dollhouse/run/console-token.json. When false (default in Phase 1),
-   * the token file is still generated but the middleware does not enforce —
-   * this lets the infrastructure land without breaking existing consumers.
-   * Will flip to default `true` in a follow-up PR once all consumers (browser,
-   * followers, bridge) have been updated to attach tokens.
+   * When true, all protected endpoints require a valid token from the
+   * console token file. When false (the pre-Phase-2 default), the token
+   * file is still generated but the middleware does not enforce — this
+   * lets the infrastructure land without breaking existing consumers.
+   * Will flip to default `true` in a follow-up PR once all consumers
+   * (browser, followers, bridge) have been updated to attach tokens.
    */
   DOLLHOUSE_WEB_AUTH_ENABLED: z.coerce.boolean().default(false),
 
   /**
    * Issue #1780: Optional override for the console token file location.
-   * Defaults to ~/.dollhouse/run/console-token.json. Mainly useful for tests
-   * and for enterprise deployments that mount a shared token file from a
-   * secrets volume.
+   * When unset, `ConsoleTokenStore` falls back to its built-in default
+   * under `~/.dollhouse/run/`. Mainly useful for tests and for enterprise
+   * deployments that mount a shared token file from a secrets volume.
    */
   DOLLHOUSE_CONSOLE_TOKEN_FILE: z.string().optional(),
+
+  /**
+   * Optional override for the console leader lock file location (#1794).
+   * When unset, `LeaderElection` falls back to its built-in default under
+   * `~/.dollhouse/run/`. Primarily useful for tests that need isolation
+   * between runs and for deployments that split runtime state across
+   * multiple installations on the same machine.
+   */
+  DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE: z.string().optional(),
 
   /**
    * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)

@@ -34,8 +34,13 @@ import {
 import { ConsoleTokenStore } from './consoleToken.js';
 import { env } from '../../config/env.js';
 
-/** Fixed port for the unified console leader */
-const CONSOLE_PORT = 3939;
+/**
+ * Port for the unified console leader — single source of truth is the
+ * `DOLLHOUSE_WEB_CONSOLE_PORT` env var (defaulted in `src/config/env.ts`).
+ * Kept as a local const so the constant name still shows up in this file
+ * and in log output, but every runtime reference flows through env.
+ */
+const CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 
 /**
  * Options for starting the unified console.

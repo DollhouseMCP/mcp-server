@@ -21,13 +21,19 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 
 /** Directory for runtime state files */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
 
-/** Path to the leader lock file */
-const LOCK_FILE = join(RUN_DIR, 'console-leader.lock');
+/**
+ * Path to the leader lock file. Prefers the `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE`
+ * env var when set, otherwise uses the built-in default under RUN_DIR. The
+ * env var is the single source of truth when present, so a deployment can
+ * relocate the lock without code changes (see `src/config/env.ts`).
+ */
+const LOCK_FILE = env.DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE ?? join(RUN_DIR, 'console-leader.lock');
 
 /** How often the leader updates its heartbeat (ms) */
 const HEARTBEAT_INTERVAL_MS = 10_000;

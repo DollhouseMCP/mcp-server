@@ -48,7 +48,13 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PORT = 3939;
+/**
+ * Default port for standalone `startWebServer` calls. Reads from the
+ * `DOLLHOUSE_WEB_CONSOLE_PORT` env var so there is a single source of
+ * truth (see `src/config/env.ts`). Callers passing an explicit `port` in
+ * `WebServerOptions` override this default.
+ */
+const DEFAULT_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
 /** Max JSON body for setup routes (install/open-config). Ingest routes use their own 1mb limit. */

@@ -18,6 +18,7 @@ import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
 /** Default maximum port attempts before giving up */
@@ -141,7 +142,9 @@ export function registerPortCleanup(): void {
  * @param defaultPort - Port to try first (default: 3939)
  * @returns The port the server should bind to, or undefined if discovery failed
  */
-export async function discoverAndBindPort(defaultPort: number = 3939): Promise<number | undefined> {
+export async function discoverAndBindPort(
+  defaultPort: number = env.DOLLHOUSE_WEB_CONSOLE_PORT,
+): Promise<number | undefined> {
   try {
     const port = await findAvailablePort(defaultPort);
 
