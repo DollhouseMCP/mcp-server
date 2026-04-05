@@ -24,6 +24,7 @@ import {
   forceClaimLeadership,
   startHeartbeat,
   registerLeaderCleanup,
+  detectLegacyLeader,
   type ElectionResult,
 } from './LeaderElection.js';
 import { createIngestRoutes } from './IngestRoutes.js';
@@ -81,6 +82,32 @@ export interface UnifiedConsoleResult {
  * or sets up event forwarding (follower).
  */
 export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promise<UnifiedConsoleResult> {
+  // Legacy-leader detection (#1794) — warn the user if a pre-auth
+  // DollhouseMCP console is running alongside this authenticated one.
+  // They will coexist fine because of port + lock + token file isolation,
+  // but the user should know both exist so the differing security posture
+  // between them doesn't look like a bug. Detection is fire-and-forget;
+  // failures must not block election.
+  try {
+    const legacy = await detectLegacyLeader();
+    if (legacy.legacyRunning) {
+      logger.warn(
+        `[UnifiedConsole] Legacy (pre-authentication) DollhouseMCP console detected ` +
+        `(pid=${legacy.pid}, port=${legacy.port}). Both consoles will run ` +
+        `independently on different ports with different security posture. ` +
+        `The authenticated console (this process) uses port ${CONSOLE_PORT}; ` +
+        `the legacy console uses port ${legacy.port ?? 3939}. ` +
+        `For consistent security, update the legacy installation to a ` +
+        `version with the authenticated console.`,
+      );
+    }
+  } catch (err) {
+    // Best-effort — never block election on a detection failure
+    logger.debug('[UnifiedConsole] Legacy leader detection failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
   let election = await electLeader(options.sessionId, CONSOLE_PORT);
 
   // If we lost the election, check if the leader is actually running a web console.
@@ -102,7 +129,8 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
 
 /**
  * Start as the console leader.
- * Binds port 3939, mounts all routes including ingestion, starts heartbeat.
+ * Binds the configured web console port (see `DOLLHOUSE_WEB_CONSOLE_PORT`
+ * in `src/config/env.ts`), mounts all routes including ingestion, starts heartbeat.
  */
 async function startAsLeader(
   options: UnifiedConsoleOptions,

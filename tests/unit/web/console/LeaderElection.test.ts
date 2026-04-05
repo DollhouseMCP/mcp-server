@@ -147,4 +147,105 @@ describe('LeaderElection', () => {
       stop(); // clean up immediately
     });
   });
+
+  /**
+   * Legacy (pre-authentication) leader detection — verifies that the
+   * authenticated console can identify an unauthenticated sibling
+   * installation running alongside it on the legacy port (#1794).
+   *
+   * `detectLegacyLeader` accepts an explicit path parameter for testing
+   * so we can point it at a sandboxed temp directory and exercise every
+   * branch deterministically without touching the real
+   * `~/.dollhouse/run/console-leader.lock`.
+   */
+  describe('detectLegacyLeader', () => {
+    let tempDir: string;
+    let legacyLockPath: string;
+
+    beforeEach(async () => {
+      const { mkdtemp } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      tempDir = await mkdtemp(join(tmpdir(), 'dh-legacy-leader-test-'));
+      legacyLockPath = join(tempDir, 'console-leader.lock');
+    });
+
+    afterEach(async () => {
+      const { rm } = await import('node:fs/promises');
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('returns legacyRunning=false when no lock file exists', async () => {
+      const result = await LeaderElection.detectLegacyLeader(legacyLockPath);
+      expect(result.legacyRunning).toBe(false);
+      expect(result.lockPath).toBe(legacyLockPath);
+      expect(result.pid).toBeUndefined();
+      expect(result.port).toBeUndefined();
+    });
+
+    it('returns legacyRunning=true with pid and port when legacy lock has a live process', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(legacyLockPath, JSON.stringify({
+        version: 1,
+        pid: process.pid, // current test process — guaranteed alive
+        port: 3939,
+        sessionId: 'legacy-test-session',
+        startedAt: new Date().toISOString(),
+        heartbeat: new Date().toISOString(),
+      }));
+
+      const result = await LeaderElection.detectLegacyLeader(legacyLockPath);
+      expect(result.legacyRunning).toBe(true);
+      expect(result.pid).toBe(process.pid);
+      expect(result.port).toBe(3939);
+      expect(result.lockPath).toBe(legacyLockPath);
+    });
+
+    it('returns legacyRunning=false when lock file exists but pid is dead', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(legacyLockPath, JSON.stringify({
+        version: 1,
+        pid: 99999999, // extremely unlikely to exist
+        port: 3939,
+        sessionId: 'dead-legacy-session',
+        startedAt: new Date().toISOString(),
+        heartbeat: new Date().toISOString(),
+      }));
+
+      const result = await LeaderElection.detectLegacyLeader(legacyLockPath);
+      expect(result.legacyRunning).toBe(false);
+      expect(result.lockPath).toBe(legacyLockPath);
+    });
+
+    it('returns legacyRunning=false when lock file is malformed JSON', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(legacyLockPath, 'this is not valid json at all');
+
+      const result = await LeaderElection.detectLegacyLeader(legacyLockPath);
+      expect(result.legacyRunning).toBe(false);
+      expect(result.lockPath).toBe(legacyLockPath);
+    });
+
+    it('returns legacyRunning=false when lock file has no pid field', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(legacyLockPath, JSON.stringify({
+        version: 1,
+        port: 3939,
+        sessionId: 'missing-pid',
+      }));
+
+      const result = await LeaderElection.detectLegacyLeader(legacyLockPath);
+      expect(result.legacyRunning).toBe(false);
+    });
+
+    it('default lockPath points at the legacy (non-.auth) filename', async () => {
+      // When called with no argument, must inspect the LEGACY path —
+      // otherwise it would look at its own .auth.lock and always return
+      // legacyRunning=false. This is the critical invariant of the
+      // whole detection feature.
+      const result = await LeaderElection.detectLegacyLeader();
+      expect(result.lockPath).toMatch(/console-leader\.lock$/);
+      expect(result.lockPath).not.toMatch(/\.auth\.lock$/);
+    });
+  });
 });

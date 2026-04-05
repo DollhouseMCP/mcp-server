@@ -5,7 +5,8 @@
  * Claude Code windows, IDE instances, or agent sessions), each needs its
  * own web console port. This module handles:
  *
- * 1. Finding an available port starting from the default (3939)
+ * 1. Finding an available port starting from the configured default
+ *    (see `DOLLHOUSE_WEB_CONSOLE_PORT` in `src/config/env.ts`)
  * 2. Writing port discovery files so external tools know which port to use
  * 3. Cleaning up port files on process exit
  *
@@ -60,7 +61,7 @@ function tryBindPort(port: number): Promise<{ port: number; server: Server } | n
  * and a held server to prevent TOCTOU race conditions. The caller should
  * close the held server after binding their own Express app to the port.
  *
- * @param startPort - Port to try first (default: 3939)
+ * @param startPort - Port to try first (see `DOLLHOUSE_WEB_CONSOLE_PORT` for the default)
  * @param maxAttempts - Maximum ports to try (default: 10, configurable via DOLLHOUSE_MAX_PORT_ATTEMPTS)
  * @returns Object with port number and held server, or throws if all attempts fail
  */
@@ -139,7 +140,7 @@ export function registerPortCleanup(): void {
  * This is the recommended entry point for Container startup. Combines
  * port discovery, file writing, and cleanup registration in one call.
  *
- * @param defaultPort - Port to try first (default: 3939)
+ * @param defaultPort - Port to try first (see `DOLLHOUSE_WEB_CONSOLE_PORT` for the default)
  * @returns The port the server should bind to, or undefined if discovery failed
  */
 export async function discoverAndBindPort(

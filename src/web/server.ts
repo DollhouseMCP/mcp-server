@@ -73,7 +73,7 @@ export function isWebServerRunning(): boolean {
  * Options for starting the web server.
  */
 export interface WebServerOptions {
-  /** Port to bind to (default: 3939) */
+  /** Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`, see `src/config/env.ts`) */
   port?: number;
   /** Path to the portfolio directory (e.g., ~/.dollhouse/portfolio) */
   portfolioDir: string;
@@ -478,7 +478,7 @@ function handleListenError(
  * Called by the `open_portfolio_browser` MCP-AQL operation (Issue #774).
  *
  * @param portfolioDir - Path to the portfolio directory (e.g., ~/.dollhouse/portfolio)
- * @param port - Port to bind to (default: 3939)
+ * @param port - Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`)
  * @returns Result with URL, server status, and browser open status
  */
 export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string, urlParams?: Record<string, string>): Promise<BrowserOpenResult> {

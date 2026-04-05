@@ -1,10 +1,16 @@
 /**
  * Console session token storage and verification (#1780).
  *
- * Manages the file at `~/.dollhouse/run/console-token.json` which holds
- * the Bearer tokens that authenticate requests to the web console on
- * port 3939. The file is created on first leader election and persists
- * across restarts — tokens only rotate when explicitly requested.
+ * Manages the file at `~/.dollhouse/run/console-token.auth.json` which
+ * holds the Bearer tokens that authenticate requests to the web console.
+ * The file is created on first leader election and persists across
+ * restarts — tokens only rotate when explicitly requested.
+ *
+ * The `.auth` filename suffix keeps this state isolated from any legacy
+ * no-authentication DollhouseMCP installation running on the same
+ * machine. The port, lock file, and token file all share the same
+ * isolation strategy — see `src/config/env.ts` for the port, and
+ * `LeaderElection.ts` for the lock file.
  *
  * Schema is forward-compatible with multi-device, multi-tenant, and
  * scope-restricted tokens for Phase 2+. Phase 1 uses a single "console"
@@ -49,8 +55,19 @@ import { logger } from '../../utils/logger.js';
 /** Directory for runtime state files — same as LeaderElection. */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
 
-/** Default path to the console token file. */
-const DEFAULT_TOKEN_FILE = join(RUN_DIR, 'console-token.json');
+/**
+ * Default path to the authenticated console's token file.
+ *
+ * The `.auth` suffix isolates this from any legacy no-authentication
+ * DollhouseMCP installation that may also be running on the same
+ * machine. Legacy installs did not write a token file at all; the
+ * authenticated console writes `console-token.auth.json`. Combined with
+ * the port and lock-file separation, this gives the two generations of
+ * the console fully independent state trees under `~/.dollhouse/run/`.
+ *
+ * Callers can override via `DOLLHOUSE_CONSOLE_TOKEN_FILE` in the env.
+ */
+const DEFAULT_TOKEN_FILE = join(RUN_DIR, 'console-token.auth.json');
 
 /** Current token file schema version. */
 const TOKEN_FILE_VERSION = 1 as const;

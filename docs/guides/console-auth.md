@@ -1,10 +1,23 @@
 # Console Authentication
 
-> **Status:** Phase 1 (infrastructure) — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default**.
-> Phase 2 adds token rotation with TOTP/authenticator confirmation.
-> Phase 3 flips the default to **on** once the DollhouseBridge permission-prompt server has been updated.
+> **Status:** Phase 2 infrastructure — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default**.
+> Phase 2 adds TOTP enrollment, structured error codes, and the migration to port 5907.
+> Phase 3 will add token rotation, flip the auth default to **on**, and retire the legacy no-auth port.
 
-DollhouseMCP's web management console on port `3939` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
+DollhouseMCP's web management console on port `5907` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
+
+> **Port change from earlier versions.** Pre-authentication DollhouseMCP releases bound the web console to port `3939`. The authenticated console binds to `5907` instead (with `.auth` suffixes on the state files) so that a legacy installation and an authenticated installation can coexist on the same machine with zero cross-contamination. Both consoles use fully independent ports, lock files, and token files. If your deployment has a collision on 5907 — for example, [Stellar Cyber](https://docs.stellarcyber.ai/6.3.xs/Configure/Ports/Firewall-Ports-for-Parsers.htm) uses it for its HTTP Google Kubernetes Engine log parser — override it via the `DOLLHOUSE_WEB_CONSOLE_PORT` env var without touching any code.
+
+## Configuration via environment variables
+
+| Env var | Default | Purpose |
+|---|---|---|
+| `DOLLHOUSE_WEB_CONSOLE_PORT` | `5907` | Port the authenticated console binds to. Any 1024-65535. |
+| `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE` | `~/.dollhouse/run/console-leader.auth.lock` | Leader election lock file path. |
+| `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` | Token storage file path. |
+| `DOLLHOUSE_WEB_AUTH_ENABLED` | `false` | Enforce Bearer auth on protected endpoints (Phase 3 default). |
+
+All four are read from `src/config/env.ts`, which is the single source of truth. Changing any of them is a one-line env change, no code edits required.
 
 This guide covers what the token is, where it lives, how to use it, and how to opt in or out.
 
@@ -14,26 +27,26 @@ This guide covers what the token is, where it lives, how to use it, and how to o
 
 ```bash
 # 1. Your token is in this file (created automatically on first run)
-cat ~/.dollhouse/run/console-token.json | jq .
+cat ~/.dollhouse/run/console-token.auth.json | jq .
 
 # 2. Attach it to curl requests
-TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:3939/api/elements
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
+curl -H "Authorization: Bearer $TOKEN" http://localhost:5907/api/elements
 
 # 3. Or define a shell helper (~/.zshrc or ~/.bashrc)
-dh-token() { jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json; }
+dh-token() { jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json; }
 dh-curl() { curl -H "Authorization: Bearer $(dh-token)" "$@"; }
 
 # Usage
-dh-curl http://localhost:3939/api/elements
-dh-curl -X POST http://localhost:3939/api/install -d '{"path":"library/personas/creative-writer.md","name":"creative-writer","type":"persona"}'
+dh-curl http://localhost:5907/api/elements
+dh-curl -X POST http://localhost:5907/api/install -d '{"path":"library/personas/creative-writer.md","name":"creative-writer","type":"persona"}'
 ```
 
 ---
 
 ## Why authentication?
 
-Port 3939 binds to `127.0.0.1` only, so it is not reachable from the network. Binding alone is the **current** security boundary. Adding authentication raises that boundary so that:
+Port 5907 binds to `127.0.0.1` only, so it is not reachable from the network. Binding alone is the **current** security boundary. Adding authentication raises that boundary so that:
 
 - Other local processes cannot inject fake logs, approve tool permissions, or kill sessions without the token
 - Shared workstations (multi-user Linux, containers with port mapping) can safely run DollhouseMCP without exposing the console to other users
@@ -43,7 +56,7 @@ Port 3939 binds to `127.0.0.1` only, so it is not reachable from the network. Bi
 
 ## The token file
 
-**Location:** `~/.dollhouse/run/console-token.json`
+**Location:** `~/.dollhouse/run/console-token.auth.json`
 **Permissions:** `0600` — owner read/write only
 **Created by:** The leader process, on first run
 **Lifecycle:** Persistent across restarts. Only changes when explicitly rotated.
@@ -167,7 +180,7 @@ These are **intentionally** unprotected in Phase 1 and will be addressed in late
 
 - **`/pages/*` — user-generated HTML dashboards** under `~/.dollhouse/pages/`. These are served as static files and the auth middleware (mounted at `/api`) never sees them. Direct navigation to a page URL does not carry a Bearer header, so protecting them requires a full meta-tag injection + cooperative fetch refactor. **If you store sensitive information in a user page, do not enable `DOLLHOUSE_WEB_AUTH_ENABLED=true` in production until Phase 2 lands.** Tracked in issue #1788.
 
-- **Leader election race window.** Between the moment a process claims leadership (writing `~/.dollhouse/run/console-leader.lock`) and the moment it finishes writing the token file (`~/.dollhouse/run/console-token.json`), there is a brief window where a follower booting concurrently may see the lock but no token. The follower's `LeaderForwardingSink` handles this with backoff + retry — failed ingest POSTs are re-attempted — so the gap is benign and self-healing.
+- **Leader election race window.** Between the moment a process claims leadership (writing `~/.dollhouse/run/console-leader.auth.lock`) and the moment it finishes writing the token file (`~/.dollhouse/run/console-token.auth.json`), there is a brief window where a follower booting concurrently may see the lock but no token. The follower's `LeaderForwardingSink` handles this with backoff + retry — failed ingest POSTs are re-attempted — so the gap is benign and self-healing.
 
 - **`401` rate limiting.** Not implemented yet. A 256-bit token cannot be brute-forced in any practical sense, but a flood of wrong-token requests could saturate the verify path as a DoS. Deferred to Phase 3.
 
@@ -197,7 +210,7 @@ Rotation handling for long-lived followers will land in Phase 2 (read-on-401 wit
 
 The feature flag is on but your requests aren't attaching the token. Check:
 
-1. `cat ~/.dollhouse/run/console-token.json` — does the file exist and contain a `tokens` array?
+1. `cat ~/.dollhouse/run/console-token.auth.json` — does the file exist and contain a `tokens` array?
 2. Are you sending `Authorization: Bearer <token>` (not `Basic`, not just the token value)?
 3. For SSE streams, are you appending `?token=<token>` to the URL?
 4. Has the token been rotated recently? Re-read the file.
@@ -215,7 +228,7 @@ Restart the follower processes. They read the token file on startup; they don't 
 That's expected — tokens are the unit of access, and rotation invalidates the old one by design. Re-read the file:
 
 ```bash
-TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 ```
 
 ### I want to reset my token without restarting
@@ -223,7 +236,7 @@ TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
 Not supported in Phase 1. You can delete the file and restart the server to force a fresh token:
 
 ```bash
-rm ~/.dollhouse/run/console-token.json
+rm ~/.dollhouse/run/console-token.auth.json
 # restart the server
 ```
 
@@ -263,26 +276,26 @@ Phase 2 adds a second factor: a time-based one-time password (TOTP) that pairs w
 **CLI walkthrough (until the Security tab UI lands):**
 
 ```bash
-TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 H="Authorization: Bearer $TOKEN"
 
 # 1. Start enrollment — shows a QR-code-rendered otpauth URI you can scan
-curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/enroll/begin \
+curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/enroll/begin \
   -H 'Content-Type: application/json' -d '{"label":"My laptop"}' | jq .
 
 # 2. Scan the QR (or paste the secret into your authenticator manually)
 # 3. Confirm with the live 6-digit code
-curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/enroll/confirm \
+curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/enroll/confirm \
   -H 'Content-Type: application/json' \
   -d '{"pendingId":"...","code":"123456"}' | jq .
 
 # Write down the 10 backup codes it returns — you will never see them again.
 
 # Check enrollment state
-curl -s -H "$H" http://localhost:3939/api/console/totp/status | jq .
+curl -s -H "$H" http://localhost:5907/api/console/totp/status | jq .
 
 # Disable later (needs a valid TOTP or backup code)
-curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/disable \
+curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/disable \
   -H 'Content-Type: application/json' -d '{"code":"123456"}'
 ```
 
@@ -307,7 +320,7 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 
 **Security notes specific to TOTP:**
 
-- The TOTP secret is stored in plaintext alongside the token inside `console-token.json`, which is `0600`. This matches standard file-based TOTP storage (SSH keys, age identity files, 1Password vault backups). Encrypting the secret with an OS keychain is a future enhancement.
+- The TOTP secret is stored in plaintext alongside the token inside `console-token.auth.json`, which is `0600`. This matches standard file-based TOTP storage (SSH keys, age identity files, 1Password vault backups). Encrypting the secret with an OS keychain is a future enhancement.
 - Enrollment endpoints rate-limit code attempts to 10 per minute to cap brute-force exposure of the 6-digit code space. With the ±60s window, 5 codes out of 10⁶ are valid at any instant — brute-force success probability remains below 5×10⁻⁵ per minute.
 - Enrolling a second factor does **not** replace the console token — both still work. The token is "something you have (on disk)", TOTP is "something you have (on your phone)". Rotation will require **both** in Phase 2.
 - Every failed verification fires a `TOTP_VERIFICATION_FAILED` event to SecurityMonitor (deduped per 60s window), so aggregate failure rates can be surfaced for brute-force detection.
@@ -317,9 +330,9 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 ## Security notes
 
 - **Treat the token like an SSH key or API key.** Anyone who holds it has full admin access to the local management API — including the ability to install MCP configs, approve tool permissions, kill sessions, and read all logs on the host.
-- **Don't commit `console-token.json` anywhere.** It lives under `~/.dollhouse/` which isn't a git repo by default, but if anyone symlinks or copies that directory, the token goes with it.
+- **Don't commit `console-token.auth.json` anywhere.** It lives under `~/.dollhouse/` which isn't a git repo by default, but if anyone symlinks or copies that directory, the token goes with it.
 - **Don't paste the token into chat, email, or pull request descriptions.** It's localhost-only, but paranoia is cheap.
-- **Don't expose port 3939 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
+- **Don't expose port 5907 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
 - **Rotation is manual in Phase 1.** If you suspect compromise, stop the server, delete the token file, and restart.
 
 ---

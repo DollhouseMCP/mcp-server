@@ -136,19 +136,36 @@ const envSchema = z.object({
   /**
    * Port the web console leader binds to (#1794).
    *
-   * This is the single source of truth for the console port. Every runtime
-   * reference (UnifiedConsole leader election, startWebServer default,
-   * port discovery) reads from this value, so the port can be changed in
-   * a single place — either by editing this default or by setting the
-   * environment variable at deploy time.
+   * ⚠️ PROVISIONAL DEFAULT — will be revisited before the first public
+   * release of the authenticated console. 5907 is confirmed to conflict
+   * with the Stellar Cyber security monitoring platform, which uses it
+   * as the listen port for its HTTP Google Kubernetes Engine log parser
+   * (JSON, `http_google_kubernetes_engine`, `cloudsec` category). See:
+   * https://docs.stellarcyber.ai/6.3.xs/Configure/Ports/Firewall-Ports-for-Parsers.htm
    *
-   * The default is set to an unassigned port outside the ephemeral range
-   * (49152-65535) so `bind()` doesn't race with kernel-allocated ephemeral
-   * source ports. If a user's deployment has a collision, setting this env
-   * var to any other port in the 1024-49151 registered range is sufficient
-   * to resolve it — no code changes required.
+   * Stellar Cyber is a plausible co-tenant on DollhouseMCP-adjacent
+   * security workstations, so this collision matters. A tracking issue
+   * filed alongside #1796 will pick the permanent default.
+   *
+   * The whole point of this architecture is that changing the port is a
+   * single-line edit here, not a hunt across the codebase. Every runtime
+   * reference (UnifiedConsole leader election, `startWebServer` default,
+   * port discovery) reads from this value, and the env var override
+   * lets deployments hit a collision resolve it without any code change.
+   *
+   * Why 5907 is still a useful interim default despite the conflict:
+   *   - Digits 5-9-0-7 spell "LOGS" upside down on a calculator — a nod
+   *     to the management console's logs tab. Thematic, memorable.
+   *   - Below the macOS ephemeral range (49152-65535), so `bind()`
+   *     does not race with kernel-allocated source ports
+   *   - In the IANA registered range (1024-49151)
+   *   - Not adjacent to the pre-authentication default (3939), so an
+   *     off-by-one typo can't silently hit the wrong console
+   *   - The conflict is with a specific security vendor's product, not
+   *     a ubiquitous dev tool, so the collision radius for interim
+   *     testing is bounded
    */
-  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(3939),
+  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(5907),
 
   /**
    * Issue #1780: Enforce Bearer token authentication on the web console API.

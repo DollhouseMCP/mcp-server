@@ -2,7 +2,7 @@
 
 > **Status:** Phase 1 covers same-machine consumers. Cross-machine consumers (browser plugins, remote LLMs) require the Phase 2 device pairing flow.
 
-DollhouseMCP's management API on port `3939` is not just for the built-in web console. Any external tool — including a **second LLM with its own MCP server** — can build an adapter that consumes this API under the same Bearer token security model as local DollhouseMCP sessions. This document describes the three access patterns and how to build each.
+DollhouseMCP's management API on port `5907` is not just for the built-in web console. Any external tool — including a **second LLM with its own MCP server** — can build an adapter that consumes this API under the same Bearer token security model as local DollhouseMCP sessions. This document describes the three access patterns and how to build each.
 
 ---
 
@@ -27,7 +27,7 @@ The common thread: these are all consumers of the management API, not replacemen
 
 **How:**
 
-1. Read the token from `~/.dollhouse/run/console-token.json`
+1. Read the token from `~/.dollhouse/run/console-token.auth.json`
 2. Attach it as `Authorization: Bearer <token>` on every request
 3. Call the API
 
@@ -41,7 +41,7 @@ import { join } from 'node:path';
 async function getConsoleToken(): Promise<string | null> {
   try {
     const content = await readFile(
-      join(homedir(), '.dollhouse', 'run', 'console-token.json'),
+      join(homedir(), '.dollhouse', 'run', 'console-token.auth.json'),
       'utf8',
     );
     const parsed = JSON.parse(content);
@@ -55,7 +55,7 @@ async function dollhouseFetch(path: string, init: RequestInit = {}): Promise<Res
   const token = await getConsoleToken();
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(`http://127.0.0.1:3939${path}`, { ...init, headers });
+  return fetch(`http://127.0.0.1:5907${path}`, { ...init, headers });
 }
 
 // Usage
@@ -67,8 +67,8 @@ console.log(`Found ${portfolio.totalCount} elements`);
 **Shell equivalent:**
 
 ```bash
-TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:3939/api/elements
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5907/api/elements
 ```
 
 **MCP-AQL adapter pattern:** If you're exposing DollhouseMCP capabilities to a different LLM via its own MCP server, wrap each DollhouseMCP endpoint you want to expose as an MCP tool in your adapter:
@@ -173,7 +173,7 @@ The Security tab will list all paired devices with:
 - Scopes granted
 - "Revoke" button (immediately invalidates that specific token without touching others)
 
-Each paired device is a separate entry in `console-token.json`, independent of the primary console token. Revoking one device has no effect on the others.
+Each paired device is a separate entry in `console-token.auth.json`, independent of the primary console token. Revoking one device has no effect on the others.
 
 ---
 
@@ -181,7 +181,7 @@ Each paired device is a separate entry in `console-token.json`, independent of t
 
 For a large engineering organization running DollhouseMCP across many workstations:
 
-- **Central token provisioning**: Tokens can be pre-seeded into `console-token.json` by an MDM system or secrets manager. The schema supports multiple entries from day one.
+- **Central token provisioning**: Tokens can be pre-seeded into `console-token.auth.json` by an MDM system or secrets manager. The schema supports multiple entries from day one.
 - **Scopes and element boundaries**: Department-specific tokens can be limited to certain element categories (e.g. `allowCategories: ["eng-platform"]`, `denyCategories: ["hr", "legal"]`). Phase 3 enforces this in the API layer automatically.
 - **Tenant isolation**: The `tenant` field on each token lets a single DollhouseMCP instance serve multiple isolated contexts (company vs. personal, engineering vs. design). Phase 3 flows this through all query operations.
 - **Audit**: Every token carries a `labels` field for enterprise metadata (cost center, approved-by, department). Query the `lastUsedAt` field to identify dormant tokens ripe for revocation.
@@ -208,9 +208,9 @@ For a large engineering organization running DollhouseMCP across many workstatio
 
 **Threat model:**
 
-- **Localhost binding** is the first line of defense — port 3939 is not reachable from the network.
+- **Localhost binding** is the first line of defense — port 5907 is not reachable from the network.
 - **Bearer token** is the second line — requires knowledge of the token to make API calls.
-- **File permissions (0600)** on `console-token.json` prevent other local users from reading it.
+- **File permissions (0600)** on `console-token.auth.json` prevent other local users from reading it.
 - **TOTP-protected rotation** (Phase 2) prevents a leaked token from being used to lock out the legitimate user.
 - **TLS** (Phase 3) adds a third line of defense if you ever need to bind beyond localhost.
 
