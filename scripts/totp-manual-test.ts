@@ -71,29 +71,29 @@ async function main(): Promise<void> {
   console.log('Copy these into a curl session:');
   console.log('');
   console.log(`  TOKEN='${primary.token}'`);
-  console.log(`  H="Authorization: Bearer \$TOKEN"`);
+  console.log(`  H="Authorization: Bearer $TOKEN"`);
   console.log(`  URL="http://127.0.0.1:${TEST_PORT}"`);
   console.log('');
   console.log('  # 1. Check initial status');
-  console.log(`  curl -s -H "\$H" \$URL/api/console/totp/status | jq .`);
+  console.log(`  curl -s -H "$H" $URL/api/console/totp/status | jq .`);
   console.log('');
   console.log('  # 2. Start enrollment — returns pendingId, secret, otpauthUri, qrSvgDataUrl');
-  console.log(`  curl -s -H "\$H" -X POST \$URL/api/console/totp/enroll/begin \\`);
+  console.log(`  curl -s -H "$H" -X POST $URL/api/console/totp/enroll/begin \\`);
   console.log(`    -H 'Content-Type: application/json' -d '{"label":"Manual test"}' | jq .`);
   console.log('');
   console.log('  # 3. Scan the QR (or paste the "secret" field into your authenticator app)');
   console.log('  # 4. Confirm with the live 6-digit code from your authenticator');
-  console.log(`  curl -s -H "\$H" -X POST \$URL/api/console/totp/enroll/confirm \\`);
+  console.log(`  curl -s -H "$H" -X POST $URL/api/console/totp/enroll/confirm \\`);
   console.log(`    -H 'Content-Type: application/json' \\`);
   console.log(`    -d '{"pendingId":"<from step 2>","code":"<from authenticator>"}' | jq .`);
   console.log('');
   console.log('  # 5. Write down the backup codes! They are shown only once.');
   console.log('');
   console.log('  # 6. Verify status reflects enrollment');
-  console.log(`  curl -s -H "\$H" \$URL/api/console/totp/status | jq .`);
+  console.log(`  curl -s -H "$H" $URL/api/console/totp/status | jq .`);
   console.log('');
   console.log('  # 7. Disable (requires a live TOTP code or a backup code)');
-  console.log(`  curl -s -H "\$H" -X POST \$URL/api/console/totp/disable \\`);
+  console.log(`  curl -s -H "$H" -X POST $URL/api/console/totp/disable \\`);
   console.log(`    -H 'Content-Type: application/json' -d '{"code":"<fresh code>"}' | jq .`);
   console.log('');
   console.log('Press Ctrl-C to stop the harness and clean up the sandbox.');
@@ -116,7 +116,9 @@ async function main(): Promise<void> {
   await new Promise<void>(() => { /* never resolves */ });
 }
 
-main().catch((err) => {
+try {
+  await main();
+} catch (err) {
   console.error('[TOTP harness] Fatal error:', err);
   process.exit(1);
-});
+}
