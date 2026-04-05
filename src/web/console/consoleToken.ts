@@ -210,6 +210,27 @@ interface PendingEnrollment {
 }
 
 /**
+ * Typed error for TOTP store operations. Carries a machine-readable
+ * `code` field so the HTTP layer can map failures to consistent response
+ * codes without parsing free-form error messages. Callers (CLI, UI) can
+ * branch on `code` instead of the human-readable `message`.
+ */
+export class TotpError extends Error {
+  constructor(message: string, public readonly code: TotpErrorCode) {
+    super(message);
+    this.name = 'TotpError';
+  }
+}
+
+/** Discriminated set of TOTP failure reasons surfaced by the store. */
+export type TotpErrorCode =
+  | 'ALREADY_ENROLLED'
+  | 'NOT_ENROLLED'
+  | 'PENDING_NOT_FOUND'
+  | 'INVALID_TOTP_CODE'
+  | 'STORE_NOT_INITIALIZED';
+
+/**
  * The full on-disk token file structure.
  */
 export interface ConsoleTokenFile {
@@ -290,7 +311,7 @@ function hashBackupCode(code: string): string {
  * "XXXX-XXXX"). Returns the canonical form that matches what we stored.
  */
 function normalizeBackupCode(raw: string): string {
-  return raw.replace(/[\s-]/g, '').toUpperCase();
+  return raw.replaceAll(/[\s-]/g, '').toUpperCase();
 }
 
 /**
@@ -523,7 +544,7 @@ export class ConsoleTokenStore {
    */
   getTotpStatus(): TotpStatus {
     const totp = this.data?.totp;
-    if (!totp || !totp.enrolled) {
+    if (!totp?.enrolled) {
       return { enrolled: false, enrolledAt: null, backupCodesRemaining: 0 };
     }
     return {
@@ -551,7 +572,10 @@ export class ConsoleTokenStore {
    */
   beginTotpEnrollment(label?: string): TotpEnrollmentBegin {
     if (this.isTotpEnrolled()) {
-      throw new Error('TOTP is already enrolled — disable existing enrollment before enrolling again');
+      throw new TotpError(
+        'TOTP is already enrolled — disable existing enrollment before enrolling again',
+        'ALREADY_ENROLLED',
+      );
     }
     this.sweepExpiredEnrollments();
 
@@ -598,12 +622,12 @@ export class ConsoleTokenStore {
    */
   async confirmTotpEnrollment(pendingId: string, code: string): Promise<TotpEnrollmentConfirm> {
     if (!this.data) {
-      throw new Error('Token store not initialized');
+      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
     }
     this.sweepExpiredEnrollments();
     const pending = this.pendingEnrollments.get(pendingId);
     if (!pending) {
-      throw new Error('Pending enrollment not found or expired');
+      throw new TotpError('Pending enrollment not found or expired', 'PENDING_NOT_FOUND');
     }
 
     // Verify the presented code against the pending secret. `validate` returns
@@ -616,10 +640,10 @@ export class ConsoleTokenStore {
       period: TOTP_PERIOD_SECONDS,
       secret: Secret.fromBase32(pending.secret),
     });
-    const sanitized = code.replace(/\s/g, '');
+    const sanitized = code.replaceAll(/\s/g, '');
     const delta = totp.validate({ token: sanitized, window: TOTP_VALIDATE_WINDOW });
     if (delta === null) {
-      throw new Error('Invalid TOTP code');
+      throw new TotpError('Invalid TOTP code', 'INVALID_TOTP_CODE');
     }
 
     // Code is valid — commit enrollment.
@@ -666,7 +690,7 @@ export class ConsoleTokenStore {
     if (!this.data?.totp?.enrolled || !this.data.totp.secret) {
       return { ok: false };
     }
-    const sanitized = code.replace(/\s/g, '');
+    const sanitized = code.replaceAll(/\s/g, '');
     if (!sanitized) return { ok: false };
 
     // Try live TOTP first — fast path, no disk write.
@@ -721,14 +745,14 @@ export class ConsoleTokenStore {
    */
   async disableTotp(code: string): Promise<void> {
     if (!this.data) {
-      throw new Error('Token store not initialized');
+      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
     }
     if (!this.isTotpEnrolled()) {
-      throw new Error('TOTP is not currently enrolled');
+      throw new TotpError('TOTP is not currently enrolled', 'NOT_ENROLLED');
     }
     const result = await this.verifyTotp(code);
     if (!result.ok) {
-      throw new Error('Invalid TOTP code');
+      throw new TotpError('Invalid TOTP code', 'INVALID_TOTP_CODE');
     }
     this.data.totp = {
       enrolled: false,

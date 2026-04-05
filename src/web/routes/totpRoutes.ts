@@ -27,7 +27,7 @@
 import express, { Router } from 'express';
 import type { Request, Response } from 'express';
 import QRCode from 'qrcode';
-import type { ConsoleTokenStore } from '../console/consoleToken.js';
+import { TotpError, type ConsoleTokenStore, type TotpErrorCode } from '../console/consoleToken.js';
 import { createAuthMiddleware } from '../middleware/authMiddleware.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -42,15 +42,60 @@ const BODY_LIMIT = '1kb';
  * an attacker up to 3 valid codes per minute. 10 attempts caps brute-force
  * success probability per minute at ~3e-5 even before network latency.
  *
- * The limiter is global (not per-IP) because the server binds to 127.0.0.1
+ * Limiters are per-endpoint (confirm vs disable) because they protect
+ * different secrets: confirm tests the in-memory pending enrollment secret
+ * (bounded lifetime, attacker must also know the pendingId), disable tests
+ * the persisted enrollment secret (long-lived). A single shared limiter
+ * would let traffic on one endpoint exhaust budget on the other.
+ *
+ * Limiters are global (not per-IP) because the server binds to 127.0.0.1
  * only — every request comes from the same loopback address, so keying on
  * IP would collapse to a single bucket anyway.
  *
- * Tests construct a fresh router per `buildApp`, which yields a fresh
- * limiter, so no cross-test pollution.
+ * Tests construct a fresh router per `buildApp`, which yields fresh
+ * limiters, so no cross-test pollution.
  */
 const DEFAULT_RATE_LIMIT_MAX = 10;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+
+/**
+ * Maps a TOTP error code from the store to the appropriate HTTP status.
+ * Centralized so all three endpoints that can surface store errors return
+ * consistent status codes for the same failure class.
+ */
+function httpStatusForTotpError(code: TotpErrorCode): number {
+  switch (code) {
+    case 'ALREADY_ENROLLED':
+      return 409;
+    case 'NOT_ENROLLED':
+    case 'PENDING_NOT_FOUND':
+    case 'INVALID_TOTP_CODE':
+      return 400;
+    case 'STORE_NOT_INITIALIZED':
+      return 503;
+    default: {
+      // Exhaustiveness check — if a new TotpErrorCode is added, TypeScript
+      // will flag this line so we remember to map it.
+      const _exhaustive: never = code;
+      void _exhaustive;
+      return 400;
+    }
+  }
+}
+
+/**
+ * Send a structured error response with both a human-readable message and
+ * a machine-readable code. Shape is stable so the upcoming CLI and Security
+ * tab UI can branch on `code` instead of string-matching the message.
+ */
+function sendTotpError(
+  res: Response,
+  status: number,
+  code: string,
+  message: string,
+): void {
+  res.status(status).json({ error: message, code });
+}
 
 /**
  * Safely extract a string field from an unknown request body and NFC-normalize
@@ -100,12 +145,14 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
   const { store } = options;
   const router = Router();
   const jsonParser = express.json({ limit: BODY_LIMIT, type: 'application/json' });
-  // Fresh limiter per router instance — keeps tests isolated and lets
-  // different mount points have independent budgets if we ever mount twice.
-  const confirmLimiter = new SlidingWindowRateLimiter(
-    options.rateLimitMax ?? DEFAULT_RATE_LIMIT_MAX,
-    options.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS,
-  );
+  // Fresh per-endpoint limiters per router instance. Separate buckets for
+  // confirm vs disable — they protect different secrets, so traffic on one
+  // should not exhaust the budget of the other. Fresh instances per call
+  // keep tests isolated.
+  const rateLimitMax = options.rateLimitMax ?? DEFAULT_RATE_LIMIT_MAX;
+  const rateLimitWindowMs = options.rateLimitWindowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS;
+  const confirmLimiter = new SlidingWindowRateLimiter(rateLimitMax, rateLimitWindowMs);
+  const disableLimiter = new SlidingWindowRateLimiter(rateLimitMax, rateLimitWindowMs);
 
   // Always-on auth — the global feature flag does not apply here. Even
   // during Phase 1 rollout (flag off), the TOTP endpoints must verify that
@@ -142,20 +189,24 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Enrollment could not be started';
       logger.debug(`[TOTP] begin failed: ${message}`);
-      res.status(409).json({ error: message });
+      if (err instanceof TotpError) {
+        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+      } else {
+        sendTotpError(res, 500, 'INTERNAL', message);
+      }
     }
   });
 
   /** POST /enroll/confirm — verify code, persist, return backup codes (once). */
   router.post('/enroll/confirm', jsonParser, async (req: Request, res: Response) => {
     if (!confirmLimiter.tryAcquire()) {
-      res.status(429).json({ error: 'Too many confirmation attempts — slow down' });
+      sendTotpError(res, 429, 'RATE_LIMITED', 'Too many confirmation attempts — slow down');
       return;
     }
     const pendingId = getNormalizedStringField(req.body, 'pendingId');
     const code = getNormalizedStringField(req.body, 'code');
     if (!pendingId || !code) {
-      res.status(400).json({ error: 'pendingId and code are required' });
+      sendTotpError(res, 400, 'MISSING_FIELDS', 'pendingId and code are required');
       return;
     }
     try {
@@ -168,19 +219,23 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Confirmation failed';
       logger.debug(`[TOTP] confirm failed: ${message}`);
-      res.status(400).json({ error: message });
+      if (err instanceof TotpError) {
+        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+      } else {
+        sendTotpError(res, 500, 'INTERNAL', message);
+      }
     }
   });
 
   /** POST /disable — verify code, clear enrollment. */
   router.post('/disable', jsonParser, async (req: Request, res: Response) => {
-    if (!confirmLimiter.tryAcquire()) {
-      res.status(429).json({ error: 'Too many disable attempts — slow down' });
+    if (!disableLimiter.tryAcquire()) {
+      sendTotpError(res, 429, 'RATE_LIMITED', 'Too many disable attempts — slow down');
       return;
     }
     const code = getNormalizedStringField(req.body, 'code');
     if (!code) {
-      res.status(400).json({ error: 'code is required' });
+      sendTotpError(res, 400, 'MISSING_FIELDS', 'code is required');
       return;
     }
     try {
@@ -189,7 +244,11 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Disable failed';
       logger.debug(`[TOTP] disable failed: ${message}`);
-      res.status(400).json({ error: message });
+      if (err instanceof TotpError) {
+        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+      } else {
+        sendTotpError(res, 500, 'INTERNAL', message);
+      }
     }
   });
 

@@ -249,6 +249,17 @@ Phase 2 adds a second factor: a time-based one-time password (TOTP) that pairs w
 | `POST /enroll/confirm` | Verifies `{pendingId, code}`, persists enrollment, returns `{enrolled, enrolledAt, backupCodes}` (plaintext, **shown once**) |
 | `POST /disable` | Verifies `{code}` (TOTP or backup code), clears enrollment |
 
+**Error responses** include both a human-readable `error` message and a machine-readable `code` field so programmatic clients (CLI, UI) can branch on the failure reason:
+
+| Code | Status | Meaning |
+|---|---|---|
+| `MISSING_FIELDS` | 400 | Required body field not present |
+| `INVALID_TOTP_CODE` | 400 | Code did not match the pending or stored secret |
+| `PENDING_NOT_FOUND` | 400 | Pending enrollment ID unknown or expired |
+| `NOT_ENROLLED` | 400 | `/disable` called but no enrollment exists |
+| `ALREADY_ENROLLED` | 409 | `/enroll/begin` called while TOTP is already enrolled |
+| `RATE_LIMITED` | 429 | Too many code-verification attempts; back off and retry |
+
 **CLI walkthrough (until the Security tab UI lands):**
 
 ```bash

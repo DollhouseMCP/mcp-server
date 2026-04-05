@@ -35,6 +35,26 @@ async function buildApp(store: ConsoleTokenStore) {
   return app;
 }
 
+/**
+ * Drive a full enroll flow (begin → confirm) against a built app and return
+ * the secret + plaintext backup codes. Shared helper — kept at module scope
+ * so it's only defined once per test run.
+ */
+async function enrollFlow(
+  app: express.Express,
+  bearerHeader: string,
+): Promise<{ secret: string; backupCodes: string[] }> {
+  const begin = await request(app)
+    .post('/api/console/totp/enroll/begin')
+    .set('Authorization', bearerHeader)
+    .send({});
+  const confirm = await request(app)
+    .post('/api/console/totp/enroll/confirm')
+    .set('Authorization', bearerHeader)
+    .send({ pendingId: begin.body.pendingId, code: currentTotpCode(begin.body.secret) });
+  return { secret: begin.body.secret, backupCodes: confirm.body.backupCodes };
+}
+
 describe('createTotpRoutes', () => {
   let testDir: string;
   let store: ConsoleTokenStore;
@@ -163,26 +183,39 @@ describe('createTotpRoutes', () => {
         .send({});
       expect(res.status).toBe(409);
       expect(res.body.error).toMatch(/already enrolled/i);
+      expect(res.body.code).toBe('ALREADY_ENROLLED');
     });
   });
 
   describe('POST /enroll/confirm', () => {
-    it('returns 400 when pendingId or code is missing', async () => {
+    it('returns 400 MISSING_FIELDS when pendingId or code is missing', async () => {
       const app = await buildApp(store);
       const res1 = await request(app)
         .post('/api/console/totp/enroll/confirm')
         .set('Authorization', bearer)
         .send({ pendingId: 'abc' });
       expect(res1.status).toBe(400);
+      expect(res1.body.code).toBe('MISSING_FIELDS');
 
       const res2 = await request(app)
         .post('/api/console/totp/enroll/confirm')
         .set('Authorization', bearer)
         .send({ code: '123456' });
       expect(res2.status).toBe(400);
+      expect(res2.body.code).toBe('MISSING_FIELDS');
     });
 
-    it('returns 400 on wrong code', async () => {
+    it('returns 400 PENDING_NOT_FOUND for unknown pendingId', async () => {
+      const app = await buildApp(store);
+      const res = await request(app)
+        .post('/api/console/totp/enroll/confirm')
+        .set('Authorization', bearer)
+        .send({ pendingId: '00000000-0000-0000-0000-000000000000', code: '123456' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('PENDING_NOT_FOUND');
+    });
+
+    it('returns 400 INVALID_TOTP_CODE on wrong code', async () => {
       const app = await buildApp(store);
       const begin = await request(app)
         .post('/api/console/totp/enroll/begin')
@@ -195,6 +228,7 @@ describe('createTotpRoutes', () => {
         .send({ pendingId: begin.body.pendingId, code: '000000' });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/invalid totp/i);
+      expect(res.body.code).toBe('INVALID_TOTP_CODE');
     });
 
     it('returns enrolled=true and backup codes on success', async () => {
@@ -216,21 +250,9 @@ describe('createTotpRoutes', () => {
   });
 
   describe('POST /disable', () => {
-    async function enroll(app: express.Express): Promise<{ secret: string; backupCodes: string[] }> {
-      const begin = await request(app)
-        .post('/api/console/totp/enroll/begin')
-        .set('Authorization', bearer)
-        .send({});
-      const confirm = await request(app)
-        .post('/api/console/totp/enroll/confirm')
-        .set('Authorization', bearer)
-        .send({ pendingId: begin.body.pendingId, code: currentTotpCode(begin.body.secret) });
-      return { secret: begin.body.secret, backupCodes: confirm.body.backupCodes };
-    }
-
     it('returns 400 when code is missing', async () => {
       const app = await buildApp(store);
-      await enroll(app);
+      await enrollFlow(app, bearer);
       const res = await request(app)
         .post('/api/console/totp/disable')
         .set('Authorization', bearer)
@@ -240,7 +262,7 @@ describe('createTotpRoutes', () => {
 
     it('returns 400 on wrong code and leaves enrollment intact', async () => {
       const app = await buildApp(store);
-      await enroll(app);
+      await enrollFlow(app, bearer);
       const res = await request(app)
         .post('/api/console/totp/disable')
         .set('Authorization', bearer)
@@ -251,7 +273,7 @@ describe('createTotpRoutes', () => {
 
     it('clears enrollment with a valid TOTP code', async () => {
       const app = await buildApp(store);
-      const { secret } = await enroll(app);
+      const { secret } = await enrollFlow(app, bearer);
       const res = await request(app)
         .post('/api/console/totp/disable')
         .set('Authorization', bearer)
@@ -263,7 +285,7 @@ describe('createTotpRoutes', () => {
 
     it('clears enrollment with a backup code', async () => {
       const app = await buildApp(store);
-      const { backupCodes } = await enroll(app);
+      const { backupCodes } = await enrollFlow(app, bearer);
       const res = await request(app)
         .post('/api/console/totp/disable')
         .set('Authorization', bearer)
@@ -272,7 +294,7 @@ describe('createTotpRoutes', () => {
       expect(store.isTotpEnrolled()).toBe(false);
     });
 
-    it('returns 400 when called before enrollment', async () => {
+    it('returns 400 NOT_ENROLLED when called before enrollment', async () => {
       const app = await buildApp(store);
       const res = await request(app)
         .post('/api/console/totp/disable')
@@ -280,6 +302,7 @@ describe('createTotpRoutes', () => {
         .send({ code: '123456' });
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/not.*enrolled/i);
+      expect(res.body.code).toBe('NOT_ENROLLED');
     });
   });
 });
