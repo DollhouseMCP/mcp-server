@@ -60,6 +60,7 @@
     "test:roundtrip": "npm run test:e2e",
     "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
     "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup",
+    "test:totp:manual": "tsx scripts/totp-manual-test.ts",
     "qa:direct": "node scripts/qa-direct-test.js",
     "test:e2e:real": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest test/e2e/real-github-integration.test.ts --verbose",
     "test:e2e:real:mcp": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest test/e2e/mcp-tool-flow.test.ts --verbose",
