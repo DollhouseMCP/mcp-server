@@ -75,6 +75,17 @@ const TOTP_SECRET_SIZE_BYTES = 20; // 160 bits — the RFC 6238 recommendation
 const TOTP_VALIDATE_WINDOW = 1;
 /** Pending enrollments expire this long after begin() to limit in-memory secret lifetime. */
 const TOTP_PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
+/**
+ * Hard cap on concurrent pending enrollments. An authenticated caller who
+ * misbehaves could otherwise fill the in-memory Map with 10-minute-TTL
+ * secrets. Realistic users need at most 1 pending enrollment at a time;
+ * 10 is generous headroom for retry-during-enrollment scenarios.
+ *
+ * When the cap is hit, `beginTotpEnrollment` throws `TOO_MANY_PENDING`
+ * (mapped to HTTP 429). Rejecting loudly is preferred over silently
+ * evicting someone else's legitimate pending entry.
+ */
+const MAX_PENDING_ENROLLMENTS = 10;
 
 /** Number of backup codes generated on enrollment. */
 const BACKUP_CODE_COUNT = 10;
@@ -228,7 +239,8 @@ export type TotpErrorCode =
   | 'NOT_ENROLLED'
   | 'PENDING_NOT_FOUND'
   | 'INVALID_TOTP_CODE'
-  | 'STORE_NOT_INITIALIZED';
+  | 'STORE_NOT_INITIALIZED'
+  | 'TOO_MANY_PENDING';
 
 /**
  * The full on-disk token file structure.
@@ -578,6 +590,15 @@ export class ConsoleTokenStore {
       );
     }
     this.sweepExpiredEnrollments();
+    // Reject if we're already at the per-process cap on concurrent pendings.
+    // Sweep ran above, so any slot still held is a live, unexpired enrollment
+    // belonging to somebody else — evicting it could silently kill their flow.
+    if (this.pendingEnrollments.size >= MAX_PENDING_ENROLLMENTS) {
+      throw new TotpError(
+        `Too many pending enrollments (max ${MAX_PENDING_ENROLLMENTS}); wait for existing pendings to expire or be confirmed`,
+        'TOO_MANY_PENDING',
+      );
+    }
 
     // Derive a display label from the primary token name if the caller
     // didn't provide one. Authenticator apps show "<Issuer>:<label>", so
@@ -643,6 +664,12 @@ export class ConsoleTokenStore {
     const sanitized = code.replaceAll(/\s/g, '');
     const delta = totp.validate({ token: sanitized, window: TOTP_VALIDATE_WINDOW });
     if (delta === null) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOTP_VERIFICATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'ConsoleTokenStore.confirmTotpEnrollment',
+        details: 'Pending TOTP enrollment failed code verification',
+      });
       throw new TotpError('Invalid TOTP code', 'INVALID_TOTP_CODE');
     }
 
@@ -718,7 +745,19 @@ export class ConsoleTokenStore {
         break;
       }
     }
-    if (matchIndex === -1) return { ok: false };
+    if (matchIndex === -1) {
+      // Both TOTP and backup code paths exhausted without a match. Emit a
+      // single audit event so the security monitor can alert on aggregate
+      // failure rates (SecurityMonitor dedups the same type+source within
+      // a 60s window, so rapid-fire attacks are collapsed into one entry).
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOTP_VERIFICATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'ConsoleTokenStore.verifyTotp',
+        details: 'Presented TOTP code matched neither the live secret nor any backup code',
+      });
+      return { ok: false };
+    }
 
     // Consume the matched backup code — remove from storage and persist.
     this.data.totp.backupCodes.splice(matchIndex, 1);

@@ -2,7 +2,7 @@
  * Unit tests for ConsoleTokenStore (#1780).
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -11,8 +11,10 @@ import {
   ConsoleTokenStore,
   readTokenFileRaw,
   getPrimaryTokenFromFile,
+  TotpError,
   type ConsoleTokenFile,
 } from '../../../../src/web/console/consoleToken.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 /**
  * Generate a TOTP code from a base32 secret using the same parameters the
@@ -492,6 +494,252 @@ describe('ConsoleTokenStore', () => {
           currentTotpCode(begin.secret),
         );
         expect(result.backupCodes).toHaveLength(10);
+      });
+    });
+
+    // ================================================================
+    // Pending enrollment map cap (memory bound)
+    // ================================================================
+    describe('pending enrollment cap', () => {
+      it('allows up to 10 concurrent pending enrollments', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+
+        // 10 begins in a row should all succeed
+        const pendings = [];
+        for (let i = 0; i < 10; i++) {
+          pendings.push(store.beginTotpEnrollment());
+        }
+        expect(pendings).toHaveLength(10);
+        // All distinct
+        expect(new Set(pendings.map(p => p.pendingId)).size).toBe(10);
+      });
+
+      it('rejects the 11th pending with TOO_MANY_PENDING', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+
+        for (let i = 0; i < 10; i++) {
+          store.beginTotpEnrollment();
+        }
+
+        try {
+          store.beginTotpEnrollment();
+          throw new Error('expected TOO_MANY_PENDING to be thrown');
+        } catch (err) {
+          expect(err).toBeInstanceOf(TotpError);
+          expect((err as TotpError).code).toBe('TOO_MANY_PENDING');
+        }
+      });
+
+      it('frees slots when pending entries expire via sweep', async () => {
+        jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
+        try {
+          const store = new ConsoleTokenStore(tokenFilePath);
+          await store.ensureInitialized('Kermit');
+
+          for (let i = 0; i < 10; i++) {
+            store.beginTotpEnrollment();
+          }
+          // Cap hit
+          expect(() => store.beginTotpEnrollment()).toThrow(/too many pending/i);
+
+          // Advance past TTL (10 minutes) — all 10 now expire on next sweep
+          jest.advanceTimersByTime(11 * 60 * 1000);
+
+          // Fresh begin succeeds because sweep runs first and clears expired
+          const fresh = store.beginTotpEnrollment();
+          expect(fresh.pendingId).toBeTruthy();
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+
+    // ================================================================
+    // Expired pending enrollment — TTL contract
+    // ================================================================
+    describe('pending enrollment TTL', () => {
+      it('rejects confirm after the pending has expired', async () => {
+        jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
+        try {
+          const store = new ConsoleTokenStore(tokenFilePath);
+          await store.ensureInitialized('Kermit');
+          const begin = store.beginTotpEnrollment();
+
+          // Advance past the 10-minute TTL
+          jest.advanceTimersByTime(11 * 60 * 1000);
+
+          // Confirming the previously-valid pendingId now yields
+          // PENDING_NOT_FOUND because sweep clears the entry first
+          await expect(
+            store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret)),
+          ).rejects.toMatchObject({
+            code: 'PENDING_NOT_FOUND',
+          });
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+    });
+
+    // ================================================================
+    // Backup code case-insensitivity
+    // ================================================================
+    describe('backup code normalization', () => {
+      it('accepts lowercase backup codes', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+        const { backupCodes } = await store.confirmTotpEnrollment(
+          begin.pendingId,
+          currentTotpCode(begin.secret),
+        );
+
+        const result = await store.verifyTotp(backupCodes[0].toLowerCase());
+        expect(result.ok).toBe(true);
+      });
+    });
+
+    // ================================================================
+    // SecurityMonitor audit trail — verifies the DMCP-SEC-006 fix
+    // actually fires events for every TOTP lifecycle operation. Uses
+    // jest.spyOn with a noop impl so the real SecurityMonitor dedup
+    // window (60s) doesn't swallow rapid-fire test calls.
+    // ================================================================
+    describe('SecurityMonitor audit events', () => {
+      let logSpy: ReturnType<typeof jest.spyOn>;
+
+      beforeEach(() => {
+        logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+      });
+
+      afterEach(() => {
+        logSpy.mockRestore();
+      });
+
+      /**
+       * Assert that none of the calls captured by `logSpy` contain the
+       * given secret material anywhere in their payload — JSON-stringify
+       * each call's arg and substring-match. Catches accidental leakage
+       * through additionalData or details fields.
+       */
+      const assertNoSecretLeaks = (forbidden: string[]) => {
+        for (const call of logSpy.mock.calls) {
+          const serialized = JSON.stringify(call[0]);
+          for (const secret of forbidden) {
+            if (!secret) continue;
+            expect(serialized).not.toContain(secret);
+          }
+        }
+      };
+
+      it('emits TOTP_ENROLLED on successful confirm', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+        const { backupCodes } = await store.confirmTotpEnrollment(
+          begin.pendingId,
+          currentTotpCode(begin.secret),
+        );
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'TOTP_ENROLLED',
+            severity: 'MEDIUM',
+            source: 'ConsoleTokenStore.confirmTotpEnrollment',
+          }),
+        );
+        // Neither the base32 secret nor any plaintext backup code may
+        // appear anywhere in the serialized audit payload
+        assertNoSecretLeaks([begin.secret, ...backupCodes]);
+      });
+
+      it('emits TOTP_VERIFICATION_FAILED on wrong confirm code', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+
+        await expect(
+          store.confirmTotpEnrollment(begin.pendingId, '000000'),
+        ).rejects.toBeInstanceOf(TotpError);
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'TOTP_VERIFICATION_FAILED',
+            severity: 'MEDIUM',
+            source: 'ConsoleTokenStore.confirmTotpEnrollment',
+          }),
+        );
+        assertNoSecretLeaks([begin.secret]);
+      });
+
+      it('emits TOTP_BACKUP_CODE_CONSUMED when a backup code verifies', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+        const { backupCodes } = await store.confirmTotpEnrollment(
+          begin.pendingId,
+          currentTotpCode(begin.secret),
+        );
+        logSpy.mockClear(); // drop the TOTP_ENROLLED call
+
+        const result = await store.verifyTotp(backupCodes[0]);
+        expect(result.ok).toBe(true);
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'TOTP_BACKUP_CODE_CONSUMED',
+            severity: 'MEDIUM',
+            source: 'ConsoleTokenStore.verifyTotp',
+            additionalData: { remaining: 9 },
+          }),
+        );
+        assertNoSecretLeaks([begin.secret, ...backupCodes]);
+      });
+
+      it('emits TOTP_VERIFICATION_FAILED when verifyTotp rejects a wrong code', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+        await store.confirmTotpEnrollment(
+          begin.pendingId,
+          currentTotpCode(begin.secret),
+        );
+        logSpy.mockClear();
+
+        const result = await store.verifyTotp('000000');
+        expect(result.ok).toBe(false);
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'TOTP_VERIFICATION_FAILED',
+            severity: 'MEDIUM',
+            source: 'ConsoleTokenStore.verifyTotp',
+          }),
+        );
+      });
+
+      it('emits TOTP_DISABLED on successful disable', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+        await store.confirmTotpEnrollment(
+          begin.pendingId,
+          currentTotpCode(begin.secret),
+        );
+        logSpy.mockClear();
+
+        await store.disableTotp(currentTotpCode(begin.secret));
+
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'TOTP_DISABLED',
+            severity: 'HIGH',
+            source: 'ConsoleTokenStore.disableTotp',
+          }),
+        );
+        assertNoSecretLeaks([begin.secret]);
       });
     });
   });
