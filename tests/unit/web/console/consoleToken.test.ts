@@ -17,11 +17,13 @@ import {
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 /**
- * Generate a TOTP code from a base32 secret using the same parameters the
- * store uses (SHA1 / 6 digits / 30s period). Shared between multiple TOTP
- * test cases.
+ * Generate a TOTP code from a base32 secret at a specific point in time,
+ * using the same parameters the store uses (SHA1 / 6 digits / 30s period).
+ * Timestamp defaults to `Date.now()` so this doubles as the "current code"
+ * helper when no explicit time is needed. Kept at module scope so Sonar
+ * (S7721) doesn't flag inner-function re-creation per test run.
  */
-function currentTotpCode(base32Secret: string): string {
+function totpCodeAt(base32Secret: string, timestampMs: number = Date.now()): string {
   const totp = new TOTP({
     issuer: 'DollhouseMCP',
     label: 'test',
@@ -30,7 +32,12 @@ function currentTotpCode(base32Secret: string): string {
     period: 30,
     secret: Secret.fromBase32(base32Secret),
   });
-  return totp.generate();
+  return totp.generate({ timestamp: timestampMs });
+}
+
+/** Convenience alias: `totpCodeAt(secret)` with the default `Date.now()`. */
+function currentTotpCode(base32Secret: string): string {
+  return totpCodeAt(base32Secret);
 }
 
 describe('ConsoleTokenStore', () => {
@@ -608,23 +615,10 @@ describe('ConsoleTokenStore', () => {
     // between generation and server verification.
     // ================================================================
     describe('validation window tolerance', () => {
-      /**
-       * Generate a TOTP code for a specific point in time, using the
-       * same parameters the store uses. Unlike `currentTotpCode`, this
-       * takes an explicit timestamp so tests can simulate codes
-       * generated in the past (or future).
-       */
-      function totpCodeAt(base32Secret: string, timestampMs: number): string {
-        const totp = new TOTP({
-          issuer: 'DollhouseMCP',
-          label: 'test',
-          algorithm: 'SHA1',
-          digits: 6,
-          period: 30,
-          secret: Secret.fromBase32(base32Secret),
-        });
-        return totp.generate({ timestamp: timestampMs });
-      }
+      // Uses the module-scope `totpCodeAt(secret, timestampMs)` helper so
+      // we can simulate codes generated in the past or future relative to
+      // the server's verification clock. Same helper `currentTotpCode`
+      // delegates to, kept at file scope per S7721.
 
       it('accepts a code generated 60 seconds in the past (slow bridge)', async () => {
         jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
