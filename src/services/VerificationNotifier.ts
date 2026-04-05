@@ -43,7 +43,7 @@ export class VerificationNotifier implements IVerificationNotifier {
       currentPlatform = platform();
       const title = 'DollhouseMCP Verification Required';
       // The message shown to the human in the dialog
-      const message = `${reason}\\n\\nVerification Code: ${code}\\n\\nType this code in your chat to proceed.`;
+      const message = `${reason}\n\nVerification Code: ${code}\n\nType this code in your chat to proceed.`;
 
       if (currentPlatform === 'darwin') {
         this.spawnMacOS(title, message);
@@ -94,12 +94,15 @@ export class VerificationNotifier implements IVerificationNotifier {
   // ---- Platform-specific spawners ----
 
   private spawnMacOS(title: string, message: string): void {
-    // Escape for AppleScript string: backslashes first, then double quotes,
-    // then strip actual newlines/CRs which would break the string syntax
-    const escapedMessage = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\n\r]/g, ' ');
+    // Escape for AppleScript: backslashes, then double quotes. Newlines are
+    // replaced with AppleScript `return` character concatenation so they render
+    // as real line breaks in the dialog instead of literal "\n" text.
     const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\n\r]/g, ' ');
+    const escapedMessage = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    // Split on newlines and join with AppleScript return concatenation
+    const messageParts = escapedMessage.split(/\r?\n/).map(part => `"${part}"`).join(' & return & ');
 
-    const script = `display dialog "${escapedMessage}" with title "${escapedTitle}" with icon caution buttons {"OK"} default button "OK"`;
+    const script = `display dialog (${messageParts}) with title "${escapedTitle}" with icon caution buttons {"OK"} default button "OK"`;
 
     // NOSONAR - Intentional: OS dialog via AppleScript, input escaped with escapeShellArg
     const child = spawn('osascript', ['-e', script], {
@@ -110,8 +113,7 @@ export class VerificationNotifier implements IVerificationNotifier {
   }
 
   private spawnLinux(title: string, message: string): void {
-    // Unescape the \\n sequences to real newlines for Linux tools
-    const realMessage = message.replace(/\\n/g, '\n');
+    const realMessage = message;
 
     try {
       execSync('which zenity', { stdio: 'pipe' }); // NOSONAR - Tool detection, no user input
@@ -164,8 +166,8 @@ export class VerificationNotifier implements IVerificationNotifier {
   }
 
   private spawnWindows(title: string, message: string): void {
-    // Unescape \\n to real newlines for PowerShell
-    const realMessage = message.replace(/\\n/g, '`n');
+    // Convert real newlines to PowerShell backtick-n for MessageBox rendering
+    const realMessage = message.replace(/\n/g, '`n');
     const escapedMessage = realMessage.replace(/'/g, "''");
     const escapedTitle = title.replace(/'/g, "''");
 
