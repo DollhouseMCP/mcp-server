@@ -1099,6 +1099,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/web/public/consoleAuth.js',
+    reason: 'Client-side browser JavaScript (#1780 console auth helper). UnicodeValidator is a Node.js module unavailable in browser context. Token is read from a server-injected meta tag, normalized via native String.prototype.normalize(\'NFC\'), and rejected unless it matches /^[0-9a-f]{64}$/ (strict hex format). The authoritative normalization + validation happens in the middleware sanitizePresentedToken() and consoleToken.verify() on the server side before any comparison runs.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/web/server.ts',
     reason: 'NFC normalization added to req.path in SPA fallback handler (line 180). File-level scanner flags despite per-input fix.'
   },
