@@ -1,8 +1,8 @@
 # Console Authentication
 
-> **Status:** Phase 2 infrastructure — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default**.
-> Phase 2 adds TOTP enrollment, structured error codes, and the migration to port 5907.
-> Phase 3 will add token rotation, flip the auth default to **on**, and retire the legacy no-auth port.
+> **Status:** Authenticated console — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default** during rollout.
+> **Current capabilities:** TOTP enrollment with structured error codes, isolated port (5907) and state files, legacy console detection.
+> **Roadmap:** token rotation endpoint, then flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed.
 
 DollhouseMCP's web management console on port `5907` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
 

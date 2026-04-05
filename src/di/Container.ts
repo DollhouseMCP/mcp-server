@@ -425,7 +425,9 @@ export class DollhouseContainer {
           version: VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
-          console: env.DOLLHOUSE_WEB_CONSOLE ? 'http://dollhouse.localhost:3939' : 'disabled',
+          console: env.DOLLHOUSE_WEB_CONSOLE
+            ? `http://dollhouse.localhost:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`
+            : 'disabled',
         },
       });
 

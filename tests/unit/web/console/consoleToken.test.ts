@@ -46,7 +46,7 @@ describe('ConsoleTokenStore', () => {
 
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'dollhouse-console-token-test-'));
-    tokenFilePath = join(testDir, 'console-token.json');
+    tokenFilePath = join(testDir, 'console-token.auth.json');
   });
 
   afterEach(async () => {
@@ -844,7 +844,7 @@ describe('readTokenFileRaw / getPrimaryTokenFromFile (follower helpers)', () => 
 
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'dollhouse-console-token-test-'));
-    tokenFilePath = join(testDir, 'console-token.json');
+    tokenFilePath = join(testDir, 'console-token.auth.json');
   });
 
   afterEach(async () => {
