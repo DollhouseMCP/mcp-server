@@ -76,6 +76,55 @@ export interface UnifiedConsoleResult {
 }
 
 /**
+ * Check for a running legacy (pre-authentication) DollhouseMCP console and
+ * log a WARN-level message if one is found (#1794).
+ *
+ * Extracted from `startUnifiedConsole` so the wiring can be integration-
+ * tested in isolation without spinning up a full web server and leader
+ * election. The implementation is fire-and-forget: detection failures
+ * are logged at DEBUG and never propagate, because a failure here must
+ * not block leader election of the authenticated console.
+ *
+ * @param currentPort - The port the authenticated console intends to
+ *                      bind to. Used in the warning message to help the
+ *                      user tell the two consoles apart.
+ * @param detect      - Optional injection point for the detection
+ *                      function. Defaults to `detectLegacyLeader`. Tests
+ *                      pass a stub.
+ * @param log         - Optional injection point for the logger. Defaults
+ *                      to the module logger. Tests pass a spy.
+ * @returns The legacy leader info from `detect()`, or null if detection
+ *          threw. Exposed so tests can assert the full result shape.
+ */
+export async function warnIfLegacyConsolePresent(
+  currentPort: number,
+  detect: typeof detectLegacyLeader = detectLegacyLeader,
+  log: typeof logger = logger,
+): Promise<Awaited<ReturnType<typeof detectLegacyLeader>> | null> {
+  try {
+    const legacy = await detect();
+    if (legacy.legacyRunning) {
+      log.warn(
+        `[UnifiedConsole] Legacy (pre-authentication) DollhouseMCP console detected ` +
+        `(pid=${legacy.pid}, port=${legacy.port}). Both consoles will run ` +
+        `independently on different ports with different security posture. ` +
+        `The authenticated console (this process) uses port ${currentPort}; ` +
+        `the legacy console uses port ${legacy.port ?? 3939}. ` +
+        `For consistent security, update the legacy installation to a ` +
+        `version with the authenticated console.`,
+      );
+    }
+    return legacy;
+  } catch (err) {
+    // Best-effort — never block election on a detection failure
+    log.debug('[UnifiedConsole] Legacy leader detection failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  }
+}
+
+/**
  * Start the unified web console.
  *
  * Runs leader election, then either starts the full console (leader)
@@ -86,27 +135,8 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
   // DollhouseMCP console is running alongside this authenticated one.
   // They will coexist fine because of port + lock + token file isolation,
   // but the user should know both exist so the differing security posture
-  // between them doesn't look like a bug. Detection is fire-and-forget;
-  // failures must not block election.
-  try {
-    const legacy = await detectLegacyLeader();
-    if (legacy.legacyRunning) {
-      logger.warn(
-        `[UnifiedConsole] Legacy (pre-authentication) DollhouseMCP console detected ` +
-        `(pid=${legacy.pid}, port=${legacy.port}). Both consoles will run ` +
-        `independently on different ports with different security posture. ` +
-        `The authenticated console (this process) uses port ${CONSOLE_PORT}; ` +
-        `the legacy console uses port ${legacy.port ?? 3939}. ` +
-        `For consistent security, update the legacy installation to a ` +
-        `version with the authenticated console.`,
-      );
-    }
-  } catch (err) {
-    // Best-effort — never block election on a detection failure
-    logger.debug('[UnifiedConsole] Legacy leader detection failed', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  // between them doesn't look like a bug.
+  await warnIfLegacyConsolePresent(CONSOLE_PORT);
 
   let election = await electLeader(options.sessionId, CONSOLE_PORT);
 
