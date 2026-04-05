@@ -95,8 +95,27 @@
     /** Current console token value (empty string if auth is off). */
     get token() { return consoleToken; },
 
-    /** Refresh the cached token from the meta tag — call after a rotation. */
-    refresh: function () { consoleToken = readTokenFromMeta(); return consoleToken; },
+    /**
+     * Update the cached token. If an explicit token string is provided and
+     * passes the strict hex format check, the in-memory cache is updated
+     * directly — this is the path used after a rotation response so the
+     * active tab picks up the new token without a page reload. Without an
+     * argument, falls back to re-reading the meta tag (legacy behavior).
+     *
+     * @param {string} [explicitToken] - New token value from a rotation response.
+     * @returns {string} The token now in use (may be empty if auth is off).
+     */
+    refresh: function (explicitToken) {
+      if (typeof explicitToken === 'string') {
+        var normalized = explicitToken.normalize('NFC');
+        if (TOKEN_FORMAT.test(normalized)) {
+          consoleToken = normalized;
+          return consoleToken;
+        }
+      }
+      consoleToken = readTokenFromMeta();
+      return consoleToken;
+    },
 
     apiFetch: apiFetch,
     apiEventSource: apiEventSource,

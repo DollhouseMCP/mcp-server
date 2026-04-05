@@ -73,6 +73,8 @@ function httpStatusForTotpError(code: TotpErrorCode): number {
       return 400;
     case 'TOO_MANY_PENDING':
       return 429;
+    case 'TOTP_REQUIRED':
+      return 403;
     case 'STORE_NOT_INITIALIZED':
       return 503;
     default: {

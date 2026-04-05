@@ -836,6 +836,175 @@ describe('ConsoleTokenStore', () => {
       });
     });
   });
+
+  describe('rotatePrimary (#1795)', () => {
+    /** Helper: enroll TOTP on a store and return the secret for code generation. */
+    async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
+      const begin = store.beginTotpEnrollment();
+      await store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret));
+      return begin.secret;
+    }
+
+    it('rotates the primary token and returns the new value', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const originalToken = entry.token;
+      const secret = await enrollTotp(store);
+
+      const result = await store.rotatePrimary(currentTotpCode(secret));
+      expect(result.token).toMatch(/^[0-9a-f]{64}$/);
+      expect(result.token).not.toBe(originalToken);
+      expect(result.rotatedAt).toBeTruthy();
+      expect(result.graceUntil).toBeGreaterThan(Date.now());
+    });
+
+    it('persists the new token to disk', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+
+      const result = await store.rotatePrimary(currentTotpCode(secret));
+      const raw = await readTokenFileRaw(tokenFilePath);
+      expect(raw!.tokens[0].token).toBe(result.token);
+      expect(raw!.tokens[0].createdVia).toBe('rotation');
+    });
+
+    it('new token verifies immediately after rotation', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+
+      const result = await store.rotatePrimary(currentTotpCode(secret));
+      expect(store.verify(result.token)).not.toBeNull();
+    });
+
+    it('old token verifies during grace window', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const originalToken = entry.token;
+      const secret = await enrollTotp(store);
+
+      await store.rotatePrimary(currentTotpCode(secret));
+      // Old token should still verify during the grace window
+      expect(store.verify(originalToken)).not.toBeNull();
+    });
+
+    it('old token rejected after grace window expires', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const originalToken = entry.token;
+      const secret = await enrollTotp(store);
+
+      jest.useFakeTimers();
+      try {
+        await store.rotatePrimary(currentTotpCode(secret));
+        // Advance past the 15-second grace window
+        jest.advanceTimersByTime(16_000);
+        expect(store.verify(originalToken)).toBeNull();
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('rejects rotation when TOTP is not enrolled', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+
+      await expect(store.rotatePrimary('123456')).rejects.toThrow(TotpError);
+      await expect(store.rotatePrimary('123456')).rejects.toThrow(/TOTP enrollment/);
+    });
+
+    it('rejects rotation with an incorrect confirmation code', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      await enrollTotp(store);
+
+      await expect(store.rotatePrimary('000000')).rejects.toThrow(TotpError);
+    });
+
+    it('rebuilds the buffer cache so getPrimaryTokenValue returns the new value', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+
+      const result = await store.rotatePrimary(currentTotpCode(secret));
+      expect(store.getPrimaryTokenValue()).toBe(result.token);
+    });
+
+    it('fires CONSOLE_TOKEN_ROTATED SecurityMonitor event without leaking secrets', async () => {
+      // Mock to bypass SecurityMonitor's 60s dedup window — same pattern as
+      // the TOTP audit event tests above.
+      const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+      try {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        const entry = await store.ensureInitialized('Kermit');
+        const secret = await enrollTotp(store);
+        logSpy.mockClear(); // drop TOTP_ENROLLED call
+
+        const result = await store.rotatePrimary(currentTotpCode(secret));
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: 'CONSOLE_TOKEN_ROTATED',
+            severity: 'HIGH',
+            source: 'ConsoleTokenStore.rotatePrimary',
+            additionalData: expect.objectContaining({
+              tokenId: entry.id,
+              rotatedAt: result.rotatedAt,
+            }),
+          }),
+        );
+        // Verify no secret material leaked into the event
+        for (const call of logSpy.mock.calls) {
+          const serialized = JSON.stringify(call[0]);
+          expect(serialized).not.toContain(result.token);
+          expect(serialized).not.toContain(secret);
+        }
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('updates createdAt on the rotated entry', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const originalCreatedAt = entry.createdAt;
+      const secret = await enrollTotp(store);
+
+      const result = await store.rotatePrimary(currentTotpCode(secret));
+      const raw = await readTokenFileRaw(tokenFilePath);
+      expect(raw!.tokens[0].createdAt).toBe(result.rotatedAt);
+      expect(raw!.tokens[0].createdAt).not.toBe(originalCreatedAt);
+    });
+
+    it('preserves the entry id across rotations', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const secret = await enrollTotp(store);
+
+      await store.rotatePrimary(currentTotpCode(secret));
+      const raw = await readTokenFileRaw(tokenFilePath);
+      expect(raw!.tokens[0].id).toBe(entry.id);
+    });
+
+    it('concurrent rotations each get their own grace entry', async () => {
+      const store = new ConsoleTokenStore(tokenFilePath);
+      const entry = await store.ensureInitialized('Kermit');
+      const token1 = entry.token;
+      const secret = await enrollTotp(store);
+
+      const result1 = await store.rotatePrimary(currentTotpCode(secret));
+      const token2 = result1.token;
+
+      const result2 = await store.rotatePrimary(currentTotpCode(secret));
+      const token3 = result2.token;
+
+      // Both old tokens should still verify during the grace window
+      expect(store.verify(token1)).not.toBeNull();
+      expect(store.verify(token2)).not.toBeNull();
+      // Current token also verifies
+      expect(store.verify(token3)).not.toBeNull();
+    });
+  });
 });
 
 describe('readTokenFileRaw / getPrimaryTokenFromFile (follower helpers)', () => {

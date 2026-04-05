@@ -143,6 +143,21 @@ const TOTP_PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
  */
 const MAX_PENDING_ENROLLMENTS = 10;
 
+/**
+ * Grace window for old tokens after rotation — 15 seconds.
+ *
+ * After a rotation, the previous token value stays valid for this period to
+ * cover in-flight requests from the rotating tab and any other local processes
+ * that read the token file but haven't picked up the new value yet. All
+ * consumers are loopback-only (127.0.0.1), so network latency is negligible
+ * and 15s is generous.
+ *
+ * Grace entries are per-rotation and in-memory only — they are never persisted
+ * to disk. A leader crash kills all grace entries, which is the safe failure
+ * mode (callers re-auth with the new token from the file).
+ */
+const ROTATION_GRACE_MS = 15_000;
+
 /** Number of backup codes generated on enrollment. */
 const BACKUP_CODE_COUNT = 10;
 /** Characters per backup code — Crockford base32-ish, no ambiguous chars. */
@@ -269,6 +284,25 @@ export interface TotpEnrollmentConfirm {
   enrolledAt: string;
 }
 
+/**
+ * Result of `rotatePrimary` — returned to the caller so they can update
+ * the browser token in-place and display the grace-window deadline.
+ */
+export interface RotationResult {
+  /** The new 64-hex token value. The caller must treat this as a secret. */
+  token: string;
+  /** ISO timestamp of the rotation. */
+  rotatedAt: string;
+  /** ms-since-epoch deadline after which the old token stops verifying. */
+  graceUntil: number;
+}
+
+/** In-memory grace entry for a recently-rotated token. */
+interface GraceEntry {
+  buf: Buffer;
+  expiresAt: number;
+}
+
 /** Internal pending-enrollment state — secret held in memory only. */
 interface PendingEnrollment {
   secret: string;
@@ -296,7 +330,8 @@ export type TotpErrorCode =
   | 'PENDING_NOT_FOUND'
   | 'INVALID_TOTP_CODE'
   | 'STORE_NOT_INITIALIZED'
-  | 'TOO_MANY_PENDING';
+  | 'TOO_MANY_PENDING'
+  | 'TOTP_REQUIRED';
 
 /**
  * The full on-disk token file structure.
@@ -459,6 +494,14 @@ export class ConsoleTokenStore {
    * Entries expire after TOTP_PENDING_TTL_MS (#1794).
    */
   private readonly pendingEnrollments = new Map<string, PendingEnrollment>();
+  /**
+   * In-memory grace buffer for recently-rotated tokens (#1795). After a
+   * rotation, the old token value is stashed here with a per-rotation expiry
+   * so in-flight requests that were sent before the rotation response arrived
+   * still authenticate. Entries are per-rotation (concurrent rotations each
+   * get their own grace slot) and never persisted to disk.
+   */
+  private readonly graceEntries: GraceEntry[] = [];
 
   constructor(filePath: string = DEFAULT_TOKEN_FILE) {
     this.filePath = filePath;
@@ -568,6 +611,20 @@ export class ConsoleTokenStore {
       if (timingSafeEqual(presentedBuf, storedBuf)) {
         entry.lastUsedAt = new Date().toISOString();
         return entry;
+      }
+    }
+
+    // Check grace buffer — recently-rotated tokens that haven't expired yet.
+    // Returns the primary entry on match so the caller gets the same admin
+    // shape; the grace window just extends the authentication period.
+    this.sweepExpiredGraceEntries();
+    for (const grace of this.graceEntries) {
+      if (grace.buf.length === presentedBuf.length && timingSafeEqual(presentedBuf, grace.buf)) {
+        // Touch the primary entry — the request is still "using" this token slot.
+        if (this.data.tokens.length > 0) {
+          this.data.tokens[0].lastUsedAt = new Date().toISOString();
+        }
+        return this.data.tokens[0] ?? null;
       }
     }
 
@@ -877,6 +934,109 @@ export class ConsoleTokenStore {
 
   // --------------------------------------------------------------------
   // end TOTP
+  // --------------------------------------------------------------------
+
+  // --------------------------------------------------------------------
+  // Token rotation — #1795
+  // --------------------------------------------------------------------
+
+  /**
+   * Rotate the primary console token. Requires TOTP confirmation (Pattern B).
+   *
+   * Flow:
+   * 1. Verify the confirmation code via `verifyTotp()` (live TOTP or backup code).
+   * 2. Stash the old token value in the in-memory grace buffer so in-flight
+   *    requests from the rotating tab (and any other local process that read
+   *    the file before the rotation) still authenticate for ROTATION_GRACE_MS.
+   * 3. Generate a new 32-byte token, mutate the primary entry in place, write
+   *    the file atomically, and rebuild the buffer cache.
+   * 4. Return the new token inline so the caller can update `DollhouseAuth.token`
+   *    without a page reload.
+   *
+   * Pattern A (OS dialog fallback for users without TOTP) is deferred — the
+   * caller should gate the UI so the rotate action is only available when
+   * TOTP is enrolled.
+   *
+   * @throws TotpError STORE_NOT_INITIALIZED — store never loaded
+   * @throws TotpError TOTP_REQUIRED — TOTP not enrolled, rotation requires second-factor confirmation
+   * @throws TotpError INVALID_TOTP_CODE — wrong code
+   */
+  async rotatePrimary(confirmationCode: string): Promise<RotationResult> {
+    if (!this.data) {
+      throw new TotpError('Token store not initialized', 'STORE_NOT_INITIALIZED');
+    }
+    if (!this.isTotpEnrolled()) {
+      throw new TotpError(
+        'Token rotation requires TOTP enrollment — enroll a second factor before rotating',
+        'TOTP_REQUIRED',
+      );
+    }
+
+    // Step 1: verify the confirmation code.
+    const verification = await this.verifyTotp(confirmationCode);
+    if (!verification.ok) {
+      throw new TotpError(INVALID_TOTP_MESSAGE, 'INVALID_TOTP_CODE');
+    }
+
+    // Step 2: stash the old token in the grace buffer.
+    const primary = this.data.tokens[0];
+    const graceDeadline = Date.now() + ROTATION_GRACE_MS;
+    this.sweepExpiredGraceEntries();
+    this.graceEntries.push({
+      buf: Buffer.from(primary.token, 'utf8'),
+      expiresAt: graceDeadline,
+    });
+
+    // Step 3: generate a new token, mutate the primary entry, persist.
+    const rotatedAt = new Date().toISOString();
+    primary.token = generateTokenValue();
+    primary.createdAt = rotatedAt;
+    primary.lastUsedAt = null;
+    primary.createdVia = 'rotation';
+
+    await this.write(this.data);
+    this.rebuildTokenBuffers();
+
+    logger.info('[ConsoleToken] Primary token rotated', {
+      id: primary.id,
+      rotatedAt,
+      graceMs: ROTATION_GRACE_MS,
+    });
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONSOLE_TOKEN_ROTATED',
+      severity: 'HIGH',
+      source: 'ConsoleTokenStore.rotatePrimary',
+      details: 'Console primary token rotated via TOTP confirmation',
+      additionalData: {
+        tokenId: primary.id,
+        rotatedAt,
+        graceMs: ROTATION_GRACE_MS,
+        confirmationMethod: verification.method,
+      },
+    });
+
+    return {
+      token: primary.token,
+      rotatedAt,
+      graceUntil: graceDeadline,
+    };
+  }
+
+  /** Remove expired grace entries so they stop matching in verify(). */
+  private sweepExpiredGraceEntries(): void {
+    const now = Date.now();
+    let i = 0;
+    while (i < this.graceEntries.length) {
+      if (this.graceEntries[i].expiresAt <= now) {
+        this.graceEntries.splice(i, 1);
+      } else {
+        i++;
+      }
+    }
+  }
+
+  // --------------------------------------------------------------------
+  // end rotation
   // --------------------------------------------------------------------
 
   /**
