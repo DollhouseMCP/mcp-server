@@ -22,6 +22,7 @@ import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes } from './routes/setupRoutes.js';
+import { createTotpRoutes } from './routes/totpRoutes.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
@@ -218,6 +219,15 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.info(
       `[WebUI] Console auth middleware mounted ${env.DOLLHOUSE_WEB_AUTH_ENABLED ? 'ENFORCING' : 'pass-through (flag off)'}`,
     );
+
+    // TOTP enrollment routes (#1794). Mounted AFTER the /api auth middleware
+    // because the router adds its own always-on auth guard — the global auth
+    // middleware at /api is a pass-through during Phase 1 rollout, but the
+    // TOTP router enforces regardless of DOLLHOUSE_WEB_AUTH_ENABLED so an
+    // attacker with local port access cannot pre-enroll a second factor and
+    // lock the legitimate user out.
+    app.use('/api/console/totp', createTotpRoutes({ store: options.tokenStore }));
+    logger.info('[WebUI] TOTP routes mounted at /api/console/totp (always-on auth)');
   }
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)

@@ -72,7 +72,8 @@ Port 3939 binds to `127.0.0.1` only, so it is not reachable from the network. Bi
   "totp": {
     "enrolled": false,
     "secret": null,
-    "backupCodes": []
+    "backupCodes": [],
+    "enrolledAt": null
   }
 }
 ```
@@ -227,6 +228,65 @@ rm ~/.dollhouse/run/console-token.json
 ```
 
 Phase 2 will add a "rotate" button in the web UI and a `dollhouse console token rotate` CLI command with authenticator-based confirmation.
+
+---
+
+## TOTP (authenticator) enrollment — Phase 2
+
+Phase 2 adds a second factor: a time-based one-time password (TOTP) that pairs with any standard authenticator app (Google Authenticator, 1Password, Authy, Bitwarden, etc.). Enrollment is optional in Phase 2 and becomes required for privileged operations like token rotation once the rotation endpoint lands.
+
+**What enrollment gives you:**
+
+- **Second-factor confirmation** for token rotation and other sensitive operations — merely holding the token is not enough; you also need the live 6-digit code from your authenticator.
+- **10 one-shot backup codes** generated at enrollment time, shown exactly once, for recovery if you lose your authenticator.
+
+**Endpoints (under `/api/console/totp`, always require auth regardless of `DOLLHOUSE_WEB_AUTH_ENABLED`):**
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /status` | Returns `{enrolled, enrolledAt, backupCodesRemaining}` |
+| `POST /enroll/begin` | Generates a pending secret, returns `{pendingId, secret, otpauthUri, qrSvgDataUrl, expiresAt}` |
+| `POST /enroll/confirm` | Verifies `{pendingId, code}`, persists enrollment, returns `{enrolled, enrolledAt, backupCodes}` (plaintext, **shown once**) |
+| `POST /disable` | Verifies `{code}` (TOTP or backup code), clears enrollment |
+
+**CLI walkthrough (until the Security tab UI lands):**
+
+```bash
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.json)
+H="Authorization: Bearer $TOKEN"
+
+# 1. Start enrollment — shows a QR-code-rendered otpauth URI you can scan
+curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/enroll/begin \
+  -H 'Content-Type: application/json' -d '{"label":"My laptop"}' | jq .
+
+# 2. Scan the QR (or paste the secret into your authenticator manually)
+# 3. Confirm with the live 6-digit code
+curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/enroll/confirm \
+  -H 'Content-Type: application/json' \
+  -d '{"pendingId":"...","code":"123456"}' | jq .
+
+# Write down the 10 backup codes it returns — you will never see them again.
+
+# Check enrollment state
+curl -s -H "$H" http://localhost:3939/api/console/totp/status | jq .
+
+# Disable later (needs a valid TOTP or backup code)
+curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/disable \
+  -H 'Content-Type: application/json' -d '{"code":"123456"}'
+```
+
+**How backup codes work:**
+
+- 10 codes × 8 characters each, drawn from an unambiguous Crockford base32 alphabet (no `I`, `L`, `O`, or `U`).
+- Each code is single-use — consuming one removes it from the store permanently.
+- Stored as `sha256` hex hashes, never plaintext. If the token file leaks, your backup codes don't.
+- Backup codes can be typed with optional dashes or spaces (`ABCD-EFGH` and `ABCDEFGH` are both accepted).
+
+**Security notes specific to TOTP:**
+
+- The TOTP secret is stored in plaintext alongside the token inside `console-token.json`, which is `0600`. This matches standard file-based TOTP storage (SSH keys, age identity files, 1Password vault backups). Encrypting the secret with an OS keychain is a future enhancement.
+- Enrollment endpoints rate-limit code attempts to 10 per minute to cap brute-force exposure of the 6-digit code space.
+- Enrolling a second factor does **not** replace the console token — both still work. The token is "something you have (on disk)", TOTP is "something you have (on your phone)". Rotation will require **both** in Phase 2.
 
 ---
 
