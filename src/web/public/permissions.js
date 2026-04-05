@@ -70,7 +70,7 @@
 
   async function poll() {
     try {
-      const res = await fetch('/api/permissions/status');
+      const res = await DollhouseAuth.apiFetch('/api/permissions/status');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       render(data);

@@ -240,7 +240,7 @@
         killBtn.addEventListener('click', function(e) {
           e.stopPropagation();
           if (!confirm('Stop session ' + displayName(s) + '?')) return;
-          fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
+          DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
             .then(function() { fetchSessions(); })
             .catch(function() {});
         });
@@ -328,7 +328,7 @@
 
   // Fetch sessions from the API
   function fetchSessions() {
-    fetch('/api/sessions').then(function(res) {
+    DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
       if (!res.ok) return;
       return res.json();
     }).then(function(data) {

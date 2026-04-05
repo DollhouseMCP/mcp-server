@@ -133,6 +133,33 @@ const envSchema = z.object({
   /** Enable the unified web console (logs + metrics tabs on port 3939) */
   DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
 
+  /**
+   * Issue #1780: Enforce Bearer token authentication on the web console API.
+   * When true, all protected endpoints on port 3939 require a valid token
+   * from ~/.dollhouse/run/console-token.json. When false (default in Phase 1),
+   * the token file is still generated but the middleware does not enforce —
+   * this lets the infrastructure land without breaking existing consumers.
+   * Will flip to default `true` in a follow-up PR once all consumers (browser,
+   * followers, bridge) have been updated to attach tokens.
+   */
+  DOLLHOUSE_WEB_AUTH_ENABLED: z.coerce.boolean().default(false),
+
+  /**
+   * Issue #1780: Optional override for the console token file location.
+   * Defaults to ~/.dollhouse/run/console-token.json. Mainly useful for tests
+   * and for enterprise deployments that mount a shared token file from a
+   * secrets volume.
+   */
+  DOLLHOUSE_CONSOLE_TOKEN_FILE: z.string().optional(),
+
+  /**
+   * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)
+   * for privileged actions like token rotation. Default is true for safety;
+   * set to false for headless CI and scripted deployments that need to rotate
+   * without human interaction.
+   */
+  DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION: z.coerce.boolean().default(true),
+
   // ============================================================================
   // Security Configuration
   // ============================================================================

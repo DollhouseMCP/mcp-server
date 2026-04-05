@@ -305,7 +305,7 @@
     if (filterCategory) params.set('category', filterCategory);
     if (filterLevel) params.set('level', filterLevel);
     const qs = params.toString();
-    eventSource = new EventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
+    eventSource = DollhouseAuth.apiEventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
 
     eventSource.onopen = () => setStatus('connected');
 

@@ -117,6 +117,16 @@ function shuffleArray<T>(arr: T[]): T[] {
 const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
 
 /**
+ * Pick a random puppet name from the pool, independent of the session
+ * name assignment. Used by the console token module (#1780) to generate
+ * a friendly default name for newly created tokens. Does not reserve the
+ * name — multiple callers can receive the same value.
+ */
+export function pickRandomPuppetName(): string {
+  return ALL_PUPPET_NAMES[randomInt(ALL_PUPPET_NAMES.length)];
+}
+
+/**
  * Canonical colors for each puppet character.
  * Adjusted from true canonical colors for UI readability in both light/dark themes.
  */

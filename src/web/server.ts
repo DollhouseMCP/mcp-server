@@ -16,16 +16,35 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
-import { mkdir, readdir } from 'node:fs/promises';
+import { mkdir, readdir, readFile as readFileFs } from 'node:fs/promises';
 import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes } from './routes/setupRoutes.js';
 import { logger } from '../utils/logger.js';
+import { env } from '../config/env.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
+import type { ConsoleTokenStore } from './console/consoleToken.js';
+import { createAuthMiddleware } from './middleware/authMiddleware.js';
+
+/**
+ * Public path prefixes that never require authentication (#1780).
+ * These endpoints return safe metadata or act as health probes — requiring
+ * tokens on them would break monitoring and client detection without adding
+ * real security value.
+ */
+const PUBLIC_PATH_PREFIXES = [
+  '/api/health',
+  '/api/setup/version',
+  '/api/setup/mcpb',
+  '/api/setup/detect',
+];
+
+/** Placeholder in index.html that is replaced with the current console token. */
+const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_PORT = 3939;
@@ -66,6 +85,16 @@ export interface WebServerOptions {
   metricsSink?: MemoryMetricsSink;
   /** Additional routers to mount before the SPA fallback (e.g., ingest routes) */
   additionalRouters?: import('express').Router[];
+  /**
+   * Console token store (#1780). When provided, the server will:
+   *   1. Mount Bearer token auth middleware before protected routers.
+   *   2. Inject the primary token into index.html so the browser client
+   *      can attach it to fetch calls and EventSource URLs.
+   *   3. Append the token file location to the startup banner.
+   * Auth enforcement is still gated on DOLLHOUSE_WEB_AUTH_ENABLED — the
+   * middleware is a pass-through when the flag is false (the Phase 1 default).
+   */
+  tokenStore?: ConsoleTokenStore;
 }
 
 /**
@@ -174,6 +203,23 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     next();
   });
 
+  // Console token authentication middleware (#1780). Mounted before any /api
+  // routes so every protected endpoint goes through it. When the feature flag
+  // DOLLHOUSE_WEB_AUTH_ENABLED is false (Phase 1 default) this is a pass-through.
+  // Public endpoints in PUBLIC_PATH_PREFIXES always bypass auth regardless of flag.
+  if (options.tokenStore) {
+    const authMiddleware = createAuthMiddleware({
+      store: options.tokenStore,
+      enabled: env.DOLLHOUSE_WEB_AUTH_ENABLED,
+      publicPathPrefixes: PUBLIC_PATH_PREFIXES,
+      label: 'api',
+    });
+    app.use('/api', authMiddleware);
+    logger.info(
+      `[WebUI] Console auth middleware mounted ${env.DOLLHOUSE_WEB_AUTH_ENABLED ? 'ENFORCING' : 'pass-through (flag off)'}`,
+    );
+  }
+
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
   // Body limit scoped to setup routes only — ingest routes need 1mb for follower log forwarding
   const setupJsonParser = express.json({ limit: SETUP_BODY_LIMIT, type: 'application/json' });
@@ -201,33 +247,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.warn('[WebUI] API routes using direct filesystem access (no MCP-AQL handler available)');
   }
 
-  // Console routes: logs, metrics, health
-  let logRoutes: LogRoutesResult | undefined;
-  let metricsRoutes: MetricsRoutesResult | undefined;
-
-  if (options.memorySink) {
-    logRoutes = createLogRoutes(options.memorySink);
-    app.use('/api', logRoutes.router);
-    result.logBroadcast = logRoutes.broadcast;
-    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
-  }
-
-  if (options.metricsSink) {
-    metricsRoutes = createMetricsRoutes(options.metricsSink);
-    app.use('/api', metricsRoutes.router);
-    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
-    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
-  }
-
-  if (options.memorySink) {
-    const healthRouter = createHealthRoutes({
-      memorySink: options.memorySink,
-      metricsSink: options.metricsSink,
-      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
-      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
-    });
-    app.use('/api', healthRouter);
-  }
+  // Console routes: logs, metrics, health — extracted to keep cognitive
+  // complexity of startWebServer manageable.
+  mountConsoleRoutes(app, options, result);
 
   // Serve ~/.dollhouse/pages/ at /pages/ — dashboards, generated content, stack views
   const pagesDir = join(dirname(options.portfolioDir), 'pages');
@@ -260,8 +282,32 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   const publicDir = join(__dirname, 'public');
   app.use(express.static(publicDir));
 
-  // SPA fallback
-  app.get('/{*path}', (req, res) => {
+  // SPA fallback with console token injection (#1780).
+  // Reads index.html on first request, substitutes the {{CONSOLE_TOKEN}} placeholder
+  // with the current token value, and caches the rendered string. Phase 2 will
+  // invalidate this cache on token rotation; Phase 1 tokens are stable so the
+  // cache lives for the life of the process.
+  let cachedIndexHtml: string | null = null;
+  const indexHtmlPath = join(publicDir, 'index.html');
+
+  const renderIndexHtml = async (): Promise<string> => {
+    if (cachedIndexHtml !== null) return cachedIndexHtml;
+    const template = await readFileFs(indexHtmlPath, 'utf8');
+    const tokenValue = options.tokenStore?.getPrimaryTokenValue() ?? '';
+    // Defensive HTML attribute escape. Tokens are strict 64-char lowercase hex
+    // today so no escaping is actually needed, but if the token format ever
+    // changes this prevents an HTML-injection regression from landing silently.
+    const escapedToken = tokenValue
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escapedToken);
+    return cachedIndexHtml;
+  };
+
+  app.get('/{*path}', async (req, res) => {
     const normalizedPath = req.path.normalize('NFC');
     if (normalizedPath.startsWith('/api/')) {
       res.status(404).json({ error: `API route not found: ${normalizedPath}` });
@@ -271,7 +317,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.status(404).json({ error: `Page not found: ${normalizedPath}` });
       return;
     }
-    res.sendFile(join(publicDir, 'index.html'));
+    try {
+      const html = await renderIndexHtml();
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.send(html);
+    } catch (err) {
+      logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);
+      res.status(500).send('Failed to load console');
+    }
   });
 
   // Global error handler — catch Express errors and route to logger instead of terminal.
@@ -286,41 +339,117 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   });
 
-  // Bind to localhost only — handle port conflicts gracefully
-  // NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
-  // is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
-  // stderr is safe for human-readable messages in both MCP and standalone modes.
+  // Bind to localhost only — handle port conflicts gracefully.
+  // Extracted to a helper to keep startWebServer's cognitive complexity manageable.
+  await bindAndListen(app, port, options);
+
+  return result;
+}
+
+/**
+ * Mount the logs, metrics, and health routes. These are only mounted when the
+ * corresponding sinks are provided (memory log sink for logs+health, metrics
+ * sink for the metrics tab). Extracted from startWebServer to cap the main
+ * function's cognitive complexity.
+ */
+function mountConsoleRoutes(
+  app: import('express').Express,
+  options: WebServerOptions,
+  result: WebServerResult,
+): void {
+  let logRoutes: LogRoutesResult | undefined;
+  let metricsRoutes: MetricsRoutesResult | undefined;
+
+  if (options.memorySink) {
+    logRoutes = createLogRoutes(options.memorySink);
+    app.use('/api', logRoutes.router);
+    result.logBroadcast = logRoutes.broadcast;
+    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
+  }
+
+  if (options.metricsSink) {
+    metricsRoutes = createMetricsRoutes(options.metricsSink);
+    app.use('/api', metricsRoutes.router);
+    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
+    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
+  }
+
+  if (options.memorySink) {
+    const healthRouter = createHealthRoutes({
+      memorySink: options.memorySink,
+      metricsSink: options.metricsSink,
+      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
+      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
+    });
+    app.use('/api', healthRouter);
+  }
+}
+
+/**
+ * Print the startup banner to stderr.
+ *
+ * NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
+ * is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
+ * stderr is safe for human-readable messages in both MCP and standalone modes.
+ */
+function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefined): void {
+  const url = `http://${CONSOLE_HOST}:${port}`;
+  const fallbackUrl = `http://127.0.0.1:${port}`;
+  logger.info(`[WebUI] Management console running at ${url}`);
+  console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+  if (tokenStore) {
+    console.error(`  Session token: ${tokenStore.getFilePath()}\n`);
+  }
+  console.error(`  Type "q" or "quit" to exit.\n`);
+}
+
+/**
+ * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
+ * Resolves on either success or EADDRINUSE — the web console is optional
+ * and never blocks server startup on a port conflict.
+ */
+async function bindAndListen(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<void> {
   await new Promise<void>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
-      const url = `http://${CONSOLE_HOST}:${port}`;
-      const fallbackUrl = `http://127.0.0.1:${port}`;
-      logger.info(`[WebUI] Management console running at ${url}`);
-      console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
-      console.error(`  Type "q" or "quit" to exit.\n`);
-
+      printStartupBanner(port, options.tokenStore);
       if (options.openBrowser) {
-        openInBrowser(url);
+        openInBrowser(`http://${CONSOLE_HOST}:${port}`);
       }
       resolve();
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      if (err.code === 'EADDRINUSE') {
-        const url = `http://${CONSOLE_HOST}:${port}`;
-        logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
-        console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
-        if (options.openBrowser) {
-          openInBrowser(url);
-        }
-      } else {
-        logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
-      }
-      resolve(); // Web console is optional — don't block startup
+      handleListenError(err, port, options.openBrowser);
+      resolve();
     });
   });
+}
 
-  return result;
+/**
+ * Handle errors from app.listen(). EADDRINUSE is treated as "another leader
+ * is already running" — we log and optionally open the existing console.
+ * Any other error is logged but does not throw.
+ */
+function handleListenError(
+  err: NodeJS.ErrnoException,
+  port: number,
+  openBrowser: boolean | undefined,
+): void {
+  if (err.code === 'EADDRINUSE') {
+    const url = `http://${CONSOLE_HOST}:${port}`;
+    logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
+    console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
+    if (openBrowser) {
+      openInBrowser(url);
+    }
+  } else {
+    logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+  }
 }
 
 /**

@@ -42,6 +42,20 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 const REQUEST_TIMEOUT_MS = 5_000;
 
 /**
+ * Build the HTTP headers for ingest POSTs, including the console auth token
+ * if one was provided (#1780). Followers read the token from the shared token
+ * file on startup and pass it to each sink; when the leader has auth disabled
+ * or the token file is missing, this is a no-op that sends only Content-Type.
+ */
+function buildIngestHeaders(token: string | null): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+/**
  * ILogSink that batch-POSTs entries to the leader's /api/ingest/logs.
  */
 export class LeaderForwardingLogSink implements ILogSink {
@@ -55,6 +69,8 @@ export class LeaderForwardingLogSink implements ILogSink {
   constructor(
     private readonly leaderUrl: string,
     private readonly sessionId: string,
+    /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
+    private readonly authToken: string | null = null,
   ) {
     this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
@@ -102,7 +118,7 @@ export class LeaderForwardingLogSink implements ILogSink {
 
       const response = await fetch(`${this.leaderUrl}/api/ingest/logs`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({ sessionId: this.sessionId, entries: batch }),
         signal: controller.signal,
       });
@@ -161,6 +177,8 @@ export class LeaderForwardingMetricsSink {
   constructor(
     private readonly leaderUrl: string,
     private readonly sessionId: string,
+    /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
+    private readonly authToken: string | null = null,
   ) {}
 
   async onSnapshot(snapshot: MetricSnapshot): Promise<void> {
@@ -170,7 +188,7 @@ export class LeaderForwardingMetricsSink {
 
       await fetch(`${this.leaderUrl}/api/ingest/metrics`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({ sessionId: this.sessionId, snapshot }),
         signal: controller.signal,
       });
@@ -191,6 +209,8 @@ export class SessionHeartbeat {
     private readonly leaderUrl: string,
     private readonly sessionId: string,
     private readonly pid: number,
+    /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
+    private readonly authToken: string | null = null,
   ) {}
 
   /** Notify the leader that this session has started */
@@ -219,7 +239,7 @@ export class SessionHeartbeat {
 
       await fetch(`${this.leaderUrl}/api/ingest/session`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({
           sessionId: this.sessionId,
           event,

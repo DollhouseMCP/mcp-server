@@ -96,7 +96,7 @@ function safeParseYaml(content) {
       showGridMessage('loading', 'Loading portfolio…');
 
       // Load portfolio from local API
-      const portfolioRes = await fetch('/api/elements');
+      const portfolioRes = await DollhouseAuth.apiFetch('/api/elements');
       if (!portfolioRes.ok) throw new Error(`HTTP ${portfolioRes.status} fetching portfolio`);
       const portfolioData = await portfolioRes.json();
 
@@ -116,7 +116,7 @@ function safeParseYaml(content) {
       applyFilters();
 
       // Load community collection (non-blocking — portfolio shows immediately)
-      fetch('/api/collection')
+      DollhouseAuth.apiFetch('/api/collection')
         .then(r => r.ok ? r.json() : Promise.reject('not available'))
         .then(mergeCollectionData)
         .catch(() => { /* collection not available — portfolio-only mode */ });
@@ -537,7 +537,7 @@ function safeParseYaml(content) {
       if (el._content) {
         content = el._content;
       } else if (el._local) {
-        const res = await fetch(`/api/elements/${el.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/elements/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
       } else {
@@ -630,7 +630,7 @@ function safeParseYaml(content) {
     btn.textContent = '⏳ Installing…';
     btn.disabled = true;
     try {
-      const res = await fetch('/api/install', {
+      const res = await DollhouseAuth.apiFetch('/api/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: element.path, name: element.name, type: element.type }),
@@ -726,13 +726,13 @@ function safeParseYaml(content) {
       if (element._content) {
         content = element._content;
       } else if (element._local) {
-        const res = await fetch(`/api/elements/${element.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/elements/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         structured = data;
         content = data.raw;
       } else {
-        const res = await fetch(`/api/collection/content/${element.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/collection/content/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         structured = data;

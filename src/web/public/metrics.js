@@ -147,7 +147,7 @@
   // ── Data fetching ────────────────────────────────────────────────────────
   async function fetchLatest() {
     try {
-      const res = await fetch('/api/metrics?latest=true');
+      const res = await DollhouseAuth.apiFetch('/api/metrics?latest=true');
       if (!res.ok) return;
       const data = await res.json();
       if (data.snapshots?.length > 0) {
@@ -167,7 +167,7 @@
   async function fetchHistory() {
     try {
       const since = new Date(Date.now() - TIME_RANGES[activeRange]).toISOString();
-      const res = await fetch(`/api/metrics?latest=false&since=${since}&limit=100`);
+      const res = await DollhouseAuth.apiFetch(`/api/metrics?latest=false&since=${since}&limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.snapshots) {
@@ -403,7 +403,7 @@
     if (securityEventsCache && (now - securityEventsCacheTime) < SECURITY_CACHE_TTL) {
       renderSecurityEvents(securityEventsCache);
     } else {
-      fetch('/api/logs?category=security&level=warn&limit=5')
+      DollhouseAuth.apiFetch('/api/logs?category=security&level=warn&limit=5')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data?.entries) {

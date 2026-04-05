@@ -31,6 +31,8 @@ import {
   LeaderForwardingLogSink,
   SessionHeartbeat,
 } from './LeaderForwardingSink.js';
+import { ConsoleTokenStore } from './consoleToken.js';
+import { env } from '../../config/env.js';
 
 /** Fixed port for the unified console leader */
 const CONSOLE_PORT = 3939;
@@ -102,6 +104,21 @@ async function startAsLeader(
   election: ElectionResult,
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
+  const { pickRandomPuppetName } = await import('./SessionNames.js');
+
+  // Initialize the console token store (#1780). Creates the token file on
+  // first run, reads the existing tokens on subsequent runs. The token is
+  // persistent across restarts — only rotated on explicit request (Phase 2).
+  // Feature flag DOLLHOUSE_WEB_AUTH_ENABLED controls enforcement; the file
+  // is generated regardless so consumers can attach tokens preemptively.
+  const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  const primaryToken = await tokenStore.ensureInitialized(pickRandomPuppetName());
+  logger.info('[UnifiedConsole] Console token store initialized', {
+    tokenId: primaryToken.id,
+    tokenName: primaryToken.name,
+    file: tokenStore.getFilePath(),
+    authEnforced: env.DOLLHOUSE_WEB_AUTH_ENABLED,
+  });
 
   // Pre-create a placeholder broadcast that we'll wire up after the server starts
   let liveBroadcast: ((entry: UnifiedLogEntry) => void) | undefined;
@@ -123,6 +140,7 @@ async function startAsLeader(
     metricsSink: options.metricsSink,
     port: CONSOLE_PORT,
     additionalRouters: [ingestResult.router],
+    tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   });
 
@@ -174,12 +192,23 @@ async function startAsFollower(
 ): Promise<UnifiedConsoleResult> {
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
+  // Read the console auth token (#1780) written by the leader. May be null
+  // if the file doesn't exist yet — the sinks handle that gracefully and
+  // simply omit the Bearer header, which is fine when auth is not enforced.
+  const { getPrimaryTokenFromFile } = await import('./consoleToken.js');
+  const authToken = await getPrimaryTokenFromFile(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  if (authToken) {
+    logger.debug('[UnifiedConsole] Follower loaded console auth token');
+  } else {
+    logger.debug('[UnifiedConsole] No console auth token file found; follower will POST without Bearer header');
+  }
+
   // Register a forwarding log sink
-  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId);
+  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId, authToken);
   options.registerLogSink(forwardingSink);
 
   // Start session heartbeat to the leader
-  const sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid);
+  const sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
   await sessionHeartbeat.start();
 
   logger.info('[UnifiedConsole] Follower started', {

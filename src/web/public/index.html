@@ -7,6 +7,11 @@
   <meta name="description" content="DollhouseMCP management console — portfolio, logs, metrics">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta http-equiv="X-Frame-Options" content="DENY">
+  <!-- Console session token (#1780) — injected by server at request time.
+       When auth is enabled, browser JS reads this tag and attaches the value
+       as an Authorization: Bearer header on fetch calls, or as a ?token= query
+       param on EventSource connections. An empty value means auth is off. -->
+  <meta name="dollhouse-console-token" content="{{CONSOLE_TOKEN}}">
   <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="logs.css">
@@ -358,6 +363,9 @@ npm install @dollhousemcp/mcp-server</code></pre>
         id="hljs-theme-dark" disabled>
   <!-- uPlot for metrics charts -->
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
+  <!-- Console auth helper must load first — it reads the token meta tag and
+       exposes window.DollhouseAuth for all subsequent scripts (#1780). -->
+  <script src="consoleAuth.js"></script>
   <script src="setup.js"></script>
   <script src="app.js"></script>
   <script src="logs.js"></script>
