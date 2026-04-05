@@ -37,6 +37,7 @@
  *   TOTP_TEST_PORT=9999 tsx scripts/totp-manual-test.ts
  */
 
+import { strict as assert } from 'node:assert';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,7 +81,7 @@ async function apiCall(
   const res = await fetch(`http://127.0.0.1:${TEST_PORT}${path}`, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   const parsed = (await res.json().catch(() => null)) as unknown;
   return { ok: res.ok, status: res.status, body: parsed };
@@ -91,13 +92,40 @@ function section(title: string): void {
   console.log(bold(cyan(`── ${title} ${'─'.repeat(Math.max(0, 60 - title.length - 4))}`)));
 }
 
-function assert(condition: boolean, label: string): void {
-  if (condition) {
-    console.log(`  ${green('✓')} ${label}`);
-  } else {
-    console.log(`  ${red('✗')} ${label}`);
-    throw new Error(`Assertion failed: ${label}`);
-  }
+/**
+ * Log a single passing-check line. Called after `assertFn` has already
+ * run without throwing — if it had thrown, control never reaches here.
+ */
+function ok(label: string): void {
+  console.log(`  ${green('✓')} ${label}`);
+}
+
+/**
+ * Log a failing-check line and throw a descriptive error. Used when
+ * we need to fail the harness with context alongside the ✗ marker
+ * before throwing — for cases where a raw `assert` would lose the
+ * accompanying response body or other debug detail.
+ */
+function bail(label: string, detail?: string): never {
+  console.log(`  ${red('✗')} ${label}`);
+  if (detail !== undefined) console.log(`    ${dim(detail)}`);
+  throw new Error(`Assertion failed: ${label}`);
+}
+
+/**
+ * Run an assertion function and, if it doesn't throw, log a ✓ line.
+ *
+ * Takes the label first and the assertion closure second. No boolean
+ * parameter driving control flow — the success/failure routing is
+ * entirely via exception propagation from `assertFn`. This is a
+ * deliberate shape to avoid Sonar's S2301 ("provide multiple methods
+ * instead of using condition to determine which action to take")
+ * which fires on single-function helpers that branch on a boolean
+ * parameter.
+ */
+function checkOk(label: string, assertFn: () => void): void {
+  assertFn();
+  ok(label);
 }
 
 async function run(): Promise<void> {
@@ -145,10 +173,9 @@ async function run(): Promise<void> {
     section('Step 1: initial status (should be not-enrolled)');
     const initialStatus = await apiCall('GET', '/api/console/totp/status', token);
     console.log(JSON.stringify(initialStatus.body, null, 2));
-    assert(initialStatus.status === 200, 'GET /status returned 200');
-    assert(
-      (initialStatus.body as { enrolled: boolean }).enrolled === false,
-      'status reports enrolled=false before enrollment',
+    checkOk('GET /status returned 200', () => assert.strictEqual(initialStatus.status, 200));
+    checkOk('status reports enrolled=false before enrollment', () =>
+      assert.strictEqual((initialStatus.body as { enrolled: boolean }).enrolled, false),
     );
 
     // ---------- Step 2: begin enrollment ----------
@@ -156,7 +183,7 @@ async function run(): Promise<void> {
     const begin = await apiCall('POST', '/api/console/totp/enroll/begin', token, {
       label: 'Manual test',
     });
-    assert(begin.status === 200, 'POST /enroll/begin returned 200');
+    checkOk('POST /enroll/begin returned 200', () => assert.strictEqual(begin.status, 200));
     const beginBody = begin.body as {
       pendingId: string;
       secret: string;
@@ -164,10 +191,20 @@ async function run(): Promise<void> {
       qrSvgDataUrl: string;
       expiresAt: number;
     };
-    assert(typeof beginBody.pendingId === 'string' && beginBody.pendingId.length > 0, 'pendingId present');
-    assert(typeof beginBody.secret === 'string' && /^[A-Z2-7]+=*$/.test(beginBody.secret), 'secret is valid base32');
-    assert(beginBody.otpauthUri.startsWith('otpauth://totp/'), 'otpauthUri starts with otpauth://totp/');
-    assert(beginBody.qrSvgDataUrl.startsWith('data:image/svg+xml'), 'qrSvgDataUrl is an SVG data URL');
+    checkOk('pendingId present', () => {
+      assert.strictEqual(typeof beginBody.pendingId, 'string');
+      assert.ok(beginBody.pendingId.length > 0);
+    });
+    checkOk('secret is valid base32', () => {
+      assert.strictEqual(typeof beginBody.secret, 'string');
+      assert.match(beginBody.secret, /^[A-Z2-7]+=*$/);
+    });
+    checkOk('otpauthUri starts with otpauth://totp/', () =>
+      assert.ok(beginBody.otpauthUri.startsWith('otpauth://totp/')),
+    );
+    checkOk('qrSvgDataUrl is an SVG data URL', () =>
+      assert.ok(beginBody.qrSvgDataUrl.startsWith('data:image/svg+xml')),
+    );
 
     // ---------- Step 3: render QR in the terminal ----------
     section('Step 3: scan this QR code with your authenticator app');
@@ -188,18 +225,25 @@ async function run(): Promise<void> {
       code: confirmCode,
     });
     if (confirm.status !== 200) {
-      console.log(red(`  ✗ confirm returned ${confirm.status}: ${JSON.stringify(confirm.body)}`));
-      throw new Error('Enrollment confirmation failed — check your authenticator and the server clock');
+      bail(
+        `confirm returned ${confirm.status}`,
+        `body: ${JSON.stringify(confirm.body)} — check your authenticator and the server clock`,
+      );
     }
     const confirmBody = confirm.body as {
       enrolled: boolean;
       enrolledAt: string;
       backupCodes: string[];
     };
-    assert(confirm.status === 200, 'POST /enroll/confirm returned 200');
-    assert(confirmBody.enrolled === true, 'response enrolled=true');
-    assert(Array.isArray(confirmBody.backupCodes) && confirmBody.backupCodes.length === 10, '10 backup codes returned');
-    assert(new Set(confirmBody.backupCodes).size === 10, 'backup codes are all unique');
+    checkOk('POST /enroll/confirm returned 200', () => assert.strictEqual(confirm.status, 200));
+    checkOk('response enrolled=true', () => assert.strictEqual(confirmBody.enrolled, true));
+    checkOk('10 backup codes returned', () => {
+      assert.ok(Array.isArray(confirmBody.backupCodes));
+      assert.strictEqual(confirmBody.backupCodes.length, 10);
+    });
+    checkOk('backup codes are all unique', () =>
+      assert.strictEqual(new Set(confirmBody.backupCodes).size, 10),
+    );
 
     console.log('');
     console.log(yellow('⚠  Backup codes (these are shown ONCE — write them down now):'));
@@ -211,14 +255,15 @@ async function run(): Promise<void> {
     section('Step 5: status reflects enrollment');
     const enrolledStatus = await apiCall('GET', '/api/console/totp/status', token);
     console.log(JSON.stringify(enrolledStatus.body, null, 2));
-    assert(enrolledStatus.status === 200, 'GET /status returned 200');
-    assert(
-      (enrolledStatus.body as { enrolled: boolean }).enrolled === true,
-      'status reports enrolled=true after enrollment',
+    checkOk('GET /status returned 200', () => assert.strictEqual(enrolledStatus.status, 200));
+    checkOk('status reports enrolled=true after enrollment', () =>
+      assert.strictEqual((enrolledStatus.body as { enrolled: boolean }).enrolled, true),
     );
-    assert(
-      (enrolledStatus.body as { backupCodesRemaining: number }).backupCodesRemaining === 10,
-      'backupCodesRemaining is 10',
+    checkOk('backupCodesRemaining is 10', () =>
+      assert.strictEqual(
+        (enrolledStatus.body as { backupCodesRemaining: number }).backupCodesRemaining,
+        10,
+      ),
     );
 
     // ---------- Step 6: disable ----------
@@ -227,23 +272,23 @@ async function run(): Promise<void> {
     const disableCode = (await rl.question('Enter a fresh 6-digit code: ')).trim();
     const disable = await apiCall('POST', '/api/console/totp/disable', token, { code: disableCode });
     if (disable.status !== 200) {
-      console.log(red(`  ✗ disable returned ${disable.status}: ${JSON.stringify(disable.body)}`));
-      throw new Error('Disable failed — check your authenticator');
+      bail(
+        `disable returned ${disable.status}`,
+        `body: ${JSON.stringify(disable.body)} — check your authenticator`,
+      );
     }
-    assert(disable.status === 200, 'POST /disable returned 200');
-    assert(
-      (disable.body as { enrolled: boolean }).enrolled === false,
-      'response enrolled=false after disable',
+    checkOk('POST /disable returned 200', () => assert.strictEqual(disable.status, 200));
+    checkOk('response enrolled=false after disable', () =>
+      assert.strictEqual((disable.body as { enrolled: boolean }).enrolled, false),
     );
 
     // ---------- Step 7: final status ----------
     section('Step 7: status reflects disable');
     const finalStatus = await apiCall('GET', '/api/console/totp/status', token);
     console.log(JSON.stringify(finalStatus.body, null, 2));
-    assert(finalStatus.status === 200, 'GET /status returned 200');
-    assert(
-      (finalStatus.body as { enrolled: boolean }).enrolled === false,
-      'status reports enrolled=false after disable',
+    checkOk('GET /status returned 200', () => assert.strictEqual(finalStatus.status, 200));
+    checkOk('status reports enrolled=false after disable', () =>
+      assert.strictEqual((finalStatus.body as { enrolled: boolean }).enrolled, false),
     );
 
     // ---------- Success ----------

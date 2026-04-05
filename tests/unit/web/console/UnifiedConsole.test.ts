@@ -20,6 +20,23 @@ import { describe, it, expect, jest } from '@jest/globals';
 import { warnIfLegacyConsolePresent } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
+/**
+ * Fake fixture path used in mock `LegacyLeaderInfo` return values.
+ *
+ * These strings are ONLY used as return-value payloads from stubbed
+ * `detectLegacyLeader` calls — they are never passed to `fs` operations,
+ * never read, never written. The test exercises the helper's routing
+ * logic (does it log the warning? swallow errors? pass the port through?)
+ * without touching the real filesystem.
+ *
+ * We deliberately do NOT use `/tmp/` here. Sonar's S5443 ("publicly
+ * writable directories used safely") flags any hardcoded `/tmp/`
+ * literal as a security hotspot, and the rule has no way to tell that
+ * in a mock return value the string is inert. A plainly-fake path
+ * avoids the false positive without suppressing the rule globally.
+ */
+const FIXTURE_LEGACY_LOCK_PATH = '/sonar-fixture/legacy.lock';
+
 /** Build a minimal logger stub with jest mocks for .warn and .debug. */
 function makeLoggerStub() {
   return {
@@ -38,7 +55,7 @@ describe('warnIfLegacyConsolePresent', () => {
       legacyRunning: true,
       pid: 12345,
       port: 3939,
-      lockPath: '/tmp/fake-legacy.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
     const result = await warnIfLegacyConsolePresent(5907, detectStub, logStub);
@@ -57,7 +74,7 @@ describe('warnIfLegacyConsolePresent', () => {
       legacyRunning: true,
       pid: 12345,
       port: 3939,
-      lockPath: '/tmp/fake-legacy.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
   });
 
@@ -65,7 +82,7 @@ describe('warnIfLegacyConsolePresent', () => {
     const logStub = makeLoggerStub();
     const detectStub = jest.fn<() => Promise<LegacyLeaderInfo>>().mockResolvedValue({
       legacyRunning: false,
-      lockPath: '/tmp/fake-legacy.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
     const result = await warnIfLegacyConsolePresent(5907, detectStub, logStub);
@@ -74,7 +91,7 @@ describe('warnIfLegacyConsolePresent', () => {
     expect(logStub.warn).not.toHaveBeenCalled();
     expect(result).toEqual({
       legacyRunning: false,
-      lockPath: '/tmp/fake-legacy.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
   });
 
@@ -110,7 +127,7 @@ describe('warnIfLegacyConsolePresent', () => {
       legacyRunning: true,
       pid: 98765,
       // no port field
-      lockPath: '/tmp/fake-legacy.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
     await warnIfLegacyConsolePresent(5907, detectStub, logStub);
@@ -130,7 +147,7 @@ describe('warnIfLegacyConsolePresent', () => {
       legacyRunning: true,
       pid: 11111,
       port: 3939,
-      lockPath: '/tmp/fake.lock',
+      lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
     await warnIfLegacyConsolePresent(8080, detectStub, logStub);
