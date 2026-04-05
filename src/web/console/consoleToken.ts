@@ -401,7 +401,7 @@ export class ConsoleTokenStore {
    * a fresh file, since the primary goal is keeping the console usable.
    */
   private async backupCorruptFile(): Promise<void> {
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
     const backupPath = `${this.filePath}.corrupt-${timestamp}`;
     try {
       await copyFile(this.filePath, backupPath);
