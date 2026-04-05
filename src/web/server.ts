@@ -294,7 +294,16 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     if (cachedIndexHtml !== null) return cachedIndexHtml;
     const template = await readFileFs(indexHtmlPath, 'utf8');
     const tokenValue = options.tokenStore?.getPrimaryTokenValue() ?? '';
-    cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, tokenValue);
+    // Defensive HTML attribute escape. Tokens are strict 64-char lowercase hex
+    // today so no escaping is actually needed, but if the token format ever
+    // changes this prevents an HTML-injection regression from landing silently.
+    const escapedToken = tokenValue
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escapedToken);
     return cachedIndexHtml;
   };
 

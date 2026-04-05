@@ -160,6 +160,18 @@ The default will flip to `true` in a follow-up PR once all first-party consumers
 | `GET` | `/api/setup/detect` | Reads local MCP client config files (no server state) |
 | `GET` | `/api/setup/mcpb` | Redirect to public GitHub release asset |
 
+### Known Phase 1 gaps
+
+These are **intentionally** unprotected in Phase 1 and will be addressed in later phases:
+
+- **`/pages/*` — user-generated HTML dashboards** under `~/.dollhouse/pages/`. These are served as static files and the auth middleware (mounted at `/api`) never sees them. Direct navigation to a page URL does not carry a Bearer header, so protecting them requires a full meta-tag injection + cooperative fetch refactor. **If you store sensitive information in a user page, do not enable `DOLLHOUSE_WEB_AUTH_ENABLED=true` in production until Phase 2 lands.** Tracked in issue #1788.
+
+- **Leader election race window.** Between the moment a process claims leadership (writing `~/.dollhouse/run/console-leader.lock`) and the moment it finishes writing the token file (`~/.dollhouse/run/console-token.json`), there is a brief window where a follower booting concurrently may see the lock but no token. The follower's `LeaderForwardingSink` handles this with backoff + retry — failed ingest POSTs are re-attempted — so the gap is benign and self-healing.
+
+- **`401` rate limiting.** Not implemented yet. A 256-bit token cannot be brute-forced in any practical sense, but a flood of wrong-token requests could saturate the verify path as a DoS. Deferred to Phase 3.
+
+- **Windows file permissions.** `chmod(0o600)` is a no-op on Windows because the file system uses ACLs instead of POSIX modes. A one-time warning is logged on startup when the token file is created on Windows. Use `icacls` or equivalent for OS-enforced isolation in multi-user Windows environments.
+
 ---
 
 ## How the browser UI gets the token

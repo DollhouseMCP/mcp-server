@@ -104,6 +104,28 @@ describe('createAuthMiddleware', () => {
       expect(res.status).toBe(401);
     });
 
+    it('rejects tokens with fullwidth hex homographs', async () => {
+      const app = await buildApp({ enabled: true, token, store });
+      // Fullwidth digits (U+FF10-U+FF19) look like ASCII 0-9 but are different
+      // codepoints. Our /^[0-9a-f]{64}$/ regex rejects them — this test pins
+      // that behaviour so a future format change doesn't silently accept them.
+      const fullwidthZero = '\uFF10'; // ０
+      const attackToken = fullwidthZero.repeat(64);
+      const res = await request(app)
+        .get(`/api/protected?token=${encodeURIComponent(attackToken)}`);
+      expect(res.status).toBe(401);
+    });
+
+    it('rejects tokens with fullwidth hex letters', async () => {
+      const app = await buildApp({ enabled: true, token, store });
+      // Fullwidth lowercase a-f (U+FF41-U+FF46) as token content.
+      const fullwidthA = '\uFF41'; // ａ
+      const attackToken = fullwidthA.repeat(64);
+      const res = await request(app)
+        .get(`/api/protected?token=${encodeURIComponent(attackToken)}`);
+      expect(res.status).toBe(401);
+    });
+
     it('accepts requests with a valid Bearer token', async () => {
       const app = await buildApp({ enabled: true, token, store });
       const res = await request(app)

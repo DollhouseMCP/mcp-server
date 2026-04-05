@@ -124,6 +124,11 @@ export interface AuthMiddlewareOptions {
  * When `enabled: false`, the handler immediately calls `next()` — allowing
  * the infrastructure to land with the default-off feature flag without
  * breaking existing traffic.
+ *
+ * TODO (Phase 3, #1789): Add 401 rate limiting to prevent DoS from floods of
+ * bad-token requests. Brute-forcing a 256-bit token is infeasible, but an
+ * attacker flooding /api with wrong tokens could saturate the verify path.
+ * A sliding-window limiter keyed on the requesting IP is the right shape.
  */
 export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
   const { store, enabled, label = 'console' } = options;

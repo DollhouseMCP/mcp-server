@@ -37,9 +37,9 @@
  * @since v2.1.0 — Issue #1780
  */
 
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, platform } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, readFile, rename, writeFile, chmod, unlink } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile, chmod, unlink, copyFile } from 'node:fs/promises';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
@@ -249,15 +249,22 @@ export class ConsoleTokenStore {
    *          to inject into HTML and stamp on followers.
    */
   async ensureInitialized(puppetName: string): Promise<ConsoleTokenEntry> {
-    const existing = await this.read();
-    if (existing && existing.tokens.length > 0) {
-      this.data = existing;
+    const readResult = await this.readWithStatus();
+    if (readResult.status === 'ok' && readResult.data.tokens.length > 0) {
+      this.data = readResult.data;
       this.rebuildTokenBuffers();
       logger.debug('[ConsoleToken] Loaded existing token file', {
         path: this.filePath,
-        count: existing.tokens.length,
+        count: readResult.data.tokens.length,
       });
-      return existing.tokens[0];
+      return readResult.data.tokens[0];
+    }
+
+    // If the file existed but was corrupt, back it up before overwriting.
+    // Users may have hand-edited the file with custom names/labels — don't
+    // destroy their data silently. A timestamped copy lets them recover.
+    if (readResult.status === 'corrupt') {
+      await this.backupCorruptFile();
     }
 
     // Create a fresh file with one initial token
@@ -359,27 +366,62 @@ export class ConsoleTokenStore {
   }
 
   /**
-   * Read the token file from disk and validate it. Returns null if missing
-   * or corrupt (caller decides whether to recreate).
+   * Read the token file and distinguish missing from corrupt.
+   *
+   * Returning a tagged union lets `ensureInitialized()` back up corrupt files
+   * before overwriting them — users who hand-edited their tokens with custom
+   * names or labels deserve a recovery path instead of a silent destroy.
    */
-  private async read(): Promise<ConsoleTokenFile | null> {
+  private async readWithStatus(): Promise<
+    | { status: 'ok'; data: ConsoleTokenFile }
+    | { status: 'missing' }
+    | { status: 'corrupt'; reason: string }
+  > {
+    let content: string;
     try {
-      const content = await readFile(this.filePath, 'utf8');
-      const parsed = JSON.parse(content);
-      return validateTokenFile(parsed);
+      content = await readFile(this.filePath, 'utf8');
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      logger.warn('[ConsoleToken] Failed to read token file, will recreate', {
-        path: this.filePath,
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { status: 'missing' };
+      return { status: 'corrupt', reason: err instanceof Error ? err.message : String(err) };
+    }
+    try {
+      const parsed = JSON.parse(content);
+      const validated = validateTokenFile(parsed);
+      if (!validated) return { status: 'corrupt', reason: 'schema validation failed' };
+      return { status: 'ok', data: validated };
+    } catch (err) {
+      return { status: 'corrupt', reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * Copy the current (presumed corrupt) token file to a timestamped backup
+   * alongside it so the user can recover hand-edited data after an accidental
+   * syntax error. Best-effort — failure to back up does not block creating
+   * a fresh file, since the primary goal is keeping the console usable.
+   */
+  private async backupCorruptFile(): Promise<void> {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupPath = `${this.filePath}.corrupt-${timestamp}`;
+    try {
+      await copyFile(this.filePath, backupPath);
+      logger.warn(`[ConsoleToken] Corrupt token file backed up to ${backupPath} — a fresh token will be created`);
+    } catch (err) {
+      logger.warn('[ConsoleToken] Could not back up corrupt token file, will overwrite in place', {
         error: err instanceof Error ? err.message : String(err),
       });
-      return null;
     }
   }
 
   /**
    * Atomically write the token file with owner-only permissions.
    * Uses temp+rename to avoid partial writes on crash.
+   *
+   * On Windows, `chmod(0o600)` is effectively a no-op because the file
+   * system uses ACLs instead of POSIX modes. We log a one-time warning so
+   * users on Windows know the token file does not have OS-enforced access
+   * control and can decide whether to use additional tooling (icacls, NTFS
+   * permissions, or a different storage location).
    */
   private async write(file: ConsoleTokenFile): Promise<void> {
     await mkdir(RUN_DIR, { recursive: true });
@@ -388,10 +430,25 @@ export class ConsoleTokenStore {
       await writeFile(tmpFile, JSON.stringify(file, null, 2), 'utf8');
       await chmod(tmpFile, TOKEN_FILE_MODE);
       await rename(tmpFile, this.filePath);
+      this.warnIfWindowsPermissions();
     } catch (err) {
       try { await unlink(tmpFile); } catch { /* ignore */ }
       throw err;
     }
+  }
+
+  /** One-shot flag so the Windows permissions warning is logged at most once. */
+  private windowsWarningLogged = false;
+
+  private warnIfWindowsPermissions(): void {
+    if (this.windowsWarningLogged) return;
+    if (platform() !== 'win32') return;
+    this.windowsWarningLogged = true;
+    logger.warn(
+      `[ConsoleToken] Token file at ${this.filePath} has no OS-enforced access control on Windows ` +
+      `(chmod 0o600 is a no-op on this platform). Any process running as the same user can read the file. ` +
+      `Consider using NTFS ACLs via 'icacls' for stronger isolation in multi-user environments.`,
+    );
   }
 }
 
