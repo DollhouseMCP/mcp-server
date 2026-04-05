@@ -293,11 +293,24 @@ curl -s -H "$H" -X POST http://localhost:3939/api/console/totp/disable \
 - Stored as `sha256` hex hashes, never plaintext. If the token file leaks, your backup codes don't.
 - Backup codes can be typed with optional dashes or spaces (`ABCD-EFGH` and `ABCDEFGH` are both accepted).
 
+**Validation window — timing tolerance for slow transports:**
+
+TOTP codes are validated with a **±60-second tolerance** (window=2, 150 seconds total validity). This is deliberately wider than the RFC 6238 default (±30s) to cover two real-world scenarios:
+
+1. **Chat-bridge transports** like DollhouseBridge over Zulip can add 10–60 seconds of latency between the user typing a code and the MCP server seeing it. With the default ±30s, a code typed with only a few seconds of step-lifetime remaining can age out mid-transit.
+2. **Clock drift** — containers, VMs, and phones with lazy NTP sync can disagree with the server by tens of seconds. ±60s absorbs routine drift without user intervention.
+
+If you consistently see invalid-code errors, especially over a chat bridge:
+- **Submit codes with plenty of step-lifetime remaining.** If your authenticator shows 5 seconds left before the next code, wait for the next one before typing it.
+- **Check the clock on whatever generates the code.** Most phones sync via NTP automatically; desktop authenticators may not.
+- **Check the clock on the MCP server host.** `timedatectl status` (Linux), `sntp -sS time.apple.com` (macOS).
+
 **Security notes specific to TOTP:**
 
 - The TOTP secret is stored in plaintext alongside the token inside `console-token.json`, which is `0600`. This matches standard file-based TOTP storage (SSH keys, age identity files, 1Password vault backups). Encrypting the secret with an OS keychain is a future enhancement.
-- Enrollment endpoints rate-limit code attempts to 10 per minute to cap brute-force exposure of the 6-digit code space.
+- Enrollment endpoints rate-limit code attempts to 10 per minute to cap brute-force exposure of the 6-digit code space. With the ±60s window, 5 codes out of 10⁶ are valid at any instant — brute-force success probability remains below 5×10⁻⁵ per minute.
 - Enrolling a second factor does **not** replace the console token — both still work. The token is "something you have (on disk)", TOTP is "something you have (on your phone)". Rotation will require **both** in Phase 2.
+- Every failed verification fires a `TOTP_VERIFICATION_FAILED` event to SecurityMonitor (deduped per 60s window), so aggregate failure rates can be surfaced for brute-force detection.
 
 ---
 

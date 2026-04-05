@@ -71,8 +71,47 @@ const TOTP_ALGORITHM = 'SHA1' as const;
 const TOTP_DIGITS = 6;
 const TOTP_PERIOD_SECONDS = 30;
 const TOTP_SECRET_SIZE_BYTES = 20; // 160 bits — the RFC 6238 recommendation
-/** ±1 time step tolerance (±30s drift) when validating codes. */
-const TOTP_VALIDATE_WINDOW = 1;
+/**
+ * ±2 time step tolerance (±60s drift) → 150 second total validity window.
+ *
+ * The naive choice would be `window: 1` (±30s, 90s total) which is the RFC
+ * 6238 default and matches most web login flows where the user types a code
+ * they just generated, with sub-second latency to the server. That doesn't
+ * cover our real deployment profile:
+ *
+ * 1. **Async bridge flows** — DollhouseBridge over Zulip (or similar chat
+ *    transports) can add 10-60 seconds of latency between the user typing
+ *    the code and the MCP server verifying it. A code typed with a few
+ *    seconds of lifetime remaining can slide out of the validation window
+ *    before reaching the server.
+ *
+ * 2. **Clock drift** — containers, VMs, and phones with lazy NTP can
+ *    disagree with the server by tens of seconds. ±30s gives zero margin
+ *    against any drift at all.
+ *
+ * `window: 2` gives 5 valid codes out of 10^6 per attempt (vs. 3 with
+ * window=1). Combined with the 10/min rate limiter and the always-on auth
+ * gate, brute-force success probability remains below 5e-5 per minute —
+ * well within the security envelope. `window: 3` (±90s, 210s total) is
+ * defensible but reserved for future deployment pressure; easier to widen
+ * later than to narrow later.
+ *
+ * Note: the window is anchored to the **server's verification clock**, not
+ * the user's code-generation clock. When a user complains that a code they
+ * "just typed" was rejected, the error message nudges them to submit codes
+ * with plenty of step-lifetime remaining.
+ */
+const TOTP_VALIDATE_WINDOW = 2;
+
+/**
+ * Error message for a failed TOTP code check. Includes a hint about the
+ * common failure mode (code aged out in transit) so users on high-latency
+ * channels know what to try differently on retry.
+ */
+const INVALID_TOTP_MESSAGE =
+  'Invalid TOTP code. When copying from an authenticator app, use a code ' +
+  'with plenty of lifetime remaining — codes can age out in transit on ' +
+  'slower channels (e.g. chat bridges). Wait for a fresh code if unsure.';
 /** Pending enrollments expire this long after begin() to limit in-memory secret lifetime. */
 const TOTP_PENDING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 /**
@@ -670,7 +709,7 @@ export class ConsoleTokenStore {
         source: 'ConsoleTokenStore.confirmTotpEnrollment',
         details: 'Pending TOTP enrollment failed code verification',
       });
-      throw new TotpError('Invalid TOTP code', 'INVALID_TOTP_CODE');
+      throw new TotpError(INVALID_TOTP_MESSAGE, 'INVALID_TOTP_CODE');
     }
 
     // Code is valid — commit enrollment.
@@ -791,7 +830,7 @@ export class ConsoleTokenStore {
     }
     const result = await this.verifyTotp(code);
     if (!result.ok) {
-      throw new TotpError('Invalid TOTP code', 'INVALID_TOTP_CODE');
+      throw new TotpError(INVALID_TOTP_MESSAGE, 'INVALID_TOTP_CODE');
     }
     this.data.totp = {
       enrolled: false,

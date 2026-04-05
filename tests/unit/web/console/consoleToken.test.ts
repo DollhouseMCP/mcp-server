@@ -602,6 +602,105 @@ describe('ConsoleTokenStore', () => {
     });
 
     // ================================================================
+    // TOTP validation window — ±60s tolerance (window=2) for
+    // async/bridge latency. A user typing a code over a slow chat
+    // transport (DollhouseBridge via Zulip) can see 30-60s elapse
+    // between generation and server verification.
+    // ================================================================
+    describe('validation window tolerance', () => {
+      /**
+       * Generate a TOTP code for a specific point in time, using the
+       * same parameters the store uses. Unlike `currentTotpCode`, this
+       * takes an explicit timestamp so tests can simulate codes
+       * generated in the past (or future).
+       */
+      function totpCodeAt(base32Secret: string, timestampMs: number): string {
+        const totp = new TOTP({
+          issuer: 'DollhouseMCP',
+          label: 'test',
+          algorithm: 'SHA1',
+          digits: 6,
+          period: 30,
+          secret: Secret.fromBase32(base32Secret),
+        });
+        return totp.generate({ timestamp: timestampMs });
+      }
+
+      it('accepts a code generated 60 seconds in the past (slow bridge)', async () => {
+        jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
+        try {
+          const store = new ConsoleTokenStore(tokenFilePath);
+          await store.ensureInitialized('Kermit');
+          const begin = store.beginTotpEnrollment();
+
+          // Simulate a code the user read from their authenticator 60
+          // seconds before it reached the server (typical worst-case for
+          // a chat-bridge transport under load).
+          const lateCode = totpCodeAt(begin.secret, Date.now() - 60_000);
+
+          const result = await store.confirmTotpEnrollment(begin.pendingId, lateCode);
+          expect(result.backupCodes).toHaveLength(10);
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('rejects a code generated 120 seconds in the past (beyond window)', async () => {
+        jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
+        try {
+          const store = new ConsoleTokenStore(tokenFilePath);
+          await store.ensureInitialized('Kermit');
+          const begin = store.beginTotpEnrollment();
+
+          // 120 seconds is 4 time-steps back — the code was generated
+          // for step N-4, server accepts N-2..N+2. Out of window.
+          const tooOldCode = totpCodeAt(begin.secret, Date.now() - 120_000);
+
+          await expect(
+            store.confirmTotpEnrollment(begin.pendingId, tooOldCode),
+          ).rejects.toMatchObject({ code: 'INVALID_TOTP_CODE' });
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('rejects a code generated 60 seconds in the future (anti-replay margin)', async () => {
+        // Symmetric check — window=2 means ±60s, so a code generated at
+        // now+90s is also out of window. Protects against a clock-skew
+        // regression that silently widens the window on one side.
+        jest.useFakeTimers({ now: new Date('2026-04-05T12:00:00Z') });
+        try {
+          const store = new ConsoleTokenStore(tokenFilePath);
+          await store.ensureInitialized('Kermit');
+          const begin = store.beginTotpEnrollment();
+
+          const tooFutureCode = totpCodeAt(begin.secret, Date.now() + 120_000);
+
+          await expect(
+            store.confirmTotpEnrollment(begin.pendingId, tooFutureCode),
+          ).rejects.toMatchObject({ code: 'INVALID_TOTP_CODE' });
+        } finally {
+          jest.useRealTimers();
+        }
+      });
+
+      it('error message includes timing guidance for users on slow channels', async () => {
+        const store = new ConsoleTokenStore(tokenFilePath);
+        await store.ensureInitialized('Kermit');
+        const begin = store.beginTotpEnrollment();
+
+        try {
+          await store.confirmTotpEnrollment(begin.pendingId, '000000');
+          throw new Error('expected INVALID_TOTP_CODE to be thrown');
+        } catch (err) {
+          expect(err).toBeInstanceOf(TotpError);
+          expect((err as TotpError).message).toMatch(/lifetime remaining/i);
+          expect((err as TotpError).message).toMatch(/bridge|slow/i);
+        }
+      });
+    });
+
+    // ================================================================
     // SecurityMonitor audit trail — verifies the DMCP-SEC-006 fix
     // actually fires events for every TOTP lifecycle operation. Uses
     // jest.spyOn with a noop impl so the real SecurityMonitor dedup
