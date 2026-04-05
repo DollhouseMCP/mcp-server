@@ -29,9 +29,14 @@ function currentTotpCode(base32Secret: string): string {
   return totp.generate();
 }
 
-async function buildApp(store: ConsoleTokenStore) {
+interface BuildAppOptions {
+  rateLimitMax?: number;
+  rateLimitWindowMs?: number;
+}
+
+async function buildApp(store: ConsoleTokenStore, options: BuildAppOptions = {}) {
   const app = express();
-  app.use('/api/console/totp', createTotpRoutes({ store }));
+  app.use('/api/console/totp', createTotpRoutes({ store, ...options }));
   return app;
 }
 
@@ -303,6 +308,97 @@ describe('createTotpRoutes', () => {
       expect(res.status).toBe(400);
       expect(res.body.error).toMatch(/not.*enrolled/i);
       expect(res.body.code).toBe('NOT_ENROLLED');
+    });
+  });
+
+  // ==================================================================
+  // Rate limiting — separate buckets for confirm vs disable
+  // ==================================================================
+  describe('rate limiting', () => {
+    /**
+     * Shared tight budget for rate-limit tests: 2 attempts per long window.
+     * Long window keeps the limiter from refilling during the test run
+     * without resorting to fake timers.
+     */
+    const TIGHT_LIMIT = { rateLimitMax: 2, rateLimitWindowMs: 60_000 };
+
+    it('returns 429 RATE_LIMITED after exhausting the confirm budget', async () => {
+      const app = await buildApp(store, TIGHT_LIMIT);
+      const begin = await request(app)
+        .post('/api/console/totp/enroll/begin')
+        .set('Authorization', bearer)
+        .send({});
+
+      // Two wrong-code attempts consume the budget — both still reach the
+      // store and come back as INVALID_TOTP_CODE.
+      for (let i = 0; i < 2; i++) {
+        const res = await request(app)
+          .post('/api/console/totp/enroll/confirm')
+          .set('Authorization', bearer)
+          .send({ pendingId: begin.body.pendingId, code: '000000' });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_TOTP_CODE');
+      }
+
+      // Third attempt is rejected by the limiter before touching the store.
+      const limited = await request(app)
+        .post('/api/console/totp/enroll/confirm')
+        .set('Authorization', bearer)
+        .send({ pendingId: begin.body.pendingId, code: '000000' });
+      expect(limited.status).toBe(429);
+      expect(limited.body.code).toBe('RATE_LIMITED');
+    });
+
+    it('returns 429 RATE_LIMITED after exhausting the disable budget', async () => {
+      const app = await buildApp(store, TIGHT_LIMIT);
+      await enrollFlow(app, bearer);
+
+      // Two wrong-code attempts consume the disable budget.
+      for (let i = 0; i < 2; i++) {
+        const res = await request(app)
+          .post('/api/console/totp/disable')
+          .set('Authorization', bearer)
+          .send({ code: '000000' });
+        expect(res.status).toBe(400);
+        expect(res.body.code).toBe('INVALID_TOTP_CODE');
+      }
+
+      const limited = await request(app)
+        .post('/api/console/totp/disable')
+        .set('Authorization', bearer)
+        .send({ code: '000000' });
+      expect(limited.status).toBe(429);
+      expect(limited.body.code).toBe('RATE_LIMITED');
+    });
+
+    it('keeps confirm and disable budgets independent', async () => {
+      const app = await buildApp(store, TIGHT_LIMIT);
+      await enrollFlow(app, bearer);
+
+      // Exhaust the disable limiter with wrong-code attempts.
+      for (let i = 0; i < 2; i++) {
+        await request(app)
+          .post('/api/console/totp/disable')
+          .set('Authorization', bearer)
+          .send({ code: '000000' });
+      }
+      const disableLimited = await request(app)
+        .post('/api/console/totp/disable')
+        .set('Authorization', bearer)
+        .send({ code: '000000' });
+      expect(disableLimited.status).toBe(429);
+
+      // The confirm limiter is a separate bucket. If it were shared with
+      // disable, this next request would also return 429. Instead, because
+      // the limiter runs before the body-parse check, a live confirm
+      // attempt should reach the store and come back as PENDING_NOT_FOUND.
+      const confirmStillOpen = await request(app)
+        .post('/api/console/totp/enroll/confirm')
+        .set('Authorization', bearer)
+        .send({ pendingId: '00000000-0000-0000-0000-000000000000', code: '000000' });
+      expect(confirmStillOpen.status).not.toBe(429);
+      expect(confirmStillOpen.status).toBe(400);
+      expect(confirmStillOpen.body.code).toBe('PENDING_NOT_FOUND');
     });
   });
 });

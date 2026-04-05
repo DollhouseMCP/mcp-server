@@ -74,10 +74,10 @@ function httpStatusForTotpError(code: TotpErrorCode): number {
     case 'STORE_NOT_INITIALIZED':
       return 503;
     default: {
-      // Exhaustiveness check — if a new TotpErrorCode is added, TypeScript
-      // will flag this line so we remember to map it.
-      const _exhaustive: never = code;
-      void _exhaustive;
+      // Exhaustiveness check — if a new TotpErrorCode is added, the
+      // `satisfies never` assertion below fails to compile so we remember
+      // to map it here.
+      code satisfies never;
       return 400;
     }
   }
