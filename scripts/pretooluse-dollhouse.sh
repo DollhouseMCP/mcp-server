@@ -16,7 +16,7 @@
 PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
 
 # Discover the port from the port file
-if [ -f "$PORT_FILE" ]; then
+if [[ -f "$PORT_FILE" ]]; then
   PORT=$(cat "$PORT_FILE" 2>/dev/null)
 else
   # No port file — server not running, fail open
@@ -38,7 +38,7 @@ TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
 TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {}' 2>/dev/null)
 
 # If we can't parse the input, fail open
-if [ -z "$TOOL_NAME" ]; then
+if [[ -z "$TOOL_NAME" ]]; then
   exit 0
 fi
 
@@ -50,7 +50,7 @@ RESPONSE=$(curl -s --max-time 35 -X POST "$ENDPOINT" \
   2>/dev/null)
 
 # If curl failed or returned empty, fail open
-if [ $? -ne 0 ] || [ -z "$RESPONSE" ]; then
+if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then
   exit 0
 fi
 
