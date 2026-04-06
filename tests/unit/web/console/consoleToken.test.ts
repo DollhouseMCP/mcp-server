@@ -40,6 +40,13 @@ function currentTotpCode(base32Secret: string): string {
   return totpCodeAt(base32Secret);
 }
 
+/** Enroll TOTP on a store and return the secret for code generation. */
+async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
+  const begin = store.beginTotpEnrollment();
+  await store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret));
+  return begin.secret;
+}
+
 describe('ConsoleTokenStore', () => {
   let testDir: string;
   let tokenFilePath: string;
@@ -838,13 +845,6 @@ describe('ConsoleTokenStore', () => {
   });
 
   describe('rotatePrimary (#1795)', () => {
-    /** Helper: enroll TOTP on a store and return the secret for code generation. */
-    async function enrollTotp(store: ConsoleTokenStore): Promise<string> {
-      const begin = store.beginTotpEnrollment();
-      await store.confirmTotpEnrollment(begin.pendingId, currentTotpCode(begin.secret));
-      return begin.secret;
-    }
-
     it('rotates the primary token and returns the new value', async () => {
       const store = new ConsoleTokenStore(tokenFilePath);
       const entry = await store.ensureInitialized('Kermit');
@@ -964,16 +964,16 @@ describe('ConsoleTokenStore', () => {
       }
     });
 
-    it('updates createdAt on the rotated entry', async () => {
+    it('updates createdAt and createdVia on the rotated entry', async () => {
       const store = new ConsoleTokenStore(tokenFilePath);
-      const entry = await store.ensureInitialized('Kermit');
-      const originalCreatedAt = entry.createdAt;
+      await store.ensureInitialized('Kermit');
       const secret = await enrollTotp(store);
 
       const result = await store.rotatePrimary(currentTotpCode(secret));
       const raw = await readTokenFileRaw(tokenFilePath);
       expect(raw!.tokens[0].createdAt).toBe(result.rotatedAt);
-      expect(raw!.tokens[0].createdAt).not.toBe(originalCreatedAt);
+      expect(raw!.tokens[0].createdVia).toBe('rotation');
+      expect(raw!.tokens[0].lastUsedAt).toBeNull();
     });
 
     it('preserves the entry id across rotations', async () => {

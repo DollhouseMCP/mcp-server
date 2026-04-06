@@ -97,8 +97,8 @@ export class VerificationNotifier implements IVerificationNotifier {
     // Escape for AppleScript: backslashes, then double quotes. Newlines are
     // replaced with AppleScript `return` character concatenation so they render
     // as real line breaks in the dialog instead of literal "\n" text.
-    const escapedTitle = title.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\n\r]/g, ' ');
-    const escapedMessage = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const escapedTitle = title.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll(/[\n\r]/g, ' ');
+    const escapedMessage = message.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
     // Split on newlines and join with AppleScript return concatenation
     const messageParts = escapedMessage.split(/\r?\n/).map(part => `"${part}"`).join(' & return & ');
 
@@ -167,9 +167,9 @@ export class VerificationNotifier implements IVerificationNotifier {
 
   private spawnWindows(title: string, message: string): void {
     // Convert real newlines to PowerShell backtick-n for MessageBox rendering
-    const realMessage = message.replace(/\n/g, '`n');
-    const escapedMessage = realMessage.replace(/'/g, "''");
-    const escapedTitle = title.replace(/'/g, "''");
+    const realMessage = message.replaceAll('\n', '`n');
+    const escapedMessage = realMessage.replaceAll("'", "''");
+    const escapedTitle = title.replaceAll("'", "''");
 
     const script = `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.MessageBox]::Show('${escapedMessage}', '${escapedTitle}', 'OK', 'Warning')`;
 

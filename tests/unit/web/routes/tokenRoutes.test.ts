@@ -109,7 +109,7 @@ describe('createTokenRoutes', () => {
     });
 
     it('returns 400 when confirmation code is wrong', async () => {
-      const secret = await enrollTotp(store);
+      await enrollTotp(store);
       const app = await buildApp(store);
       const res = await request(app)
         .post('/api/console/token/rotate')
