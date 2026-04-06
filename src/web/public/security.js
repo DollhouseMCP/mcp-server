@@ -1,10 +1,9 @@
 /**
- * Security tab for the DollhouseMCP management console (#1791).
+ * Authentication tab for the DollhouseMCP management console (#1791).
  *
  * Panels:
  * - Token: current token display (masked), metadata, rotate button
  * - Authenticator: TOTP enrollment status, enroll/disable flows
- * - Recent activity: SecurityMonitor event timeline
  *
  * All API calls use DollhouseAuth.apiFetch() for automatic token injection.
  *
@@ -64,17 +63,6 @@
       +   '</div>'
       +   '<div class="sec-card-body">'
       +     '<div id="sec-totp-content">Loading...</div>'
-      +   '</div>'
-      + '</div>'
-
-      // Recent activity panel (full width)
-      + '<div class="sec-card sec-card--wide" data-collapsed="false">'
-      +   '<div class="sec-card-header" role="button" tabindex="0" aria-expanded="true">'
-      +     '<h3 class="sec-card-title">Recent Security Events</h3>'
-      +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
-      +   '</div>'
-      +   '<div class="sec-card-body">'
-      +     '<div id="sec-events-content">Loading...</div>'
       +   '</div>'
       + '</div>'
 
@@ -188,43 +176,10 @@
     }
   }
 
-  function renderEventsPanel() {
-    var el = document.getElementById('sec-events-content');
-    if (!el) return;
-
-    DollhouseAuth.apiFetch('/api/logs?category=security&limit=20')
-      .then(function (r) { return r.ok ? r.json() : Promise.reject('not available'); })
-      .then(function (data) {
-        var entries = data.entries || data || [];
-        if (!entries.length) {
-          el.innerHTML = '<p class="sec-hint">No recent security events.</p>';
-          return;
-        }
-        el.innerHTML = '<div class="sec-events-list">'
-          + entries.map(function (e) {
-            var severity = (e.severity || e.level || 'INFO').toUpperCase();
-            var badgeClass = severity === 'HIGH' || severity === 'CRITICAL' ? 'sec-badge--red'
-              : severity === 'MEDIUM' ? 'sec-badge--amber'
-              : 'sec-badge--blue';
-            return '<div class="sec-event-row">'
-              + '<span class="sec-event-time">' + esc(formatTime(e.timestamp)) + '</span>'
-              + '<span class="sec-badge ' + badgeClass + '">' + esc(severity) + '</span>'
-              + '<span class="sec-event-type">' + esc(e.type || e.message || '') + '</span>'
-              + '<span class="sec-event-detail">' + esc(e.details || e.source || '') + '</span>'
-              + '</div>';
-          }).join('')
-          + '</div>';
-      })
-      .catch(function () {
-        el.innerHTML = '<p class="sec-hint">Could not load security events.</p>';
-      });
-  }
-
   function render(data) {
     lastData = data;
     renderTokenPanel(data);
     renderTotpPanel(data);
-    renderEventsPanel();
   }
 
   // ── Actions ───────────────────────────────────────────────────────────
@@ -348,7 +303,7 @@
       .then(function (data) { render(data); })
       .catch(function (err) {
         var root = document.getElementById('security-dashboard-root');
-        if (root) root.innerHTML = '<p class="sec-error">Failed to load security data: ' + esc(err.message) + '</p>';
+        if (root) root.innerHTML = '<p class="sec-error">Failed to load authentication data: ' + esc(err.message) + '</p>';
       });
   }
 

@@ -352,6 +352,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     try {
       const html = await renderIndexHtml();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      // In debug mode, prevent browser caching so UI changes are picked up
+      // immediately. In production, allow short caching for performance.
+      const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+      res.setHeader('Cache-Control', isDebug
+        ? 'no-cache, no-store, must-revalidate'
+        : 'private, max-age=60');
       res.send(html);
     } catch (err) {
       logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);

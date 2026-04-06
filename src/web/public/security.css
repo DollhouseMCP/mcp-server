@@ -271,73 +271,6 @@
   letter-spacing: 0.05em;
 }
 
-/* Security events timeline */
-.sec-events-list {
-  max-height: 300px;
-  overflow-y: auto;
-}
-
-.sec-event-row {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  padding: 0.375rem 0;
-  border-bottom: 1px solid var(--line, #c8d5e9);
-  font-size: 0.75rem;
-}
-
-.sec-event-row:last-child { border-bottom: none; }
-
-.sec-event-time {
-  color: var(--ink-500, #6b7a8d);
-  white-space: nowrap;
-  min-width: 140px;
-}
-
-.sec-event-type {
-  font-weight: 600;
-  color: var(--ink-900, #18243a);
-  white-space: nowrap;
-}
-
-.sec-event-detail {
-  color: var(--ink-500, #6b7a8d);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  min-width: 0;
-}
-
-.sec-badge {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 9px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
-}
-
-.sec-badge--blue {
-  background: #eff6ff;
-  color: #1e40af;
-  border: 1px solid #bfdbfe;
-}
-
-.sec-badge--amber {
-  background: #fff7ed;
-  color: #9a3412;
-  border: 1px solid #fed7aa;
-}
-
-.sec-badge--red {
-  background: #fef2f2;
-  color: #991b1b;
-  border: 1px solid #fecaca;
-}
-
 /* Responsive */
 @media (max-width: 768px) {
   .sec-dashboard {
@@ -372,24 +305,6 @@
   background: var(--paper-strong, #1a1a2e);
   color: var(--ink-100, #e2e8f0);
   border-color: var(--line, #2d3748);
-}
-
-[data-theme="dark"] .sec-badge--blue {
-  background: #172554;
-  color: #93c5fd;
-  border-color: #1e40af;
-}
-
-[data-theme="dark"] .sec-badge--amber {
-  background: #431407;
-  color: #fdba74;
-  border-color: #9a3412;
-}
-
-[data-theme="dark"] .sec-badge--red {
-  background: #450a0a;
-  color: #fca5a5;
-  border-color: #991b1b;
 }
 
 [data-theme="dark"] .sec-hint--warn {
