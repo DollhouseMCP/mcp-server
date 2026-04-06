@@ -7,10 +7,10 @@
  */
 
 import { describe, expect, it, beforeAll } from '@jest/globals';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-const OSV_SCANNER_PATH = path.resolve(__dirname, '../../osv-scanner.toml');
+const OSV_SCANNER_PATH = path.join(process.cwd(), 'osv-scanner.toml');
 
 describe('OSV Scanner Configuration', () => {
   let content: string;
