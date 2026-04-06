@@ -1,0 +1,99 @@
+name: GHSA Reclassification Monitor
+
+on:
+  schedule:
+    - cron: '0 9 * * 1' # Every Monday at 9 AM UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-ghsa-updates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check dismissed GHSAs for updates
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Extract GHSA IDs from osv-scanner.toml
+          GHSA_IDS=$(grep '^id = ' osv-scanner.toml | sed 's/id = "//;s/"//' | sort -u)
+
+          CHANGES_FOUND=""
+
+          for GHSA in $GHSA_IDS; do
+            echo "Checking $GHSA..."
+
+            # Query OSV.dev API for current vulnerability state
+            RESPONSE=$(curl -s "https://api.osv.dev/v1/vulns/$GHSA")
+
+            # Check if the vulnerability has been withdrawn
+            WITHDRAWN=$(echo "$RESPONSE" | jq -r '.withdrawn // empty')
+            if [ -n "$WITHDRAWN" ]; then
+              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Withdrawn on $WITHDRAWN (can be removed from osv-scanner.toml)"
+              continue
+            fi
+
+            # Check if severity has changed (compare with our documented assessment)
+            SEVERITY=$(echo "$RESPONSE" | jq -r '
+              .severity[]? |
+              select(.type == "CVSS_V3") |
+              .score // empty
+            ' 2>/dev/null | head -1)
+
+            # Check if affected versions have changed (new fix available)
+            HAS_FIX=$(echo "$RESPONSE" | jq -r '
+              .affected[]? |
+              .ranges[]? |
+              .events[]? |
+              select(.fixed) |
+              .fixed
+            ' 2>/dev/null | head -1)
+
+            if [ -n "$HAS_FIX" ]; then
+              # Check if this is a new fix we haven't seen
+              MODIFIED=$(echo "$RESPONSE" | jq -r '.modified // empty')
+              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Fix available (version $HAS_FIX), last modified $MODIFIED"
+            fi
+          done
+
+          if [ -n "$CHANGES_FOUND" ]; then
+            echo "changes_found=true" >> "$GITHUB_ENV"
+            # Write to file for the next step (avoids env var escaping issues)
+            printf "%b" "$CHANGES_FOUND" > /tmp/ghsa-changes.txt
+          else
+            echo "changes_found=false" >> "$GITHUB_ENV"
+            echo "No changes detected in dismissed GHSAs."
+          fi
+
+      - name: Create issue if changes detected
+        if: env.changes_found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CHANGES=$(cat /tmp/ghsa-changes.txt)
+          gh issue create \
+            --title "Security: Dismissed GHSA updates detected ($(date +%Y-%m-%d))" \
+            --label "security" \
+            --body "$(cat <<EOF
+          ## Dismissed GHSA Reclassification Alert
+
+          The weekly GHSA monitor detected changes to vulnerabilities we previously dismissed in \`osv-scanner.toml\`.
+
+          ### Changes Detected
+          ${CHANGES}
+
+          ### Action Required
+          Review each change and determine if:
+          1. The vulnerability should be **re-opened** in Dependabot
+          2. The \`osv-scanner.toml\` entry should be **updated or removed**
+          3. A dependency **upgrade** is now available and should be applied
+
+          ### References
+          - [Original triage: #1800](https://github.com/DollhouseMCP/mcp-server/issues/1800)
+          - [osv-scanner.toml](../blob/develop/osv-scanner.toml)
+          EOF
+          )"

@@ -5,6 +5,13 @@
 #
 # Analysis date: 2026-04-06
 # Related issue: https://github.com/DollhouseMCP/mcp-server/issues/1800
+#
+# Total dismissed: 20 alerts across 5 packages (as of 2026-04-06)
+#   handlebars: 7 (dev-only, ts-jest transitive)
+#   tar:        6 (dead code, install-mcp→giget never imported)
+#   picomatch:  3 (dev-only, jest/eslint transitive)
+#   lodash:     2 (dev-only, archiver transitive)
+#   path-to-regexp: 2 (tolerable risk, localhost + static routes)
 
 # --- handlebars (7 alerts) ---
 # Dev dependency only — transitive dep of ts-jest.
