@@ -68,6 +68,17 @@ export function createTokenRoutes(options: TokenRoutesOptions): Router {
   });
   router.use(auth);
 
+  /** GET /info — token metadata + TOTP status for the Security tab UI (#1791). */
+  router.get('/info', (_req: Request, res: Response) => {
+    const masked = store.listMasked();
+    const totpStatus = store.getTotpStatus();
+    res.json({
+      tokens: masked,
+      totp: totpStatus,
+      filePath: store.getFilePath(),
+    });
+  });
+
   /** POST /rotate — rotate the primary console token with TOTP confirmation. */
   router.post('/rotate', jsonParser, async (req: Request, res: Response) => {
     if (!rotateLimiter.tryAcquire()) {

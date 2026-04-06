@@ -1931,7 +1931,7 @@ function safeParseYaml(content) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
-    const tabInits = { logs: false, metrics: false, permissions: false };
+    const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
@@ -2105,6 +2105,10 @@ function safeParseYaml(content) {
       if (tab === 'permissions' && dc?.permissions) {
         if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(params); }
         else if (dc.permissions.refresh) { dc.permissions.refresh(); }
+      }
+      if (tab === 'security' && dc?.security) {
+        if (!tabInits.security) { tabInits.security = true; dc.security.init(params); }
+        else if (dc.security.refresh) { dc.security.refresh(); }
       }
     }
 
