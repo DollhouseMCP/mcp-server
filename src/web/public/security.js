@@ -67,7 +67,7 @@
       // Authenticator panel
       + '<div class="sec-card" data-collapsed="false">'
       +   '<div class="sec-card-header" role="button" tabindex="0" aria-expanded="true">'
-      +     '<h3 class="sec-card-title">Authenticator (TOTP)</h3>'
+      +     '<h3 class="sec-card-title">Authenticator (TOTP &mdash; Time-based One-Time Password)</h3>'
       +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
       +   '</div>'
       +   '<div class="sec-card-body">'
@@ -362,27 +362,17 @@
     initialized = true;
     var root = document.getElementById('security-dashboard-root');
     if (!root) return;
-    // Insert intro from <template> if not previously dismissed
-    var dismissed = false;
-    try { dismissed = localStorage.getItem('sec-intro-dismissed') === '1'; } catch { /* no storage */ }
-    if (!dismissed) {
-      var tmpl = document.getElementById('sec-intro-template');
-      if (tmpl) {
-        root.appendChild(tmpl.content.cloneNode(true));
-        var dismissBtn = document.getElementById('sec-intro-dismiss');
-        if (dismissBtn) {
-          dismissBtn.addEventListener('click', function () {
-            var intro = document.getElementById('sec-intro');
-            if (intro) intro.remove();
-            try { localStorage.setItem('sec-intro-dismissed', '1'); } catch { /* no storage */ }
-          });
-        }
+    // Clone the intro card from the <template> in index.html and inject
+    // it as the first card inside the dashboard grid.
+    root.innerHTML = buildDashboardHTML();
+    var tmpl = document.getElementById('sec-intro-template');
+    if (tmpl) {
+      var dashboard = root.querySelector('.sec-dashboard');
+      if (dashboard && dashboard.firstChild) {
+        var frag = tmpl.content.cloneNode(true);
+        dashboard.insertBefore(frag, dashboard.firstChild);
       }
     }
-    // Build the dashboard panels below the intro
-    var dashboard = document.createElement('div');
-    dashboard.innerHTML = buildDashboardHTML();
-    root.appendChild(dashboard.firstElementChild);
     attachCardToggles();
     poll();
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);

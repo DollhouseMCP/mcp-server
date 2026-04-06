@@ -1,62 +1,50 @@
 /* Auth tab styles (#1791) — follows permissions.css patterns */
 
 /* Intro explainer (#1816) */
-.sec-intro {
-  max-width: 1200px;
-  margin: 1rem auto 0;
-  padding: 0 1rem;
+/* Intro card spans the full grid width */
+.sec-card--intro {
+  grid-column: 1 / -1;
 }
 
-.sec-intro-content {
-  background: var(--surface-1, #eaf1ff);
-  border: 1px solid var(--line, #c8d5e9);
-  border-radius: 0.5rem;
-  padding: 1.25rem 1.5rem;
-}
-
-.sec-intro-title {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
-  font-weight: 700;
-  color: var(--ink-900, #18243a);
+.sec-intro-summary {
+  font-weight: 400;
+  font-size: 0.8125rem;
+  color: var(--ink-500, #6b7a8d);
 }
 
 .sec-intro-subtitle {
-  margin: 0.75rem 0 0.375rem;
-  font-size: 0.875rem;
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.8125rem;
   font-weight: 700;
-  color: var(--ink-900, #18243a);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-500, #6b7a8d);
 }
 
 .sec-intro-content p {
   font-size: 0.875rem;
-  line-height: 1.6;
+  line-height: 1.7;
   color: var(--ink-700, #324563);
-  margin: 0 0 0.75rem;
+  margin: 0 0 0.5rem;
 }
 
 .sec-intro-list {
-  margin: 0.5rem 0 0.75rem 1.25rem;
+  margin: 0.25rem 0 0 1.25rem;
   padding: 0;
-  font-size: 0.875rem;
-  line-height: 1.6;
+  font-size: 0.8125rem;
+  line-height: 1.7;
   color: var(--ink-700, #324563);
 }
 
 .sec-intro-list li {
-  margin-bottom: 0.375rem;
+  margin-bottom: 0.625rem;
 }
 
-.sec-intro-who {
-  font-size: 0.8125rem;
+.sec-intro-list li strong {
+  color: var(--ink-900, #18243a);
 }
 
-.sec-intro-actions {
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-  margin-top: 0.75rem;
-}
+/* Intro doc link */
 
 .sec-intro-link {
   font-size: 0.8125rem;
@@ -69,18 +57,22 @@
   text-decoration: underline;
 }
 
-[data-theme="dark"] .sec-intro-content {
-  background: var(--surface-1, #1e293b);
-}
-
-/* Dashboard grid */
+/* Dashboard grid — single column keeps cards readable at all widths.
+   The token card has too much metadata for a half-width column. */
 .sec-dashboard {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 1rem;
   padding: 1rem;
-  max-width: 1200px;
+  max-width: 720px;
   margin: 0 auto;
+}
+
+@media (min-width: 900px) {
+  .sec-dashboard {
+    grid-template-columns: 1fr 1fr;
+    max-width: 1200px;
+  }
 }
 
 /* Cards */
