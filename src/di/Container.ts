@@ -865,6 +865,7 @@ export class DollhouseContainer {
     await this.deferredLogHooks(timer);
     await this.deferredMetricsCollectors(timer);
     await this.deferredWebConsole(timer);
+    await this.deferredPermissionServer(timer);
     await this.deferredDangerZoneInit(timer);
     await this.deferredPatternEncryption(timer);
     await this.deferredBackgroundValidator(timer);
@@ -1008,6 +1009,39 @@ export class DollhouseContainer {
       logger.warn('[Container] Web console startup failed:', error);
     }
     timer.endPhase('web_console');
+  }
+
+  private async deferredPermissionServer(timer: StartupTimer): Promise<void> {
+    timer.startPhase('permission_server', false);
+    try {
+      if (!env.DOLLHOUSE_PERMISSION_SERVER) {
+        logger.debug('[Container] Permission server disabled via DOLLHOUSE_PERMISSION_SERVER=false');
+        return;
+      }
+
+      if (!env.DOLLHOUSE_WEB_CONSOLE) {
+        logger.debug('[Container] Permission server skipped — web console is disabled');
+        return;
+      }
+
+      // Permission routes are already mounted on the unified web console.
+      // We just need to write the port file so the PreToolUse hook script
+      // can discover it. No separate server — use the existing console port.
+      const port = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+      const startMs = Date.now();
+
+      const { writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
+      logger.debug(`[Container] Writing permission server port file for port ${port}`);
+      await writePortFile(port);
+      registerPortCleanup();
+      logger.debug(`[Container] Port cleanup handlers registered`);
+
+      const elapsedMs = Date.now() - startMs;
+      logger.info(`[Container] Permission server port file written (port ${port}, ${elapsedMs}ms)`);
+    } catch (error) {
+      logger.warn('[Container] Permission server startup failed:', error);
+    }
+    timer.endPhase('permission_server');
   }
 
   private async deferredDangerZoneInit(timer: StartupTimer): Promise<void> {

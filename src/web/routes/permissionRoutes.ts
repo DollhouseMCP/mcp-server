@@ -93,6 +93,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       return;
     }
 
+    const startMs = Date.now();
     try {
       const opResult = asSingleResult(await handler.handleRead({
         operation: 'evaluate_permission',
@@ -102,19 +103,24 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
           platform: platform || 'claude_code',
         },
       }));
+      const elapsedMs = Date.now() - startMs;
 
       if (!opResult.success) {
-        logger.warn(`[WebUI/Gateway] evaluate_permission failed: ${opResult.error}`);
+        logger.warn(`[WebUI/Gateway] evaluate_permission failed (${elapsedMs}ms): ${opResult.error}`);
         res.json({ decision: 'allow' }); // fail open
         return;
       }
+
+      const decision = (opResult.data as Record<string, unknown>)?.decision ?? 'unknown';
+      logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
       trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
 
       res.json(opResult.data);
     } catch (err) {
-      logger.error('[WebUI/Gateway] evaluate_permission error:', err);
+      const elapsedMs = Date.now() - startMs;
+      logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms):`, err);
       res.json({ decision: 'allow' }); // fail open
     }
   });

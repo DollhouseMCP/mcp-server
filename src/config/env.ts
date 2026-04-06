@@ -128,6 +128,17 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY: z.coerce.number().default(100),
 
   // ============================================================================
+  // Permission Server Configuration
+  // ============================================================================
+  /**
+   * Enable the HTTP permission evaluation server for PreToolUse hooks.
+   * When true, starts an HTTP endpoint on a dynamic port after deferred
+   * setup completes. Writes port to ~/.dollhouse/run/permission-server.port
+   * for hook script discovery. Required for autonomous agent permission
+   * management via Claude Code hooks.
+   */
+  DOLLHOUSE_PERMISSION_SERVER: z.coerce.boolean().default(true),
+
   // Web Console Configuration
   // ============================================================================
   /** Enable the unified web console (logs + metrics tabs) */
