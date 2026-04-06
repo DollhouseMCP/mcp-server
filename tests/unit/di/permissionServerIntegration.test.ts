@@ -136,6 +136,10 @@ describe('Permission Server Integration', () => {
   });
 
   describe('hook script integration', () => {
+    // Hook script requires bash — skip on Windows where bash is not available
+    const isWindows = process.platform === 'win32';
+    const itBash = isWindows ? it.skip : it;
+
     afterEach(async () => {
       await fs.unlink(PORT_FILE).catch(() => {});
     });
@@ -145,7 +149,7 @@ describe('Permission Server Integration', () => {
       expect(exists).toBe(true);
     });
 
-    it('hook script should fail open when port file is missing', (done) => {
+    itBash('hook script should fail open when port file is missing', (done) => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
         execFile('bash', [HOOK_SCRIPT], {
@@ -160,7 +164,7 @@ describe('Permission Server Integration', () => {
       });
     });
 
-    it('hook script should discover server via port file and get a response', (done) => {
+    itBash('hook script should discover server via port file and get a response', (done) => {
       // Start a tiny server, write port file, run hook script
       const testPort = 49360;
       const mockServer = http.createServer((req, res) => {
