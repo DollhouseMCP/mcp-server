@@ -41,19 +41,25 @@ const SESSION_STALE_MS = 15_000;
  * Tracked session information.
  */
 export interface SessionInfo {
+  /** Unique identifier for this session (UUID or `console-<pid>`). */
   sessionId: string;
-  /** Friendly puppet name (e.g., "Kermit", "Punch") */
+  /** Friendly puppet name (e.g., "Kermit", "Punch") or "Web Console". */
   displayName: string;
-  /** Canonical hex color for this puppet character */
+  /** Canonical hex color for this puppet character. */
   color: string;
+  /** OS process ID of the MCP server or web console process. */
   pid: number;
+  /** ISO timestamp when the session started. */
   startedAt: string;
+  /** ISO timestamp of the most recent heartbeat (followers) or registration (leader/console). */
   lastHeartbeat: string;
+  /** Lifecycle status — 'active' until ended or reaped for staleness. */
   status: 'active' | 'ended';
+  /** True if this session won leader election and owns the token file. */
   isLeader: boolean;
   /** Whether this session connected with a valid Bearer token (#1805). */
   authenticated: boolean;
-  /** Session kind — 'mcp' for MCP stdio sessions, 'console' for the web console itself. */
+  /** Session kind — 'mcp' for MCP stdio sessions, 'console' for the web console itself (#1805). */
   kind: 'mcp' | 'console';
 }
 

@@ -271,8 +271,15 @@
           e.stopPropagation();
           if (!confirm('Stop session ' + displayName(s) + '?')) return;
           DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
-            .then(function() { fetchSessions(); })
-            .catch(function() {});
+            .then(function(res) {
+              if (!res.ok) {
+                alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+              }
+              fetchSessions();
+            })
+            .catch(function(err) {
+              alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
+            });
         });
         item.appendChild(killBtn);
 
