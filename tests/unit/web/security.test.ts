@@ -59,7 +59,7 @@ async function createBrowserEnv() {
     </head><body>
       <div id="security-dashboard-root"></div>
       <template id="sec-intro-template">
-        <div class="sec-card sec-card--intro" data-collapsed="true">
+        <section class="sec-card sec-card--intro" data-collapsed="true" aria-labelledby="sec-intro-title">
           <button class="sec-card-header" type="button" aria-expanded="false">
             <h3 class="sec-card-title">Console Authentication</h3>
             <span class="sec-card-toggle">&#9662;</span>
@@ -67,7 +67,7 @@ async function createBrowserEnv() {
           <div class="sec-card-body">
             <p>Test intro content</p>
           </div>
-        </div>
+        </section>
       </template>
     </body></html>`,
     { url: 'http://localhost:5907', runScripts: 'dangerously', pretendToBeVisual: true },
@@ -164,7 +164,7 @@ describe('Auth tab (security.js) — #1791', () => {
       (win as any).DollhouseConsole.security.init();
       const introCard = win.document.querySelector('.sec-card--intro');
       expect(introCard).not.toBeNull();
-      expect(introCard!.getAttribute('data-collapsed')).toBe('true');
+      expect((introCard as HTMLElement).dataset.collapsed).toBe('true');
       const header = introCard!.querySelector('.sec-card-header');
       expect(header!.getAttribute('aria-expanded')).toBe('false');
     });
