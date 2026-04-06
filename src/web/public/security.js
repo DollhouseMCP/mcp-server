@@ -131,7 +131,7 @@
     if (curlBtn) {
       curlBtn.addEventListener('click', function () {
         var liveToken = DollhouseAuth.token || '<TOKEN>';
-        var port = location.port || '5907';
+        var port = location.port || '41715';
         var curl = 'curl -H "Authorization: Bearer ' + liveToken + '" http://localhost:' + port + '/api/elements';
         navigator.clipboard.writeText(curl)
           .then(function () { curlBtn.textContent = 'Copied!'; setTimeout(function () { curlBtn.textContent = 'Copy curl'; }, 1500); })

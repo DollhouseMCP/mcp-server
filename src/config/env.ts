@@ -134,38 +134,28 @@ const envSchema = z.object({
   DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
 
   /**
-   * Port the web console leader binds to (#1794).
+   * Port the web console leader binds to (#1794, #1798).
    *
-   * ⚠️ PROVISIONAL DEFAULT — will be revisited before the first public
-   * release of the authenticated console. 5907 is confirmed to conflict
-   * with the Stellar Cyber security monitoring platform, which uses it
-   * as the listen port for its HTTP Google Kubernetes Engine log parser
-   * (JSON, `http_google_kubernetes_engine`, `cloudsec` category). See:
-   * https://docs.stellarcyber.ai/6.3.xs/Configure/Ports/Firewall-Ports-for-Parsers.htm
+   * Default: 41715 — "AILIS" on a phone keypad, after the AI Layer
+   * Interface Specification that DollhouseMCP implements. Also "Alice"
+   * in Gaelic.
    *
-   * Stellar Cyber is a plausible co-tenant on DollhouseMCP-adjacent
-   * security workstations, so this collision matters. A tracking issue
-   * filed alongside #1796 will pick the permanent default.
-   *
-   * The whole point of this architecture is that changing the port is a
-   * single-line edit here, not a hunt across the codebase. Every runtime
-   * reference (UnifiedConsole leader election, `startWebServer` default,
-   * port discovery) reads from this value, and the env var override
-   * lets deployments hit a collision resolve it without any code change.
-   *
-   * Why 5907 is still a useful interim default despite the conflict:
-   *   - Digits 5-9-0-7 spell "LOGS" upside down on a calculator — a nod
-   *     to the management console's logs tab. Thematic, memorable.
+   * Port selection criteria (verified 2026-04-06):
+   *   - Not registered with IANA (no entry in the service name registry)
+   *   - Not in nmap services database (never observed in the wild)
+   *   - No known application, security tool, or malware associations
    *   - Below the macOS ephemeral range (49152-65535), so `bind()`
    *     does not race with kernel-allocated source ports
-   *   - In the IANA registered range (1024-49151)
-   *   - Not adjacent to the pre-authentication default (3939), so an
-   *     off-by-one typo can't silently hit the wrong console
-   *   - The conflict is with a specific security vendor's product, not
-   *     a ubiquitous dev tool, so the collision radius for interim
-   *     testing is bounded
+   *   - In the IANA user port range (1024-49151)
+   *   - Not adjacent to the pre-authentication default (3939)
+   *
+   * Previous default was 5907 ("LOGS" upside down on a calculator),
+   * which conflicted with Stellar Cyber's HTTP GKE log parser.
+   *
+   * Override via env var if 41715 collides with something in your
+   * environment — every runtime reference reads from this single value.
    */
-  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(5907),
+  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(41715),
 
   /**
    * Issue #1780: Enforce Bearer token authentication on the web console API.

@@ -1,18 +1,18 @@
 # Console Authentication
 
 > **Status:** Authenticated console — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default** during rollout.
-> **Current capabilities:** TOTP enrollment, token rotation with TOTP confirmation, structured error codes, isolated port (5907) and state files, legacy console detection.
+> **Current capabilities:** TOTP enrollment, token rotation with TOTP confirmation, structured error codes, isolated port (41715) and state files, legacy console detection.
 > **Roadmap:** CLI rotation command, Security tab UI, then flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed.
 
-DollhouseMCP's web management console on port `5907` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
+DollhouseMCP's web management console on port `41715` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
 
-> **Port change from earlier versions.** Pre-authentication DollhouseMCP releases bound the web console to port `3939`. The authenticated console binds to `5907` instead (with `.auth` suffixes on the state files) so that a legacy installation and an authenticated installation can coexist on the same machine with zero cross-contamination. Both consoles use fully independent ports, lock files, and token files. If your deployment has a collision on 5907 — for example, [Stellar Cyber](https://docs.stellarcyber.ai/6.3.xs/Configure/Ports/Firewall-Ports-for-Parsers.htm) uses it for its HTTP Google Kubernetes Engine log parser — override it via the `DOLLHOUSE_WEB_CONSOLE_PORT` env var without touching any code.
+> **Port change from earlier versions.** Pre-authentication DollhouseMCP releases bound the web console to port `3939`. The authenticated console binds to `41715` instead (with `.auth` suffixes on the state files) so that a legacy installation and an authenticated installation can coexist on the same machine with zero cross-contamination. Both consoles use fully independent ports, lock files, and token files. Port 41715 spells "AILIS" on a phone keypad — the AI Layer Interface Specification. If your deployment has a collision on 41715, override it via the `DOLLHOUSE_WEB_CONSOLE_PORT` env var without touching any code.
 
 ## Configuration via environment variables
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `DOLLHOUSE_WEB_CONSOLE_PORT` | `5907` | Port the authenticated console binds to. Any 1024-65535. |
+| `DOLLHOUSE_WEB_CONSOLE_PORT` | `41715` | Port the authenticated console binds to. Any 1024-65535. |
 | `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE` | `~/.dollhouse/run/console-leader.auth.lock` | Leader election lock file path. |
 | `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` | Token storage file path. |
 | `DOLLHOUSE_WEB_AUTH_ENABLED` | `false` | Enforce Bearer auth on protected endpoints (Phase 3 default). |
@@ -31,22 +31,22 @@ cat ~/.dollhouse/run/console-token.auth.json | jq .
 
 # 2. Attach it to curl requests
 TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
-curl -H "Authorization: Bearer $TOKEN" http://localhost:5907/api/elements
+curl -H "Authorization: Bearer $TOKEN" http://localhost:41715/api/elements
 
 # 3. Or define a shell helper (~/.zshrc or ~/.bashrc)
 dh-token() { jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json; }
 dh-curl() { curl -H "Authorization: Bearer $(dh-token)" "$@"; }
 
 # Usage
-dh-curl http://localhost:5907/api/elements
-dh-curl -X POST http://localhost:5907/api/install -d '{"path":"library/personas/creative-writer.md","name":"creative-writer","type":"persona"}'
+dh-curl http://localhost:41715/api/elements
+dh-curl -X POST http://localhost:41715/api/install -d '{"path":"library/personas/creative-writer.md","name":"creative-writer","type":"persona"}'
 ```
 
 ---
 
 ## Why authentication?
 
-Port 5907 binds to `127.0.0.1` only, so it is not reachable from the network. Binding alone is the **current** security boundary. Adding authentication raises that boundary so that:
+Port 41715 binds to `127.0.0.1` only, so it is not reachable from the network. Binding alone is the **current** security boundary. Adding authentication raises that boundary so that:
 
 - Other local processes cannot inject fake logs, approve tool permissions, or kill sessions without the token
 - Shared workstations (multi-user Linux, containers with port mapping) can safely run DollhouseMCP without exposing the console to other users
@@ -246,7 +246,7 @@ Use the rotation endpoint (requires TOTP enrollment):
 
 ```bash
 TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
-curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5907/api/console/token/rotate \
+curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:41715/api/console/token/rotate \
   -H 'Content-Type: application/json' -d '{"confirmationCode":"<6-digit TOTP code>"}' | jq .
 ```
 
@@ -297,22 +297,22 @@ TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 H="Authorization: Bearer $TOKEN"
 
 # 1. Start enrollment — shows a QR-code-rendered otpauth URI you can scan
-curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/enroll/begin \
+curl -s -H "$H" -X POST http://localhost:41715/api/console/totp/enroll/begin \
   -H 'Content-Type: application/json' -d '{"label":"My laptop"}' | jq .
 
 # 2. Scan the QR (or paste the secret into your authenticator manually)
 # 3. Confirm with the live 6-digit code
-curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/enroll/confirm \
+curl -s -H "$H" -X POST http://localhost:41715/api/console/totp/enroll/confirm \
   -H 'Content-Type: application/json' \
   -d '{"pendingId":"...","code":"123456"}' | jq .
 
 # Write down the 10 backup codes it returns — you will never see them again.
 
 # Check enrollment state
-curl -s -H "$H" http://localhost:5907/api/console/totp/status | jq .
+curl -s -H "$H" http://localhost:41715/api/console/totp/status | jq .
 
 # Disable later (needs a valid TOTP or backup code)
-curl -s -H "$H" -X POST http://localhost:5907/api/console/totp/disable \
+curl -s -H "$H" -X POST http://localhost:41715/api/console/totp/disable \
   -H 'Content-Type: application/json' -d '{"code":"123456"}'
 ```
 
@@ -414,7 +414,7 @@ TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 H="Authorization: Bearer $TOKEN"
 
 # Rotate (provide a live TOTP code from your authenticator)
-RESULT=$(curl -s -H "$H" -X POST http://localhost:5907/api/console/token/rotate \
+RESULT=$(curl -s -H "$H" -X POST http://localhost:41715/api/console/token/rotate \
   -H 'Content-Type: application/json' -d '{"confirmationCode":"123456"}')
 echo "$RESULT" | jq .
 
@@ -491,7 +491,7 @@ dollhouse-console-token revoke --code 123456 --json
 - **Treat the token like an SSH key or API key.** Anyone who holds it has full admin access to the local management API — including the ability to install MCP configs, approve tool permissions, kill sessions, and read all logs on the host.
 - **Don't commit `console-token.auth.json` anywhere.** It lives under `~/.dollhouse/` which isn't a git repo by default, but if anyone symlinks or copies that directory, the token goes with it.
 - **Don't paste the token into chat, email, or pull request descriptions.** It's localhost-only, but paranoia is cheap.
-- **Don't expose port 5907 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
+- **Don't expose port 41715 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
 - **If you suspect token compromise, rotate immediately.** Use `dollhouse-console-token rotate` or `POST /api/console/token/rotate` with a TOTP code. If you haven't enrolled TOTP, delete the token file and restart the server as a fallback.
 
 ---

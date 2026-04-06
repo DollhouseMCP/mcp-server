@@ -276,7 +276,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
    */
   router.get('/api/sessions', async (_req: Request, res: Response) => {
     const localSessions = Array.from(sessions.values());
-    const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 5907;
+    const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
 
     // Federate with the legacy port (3939) to show all sessions on the
     // machine, including unauthenticated ones from pre-auth installs.

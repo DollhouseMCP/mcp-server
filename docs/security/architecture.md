@@ -464,7 +464,7 @@ The `TokenManager` class provides secure GitHub token management:
 
 **Source files:** `src/web/console/consoleToken.ts`, `src/web/middleware/authMiddleware.ts`
 
-The management console on port 5907 protects its API with a Bearer token stored at `~/.dollhouse/run/console-token.auth.json` (0600 permissions, owner-only). The token is 32 bytes of cryptographic randomness (64 hex chars), generated on first leader election and persisted across restarts. Rotation is explicit-only — restarts do not cycle the token.
+The management console on port 41715 protects its API with a Bearer token stored at `~/.dollhouse/run/console-token.auth.json` (0600 permissions, owner-only). The token is 32 bytes of cryptographic randomness (64 hex chars), generated on first leader election and persisted across restarts. Rotation is explicit-only — restarts do not cycle the token.
 
 **Middleware behavior:**
 - Gated on `DOLLHOUSE_WEB_AUTH_ENABLED` (default `false` during Phase 1 rollout, will flip to `true` in a follow-up PR)

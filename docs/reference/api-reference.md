@@ -615,7 +615,7 @@ Get statistics about Enhanced Index relationships. No parameters.
 
 ### open_portfolio_browser
 
-Start the portfolio web UI and open it in the system browser (localhost:5907). Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation.
+Start the portfolio web UI and open it in the system browser (localhost:41715). Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
