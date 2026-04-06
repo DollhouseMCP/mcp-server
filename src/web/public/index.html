@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="permissions.css">
   <link rel="stylesheet" href="sessions.css">
   <link rel="stylesheet" href="setup.css">
+  <link rel="stylesheet" href="security.css">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -37,10 +38,11 @@
     <div class="header-right">
       <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
         <button class="console-tab" data-tab="setup">Setup</button>
-        <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+        <button class="console-tab" data-tab="security">Auth</button>
         <button class="console-tab" data-tab="logs">Logs</button>
         <button class="console-tab" data-tab="metrics">Metrics</button>
         <button class="console-tab" data-tab="permissions">Permissions</button>
+        <button class="console-tab active" data-tab="portfolio">Portfolio</button>
       </nav>
       <div class="session-indicator" id="session-indicator" title="Active sessions"></div>
       <div class="site-stats" id="stats" aria-live="polite"></div>
@@ -297,6 +299,11 @@ npm install @dollhousemcp/mcp-server</code></pre>
     <div id="permissions-dashboard-root"></div>
   </div>
 
+  <!-- Tab: Security (#1791) -->
+  <div id="tab-security" class="tab-panel" hidden>
+    <div id="security-dashboard-root"></div>
+  </div>
+
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">
@@ -372,5 +379,6 @@ npm install @dollhousemcp/mcp-server</code></pre>
   <script src="metrics.js"></script>
   <script src="permissions.js"></script>
   <script src="sessions.js"></script>
+  <script src="security.js"></script>
 </body>
 </html>

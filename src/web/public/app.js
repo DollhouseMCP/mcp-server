@@ -1931,7 +1931,7 @@ function safeParseYaml(content) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
-    const tabInits = { logs: false, metrics: false, permissions: false };
+    const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
@@ -2094,17 +2094,13 @@ function safeParseYaml(content) {
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
-      if (tab === 'logs' && dc?.logs) {
-        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(params); }
-        else if (dc.logs.refresh) { dc.logs.refresh(); }
-      }
-      if (tab === 'metrics' && dc?.metrics) {
-        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(params); }
-        else if (dc.metrics.refresh) { dc.metrics.refresh(); }
-      }
-      if (tab === 'permissions' && dc?.permissions) {
-        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(params); }
-        else if (dc.permissions.refresh) { dc.permissions.refresh(); }
+      const module = dc?.[tab];
+      if (!module) return;
+      if (!tabInits[tab]) {
+        tabInits[tab] = true;
+        module.init(params);
+      } else if (module.refresh) {
+        module.refresh();
       }
     }
 

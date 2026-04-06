@@ -23,6 +23,7 @@ import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.j
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SessionNamePool } from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
+import { env } from '../../config/env.js';
 
 /** Maximum payload size for ingestion requests */
 const MAX_PAYLOAD_SIZE = '1mb';
@@ -273,9 +274,40 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   /**
    * GET /api/sessions — List all tracked sessions.
    */
-  router.get('/api/sessions', (_req: Request, res: Response) => {
-    const allSessions = Array.from(sessions.values());
-    res.json({ sessions: allSessions });
+  router.get('/api/sessions', async (_req: Request, res: Response) => {
+    const localSessions = Array.from(sessions.values());
+    const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 5907;
+
+    // Federate with the legacy port (3939) to show all sessions on the
+    // machine, including unauthenticated ones from pre-auth installs.
+    // Server-to-server avoids CORS restrictions (#1805).
+    if (currentPort !== 3939) {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 2000);
+        const legacyRes = await fetch('http://127.0.0.1:3939/api/sessions', {
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (legacyRes.ok) {
+          const legacyData = await legacyRes.json() as { sessions: SessionInfo[] };
+          const localIds = new Set(localSessions.map(s => s.sessionId));
+          for (const ls of (legacyData.sessions || [])) {
+            if (!localIds.has(ls.sessionId) && ls.status === 'active') {
+              localSessions.push({
+                ...ls,
+                authenticated: false,
+                kind: ls.kind || 'mcp',
+              });
+            }
+          }
+        }
+      } catch {
+        // Legacy instance not running or unreachable — that's fine
+      }
+    }
+
+    res.json({ sessions: localSessions });
   });
 
   /**

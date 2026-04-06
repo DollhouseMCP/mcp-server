@@ -109,16 +109,19 @@ describe('Session registry (#1805)', () => {
 
       const res = await request(app).get('/api/sessions');
       expect(res.status).toBe(200);
-      expect(res.body.sessions).toHaveLength(2);
+      // At least 2 local sessions; may include federated legacy sessions
+      // if a legacy DollhouseMCP instance is running on port 3939.
+      expect(res.body.sessions.length).toBeGreaterThanOrEqual(2);
 
-      const leader = res.body.sessions.find((s: SessionInfo) => s.kind === 'mcp');
+      const leader = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'leader-001');
+      expect(leader).toBeDefined();
       expect(leader.authenticated).toBe(true);
       expect(leader.kind).toBe('mcp');
 
-      const console = res.body.sessions.find((s: SessionInfo) => s.kind === 'console');
-      expect(console.authenticated).toBe(true);
-      expect(console.kind).toBe('console');
-      expect(console.displayName).toBe('Web Console');
+      const consoleSess = res.body.sessions.find((s: SessionInfo) => s.kind === 'console');
+      expect(consoleSess).toBeDefined();
+      expect(consoleSess.authenticated).toBe(true);
+      expect(consoleSess.displayName).toBe('Web Console');
     });
   });
 

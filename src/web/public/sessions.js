@@ -363,7 +363,10 @@
     }
   }
 
-  // Fetch sessions from the API
+  /**
+   * Fetch sessions from the API. The server handles federation with the
+   * legacy port (3939) server-side to avoid CORS issues (#1805).
+   */
   function fetchSessions() {
     DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
       if (!res.ok) return;

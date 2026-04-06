@@ -205,6 +205,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       "default-src 'self'",
       "script-src 'self' cdn.jsdelivr.net cdnjs.cloudflare.com",
       "style-src 'self' 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net",
+      "img-src 'self' data:",
       "connect-src 'self' raw.githubusercontent.com",
       "font-src 'self'",
     ].join('; '));
@@ -307,7 +308,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
   // meta tag). Without this, express.static serves the raw template
   // and the browser never gets the auth token (#1780).
-  app.use(express.static(publicDir, { index: false }));
+  const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+  app.use(express.static(publicDir, {
+    index: false,
+    // In debug mode, disable caching on all static assets (JS, CSS) so
+    // UI changes are picked up on normal reload without Cmd+Shift+R.
+    ...(isDebug ? { etag: false, lastModified: false, maxAge: 0 } : {}),
+  }));
 
   // SPA fallback with console token injection (#1780).
   // Reads index.html on first request, substitutes the {{CONSOLE_TOKEN}} placeholder
@@ -352,6 +359,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     try {
       const html = await renderIndexHtml();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      // In debug mode, prevent browser caching so UI changes are picked up
+      // immediately. In production, allow short caching for performance.
+      const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+      res.setHeader('Cache-Control', isDebug
+        ? 'no-cache, no-store, must-revalidate'
+        : 'private, max-age=60');
       res.send(html);
     } catch (err) {
       logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);
