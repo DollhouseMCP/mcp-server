@@ -2,7 +2,7 @@
 
 > **Status:** Phase 1 covers same-machine consumers. Cross-machine consumers (browser plugins, remote LLMs) require the Phase 2 device pairing flow.
 
-DollhouseMCP's management API on port `5907` is not just for the built-in web console. Any external tool — including a **second LLM with its own MCP server** — can build an adapter that consumes this API under the same Bearer token security model as local DollhouseMCP sessions. This document describes the three access patterns and how to build each.
+DollhouseMCP's management API on port `41715` is not just for the built-in web console. Any external tool — including a **second LLM with its own MCP server** — can build an adapter that consumes this API under the same Bearer token security model as local DollhouseMCP sessions. This document describes the three access patterns and how to build each.
 
 ---
 
@@ -55,7 +55,7 @@ async function dollhouseFetch(path: string, init: RequestInit = {}): Promise<Res
   const token = await getConsoleToken();
   const headers = new Headers(init.headers);
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  return fetch(`http://127.0.0.1:5907${path}`, { ...init, headers });
+  return fetch(`http://127.0.0.1:41715${path}`, { ...init, headers });
 }
 
 // Usage
@@ -68,7 +68,7 @@ console.log(`Found ${portfolio.totalCount} elements`);
 
 ```bash
 TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
-curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5907/api/elements
+curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:41715/api/elements
 ```
 
 **MCP-AQL adapter pattern:** If you're exposing DollhouseMCP capabilities to a different LLM via its own MCP server, wrap each DollhouseMCP endpoint you want to expose as an MCP tool in your adapter:
@@ -208,7 +208,7 @@ For a large engineering organization running DollhouseMCP across many workstatio
 
 **Threat model:**
 
-- **Localhost binding** is the first line of defense — port 5907 is not reachable from the network.
+- **Localhost binding** is the first line of defense — port 41715 is not reachable from the network.
 - **Bearer token** is the second line — requires knowledge of the token to make API calls.
 - **File permissions (0600)** on `console-token.auth.json` prevent other local users from reading it.
 - **TOTP-protected rotation** (Phase 2) prevents a leaked token from being used to lock out the legitimate user.
