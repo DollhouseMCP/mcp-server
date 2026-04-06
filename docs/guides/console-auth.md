@@ -439,13 +439,60 @@ TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 
 ---
 
+## CLI token management
+
+The `dollhouse-console-token` command provides a terminal interface for token operations. All commands support `--json` for scripted consumption.
+
+**Show the current token:**
+
+```bash
+# Print the raw token (for piping to clipboard or env vars)
+dollhouse-console-token show
+
+# JSON output with metadata
+dollhouse-console-token show --json
+
+# Masked (safe for screen sharing)
+dollhouse-console-token show --masked
+```
+
+**Rotate the token (requires TOTP enrollment):**
+
+```bash
+# Interactive — prompts for TOTP code
+dollhouse-console-token rotate
+
+# Non-interactive — pass the code directly
+dollhouse-console-token rotate --code 123456
+
+# JSON output for scripts
+dollhouse-console-token rotate --json --code 123456
+```
+
+**Revoke the token (rotate + invalidate all sessions):**
+
+```bash
+dollhouse-console-token revoke
+dollhouse-console-token revoke --code 123456 --json
+```
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| `0` | Success |
+| `1` | User error (missing file, invalid args) |
+| `2` | Auth/confirmation failure (wrong TOTP, not enrolled) |
+
+---
+
 ## Security notes
 
 - **Treat the token like an SSH key or API key.** Anyone who holds it has full admin access to the local management API — including the ability to install MCP configs, approve tool permissions, kill sessions, and read all logs on the host.
 - **Don't commit `console-token.auth.json` anywhere.** It lives under `~/.dollhouse/` which isn't a git repo by default, but if anyone symlinks or copies that directory, the token goes with it.
 - **Don't paste the token into chat, email, or pull request descriptions.** It's localhost-only, but paranoia is cheap.
 - **Don't expose port 5907 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
-- **If you suspect token compromise, rotate immediately.** Use `POST /api/console/token/rotate` with a TOTP code. If you haven't enrolled TOTP, delete the token file and restart the server as a fallback.
+- **If you suspect token compromise, rotate immediately.** Use `dollhouse-console-token rotate` or `POST /api/console/token/rotate` with a TOTP code. If you haven't enrolled TOTP, delete the token file and restart the server as a fallback.
 
 ---
 

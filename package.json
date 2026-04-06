@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "bin": {
     "dollhousemcp": "dist/index.js",
-    "mcp-server": "dist/index.js"
+    "mcp-server": "dist/index.js",
+    "dollhouse-console-token": "dist/cli/console-token.js"
   },
   "scripts": {
     "prebuild": "npm run build:safety && node scripts/generate-version.js",
