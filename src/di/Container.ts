@@ -865,6 +865,7 @@ export class DollhouseContainer {
     await this.deferredLogHooks(timer);
     await this.deferredMetricsCollectors(timer);
     await this.deferredWebConsole(timer);
+    await this.deferredPermissionServer(timer);
     await this.deferredDangerZoneInit(timer);
     await this.deferredPatternEncryption(timer);
     await this.deferredBackgroundValidator(timer);
@@ -1008,6 +1009,36 @@ export class DollhouseContainer {
       logger.warn('[Container] Web console startup failed:', error);
     }
     timer.endPhase('web_console');
+  }
+
+  private async deferredPermissionServer(timer: StartupTimer): Promise<void> {
+    timer.startPhase('permission_server', false);
+    try {
+      if (!env.DOLLHOUSE_PERMISSION_SERVER) {
+        logger.debug('[Container] Permission server disabled via DOLLHOUSE_PERMISSION_SERVER=false');
+        return;
+      }
+
+      const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
+      if (!mcpAqlHandler) {
+        logger.debug('[Container] Permission server skipped — no MCPAQLHandler available');
+        return;
+      }
+
+      const memorySink = this.tryResolve<MemoryLogSink>('MemoryLogSink');
+      const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
+
+      const { startPermissionServer } = await import('../auto-dollhouse/webAutoStart.js');
+      await startPermissionServer(
+        mcpAqlHandler,
+        memorySink,
+        metricsSink,
+        (name: string) => this.tryResolve(name),
+      );
+    } catch (error) {
+      logger.warn('[Container] Permission server startup failed:', error);
+    }
+    timer.endPhase('permission_server');
   }
 
   private async deferredDangerZoneInit(timer: StartupTimer): Promise<void> {
