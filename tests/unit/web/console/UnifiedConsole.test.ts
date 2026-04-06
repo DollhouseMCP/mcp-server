@@ -58,7 +58,7 @@ describe('warnIfLegacyConsolePresent', () => {
       lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
-    const result = await warnIfLegacyConsolePresent(5907, detectStub, logStub);
+    const result = await warnIfLegacyConsolePresent(41715, detectStub, logStub);
 
     expect(detectStub).toHaveBeenCalledTimes(1);
     expect(logStub.warn).toHaveBeenCalledTimes(1);
@@ -67,7 +67,7 @@ describe('warnIfLegacyConsolePresent', () => {
     expect(warnMessage).toContain('Legacy');
     expect(warnMessage).toContain('pid=12345');
     expect(warnMessage).toContain('port=3939');
-    expect(warnMessage).toContain('port 5907'); // current port
+    expect(warnMessage).toContain('port 41715'); // current port
     expect(warnMessage).toContain('update the legacy installation');
     // Result shape is passed through unchanged
     expect(result).toEqual({
@@ -85,7 +85,7 @@ describe('warnIfLegacyConsolePresent', () => {
       lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
-    const result = await warnIfLegacyConsolePresent(5907, detectStub, logStub);
+    const result = await warnIfLegacyConsolePresent(41715, detectStub, logStub);
 
     expect(detectStub).toHaveBeenCalledTimes(1);
     expect(logStub.warn).not.toHaveBeenCalled();
@@ -107,7 +107,7 @@ describe('warnIfLegacyConsolePresent', () => {
       new Error('simulated EACCES on legacy lock path'),
     );
 
-    const result = await warnIfLegacyConsolePresent(5907, detectStub, logStub);
+    const result = await warnIfLegacyConsolePresent(41715, detectStub, logStub);
 
     expect(detectStub).toHaveBeenCalledTimes(1);
     expect(logStub.warn).not.toHaveBeenCalled();
@@ -130,7 +130,7 @@ describe('warnIfLegacyConsolePresent', () => {
       lockPath: FIXTURE_LEGACY_LOCK_PATH,
     });
 
-    await warnIfLegacyConsolePresent(5907, detectStub, logStub);
+    await warnIfLegacyConsolePresent(41715, detectStub, logStub);
 
     const warnMessage = (logStub.warn as jest.Mock).mock.calls[0][0] as string;
     expect(warnMessage).toContain('pid=98765');
@@ -141,7 +141,7 @@ describe('warnIfLegacyConsolePresent', () => {
   it('passes the current port through to the warning message', async () => {
     // Different deployments may configure different ports via
     // DOLLHOUSE_WEB_CONSOLE_PORT. The warning message must reflect
-    // whatever port this process actually bound to, not hardcode 5907.
+    // whatever port this process actually bound to, not hardcode 41715.
     const logStub = makeLoggerStub();
     const detectStub = jest.fn<() => Promise<LegacyLeaderInfo>>().mockResolvedValue({
       legacyRunning: true,
@@ -154,6 +154,6 @@ describe('warnIfLegacyConsolePresent', () => {
 
     const warnMessage = (logStub.warn as jest.Mock).mock.calls[0][0] as string;
     expect(warnMessage).toContain('port 8080');
-    expect(warnMessage).not.toMatch(/port 5907/);
+    expect(warnMessage).not.toMatch(/port 41715/);
   });
 });

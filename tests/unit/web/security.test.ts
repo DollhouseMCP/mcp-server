@@ -70,7 +70,7 @@ async function createBrowserEnv() {
         </section>
       </template>
     </body></html>`,
-    { url: 'http://localhost:5907', runScripts: 'dangerously', pretendToBeVisual: true },
+    { url: 'http://localhost:41715', runScripts: 'dangerously', pretendToBeVisual: true },
   );
 
   // Stub fetch

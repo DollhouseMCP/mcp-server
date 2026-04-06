@@ -41,7 +41,7 @@ async function createBrowserEnv(token: string = ''): Promise<{
   const dom = new JSDOM(
     `<!DOCTYPE html><html><head>${metaTag}</head><body></body></html>`,
     {
-      url: 'http://localhost:5907',
+      url: 'http://localhost:41715',
       runScripts: 'dangerously',
       pretendToBeVisual: true,
     },
