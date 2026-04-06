@@ -225,20 +225,36 @@
         if (s.color) nameEl.style.color = s.color;
         item.appendChild(nameEl);
 
-        // Auth status badge (#1805)
-        var badge = document.createElement('span');
-        badge.className = 'session-auth-badge';
-        if (s.kind === 'console') {
-          badge.textContent = 'console';
-          badge.dataset.auth = 'console';
-        } else if (s.authenticated) {
-          badge.textContent = 'auth';
-          badge.dataset.auth = 'yes';
+        // Session status badges (#1805) — two independent dimensions:
+        // 1. Auth status (filled/empty circle + text)
+        // 2. Client attachment (checkmark/X + text)
+        // Shape + text + colorblind-safe color (blue/orange) = three
+        // independent channels so no single channel carries meaning alone.
+        var authBadge = document.createElement('span');
+        authBadge.className = 'session-status-badge';
+        if (s.authenticated) {
+          authBadge.textContent = '\u25CF Auth';
+          authBadge.dataset.status = 'positive';
+          authBadge.title = 'Authenticated session';
         } else {
-          badge.textContent = 'no auth';
-          badge.dataset.auth = 'no';
+          authBadge.textContent = '\u25CB No auth';
+          authBadge.dataset.status = 'negative';
+          authBadge.title = 'Unauthenticated session';
         }
-        item.appendChild(badge);
+        item.appendChild(authBadge);
+
+        var clientBadge = document.createElement('span');
+        clientBadge.className = 'session-status-badge';
+        if (s.kind === 'mcp') {
+          clientBadge.textContent = '\u2713 Client';
+          clientBadge.dataset.status = 'positive';
+          clientBadge.title = 'MCP client attached';
+        } else {
+          clientBadge.textContent = '\u2717 No client';
+          clientBadge.dataset.status = 'negative';
+          clientBadge.title = 'No MCP client attached';
+        }
+        item.appendChild(clientBadge);
 
         var uptimeEl = document.createElement('span');
         uptimeEl.className = 'session-dropdown-uptime';
