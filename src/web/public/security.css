@@ -87,15 +87,21 @@
   grid-column: 1 / -1;
 }
 
+/* Reset button styles when card header is a <button> for accessibility */
 .sec-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
   padding: 0.75rem 1rem;
   background: var(--paper-base, #f8fbff);
+  border: none;
   border-bottom: 1px solid var(--line, #c8d5e9);
   cursor: pointer;
   user-select: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
 .sec-card-header:hover {

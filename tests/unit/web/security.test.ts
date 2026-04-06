@@ -144,7 +144,7 @@ describe('Auth tab (security.js) — #1791', () => {
       const headers = win.document.querySelectorAll('.sec-card-header');
       expect(headers.length).toBe(2); // Token + Authenticator
       headers.forEach((h: Element) => {
-        expect(h.getAttribute('role')).toBe('button');
+        expect(h.tagName.toLowerCase()).toBe('button');
         expect(h.getAttribute('aria-expanded')).toBe('true');
       });
     });
