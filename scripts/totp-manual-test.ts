@@ -21,7 +21,7 @@
  * risk to other DollhouseMCP instances on the same machine:
  *
  *   • Binds to a test-only port (default 8765, far from both the
- *     legacy 3939 and the authenticated 5907)
+ *     legacy 3939 and the authenticated 41715)
  *   • Uses a fresh temp token file under /tmp — never touches
  *     ~/.dollhouse/run/console-token.auth.json
  *   • Bypasses leader election entirely — no lock file contention
