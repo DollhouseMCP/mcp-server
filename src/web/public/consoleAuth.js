@@ -51,6 +51,19 @@
   var consoleToken = readTokenFromMeta();
 
   /**
+   * Fire a custom event when the server returns 401 — the cached token is
+   * stale (rotated, server restarted, file deleted). The global listener
+   * in app.js shows a reload toast. Dispatched at most once per page load
+   * so multiple 401s don't stack multiple events.
+   */
+  var sessionExpiredFired = false;
+  function fireSessionExpired() {
+    if (sessionExpiredFired) return;
+    sessionExpiredFired = true;
+    window.dispatchEvent(new CustomEvent('dollhouse:session-expired'));
+  }
+
+  /**
    * Fetch wrapper that attaches Authorization: Bearer to API requests.
    * Accepts the same arguments as native fetch().
    *
@@ -68,7 +81,12 @@
       headers.set('Authorization', 'Bearer ' + consoleToken);
     }
     opts.headers = headers;
-    return fetch(input, opts);
+    return fetch(input, opts).then(function (response) {
+      if (response.status === 401 && consoleToken) {
+        fireSessionExpired();
+      }
+      return response;
+    });
   }
 
   /**
@@ -87,7 +105,18 @@
     }
     var separator = url.indexOf('?') >= 0 ? '&' : '?';
     var urlWithToken = url + separator + 'token=' + encodeURIComponent(consoleToken);
-    return new EventSource(urlWithToken, init);
+    var es = new EventSource(urlWithToken, init);
+    // EventSource doesn't expose HTTP status codes on error. When the
+    // connection closes with an error, probe the base URL with a HEAD
+    // request to detect 401. If the token is stale, apiFetch's .then()
+    // handler fires the session-expired event. addEventListener runs
+    // alongside any onerror the caller sets — no interference.
+    es.addEventListener('error', function () {
+      if (consoleToken && es.readyState === EventSource.CLOSED) {
+        apiFetch(url, { method: 'HEAD' }).catch(function () { /* ignore */ });
+      }
+    });
+    return es;
   }
 
   /** Expose the helpers on the global namespace. */
