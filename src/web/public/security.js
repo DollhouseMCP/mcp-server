@@ -87,10 +87,7 @@
       return;
     }
     var t = data.tokens[0];
-    var revealed = el.dataset.revealed === 'true';
-    var tokenDisplay = revealed
-      ? '<code class="sec-token-value">' + esc(t.tokenPreview.replace(/•/g, '')) + '...</code>'
-      : '<code class="sec-token-value">' + esc(t.tokenPreview) + '</code>';
+    var tokenDisplay = '<code class="sec-token-value">' + esc(t.tokenPreview) + '</code>';
 
     el.innerHTML = ''
       + '<div class="sec-token-row">'
@@ -129,11 +126,13 @@
       });
     }
 
-    // Copy as curl
+    // Copy as curl — includes live token for a runnable command
     var curlBtn = document.getElementById('sec-copy-curl');
     if (curlBtn) {
       curlBtn.addEventListener('click', function () {
-        var curl = 'curl -H "Authorization: Bearer <TOKEN>" http://localhost:' + location.port + '/api/elements';
+        var liveToken = DollhouseAuth.token || '<TOKEN>';
+        var port = location.port || '5907';
+        var curl = 'curl -H "Authorization: Bearer ' + liveToken + '" http://localhost:' + port + '/api/elements';
         navigator.clipboard.writeText(curl)
           .then(function () { curlBtn.textContent = 'Copied!'; setTimeout(function () { curlBtn.textContent = 'Copy curl'; }, 1500); })
           .catch(function () { alert('Failed to copy — check clipboard permissions'); });

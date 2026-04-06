@@ -74,7 +74,7 @@ async function createBrowserEnv() {
       url: string;
       readyState = 1;
       constructor(url: string) { this.url = url; }
-      addEventListener() {}
+      addEventListener() { /* stub — no-op for test environment */ }
       close() { this.readyState = 2; }
     };
   }
@@ -97,7 +97,7 @@ async function createBrowserEnv() {
 
 /** Set up fetch to return mock token info. */
 function mockFetchSuccess(win: any, data: any = MOCK_TOKEN_INFO) {
-  (win as any).fetch = jest.fn().mockResolvedValue({
+  win.fetch = jest.fn().mockResolvedValue({
     ok: true,
     status: 200,
     json: () => Promise.resolve(data),
@@ -241,6 +241,45 @@ describe('Auth tab (security.js) — #1791', () => {
       header.click();
       expect(card.dataset.collapsed).toBe('false');
       expect(header.getAttribute('aria-expanded')).toBe('true');
+    });
+  });
+
+  describe('edge cases', () => {
+    it('handles empty tokens array gracefully', async () => {
+      mockFetchSuccess(win, { tokens: [], totp: MOCK_TOKEN_INFO.totp, filePath: '/test' });
+      (win as any).DollhouseConsole.security.init();
+      await new Promise(r => setTimeout(r, 50));
+
+      const tokenContent = win.document.getElementById('sec-token-content');
+      expect(tokenContent!.textContent).toContain('No token data');
+    });
+
+    it('handles poll failure by clearing stale content', async () => {
+      // First successful render
+      mockFetchSuccess(win);
+      (win as any).DollhouseConsole.security.init();
+      await new Promise(r => setTimeout(r, 50));
+
+      // Now make fetch fail
+      win.fetch = jest.fn().mockRejectedValue(new Error('network down'));
+      (win as any).DollhouseConsole.security.refresh();
+      await new Promise(r => setTimeout(r, 50));
+
+      const tokenContent = win.document.getElementById('sec-token-content');
+      expect(tokenContent!.innerHTML).toBe('');
+    });
+
+    it('handles missing totp field in response', async () => {
+      mockFetchSuccess(win, {
+        tokens: MOCK_TOKEN_INFO.tokens,
+        totp: { enrolled: false, enrolledAt: null, backupCodesRemaining: 0 },
+        filePath: '/test',
+      });
+      (win as any).DollhouseConsole.security.init();
+      await new Promise(r => setTimeout(r, 50));
+
+      const totpContent = win.document.getElementById('sec-totp-content');
+      expect(totpContent!.innerHTML).toContain('Not enrolled');
     });
   });
 
