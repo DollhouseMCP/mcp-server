@@ -36,7 +36,7 @@ describe('Permission Server Integration', () => {
     });
 
     it('should find a port and write a discoverable port file', async () => {
-      const { findAvailablePort, writePortFile } = await import(
+      const { findAvailablePort, writePortFile, cleanupPortFile } = await import(
         '../../../src/auto-dollhouse/portDiscovery.js'
       );
 
@@ -50,6 +50,10 @@ describe('Permission Server Integration', () => {
       // PID-keyed file should also exist
       const pidContent = await fs.readFile(pidFile, 'utf-8');
       expect(pidContent.trim()).toBe(String(testPort));
+
+      // Clean up immediately to avoid race with other test suites sharing the port file
+      await cleanupPortFile();
+      await fs.unlink(PORT_FILE).catch(() => {});
     });
 
     it('should accept POST /api/evaluate_permission and return a decision', async () => {
@@ -164,8 +168,7 @@ describe('Permission Server Integration', () => {
       });
     });
 
-    itBash('hook script should discover server via port file and get a response', (done) => {
-      // Start a tiny server, write port file, run hook script
+    itBash('hook script should discover server via port file and get a response', async () => {
       const testPort = 49360;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -181,41 +184,37 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      mockServer.listen(testPort, '127.0.0.1', async () => {
-        // Write port file so hook can discover it
-        await fs.mkdir(RUN_DIR, { recursive: true });
-        await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+      // Start server and write port file
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
-        // Run hook script with tool input on stdin
-        const { spawn } = await import('node:child_process');
+      // Run hook script
+      const { spawn } = await import('node:child_process');
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn('bash', [HOOK_SCRIPT], {
           env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-
-        const hookInput = JSON.stringify({
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
           tool_name: 'Read',
           tool_input: { file_path: './test-fixture.txt' },
-        });
-
-        let stdout = '';
-        hookProc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
-
-        hookProc.on('close', (code: number) => {
-          mockServer.close(() => {
-            fs.unlink(PORT_FILE).catch(() => {});
-            expect(code).toBe(0);
-            if (stdout.trim()) {
-              const response = JSON.parse(stdout.trim());
-              expect(response.decision).toBe('allow');
-            }
-            done();
-          });
-        });
-
-        hookProc.stdin.write(hookInput);
+        }));
         hookProc.stdin.end();
       });
+
+      // Cleanup and assert
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      if (stdout.trim()) {
+        const response = JSON.parse(stdout.trim());
+        expect(response.decision).toBe('allow');
+      }
     });
   });
 
