@@ -149,7 +149,7 @@ describe('Permission Server Integration', () => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
         execFile('bash', [HOOK_SCRIPT], {
-          env: { ...process.env, HOME: os.homedir() },
+          env: { HOME: os.homedir(), PATH: process.env.PATH ?? '' },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
           expect(error).toBeNull();
@@ -185,13 +185,13 @@ describe('Permission Server Integration', () => {
         // Run hook script with tool input on stdin
         const { spawn } = await import('node:child_process');
         const hookProc = spawn('bash', [HOOK_SCRIPT], {
-          env: { ...process.env, HOME: os.homedir() },
+          env: { HOME: os.homedir(), PATH: process.env.PATH ?? '' },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
 
         const hookInput = JSON.stringify({
           tool_name: 'Read',
-          tool_input: { file_path: '/tmp/test.txt' },
+          tool_input: { file_path: './test-fixture.txt' },
         });
 
         let stdout = '';
