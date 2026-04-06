@@ -37,9 +37,21 @@ jobs:
               -d "{\"query\": \"{ securityAdvisory(ghsaId: \\\"$GHSA\\\") { withdrawnAt, severity, cvss { score }, updatedAt } }\"}" \
               https://api.github.com/graphql 2>/dev/null)
 
+            # Validate GraphQL response — skip GitHub data if errors or null
+            GH_VALID="true"
+            GH_ERRORS=$(echo "$GH_RESPONSE" | jq -r '.errors // empty' 2>/dev/null)
+            GH_DATA=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory // empty' 2>/dev/null)
+            if [ -n "$GH_ERRORS" ] || [ -z "$GH_DATA" ]; then
+              echo "  Warning: GitHub Advisory DB returned no data for $GHSA (falling back to OSV.dev only)"
+              GH_VALID="false"
+            fi
+
             # Check if the vulnerability has been withdrawn (either source)
             OSV_WITHDRAWN=$(echo "$OSV_RESPONSE" | jq -r '.withdrawn // empty')
-            GH_WITHDRAWN=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.withdrawnAt // empty' 2>/dev/null)
+            GH_WITHDRAWN=""
+            if [ "$GH_VALID" = "true" ]; then
+              GH_WITHDRAWN=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.withdrawnAt // empty' 2>/dev/null)
+            fi
 
             if [ -n "$OSV_WITHDRAWN" ] || [ -n "$GH_WITHDRAWN" ]; then
               WITHDRAWN_DATE="${OSV_WITHDRAWN:-$GH_WITHDRAWN}"
@@ -47,10 +59,11 @@ jobs:
               continue
             fi
 
-            # Check if severity changed on GitHub Advisory Database
-            GH_SEVERITY=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.severity // empty' 2>/dev/null)
-            GH_CVSS=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.cvss.score // empty' 2>/dev/null)
-            GH_UPDATED=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.updatedAt // empty' 2>/dev/null)
+            # Extract severity from GitHub Advisory Database (if available)
+            GH_CVSS="unknown"
+            if [ "$GH_VALID" = "true" ]; then
+              GH_CVSS=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.cvss.score // "unknown"' 2>/dev/null)
+            fi
 
             # Check if affected versions have changed (new fix available)
             HAS_FIX=$(echo "$OSV_RESPONSE" | jq -r '
