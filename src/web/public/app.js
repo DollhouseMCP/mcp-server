@@ -2108,6 +2108,26 @@ function safeParseYaml(content) {
       }
     }
 
+    // 401 recovery (#1792): when the cached token becomes stale (rotation,
+    // restart, file deletion), consoleAuth.js fires this event. Show a
+    // persistent, idempotent reload banner so the user knows why the UI
+    // stopped updating.
+    globalThis.addEventListener('dollhouse:session-expired', function () {
+      if (document.getElementById('session-expired-toast')) return;
+      const toast = document.createElement('div');
+      toast.id = 'session-expired-toast';
+      toast.setAttribute('role', 'alert');
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
+        + 'background:#b91c1c;color:#fff;padding:12px 24px;border-radius:8px;'
+        + 'font-size:14px;z-index:99999;display:flex;align-items:center;gap:12px;'
+        + 'box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+      toast.innerHTML = 'Console session token changed\u2009\u2014\u2009'
+        + '<button style="background:#fff;color:#b91c1c;border:none;padding:6px 16px;'
+        + 'border-radius:4px;cursor:pointer;font-weight:600;font-size:14px"'
+        + ' onclick="location.reload()">Reload</button>';
+      document.body.appendChild(toast);
+    });
+
     init();
   });
 

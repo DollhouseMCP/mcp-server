@@ -201,13 +201,15 @@ The server injects the current token into `index.html` via a `<meta name="dollho
 
 The token is never exposed in `localStorage` or cookies — it's re-read from the freshly rendered HTML on every page load. After a rotation, the browser helper's `DollhouseAuth.refresh(newToken)` method updates the cached token in memory so the active tab switches to the new value without a full page reload. A manual reload also works — the server injects the current token into the HTML on each request.
 
+If the cached token becomes stale (rotation from another window, server restart, file deletion), `apiFetch` detects the `401` response and fires a `dollhouse:session-expired` custom event. The UI shows a persistent reload banner so the user knows why the console stopped updating. SSE streams (`apiEventSource`) detect stale tokens the same way — on connection failure, a HEAD probe checks whether the cause is a `401`, and fires the same event if so. The banner is idempotent: multiple `401`s produce only one toast.
+
 ---
 
 ## How follower processes get the token
 
 DollhouseMCP uses a leader/follower model for multi-session deployments. The leader owns the token file; followers read it on startup and attach the token to their `/api/ingest/*` POSTs. If the file is missing when a follower starts (unusual — the leader creates it), the follower simply omits the Bearer header and relies on the auth flag being off.
 
-After a rotation, the new token value is written to disk atomically; followers that restart will pick up the new value automatically. Long-lived followers that encounter a `401` should re-read the token file — automated read-on-401 recovery is tracked in issue #1792.
+After a rotation, the new token value is written to disk atomically; followers that restart will pick up the new value automatically. Long-lived followers that encounter a `401` should re-read the token file.
 
 ---
 
