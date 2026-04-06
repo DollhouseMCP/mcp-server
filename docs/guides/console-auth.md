@@ -185,7 +185,13 @@ These are **intentionally** unprotected in Phase 1 and will be addressed in late
 
 - **`401` rate limiting.** Not implemented yet. A 256-bit token cannot be brute-forced in any practical sense, but a flood of wrong-token requests could saturate the verify path as a DoS. Deferred to Phase 3.
 
-- **Windows file permissions.** `chmod(0o600)` is a no-op on Windows because the file system uses ACLs instead of POSIX modes. A one-time warning is logged on startup when the token file is created on Windows. Use `icacls` or equivalent for OS-enforced isolation in multi-user Windows environments.
+- **Windows file permissions.** `chmod(0o600)` is a no-op on Windows because the file system uses ACLs instead of POSIX modes. A one-time warning is logged on startup when the token file is created on Windows. In multi-user Windows environments, restrict access with `icacls`:
+
+  ```powershell
+  icacls "%USERPROFILE%\.dollhouse\run\console-token.auth.json" /inheritance:r /grant:r "%USERNAME%:RW"
+  ```
+
+  This removes inherited permissions and grants read/write only to the current user — the Windows equivalent of `chmod 0600`.
 
 ---
 
@@ -339,6 +345,36 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 ## Token rotation
 
 The rotation endpoint lets you invalidate the current console token and get a fresh one in a single request — no restart, no file editing. Rotation requires TOTP confirmation (you must be enrolled first; see [TOTP enrollment](#totp-authenticator-enrollment) above).
+
+**Rotation flow:**
+
+```
+  Browser / CLI              Server                    Token File
+       │                       │                           │
+       │  POST /rotate         │                           │
+       │  Authorization: Bearer OLD_TOKEN                  │
+       │  { confirmationCode } │                           │
+       │──────────────────────>│                           │
+       │                       │  1. Verify Bearer token   │
+       │                       │  2. Verify TOTP code      │
+       │                       │  3. Stash OLD in grace    │
+       │                       │     buffer (15s TTL)      │
+       │                       │  4. Generate NEW token    │
+       │                       │  5. Write atomically ────>│
+       │                       │  6. Rebuild buffer cache  │
+       │   { token: NEW,       │                           │
+       │     rotatedAt, graceUntil }                       │
+       │<──────────────────────│                           │
+       │                       │                           │
+       │  DollhouseAuth.refresh(NEW)                       │
+       │  (in-memory update,   │                           │
+       │   no page reload)     │                           │
+       │                       │                           │
+       │  ── 15s grace ──      │                           │
+       │  OLD still accepted   │                           │
+       │  ── grace expires ──  │                           │
+       │  OLD rejected         │                           │
+```
 
 **Endpoint:** `POST /api/console/token/rotate` (always requires auth regardless of `DOLLHOUSE_WEB_AUTH_ENABLED`)
 
