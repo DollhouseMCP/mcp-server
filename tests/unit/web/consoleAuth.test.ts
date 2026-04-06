@@ -58,10 +58,11 @@ async function createBrowserEnv(token: string = ''): Promise<{
       static readonly CLOSED = 2;
       url: string;
       readyState = 1;
-      private listeners: Record<string, Function[]> = {};
+      private readonly listeners: Record<string, Function[]> = {};
       constructor(url: string) { this.url = url; }
       addEventListener(type: string, fn: Function) {
-        (this.listeners[type] ??= []).push(fn);
+        if (!this.listeners[type]) { this.listeners[type] = []; }
+        this.listeners[type].push(fn);
       }
       close() { this.readyState = 2; }
     };
