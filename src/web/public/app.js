@@ -2094,21 +2094,13 @@ function safeParseYaml(content) {
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
-      if (tab === 'logs' && dc?.logs) {
-        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(params); }
-        else if (dc.logs.refresh) { dc.logs.refresh(); }
-      }
-      if (tab === 'metrics' && dc?.metrics) {
-        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(params); }
-        else if (dc.metrics.refresh) { dc.metrics.refresh(); }
-      }
-      if (tab === 'permissions' && dc?.permissions) {
-        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(params); }
-        else if (dc.permissions.refresh) { dc.permissions.refresh(); }
-      }
-      if (tab === 'security' && dc?.security) {
-        if (!tabInits.security) { tabInits.security = true; dc.security.init(params); }
-        else if (dc.security.refresh) { dc.security.refresh(); }
+      const module = dc?.[tab];
+      if (!module) return;
+      if (!tabInits[tab]) {
+        tabInits[tab] = true;
+        module.init(params);
+      } else if (module.refresh) {
+        module.refresh();
       }
     }
 

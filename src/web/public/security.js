@@ -16,13 +16,19 @@
 (function () {
   'use strict';
 
+  /** How often to refresh token/TOTP data from the server. */
   var POLL_INTERVAL_MS = 5000;
+  /** Handle for the polling interval so we can clear on destroy. */
   var pollTimer = null;
+  /** Whether initSecurity() has been called (prevents double-init). */
   var initialized = false;
+  /** Last fetched data — stashed during enrollment so we can re-render after. */
   var lastData = null;
   /** When true, poll() skips rendering to avoid overwriting an in-progress
    *  enrollment flow (QR code, confirm input, backup codes display). */
   var enrollmentInProgress = false;
+  /** Debounce flag — prevents rapid double-clicks on action buttons. */
+  var actionInProgress = false;
 
   /** NFC-normalize and HTML-escape a string for safe display. */
   function esc(str) {
@@ -90,7 +96,7 @@
       + '<div class="sec-token-row">'
       +   '<span class="sec-label">Token</span>'
       +   tokenDisplay
-      +   '<button class="sec-btn sec-btn--sm" id="sec-copy-token" title="Copy full token to clipboard">Copy</button>'
+      +   '<button class="sec-btn sec-btn--sm" id="sec-copy-token" title="Copy token to clipboard">Copy</button>'
       +   '<button class="sec-btn sec-btn--sm" id="sec-copy-curl" title="Copy as curl command">Copy curl</button>'
       + '</div>'
       + '<div class="sec-meta-grid">'
@@ -108,18 +114,18 @@
       +   '>Rotate Token</button>'
       + '</div>';
 
-    // Copy token
+    // Copy token — uses the live token from DollhouseAuth (already in browser memory)
     var copyBtn = document.getElementById('sec-copy-token');
     if (copyBtn) {
       copyBtn.addEventListener('click', function () {
-        DollhouseAuth.apiFetch('/api/console/token/info')
-          .then(function (r) { return r.json(); })
-          .then(function () {
-            // Token preview only — full token requires a reveal endpoint
-            navigator.clipboard.writeText(t.tokenPreview)
-              .then(function () { copyBtn.textContent = 'Copied!'; setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500); })
-              .catch(function () { alert('Failed to copy — check clipboard permissions'); });
-          });
+        var liveToken = DollhouseAuth.token;
+        if (!liveToken) {
+          alert('No token available — authentication may be disabled.');
+          return;
+        }
+        navigator.clipboard.writeText(liveToken)
+          .then(function () { copyBtn.textContent = 'Copied!'; setTimeout(function () { copyBtn.textContent = 'Copy'; }, 1500); })
+          .catch(function () { alert('Failed to copy — check clipboard permissions'); });
       });
     }
 
@@ -187,9 +193,12 @@
 
   // ── Actions ───────────────────────────────────────────────────────────
 
+  /** Prompt for TOTP code and rotate the primary token. */
   function handleRotate() {
+    if (actionInProgress) return;
     var code = prompt('Enter your TOTP code to rotate the token:');
     if (!code) return;
+    actionInProgress = true;
     DollhouseAuth.apiFetch('/api/console/token/rotate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -197,6 +206,7 @@
     })
       .then(function (r) { return r.json().then(function (body) { return { ok: r.ok, body: body }; }); })
       .then(function (result) {
+        actionInProgress = false;
         if (result.ok) {
           DollhouseAuth.refresh(result.body.token);
           alert('Token rotated successfully. The new token is now active.');
@@ -205,10 +215,13 @@
           alert('Rotation failed: ' + (result.body.error || 'Unknown error'));
         }
       })
-      .catch(function (err) { alert('Rotation failed: ' + (err.message || 'network error')); });
+      .catch(function (err) { actionInProgress = false; alert('Rotation failed: ' + (err.message || 'network error')); });
   }
 
+  /** Start the TOTP enrollment flow — show QR code, confirm, display backup codes. */
   function handleEnrollTotp() {
+    if (actionInProgress) return;
+    actionInProgress = true;
     DollhouseAuth.apiFetch('/api/console/totp/enroll/begin', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -216,6 +229,7 @@
     })
       .then(function (r) { return r.json().then(function (body) { return { ok: r.ok, body: body }; }); })
       .then(function (result) {
+        actionInProgress = false;
         if (!result.ok) {
           alert('Enrollment failed: ' + (result.body.error || 'Unknown error'));
           return;
@@ -274,12 +288,15 @@
             .catch(function (err) { alert('Confirmation failed: ' + (err.message || 'network error')); });
         });
       })
-      .catch(function (err) { alert('Enrollment failed: ' + (err.message || 'network error')); });
+      .catch(function (err) { actionInProgress = false; alert('Enrollment failed: ' + (err.message || 'network error')); });
   }
 
+  /** Disable TOTP enrollment after code confirmation. */
   function handleDisableTotp() {
+    if (actionInProgress) return;
     var code = prompt('Enter your TOTP code (or backup code) to disable TOTP:');
     if (!code) return;
+    actionInProgress = true;
     DollhouseAuth.apiFetch('/api/console/totp/disable', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -287,6 +304,7 @@
     })
       .then(function (r) { return r.json().then(function (body) { return { ok: r.ok, body: body }; }); })
       .then(function (result) {
+        actionInProgress = false;
         if (result.ok) {
           alert('TOTP disabled. Token rotation now requires re-enrollment.');
           poll();
@@ -294,11 +312,12 @@
           alert('Disable failed: ' + (result.body.error || 'Unknown error'));
         }
       })
-      .catch(function (err) { alert('Disable failed: ' + (err.message || 'network error')); });
+      .catch(function (err) { actionInProgress = false; alert('Disable failed: ' + (err.message || 'network error')); });
   }
 
   // ── Polling & lifecycle ───────────────────────────────────────────────
 
+  /** Fetch token info and re-render panels (skipped during enrollment flow). */
   function poll() {
     DollhouseAuth.apiFetch('/api/console/token/info')
       .then(function (r) {
@@ -310,8 +329,17 @@
         else lastData = data; // stash for when enrollment completes
       })
       .catch(function (err) {
+        // Clear stale panel content so the user doesn't see outdated data
+        // alongside the error message.
+        var tokenEl = document.getElementById('sec-token-content');
+        var totpEl = document.getElementById('sec-totp-content');
+        if (tokenEl) tokenEl.innerHTML = '';
+        if (totpEl) totpEl.innerHTML = '';
         var root = document.getElementById('security-dashboard-root');
-        if (root) root.innerHTML = '<p class="sec-error">Failed to load authentication data: ' + esc(err.message) + '</p>';
+        if (root && !document.querySelector('.sec-card')) {
+          // Dashboard not yet built — show error in root
+          root.innerHTML = '<p class="sec-error">Failed to load authentication data: ' + esc(err.message) + '</p>';
+        }
       });
   }
 

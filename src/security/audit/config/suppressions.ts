@@ -67,6 +67,11 @@ export const suppressions: Suppression[] = [
     file: 'src/web/public/metrics.js',
     reason: 'FALSE POSITIVE: Browser-side Date.toLocaleTimeString() concatenation for display label. Not SQL — the codebase does not use SQL.'
   },
+  {
+    rule: 'CWE-89-001',
+    file: 'src/web/public/security.js',
+    reason: 'FALSE POSITIVE: HTML string concatenation building DOM markup for the Auth tab. All values HTML-escaped via esc() helper. Not SQL — the codebase does not use SQL. PR #1791'
+  },
 
   // ========================================
   // Metrics & Web Console False Positives
