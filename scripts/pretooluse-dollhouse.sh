@@ -11,24 +11,36 @@
 # Fail-open: if the server is unreachable or returns an error, the hook allows
 # the action rather than blocking the user.
 #
-# auto-dollhouse#5
+# Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
 
 PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+MAX_RETRIES=2
+INITIAL_TIMEOUT=5
+
+# Debug logging helper — writes to stderr so it doesn't pollute stdout
+debug() {
+  if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then
+    echo "[pretooluse] $*" >&2
+  fi
+}
 
 # Discover the port from the port file
 if [[ -f "$PORT_FILE" ]]; then
   PORT=$(cat "$PORT_FILE" 2>/dev/null)
+  debug "Port file found: $PORT"
 else
-  # No port file — server not running, fail open
+  debug "No port file at $PORT_FILE — fail open"
   exit 0
 fi
 
 # Validate port is a number
 if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+  debug "Invalid port value: $PORT — fail open"
   exit 0
 fi
 
 ENDPOINT="http://127.0.0.1:${PORT}/api/evaluate_permission"
+debug "Endpoint: $ENDPOINT"
 
 # Read the hook input from stdin
 INPUT=$(cat)
@@ -39,20 +51,39 @@ TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {}' 2>/dev/null)
 
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
+  debug "Could not parse tool_name from input — fail open"
   exit 0
 fi
 
-# Call the DollhouseMCP permission evaluation endpoint
-# Timeout is 35s to allow Drawing Room confirmation (30s server timeout + 5s buffer)
-RESPONSE=$(curl -s --max-time 35 -X POST "$ENDPOINT" \
-  -H "Content-Type: application/json" \
-  -d "{\"tool_name\": \"$TOOL_NAME\", \"input\": $TOOL_INPUT, \"platform\": \"claude_code\"}" \
-  2>/dev/null)
+debug "Evaluating: $TOOL_NAME"
 
-# If curl failed or returned empty, fail open
-if [[ $? -ne 0 ]] || [[ -z "$RESPONSE" ]]; then
-  exit 0
-fi
+# Call the DollhouseMCP permission evaluation endpoint with exponential backoff.
+# Retry on transient failures (connection refused, timeout) but not on HTTP errors.
+ATTEMPT=0
+TIMEOUT=$INITIAL_TIMEOUT
 
-# Output the response directly — it's already in Claude Code hook format
-echo "$RESPONSE"
+while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
+  RESPONSE=$(curl -s --max-time "$TIMEOUT" -X POST "$ENDPOINT" \
+    -H "Content-Type: application/json" \
+    -d "{\"tool_name\": \"$TOOL_NAME\", \"input\": $TOOL_INPUT, \"platform\": \"claude_code\"}" \
+    2>/dev/null)
+  CURL_EXIT=$?
+
+  if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
+    debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
+    echo "$RESPONSE"
+    exit 0
+  fi
+
+  ATTEMPT=$((ATTEMPT + 1))
+  if [[ $ATTEMPT -le $MAX_RETRIES ]]; then
+    BACKOFF=$((TIMEOUT * ATTEMPT))
+    debug "Attempt $ATTEMPT failed (curl exit $CURL_EXIT) — retrying in ${BACKOFF}s (timeout ${TIMEOUT}s → $((TIMEOUT * 2))s)"
+    sleep "$BACKOFF"
+    TIMEOUT=$((TIMEOUT * 2))
+  fi
+done
+
+# All retries exhausted — fail open
+debug "All $((MAX_RETRIES + 1)) attempts failed — fail open"
+exit 0

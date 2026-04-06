@@ -1028,11 +1028,16 @@ export class DollhouseContainer {
       // We just need to write the port file so the PreToolUse hook script
       // can discover it. No separate server — use the existing console port.
       const port = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+      const startMs = Date.now();
+
       const { writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
+      logger.debug(`[Container] Writing permission server port file for port ${port}`);
       await writePortFile(port);
       registerPortCleanup();
+      logger.debug(`[Container] Port cleanup handlers registered`);
 
-      logger.info(`[Container] Permission server port file written (port ${port})`);
+      const elapsedMs = Date.now() - startMs;
+      logger.info(`[Container] Permission server port file written (port ${port}, ${elapsedMs}ms)`);
     } catch (error) {
       logger.warn('[Container] Permission server startup failed:', error);
     }
