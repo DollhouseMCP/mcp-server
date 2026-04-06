@@ -96,6 +96,16 @@ export const suppressions: Suppression[] = [
     file: 'src/web/public/setup.js',
     reason: 'FALSE POSITIVE: Client-side browser JavaScript. User inputs (platform tab clicks, method toggle) are matched against hardcoded DOM element IDs only — no free-text processing. Server-side handlers in setupRoutes.ts use UnicodeValidator.normalize() on all API input. UnicodeValidator is a Node.js module unavailable in browser context.'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/totpRoutes.ts',
+    reason: 'FALSE POSITIVE: All user input fields (code, pendingId, label) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/tokenRoutes.ts',
+    reason: 'FALSE POSITIVE: All user input fields (confirmationCode) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
+  },
 
   // ========================================
   // Test File Suppressions

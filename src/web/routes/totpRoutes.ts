@@ -27,10 +27,10 @@
 import express, { Router } from 'express';
 import type { Request, Response } from 'express';
 import QRCode from 'qrcode';
-import { TotpError, type ConsoleTokenStore, type TotpErrorCode } from '../console/consoleToken.js';
+import { TotpError, type ConsoleTokenStore } from '../console/consoleToken.js';
 import { createAuthMiddleware } from '../middleware/authMiddleware.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
-import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { httpStatusForStoreError, sendStoreError, getNormalizedStringField } from './consoleRouteHelpers.js';
 import { logger } from '../../utils/logger.js';
 
 /** JSON body size limit — TOTP requests are tiny, cap hard. */
@@ -57,61 +57,6 @@ const BODY_LIMIT = '1kb';
  */
 const DEFAULT_RATE_LIMIT_MAX = 10;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
-
-/**
- * Maps a TOTP error code from the store to the appropriate HTTP status.
- * Centralized so all three endpoints that can surface store errors return
- * consistent status codes for the same failure class.
- */
-function httpStatusForTotpError(code: TotpErrorCode): number {
-  switch (code) {
-    case 'ALREADY_ENROLLED':
-      return 409;
-    case 'NOT_ENROLLED':
-    case 'PENDING_NOT_FOUND':
-    case 'INVALID_TOTP_CODE':
-      return 400;
-    case 'TOO_MANY_PENDING':
-      return 429;
-    case 'STORE_NOT_INITIALIZED':
-      return 503;
-    default: {
-      // Exhaustiveness check — if a new TotpErrorCode is added, the
-      // `satisfies never` assertion below fails to compile so we remember
-      // to map it here.
-      code satisfies never;
-      return 400;
-    }
-  }
-}
-
-/**
- * Send a structured error response with both a human-readable message and
- * a machine-readable code. Shape is stable so the upcoming CLI and Security
- * tab UI can branch on `code` instead of string-matching the message.
- */
-function sendTotpError(
-  res: Response,
-  status: number,
-  code: string,
-  message: string,
-): void {
-  res.status(status).json({ error: message, code });
-}
-
-/**
- * Safely extract a string field from an unknown request body and NFC-normalize
- * it (DMCP-SEC-004). Returns null if the body is not an object or the field
- * is missing / not a string. Normalization blocks homograph, bidi, and
- * zero-width abuse before the value reaches downstream parsers (TOTP codes,
- * otpauth URI labels, pending-id lookups).
- */
-function getNormalizedStringField(body: unknown, field: string): string | null {
-  if (!body || typeof body !== 'object') return null;
-  const val = (body as Record<string, unknown>)[field];
-  if (typeof val !== 'string') return null;
-  return UnicodeValidator.normalize(val).normalizedContent;
-}
 
 /**
  * Render an otpauth URI as an SVG data URL suitable for direct embedding
@@ -192,9 +137,9 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
       const message = err instanceof Error ? err.message : 'Enrollment could not be started';
       logger.debug(`[TOTP] begin failed: ${message}`);
       if (err instanceof TotpError) {
-        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+        sendStoreError(res, httpStatusForStoreError(err.code), err.code, err.message);
       } else {
-        sendTotpError(res, 500, 'INTERNAL', message);
+        sendStoreError(res, 500, 'INTERNAL', message);
       }
     }
   });
@@ -202,13 +147,13 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
   /** POST /enroll/confirm — verify code, persist, return backup codes (once). */
   router.post('/enroll/confirm', jsonParser, async (req: Request, res: Response) => {
     if (!confirmLimiter.tryAcquire()) {
-      sendTotpError(res, 429, 'RATE_LIMITED', 'Too many confirmation attempts — slow down');
+      sendStoreError(res, 429, 'RATE_LIMITED', 'Too many confirmation attempts — slow down');
       return;
     }
     const pendingId = getNormalizedStringField(req.body, 'pendingId');
     const code = getNormalizedStringField(req.body, 'code');
     if (!pendingId || !code) {
-      sendTotpError(res, 400, 'MISSING_FIELDS', 'pendingId and code are required');
+      sendStoreError(res, 400, 'MISSING_FIELDS', 'pendingId and code are required');
       return;
     }
     try {
@@ -222,9 +167,9 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
       const message = err instanceof Error ? err.message : 'Confirmation failed';
       logger.debug(`[TOTP] confirm failed: ${message}`);
       if (err instanceof TotpError) {
-        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+        sendStoreError(res, httpStatusForStoreError(err.code), err.code, err.message);
       } else {
-        sendTotpError(res, 500, 'INTERNAL', message);
+        sendStoreError(res, 500, 'INTERNAL', message);
       }
     }
   });
@@ -232,12 +177,12 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
   /** POST /disable — verify code, clear enrollment. */
   router.post('/disable', jsonParser, async (req: Request, res: Response) => {
     if (!disableLimiter.tryAcquire()) {
-      sendTotpError(res, 429, 'RATE_LIMITED', 'Too many disable attempts — slow down');
+      sendStoreError(res, 429, 'RATE_LIMITED', 'Too many disable attempts — slow down');
       return;
     }
     const code = getNormalizedStringField(req.body, 'code');
     if (!code) {
-      sendTotpError(res, 400, 'MISSING_FIELDS', 'code is required');
+      sendStoreError(res, 400, 'MISSING_FIELDS', 'code is required');
       return;
     }
     try {
@@ -247,9 +192,9 @@ export function createTotpRoutes(options: TotpRoutesOptions): Router {
       const message = err instanceof Error ? err.message : 'Disable failed';
       logger.debug(`[TOTP] disable failed: ${message}`);
       if (err instanceof TotpError) {
-        sendTotpError(res, httpStatusForTotpError(err.code), err.code, err.message);
+        sendStoreError(res, httpStatusForStoreError(err.code), err.code, err.message);
       } else {
-        sendTotpError(res, 500, 'INTERNAL', message);
+        sendStoreError(res, 500, 'INTERNAL', message);
       }
     }
   });

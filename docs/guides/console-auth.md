@@ -1,8 +1,8 @@
 # Console Authentication
 
 > **Status:** Authenticated console — `DOLLHOUSE_WEB_AUTH_ENABLED` is **off by default** during rollout.
-> **Current capabilities:** TOTP enrollment with structured error codes, isolated port (5907) and state files, legacy console detection.
-> **Roadmap:** token rotation endpoint, then flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed.
+> **Current capabilities:** TOTP enrollment, token rotation with TOTP confirmation, structured error codes, isolated port (5907) and state files, legacy console detection.
+> **Roadmap:** CLI rotation command, Security tab UI, then flipping the auth default to **on** once consumer updates (DollhouseBridge, browser helpers) have landed.
 
 DollhouseMCP's web management console on port `5907` protects its API with a session token. The token is generated automatically on first run, persists across restarts, and is required on every protected endpoint when the `DOLLHOUSE_WEB_AUTH_ENABLED` environment variable is `true`.
 
@@ -144,6 +144,7 @@ The default will flip to `true` in a follow-up PR once all first-party consumers
 
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/api/console/token/rotate` | Rotate the primary console token (always-on auth + TOTP) |
 | `POST` | `/api/setup/install` | Install DollhouseMCP to an MCP client |
 | `POST` | `/api/setup/open-config` | Open MCP client config in an editor |
 | `POST` | `/api/install` | Install a collection element into the portfolio |
@@ -184,7 +185,13 @@ These are **intentionally** unprotected in Phase 1 and will be addressed in late
 
 - **`401` rate limiting.** Not implemented yet. A 256-bit token cannot be brute-forced in any practical sense, but a flood of wrong-token requests could saturate the verify path as a DoS. Deferred to Phase 3.
 
-- **Windows file permissions.** `chmod(0o600)` is a no-op on Windows because the file system uses ACLs instead of POSIX modes. A one-time warning is logged on startup when the token file is created on Windows. Use `icacls` or equivalent for OS-enforced isolation in multi-user Windows environments.
+- **Windows file permissions.** `chmod(0o600)` is a no-op on Windows because the file system uses ACLs instead of POSIX modes. A one-time warning is logged on startup when the token file is created on Windows. In multi-user Windows environments, restrict access with `icacls`:
+
+  ```powershell
+  icacls "%USERPROFILE%\.dollhouse\run\console-token.auth.json" /inheritance:r /grant:r "%USERNAME%:RW"
+  ```
+
+  This removes inherited permissions and grants read/write only to the current user — the Windows equivalent of `chmod 0600`.
 
 ---
 
@@ -192,7 +199,7 @@ These are **intentionally** unprotected in Phase 1 and will be addressed in late
 
 The server injects the current token into `index.html` via a `<meta name="dollhouse-console-token">` tag at request time. The browser's auth helper (`consoleAuth.js`) reads the tag on page load and automatically attaches the token to every fetch and SSE call via a thin wrapper (`window.DollhouseAuth.apiFetch`, `window.DollhouseAuth.apiEventSource`).
 
-The token is never exposed in `localStorage` or cookies — it's re-read from the freshly rendered HTML on every page load. After a rotation (Phase 2), a page reload picks up the new token immediately.
+The token is never exposed in `localStorage` or cookies — it's re-read from the freshly rendered HTML on every page load. After a rotation, the browser helper's `DollhouseAuth.refresh(newToken)` method updates the cached token in memory so the active tab switches to the new value without a full page reload. A manual reload also works — the server injects the current token into the HTML on each request.
 
 ---
 
@@ -200,7 +207,7 @@ The token is never exposed in `localStorage` or cookies — it's re-read from th
 
 DollhouseMCP uses a leader/follower model for multi-session deployments. The leader owns the token file; followers read it on startup and attach the token to their `/api/ingest/*` POSTs. If the file is missing when a follower starts (unusual — the leader creates it), the follower simply omits the Bearer header and relies on the auth flag being off.
 
-Rotation handling for long-lived followers will land in Phase 2 (read-on-401 with file refresh).
+After a rotation, the new token value is written to disk atomically; followers that restart will pick up the new value automatically. Long-lived followers that encounter a `401` should re-read the token file — automated read-on-401 recovery is tracked in issue #1792.
 
 ---
 
@@ -233,14 +240,22 @@ TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
 
 ### I want to reset my token without restarting
 
-Not supported in Phase 1. You can delete the file and restart the server to force a fresh token:
+Use the rotation endpoint (requires TOTP enrollment):
+
+```bash
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
+curl -s -H "Authorization: Bearer $TOKEN" -X POST http://localhost:5907/api/console/token/rotate \
+  -H 'Content-Type: application/json' -d '{"confirmationCode":"<6-digit TOTP code>"}' | jq .
+```
+
+The response contains the new token. Update your shell variable and you're back in business. See [Token rotation](#token-rotation) below for the full walkthrough.
+
+If you haven't enrolled TOTP yet, the fallback is to delete the file and restart:
 
 ```bash
 rm ~/.dollhouse/run/console-token.auth.json
 # restart the server
 ```
-
-Phase 2 will add a "rotate" button in the web UI and a `dollhouse console token rotate` CLI command with authenticator-based confirmation.
 
 ---
 
@@ -322,8 +337,103 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 
 - The TOTP secret is stored in plaintext alongside the token inside `console-token.auth.json`, which is `0600`. This matches standard file-based TOTP storage (SSH keys, age identity files, 1Password vault backups). Encrypting the secret with an OS keychain is a future enhancement.
 - Enrollment endpoints rate-limit code attempts to 10 per minute to cap brute-force exposure of the 6-digit code space. With the ±60s window, 5 codes out of 10⁶ are valid at any instant — brute-force success probability remains below 5×10⁻⁵ per minute.
-- Enrolling a second factor does **not** replace the console token — both still work. The token is "something you have (on disk)", TOTP is "something you have (on your phone)". Rotation will require **both** in Phase 2.
+- Enrolling a second factor does **not** replace the console token — both still work. The token is "something you have (on disk)", TOTP is "something you have (on your phone)". Token rotation requires **both** — you must present the console token (via auth middleware) **and** a valid TOTP code (via the confirmation code parameter).
 - Every failed verification fires a `TOTP_VERIFICATION_FAILED` event to SecurityMonitor (deduped per 60s window), so aggregate failure rates can be surfaced for brute-force detection.
+
+---
+
+## Token rotation
+
+The rotation endpoint lets you invalidate the current console token and get a fresh one in a single request — no restart, no file editing. Rotation requires TOTP confirmation (you must be enrolled first; see [TOTP enrollment](#totp-authenticator-enrollment) above).
+
+**Rotation flow:**
+
+```
+  Browser / CLI              Server                    Token File
+       │                       │                           │
+       │  POST /rotate         │                           │
+       │  Authorization: Bearer OLD_TOKEN                  │
+       │  { confirmationCode } │                           │
+       │──────────────────────>│                           │
+       │                       │  1. Verify Bearer token   │
+       │                       │  2. Verify TOTP code      │
+       │                       │  3. Stash OLD in grace    │
+       │                       │     buffer (15s TTL)      │
+       │                       │  4. Generate NEW token    │
+       │                       │  5. Write atomically ────>│
+       │                       │  6. Rebuild buffer cache  │
+       │   { token: NEW,       │                           │
+       │     rotatedAt, graceUntil }                       │
+       │<──────────────────────│                           │
+       │                       │                           │
+       │  DollhouseAuth.refresh(NEW)                       │
+       │  (in-memory update,   │                           │
+       │   no page reload)     │                           │
+       │                       │                           │
+       │  ── 15s grace ──      │                           │
+       │  OLD still accepted   │                           │
+       │  ── grace expires ──  │                           │
+       │  OLD rejected         │                           │
+```
+
+**Endpoint:** `POST /api/console/token/rotate` (always requires auth regardless of `DOLLHOUSE_WEB_AUTH_ENABLED`)
+
+**Request body:**
+
+```json
+{ "confirmationCode": "<6-digit TOTP code or backup code>" }
+```
+
+**Response (200):**
+
+```json
+{
+  "token": "a1b2c3d4...64 hex chars...",
+  "rotatedAt": "2026-04-05T19:00:00.000Z",
+  "graceUntil": 1743879615000
+}
+```
+
+**Error codes:**
+
+| Code | Status | Meaning |
+|---|---|---|
+| `MISSING_FIELDS` | 400 | `confirmationCode` not present in request body |
+| `INVALID_TOTP_CODE` | 400 | Code did not match the stored secret or any backup code |
+| `TOTP_REQUIRED` | 403 | TOTP not enrolled — enroll before rotating |
+| `RATE_LIMITED` | 429 | Too many rotation attempts; back off and retry |
+
+**Grace window:** After rotation, the old token continues to authenticate for **15 seconds** so in-flight requests from the rotating tab or other local processes don't fail. After the grace window, only the new token works.
+
+**CLI walkthrough:**
+
+```bash
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
+H="Authorization: Bearer $TOKEN"
+
+# Rotate (provide a live TOTP code from your authenticator)
+RESULT=$(curl -s -H "$H" -X POST http://localhost:5907/api/console/token/rotate \
+  -H 'Content-Type: application/json' -d '{"confirmationCode":"123456"}')
+echo "$RESULT" | jq .
+
+# Update your shell variable to the new token
+TOKEN=$(echo "$RESULT" | jq -r .token)
+
+# Or re-read from the file (the new value is already persisted)
+TOKEN=$(jq -r '.tokens[0].token' ~/.dollhouse/run/console-token.auth.json)
+```
+
+**Browser integration:** After the rotation response, the active tab calls `DollhouseAuth.refresh(newToken)` to update the in-memory cache without a page reload. The `graceUntil` field lets the UI display a countdown while the old token is still accepted.
+
+**What changes on disk after rotation:**
+
+- The `token` field in `console-token.auth.json` is updated to the new 64-hex value
+- `createdAt` is set to the rotation timestamp
+- `createdVia` changes from `"initial-setup"` (or previous value) to `"rotation"`
+- `lastUsedAt` is reset to `null`
+- The entry `id` and `name` are preserved — the UI identity of the token slot doesn't change
+
+**Security event:** Every rotation emits a `CONSOLE_TOKEN_ROTATED` event (severity `HIGH`) to SecurityMonitor with the token's `id`, rotation timestamp, grace duration, and confirmation method (`totp` or `backup`). No secret material is included in the event payload.
 
 ---
 
@@ -333,7 +443,7 @@ If you consistently see invalid-code errors, especially over a chat bridge:
 - **Don't commit `console-token.auth.json` anywhere.** It lives under `~/.dollhouse/` which isn't a git repo by default, but if anyone symlinks or copies that directory, the token goes with it.
 - **Don't paste the token into chat, email, or pull request descriptions.** It's localhost-only, but paranoia is cheap.
 - **Don't expose port 5907 beyond localhost without TLS.** The binding is still `127.0.0.1` only. Bearer-over-HTTP is fine for localhost but unsafe the moment you change the bind address.
-- **Rotation is manual in Phase 1.** If you suspect compromise, stop the server, delete the token file, and restart.
+- **If you suspect token compromise, rotate immediately.** Use `POST /api/console/token/rotate` with a TOTP code. If you haven't enrolled TOTP, delete the token file and restart the server as a fallback.
 
 ---
 

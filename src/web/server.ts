@@ -23,6 +23,7 @@ import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsR
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes } from './routes/setupRoutes.js';
 import { createTotpRoutes } from './routes/totpRoutes.js';
+import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
 import { env } from '../config/env.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
@@ -234,6 +235,12 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     // lock the legitimate user out.
     app.use('/api/console/totp', createTotpRoutes({ store: options.tokenStore }));
     logger.info('[WebUI] TOTP routes mounted at /api/console/totp (always-on auth)');
+
+    // Token management routes (#1795). Mounted alongside the TOTP router with
+    // the same always-on auth pattern. Currently hosts the rotation endpoint;
+    // future token management operations (list, revoke) go here too.
+    app.use('/api/console/token', createTokenRoutes({ store: options.tokenStore }));
+    logger.info('[WebUI] Token routes mounted at /api/console/token (always-on auth)');
   }
 
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
