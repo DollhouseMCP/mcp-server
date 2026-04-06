@@ -1,5 +1,72 @@
-/* Security tab styles (#1791) — follows permissions.css patterns */
+/* Auth tab styles (#1791) — follows permissions.css patterns */
 
+/* Intro explainer (#1816) */
+.sec-intro {
+  max-width: 1200px;
+  margin: 1rem auto 0;
+  padding: 0 1rem;
+}
+
+.sec-intro-content {
+  background: var(--surface-1, #eaf1ff);
+  border: 1px solid var(--line, #c8d5e9);
+  border-radius: 0.5rem;
+  padding: 1.25rem 1.5rem;
+}
+
+.sec-intro-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--ink-900, #18243a);
+}
+
+.sec-intro-content p {
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--ink-700, #324563);
+  margin: 0 0 0.75rem;
+}
+
+.sec-intro-list {
+  margin: 0.5rem 0 0.75rem 1.25rem;
+  padding: 0;
+  font-size: 0.875rem;
+  line-height: 1.6;
+  color: var(--ink-700, #324563);
+}
+
+.sec-intro-list li {
+  margin-bottom: 0.375rem;
+}
+
+.sec-intro-who {
+  font-size: 0.8125rem;
+}
+
+.sec-intro-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 0.75rem;
+}
+
+.sec-intro-link {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--signal, #1e40af);
+  text-decoration: none;
+}
+
+.sec-intro-link:hover {
+  text-decoration: underline;
+}
+
+[data-theme="dark"] .sec-intro-content {
+  background: var(--surface-1, #1e293b);
+}
+
+/* Dashboard grid */
 .sec-dashboard {
   display: grid;
   grid-template-columns: 1fr 1fr;

@@ -50,7 +50,35 @@
   // ── HTML template ─────────────────────────────────────────────────────
 
   function buildDashboardHTML() {
+    var dismissed = false;
+    try { dismissed = localStorage.getItem('sec-intro-dismissed') === '1'; } catch { /* no storage */ }
+
+    var intro = dismissed ? '' : ''
+      + '<div class="sec-intro" id="sec-intro">'
+      +   '<div class="sec-intro-content">'
+      +     '<h2 class="sec-intro-title">What is console authentication?</h2>'
+      +     '<p>DollhouseMCP\'s management console controls your AI sessions \u2014 it can install MCP configs, '
+      +       'approve tool permissions, kill sessions, and read all logs on this machine. '
+      +       'Authentication ensures only <strong>you</strong> can do these things.</p>'
+      +     '<ul class="sec-intro-list">'
+      +       '<li><strong>Console Token</strong> \u2014 a secret key that every API request must carry. '
+      +         'Without it, other processes on your machine can\u2019t access the console.</li>'
+      +       '<li><strong>Authenticator (TOTP)</strong> \u2014 a second factor from your phone. '
+      +         'Even if the token leaks, sensitive operations like rotation still require a 6-digit code '
+      +         'from your authenticator app.</li>'
+      +     '</ul>'
+      +     '<p class="sec-intro-who"><strong>Who needs this?</strong> Shared workstations, multi-user Linux, '
+      +       'containers with port mapping, or anyone who wants defense-in-depth beyond localhost binding.</p>'
+      +     '<div class="sec-intro-actions">'
+      +       '<a class="sec-intro-link" href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/console-auth.md" '
+      +         'target="_blank" rel="noopener">Learn more</a>'
+      +       '<button class="sec-btn sec-btn--sm" id="sec-intro-dismiss">Got it, don\u2019t show again</button>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
+
     return ''
+      + intro
       + '<div class="sec-dashboard">'
 
       // Token panel
@@ -364,6 +392,15 @@
     if (!root) return;
     root.innerHTML = buildDashboardHTML();
     attachCardToggles();
+    // Intro dismiss button
+    var dismissBtn = document.getElementById('sec-intro-dismiss');
+    if (dismissBtn) {
+      dismissBtn.addEventListener('click', function () {
+        var intro = document.getElementById('sec-intro');
+        if (intro) intro.remove();
+        try { localStorage.setItem('sec-intro-dismissed', '1'); } catch { /* no storage */ }
+      });
+    }
     poll();
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);
   }
