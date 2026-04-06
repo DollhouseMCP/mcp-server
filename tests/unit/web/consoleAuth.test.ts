@@ -16,8 +16,10 @@ let consoleAuthSource: string;
 
 async function loadSource(): Promise<string> {
   if (!consoleAuthSource) {
+    // Use process.cwd() instead of __dirname for ESM compatibility —
+    // CI runs with --experimental-vm-modules where __dirname is undefined.
     consoleAuthSource = await readFile(
-      join(__dirname, '../../../src/web/public/consoleAuth.js'),
+      join(process.cwd(), 'src/web/public/consoleAuth.js'),
       'utf8',
     );
   }
