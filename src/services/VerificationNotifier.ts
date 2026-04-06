@@ -97,8 +97,8 @@ export class VerificationNotifier implements IVerificationNotifier {
     // Escape for AppleScript: backslashes, then double quotes. Newlines are
     // replaced with AppleScript `return` character concatenation so they render
     // as real line breaks in the dialog instead of literal "\n" text.
-    const escapedTitle = title.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll(/[\n\r]/g, ' ');
-    const escapedMessage = message.replaceAll('\\', String.raw`\\`).replaceAll('"', '\\"');
+    const escapedTitle = title.replaceAll('\\', String.raw`\\`).replaceAll('"', String.raw`\"`).replaceAll(/[\n\r]/g, ' ');
+    const escapedMessage = message.replaceAll('\\', String.raw`\\`).replaceAll('"', String.raw`\"`);
     // Split on newlines and join with AppleScript return concatenation
     const messageParts = escapedMessage.split(/\r?\n/).map(part => `"${part}"`).join(' & return & ');
 
