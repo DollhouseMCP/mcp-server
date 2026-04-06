@@ -1,8 +1,9 @@
 /**
- * Unit tests for the permission server wiring.
+ * Unit tests for the permission server port file wiring in Container.
  *
- * Tests the env flag gating, the startPermissionServer function signature,
- * and the port discovery integration. Does NOT start actual HTTP servers.
+ * In mcp-server, the permission routes are already mounted on the
+ * unified web console (port 41715). The permission server setup just
+ * writes the port file so the PreToolUse hook script can discover it.
  */
 
 import { describe, expect, it } from '@jest/globals';
@@ -13,32 +14,17 @@ import * as os from 'node:os';
 describe('Permission Server Wiring', () => {
   describe('DOLLHOUSE_PERMISSION_SERVER env flag', () => {
     it('should be defined in env schema with boolean type', async () => {
-      // Verify the env var exists in the schema by checking the parsed env object
       const { env } = await import('../../../src/config/env.js');
       expect(typeof env.DOLLHOUSE_PERMISSION_SERVER).toBe('boolean');
     });
 
     it('should default to true', async () => {
       const { env } = await import('../../../src/config/env.js');
-      // Default is true unless explicitly overridden
       expect(env.DOLLHOUSE_PERMISSION_SERVER).toBe(true);
     });
   });
 
-  describe('startPermissionServer export', () => {
-    it('should be exported from webAutoStart', async () => {
-      const mod = await import('../../../src/auto-dollhouse/webAutoStart.js');
-      expect(typeof mod.startPermissionServer).toBe('function');
-    });
-
-    it('should accept mcpAqlHandler as first argument', async () => {
-      const mod = await import('../../../src/auto-dollhouse/webAutoStart.js');
-      // Verify function signature — should accept 4 params
-      expect(mod.startPermissionServer.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  describe('portDiscovery integration', () => {
+  describe('portDiscovery exports', () => {
     it('should export findAvailablePort, writePortFile, registerPortCleanup', async () => {
       const mod = await import('../../../src/auto-dollhouse/portDiscovery.js');
       expect(typeof mod.findAvailablePort).toBe('function');
@@ -70,23 +56,29 @@ describe('Permission Server Wiring', () => {
 
   describe('Container.completeDeferredSetup integration', () => {
     it('should have deferredPermissionServer in the deferred setup chain', async () => {
-      // Read Container source to verify the method exists and is called
       const containerSource = await fs.readFile(
         path.join(process.cwd(), 'src/di/Container.ts'),
         'utf-8'
       );
 
-      // Verify the method exists
       expect(containerSource).toContain('private async deferredPermissionServer');
-
-      // Verify it's called in completeDeferredSetup
       expect(containerSource).toContain('await this.deferredPermissionServer(timer)');
-
-      // Verify it checks the env flag
       expect(containerSource).toContain('DOLLHOUSE_PERMISSION_SERVER');
+    });
 
-      // Verify it imports startPermissionServer
-      expect(containerSource).toContain("import('../auto-dollhouse/webAutoStart.js')");
+    it('should use the existing web console port, not start a new server', async () => {
+      const containerSource = await fs.readFile(
+        path.join(process.cwd(), 'src/di/Container.ts'),
+        'utf-8'
+      );
+
+      // Should reference the console port, not start a new server
+      expect(containerSource).toContain('DOLLHOUSE_WEB_CONSOLE_PORT');
+      expect(containerSource).toContain('writePortFile');
+      expect(containerSource).toContain('registerPortCleanup');
+
+      // Should NOT import webAutoStart (that's auto-dollhouse only)
+      expect(containerSource).not.toContain("import('../auto-dollhouse/webAutoStart.js')");
     });
 
     it('should run permission server after web console in deferred setup', async () => {
@@ -99,9 +91,18 @@ describe('Permission Server Wiring', () => {
       const permServerIdx = containerSource.indexOf('deferredPermissionServer(timer)');
       const dangerZoneIdx = containerSource.indexOf('deferredDangerZoneInit(timer)');
 
-      // Permission server should come after web console but before danger zone
       expect(permServerIdx).toBeGreaterThan(webConsoleIdx);
       expect(permServerIdx).toBeLessThan(dangerZoneIdx);
+    });
+
+    it('should skip when web console is disabled', async () => {
+      const containerSource = await fs.readFile(
+        path.join(process.cwd(), 'src/di/Container.ts'),
+        'utf-8'
+      );
+
+      expect(containerSource).toContain('DOLLHOUSE_WEB_CONSOLE');
+      expect(containerSource).toContain('Permission server skipped — web console is disabled');
     });
   });
 });

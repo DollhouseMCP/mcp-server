@@ -1019,22 +1019,20 @@ export class DollhouseContainer {
         return;
       }
 
-      const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
-      if (!mcpAqlHandler) {
-        logger.debug('[Container] Permission server skipped — no MCPAQLHandler available');
+      if (!env.DOLLHOUSE_WEB_CONSOLE) {
+        logger.debug('[Container] Permission server skipped — web console is disabled');
         return;
       }
 
-      const memorySink = this.tryResolve<MemoryLogSink>('MemoryLogSink');
-      const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
+      // Permission routes are already mounted on the unified web console.
+      // We just need to write the port file so the PreToolUse hook script
+      // can discover it. No separate server — use the existing console port.
+      const port = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+      const { writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
+      await writePortFile(port);
+      registerPortCleanup();
 
-      const { startPermissionServer } = await import('../auto-dollhouse/webAutoStart.js');
-      await startPermissionServer(
-        mcpAqlHandler,
-        memorySink,
-        metricsSink,
-        (name: string) => this.tryResolve(name),
-      );
+      logger.info(`[Container] Permission server port file written (port ${port})`);
     } catch (error) {
       logger.warn('[Container] Permission server startup failed:', error);
     }

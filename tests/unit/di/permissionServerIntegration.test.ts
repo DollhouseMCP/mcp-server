@@ -1,8 +1,9 @@
 /**
  * Integration tests for the permission server chain.
  *
- * Tests the full lifecycle: server startup, HTTP endpoint, port file
- * discovery, hook script compatibility, cleanup, and error recovery.
+ * In mcp-server, permission routes are mounted on the unified web
+ * console (port 41715). These tests verify port file lifecycle, HTTP
+ * endpoint behavior, hook script compatibility, and error recovery.
  */
 
 import { describe, expect, it, afterEach } from '@jest/globals';
@@ -215,24 +216,6 @@ describe('Permission Server Integration', () => {
   });
 
   describe('error recovery', () => {
-    it('should handle startPermissionServer failure gracefully', async () => {
-      // The Container wraps startPermissionServer in try/catch and logs a warning.
-      // Verify the function itself throws on bad input but doesn't crash the process.
-      const { startPermissionServer } = await import(
-        '../../../src/auto-dollhouse/webAutoStart.js'
-      );
-
-      // Calling with null handler should throw inside, not crash
-      try {
-        await startPermissionServer(null as any);
-      } catch {
-        // Expected — the function throws, Container catches it
-      }
-
-      // Process should still be alive
-      expect(process.exitCode).toBeUndefined();
-    });
-
     it('Container should log warning and continue when permission server fails', async () => {
       // Verify the Container's error handling pattern exists
       const containerSource = await fs.readFile(
