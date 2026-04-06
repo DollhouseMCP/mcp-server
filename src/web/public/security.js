@@ -20,6 +20,9 @@
   var pollTimer = null;
   var initialized = false;
   var lastData = null;
+  /** When true, poll() skips rendering to avoid overwriting an in-progress
+   *  enrollment flow (QR code, confirm input, backup codes display). */
+  var enrollmentInProgress = false;
 
   /** NFC-normalize and HTML-escape a string for safe display. */
   function esc(str) {
@@ -217,6 +220,7 @@
           alert('Enrollment failed: ' + (result.body.error || 'Unknown error'));
           return;
         }
+        enrollmentInProgress = true;
         var begin = result.body;
         // Show QR code and secret in a panel
         var totpEl = document.getElementById('sec-totp-content');
@@ -225,7 +229,7 @@
           + '<div class="sec-enroll-flow">'
           +   '<h4>Scan this QR code with your authenticator app</h4>'
           +   '<div class="sec-qr-container">'
-          +     '<img src="' + esc(begin.qrSvgDataUrl) + '" alt="TOTP QR code" class="sec-qr-img" />'
+          +     '<img src="' + begin.qrSvgDataUrl + '" alt="TOTP QR code" class="sec-qr-img" />'
           +   '</div>'
           +   '<p class="sec-hint">Or enter this secret manually: <code>' + esc(begin.secret) + '</code></p>'
           +   '<div class="sec-confirm-form">'
@@ -237,7 +241,7 @@
           +   '</div>'
           + '</div>';
 
-        document.getElementById('sec-cancel-enroll').addEventListener('click', function () { poll(); });
+        document.getElementById('sec-cancel-enroll').addEventListener('click', function () { enrollmentInProgress = false; poll(); });
         document.getElementById('sec-confirm-enroll').addEventListener('click', function () {
           var code = document.getElementById('sec-confirm-code').value.trim();
           if (!code) return;
@@ -261,9 +265,10 @@
                   +   '</div>'
                   +   '<button class="sec-btn sec-btn--primary" id="sec-codes-done">I\'ve saved my codes</button>'
                   + '</div>';
-                document.getElementById('sec-codes-done').addEventListener('click', function () { poll(); });
+                document.getElementById('sec-codes-done').addEventListener('click', function () { enrollmentInProgress = false; poll(); });
               } else {
                 alert('Confirmation failed: ' + (confirmResult.body.error || 'Invalid code'));
+                // Keep enrollmentInProgress true — user can retry the code
               }
             })
             .catch(function (err) { alert('Confirmation failed: ' + (err.message || 'network error')); });
@@ -300,7 +305,10 @@
         if (!r.ok) throw new Error('HTTP ' + r.status);
         return r.json();
       })
-      .then(function (data) { render(data); })
+      .then(function (data) {
+        if (!enrollmentInProgress) render(data);
+        else lastData = data; // stash for when enrollment completes
+      })
       .catch(function (err) {
         var root = document.getElementById('security-dashboard-root');
         if (root) root.innerHTML = '<p class="sec-error">Failed to load authentication data: ' + esc(err.message) + '</p>';

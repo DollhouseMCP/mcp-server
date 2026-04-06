@@ -98,6 +98,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/web/public/security.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript for the Auth tab. All user input (TOTP codes) is sent to server-side endpoints (totpRoutes.ts, tokenRoutes.ts) which normalize via consoleRouteHelpers.ts getNormalizedStringField(). The esc() helper applies NFC normalization for display. UnicodeValidator is a Node.js module unavailable in browser context. PR #1791'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/web/routes/totpRoutes.ts',
     reason: 'FALSE POSITIVE: All user input fields (code, pendingId, label) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
   },
