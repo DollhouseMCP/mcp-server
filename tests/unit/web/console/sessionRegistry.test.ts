@@ -5,7 +5,7 @@
  * console session behavior, and stale reaper exemptions.
  */
 
-import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import {
@@ -72,8 +72,9 @@ describe('Session registry (#1805)', () => {
     it('uses process pid', () => {
       ingestResult.registerConsoleSession();
       const sessions = ingestResult.getSessions();
-      const consoleSessions = sessions.filter(s => s.kind === 'console');
-      expect(consoleSessions[0].pid).toBe(process.pid);
+      const consoleSession = sessions.find(s => s.kind === 'console');
+      expect(consoleSession).toBeDefined();
+      expect(consoleSession!.pid).toBe(process.pid);
     });
   });
 
