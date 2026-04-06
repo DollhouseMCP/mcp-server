@@ -229,6 +229,47 @@
   letter-spacing: 0.02em;
 }
 
+/* Session status badges — auth + client indicators (#1805)
+ * Two independent dimensions, each with:
+ * - Shape (filled/empty circle for auth, checkmark/X for client)
+ * - Text label (always present for accessibility)
+ * - Color (blue=positive, orange=negative — colorblind-safe pair)
+ */
+.session-status-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.session-status-badge[data-status="positive"] {
+  background: #eff6ff;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+}
+
+.session-status-badge[data-status="negative"] {
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+}
+
+[data-theme="dark"] .session-status-badge[data-status="positive"] {
+  background: #172554;
+  color: #93c5fd;
+  border-color: #1e40af;
+}
+
+[data-theme="dark"] .session-status-badge[data-status="negative"] {
+  background: #431407;
+  color: #fdba74;
+  border-color: #9a3412;
+}
+
 /* Session filter in the log viewer */
 #log-session-filter {
   min-width: 120px;

@@ -142,7 +142,6 @@
     dropdownBuilt = false;
 
     var count = active.length;
-    if (count === 0) return;
 
     // Box button
     var box = document.createElement('button');
@@ -226,6 +225,37 @@
         if (s.color) nameEl.style.color = s.color;
         item.appendChild(nameEl);
 
+        // Session status badges (#1805) — two independent dimensions:
+        // 1. Auth status (filled/empty circle + text)
+        // 2. Client attachment (checkmark/X + text)
+        // Shape + text + colorblind-safe color (blue/orange) = three
+        // independent channels so no single channel carries meaning alone.
+        var authBadge = document.createElement('span');
+        authBadge.className = 'session-status-badge';
+        if (s.authenticated) {
+          authBadge.textContent = '\u25CF Auth';
+          authBadge.dataset.status = 'positive';
+          authBadge.title = 'Authenticated session';
+        } else {
+          authBadge.textContent = '\u25CB No auth';
+          authBadge.dataset.status = 'negative';
+          authBadge.title = 'Unauthenticated session';
+        }
+        item.appendChild(authBadge);
+
+        var clientBadge = document.createElement('span');
+        clientBadge.className = 'session-status-badge';
+        if (s.kind === 'mcp') {
+          clientBadge.textContent = '\u2713 Client';
+          clientBadge.dataset.status = 'positive';
+          clientBadge.title = 'MCP client attached';
+        } else {
+          clientBadge.textContent = '\u2717 No client';
+          clientBadge.dataset.status = 'negative';
+          clientBadge.title = 'No MCP client attached';
+        }
+        item.appendChild(clientBadge);
+
         var uptimeEl = document.createElement('span');
         uptimeEl.className = 'session-dropdown-uptime';
         uptimeEl.dataset.startedAt = s.startedAt;
@@ -241,8 +271,15 @@
           e.stopPropagation();
           if (!confirm('Stop session ' + displayName(s) + '?')) return;
           DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
-            .then(function() { fetchSessions(); })
-            .catch(function() {});
+            .then(function(res) {
+              if (!res.ok) {
+                alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+              }
+              fetchSessions();
+            })
+            .catch(function(err) {
+              alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
+            });
         });
         item.appendChild(killBtn);
 

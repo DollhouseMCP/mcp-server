@@ -833,8 +833,16 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         metricsSink = new MemoryMetricsSink(240);
       }
 
+      // Set up ingest routes so --web mode has a session registry (#1805).
+      // Without this, the session indicator is always empty in standalone mode.
+      const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
+      const ingestResult = createIngestRoutes({
+        logBroadcast: (entry) => { /* wired after server starts */ },
+      });
+      ingestResult.registerConsoleSession();
+
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink });
+      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router] });
 
       // Listen for quit commands on stdin (standalone --web mode only).
       // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.
