@@ -366,9 +366,13 @@
     var tmpl = document.getElementById('sec-intro-template');
     if (tmpl) {
       var dashboard = root.querySelector('.sec-dashboard');
-      if (dashboard && dashboard.firstChild) {
-        var frag = tmpl.content.cloneNode(true);
-        dashboard.insertBefore(frag, dashboard.firstChild);
+      var frag = tmpl ? tmpl.content.cloneNode(true) : null;
+      if (dashboard && frag) {
+        if (dashboard.firstChild) {
+          dashboard.insertBefore(frag, dashboard.firstChild);
+        } else {
+          dashboard.appendChild(frag);
+        }
       }
     }
     attachCardToggles();
