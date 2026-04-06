@@ -16,6 +16,7 @@
 # --- handlebars (7 alerts) ---
 # Dev dependency only — transitive dep of ts-jest.
 # Never imported by source code, does not ship to production.
+# Last modified upstream: 2026-03-28 to 2026-03-30
 
 [[IgnoredVulns]]
 id = "GHSA-2w6w-674q-4c4q"
@@ -49,6 +50,7 @@ reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by 
 # Transitive dep via install-mcp → giget → tar@6.2.1.
 # install-mcp's runtime code (dist/run.js) never imports giget or tar.
 # The library is installed but never loaded. Dead code path.
+# Last modified upstream: 2026-02-04 to 2026-03-16
 
 [[IgnoredVulns]]
 id = "GHSA-9ppj-qmqm-q256"
@@ -77,6 +79,7 @@ reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imp
 # --- lodash (2 alerts) ---
 # Dev dependency only — transitive dep of archiver (used only in tests).
 # No source code imports lodash. Does not ship to production.
+# Last modified upstream: 2026-04-02
 
 [[IgnoredVulns]]
 id = "GHSA-r5fr-rjxr-66jc"
@@ -90,6 +93,7 @@ reason = "lodash is a dev-only transitive dep of archiver (used only in tests). 
 # Runtime dep via Express 5.2.1, but server binds exclusively to 127.0.0.1
 # with static route patterns. No user-controlled route registration.
 # ReDoS requires complex optional groups we don't define.
+# Last modified upstream: 2026-03-30
 
 [[IgnoredVulns]]
 id = "GHSA-27v5-c462-wpq7"
@@ -102,6 +106,7 @@ reason = "Express server binds to 127.0.0.1 only with static route patterns. No 
 # --- picomatch (3 alerts, 1 GHSA ID) ---
 # Dev dependency only — transitive dep of jest/eslint.
 # Does not ship to production.
+# Last modified upstream: 2026-03-28
 
 [[IgnoredVulns]]
 id = "GHSA-3v7f-55p6-f55p"

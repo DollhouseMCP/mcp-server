@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check dismissed GHSAs for updates
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -28,24 +29,31 @@ jobs:
             echo "Checking $GHSA..."
 
             # Query OSV.dev API for current vulnerability state
-            RESPONSE=$(curl -s "https://api.osv.dev/v1/vulns/$GHSA")
+            OSV_RESPONSE=$(curl -s "https://api.osv.dev/v1/vulns/$GHSA")
 
-            # Check if the vulnerability has been withdrawn
-            WITHDRAWN=$(echo "$RESPONSE" | jq -r '.withdrawn // empty')
-            if [ -n "$WITHDRAWN" ]; then
-              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Withdrawn on $WITHDRAWN (can be removed from osv-scanner.toml)"
+            # Query GitHub Advisory Database for additional coverage
+            GH_RESPONSE=$(curl -s -H "Authorization: bearer $GH_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"query\": \"{ securityAdvisory(ghsaId: \\\"$GHSA\\\") { withdrawnAt, severity, cvss { score }, updatedAt } }\"}" \
+              https://api.github.com/graphql 2>/dev/null)
+
+            # Check if the vulnerability has been withdrawn (either source)
+            OSV_WITHDRAWN=$(echo "$OSV_RESPONSE" | jq -r '.withdrawn // empty')
+            GH_WITHDRAWN=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.withdrawnAt // empty' 2>/dev/null)
+
+            if [ -n "$OSV_WITHDRAWN" ] || [ -n "$GH_WITHDRAWN" ]; then
+              WITHDRAWN_DATE="${OSV_WITHDRAWN:-$GH_WITHDRAWN}"
+              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Withdrawn on $WITHDRAWN_DATE (can be removed from osv-scanner.toml)"
               continue
             fi
 
-            # Check if severity has changed (compare with our documented assessment)
-            SEVERITY=$(echo "$RESPONSE" | jq -r '
-              .severity[]? |
-              select(.type == "CVSS_V3") |
-              .score // empty
-            ' 2>/dev/null | head -1)
+            # Check if severity changed on GitHub Advisory Database
+            GH_SEVERITY=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.severity // empty' 2>/dev/null)
+            GH_CVSS=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.cvss.score // empty' 2>/dev/null)
+            GH_UPDATED=$(echo "$GH_RESPONSE" | jq -r '.data.securityAdvisory.updatedAt // empty' 2>/dev/null)
 
             # Check if affected versions have changed (new fix available)
-            HAS_FIX=$(echo "$RESPONSE" | jq -r '
+            HAS_FIX=$(echo "$OSV_RESPONSE" | jq -r '
               .affected[]? |
               .ranges[]? |
               .events[]? |
@@ -53,10 +61,10 @@ jobs:
               .fixed
             ' 2>/dev/null | head -1)
 
+            OSV_MODIFIED=$(echo "$OSV_RESPONSE" | jq -r '.modified // empty')
+
             if [ -n "$HAS_FIX" ]; then
-              # Check if this is a new fix we haven't seen
-              MODIFIED=$(echo "$RESPONSE" | jq -r '.modified // empty')
-              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Fix available (version $HAS_FIX), last modified $MODIFIED"
+              CHANGES_FOUND="${CHANGES_FOUND}\n- **$GHSA**: Fix available (version $HAS_FIX), last modified $OSV_MODIFIED (CVSS: ${GH_CVSS:-unknown})"
             fi
           done
 
@@ -69,8 +77,30 @@ jobs:
             echo "No changes detected in dismissed GHSAs."
           fi
 
-      - name: Create issue if changes detected
+      - name: Check for duplicate issues
         if: env.changes_found == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Search for open issues with the same title prefix to avoid duplicates
+          EXISTING=$(gh issue list \
+            --label "security" \
+            --state open \
+            --search "Security: Dismissed GHSA updates detected" \
+            --json number \
+            --jq 'length')
+
+          if [ "$EXISTING" -gt 0 ]; then
+            echo "duplicate=true" >> "$GITHUB_ENV"
+            echo "Skipping issue creation — an open GHSA reclassification issue already exists."
+          else
+            echo "duplicate=false" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create issue if changes detected
+        if: env.changes_found == 'true' && env.duplicate == 'false'
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -82,6 +112,7 @@ jobs:
           ## Dismissed GHSA Reclassification Alert
 
           The weekly GHSA monitor detected changes to vulnerabilities we previously dismissed in \`osv-scanner.toml\`.
+          Sources checked: **OSV.dev** and **GitHub Advisory Database**.
 
           ### Changes Detected
           ${CHANGES}
