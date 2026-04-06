@@ -55,10 +55,10 @@
 
       // Token panel
       + '<div class="sec-card" data-collapsed="false">'
-      +   '<div class="sec-card-header" role="button" tabindex="0" aria-expanded="true">'
+      +   '<button class="sec-card-header" type="button" aria-expanded="true">'
       +     '<h3 class="sec-card-title">Console Token</h3>'
       +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
-      +   '</div>'
+      +   '</button>'
       +   '<div class="sec-card-body">'
       +     '<div id="sec-token-content">Loading...</div>'
       +   '</div>'
@@ -66,10 +66,10 @@
 
       // Authenticator panel
       + '<div class="sec-card" data-collapsed="false">'
-      +   '<div class="sec-card-header" role="button" tabindex="0" aria-expanded="true">'
-      +     '<h3 class="sec-card-title">Authenticator (TOTP)</h3>'
+      +   '<button class="sec-card-header" type="button" aria-expanded="true">'
+      +     '<h3 class="sec-card-title">Authenticator (TOTP &mdash; Time-based One-Time Password)</h3>'
       +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
-      +   '</div>'
+      +   '</button>'
       +   '<div class="sec-card-body">'
       +     '<div id="sec-totp-content">Loading...</div>'
       +   '</div>'
@@ -342,17 +342,15 @@
       });
   }
 
+  /** Attach collapse/expand behavior to all card headers. Since headers
+   *  are <button> elements, Enter/Space keyboard activation is native. */
   function attachCardToggles() {
     document.querySelectorAll('.sec-card-header').forEach(function (header) {
-      var toggle = function () {
+      header.addEventListener('click', function () {
         var card = header.parentElement;
         var collapsed = card.dataset.collapsed === 'true';
         card.dataset.collapsed = collapsed ? 'false' : 'true';
         header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-      };
-      header.addEventListener('click', toggle);
-      header.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
       });
     });
   }
@@ -362,7 +360,21 @@
     initialized = true;
     var root = document.getElementById('security-dashboard-root');
     if (!root) return;
+    // Clone the intro card from the <template> in index.html and inject
+    // it as the first card inside the dashboard grid.
     root.innerHTML = buildDashboardHTML();
+    var tmpl = document.getElementById('sec-intro-template');
+    if (tmpl) {
+      var dashboard = root.querySelector('.sec-dashboard');
+      var frag = tmpl ? tmpl.content.cloneNode(true) : null;
+      if (dashboard && frag) {
+        if (dashboard.firstChild) {
+          dashboard.insertBefore(frag, dashboard.firstChild);
+        } else {
+          dashboard.appendChild(frag);
+        }
+      }
+    }
     attachCardToggles();
     poll();
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);

@@ -304,6 +304,61 @@ npm install @dollhousemcp/mcp-server</code></pre>
     <div id="security-dashboard-root"></div>
   </div>
 
+  <!-- Auth tab intro content (#1816) — edit here, not in security.js -->
+  <template id="sec-intro-template">
+    <section class="sec-card sec-card--intro" data-collapsed="true" aria-labelledby="sec-intro-title">
+      <button class="sec-card-header" type="button" aria-expanded="false">
+        <h3 class="sec-card-title" id="sec-intro-title">Console Authentication
+          <span class="sec-intro-summary">&mdash; how it can protect your sessions, permissions, and configurations</span>
+        </h3>
+        <span class="sec-card-toggle" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="sec-card-body">
+        <h4 class="sec-intro-subtitle">Why this matters</h4>
+        <ul class="sec-intro-list">
+          <li><strong>Prompt injection defense</strong> &mdash; Your LLM
+            processes content from the outside world: web searches, emails,
+            documents, links. Any of these can carry hidden instructions
+            targeting DollhouseMCP &mdash; attempting to create malicious
+            elements, alter permissions, or change your configuration.
+            Authentication ensures those attempts fail. The attacker
+            doesn&rsquo;t have your token, and TOTP means sensitive
+            operations require a code from your phone that no injection
+            can reach.</li>
+          <li><strong>Defense in depth</strong> &mdash; DollhouseMCP
+            validates and sanitizes inputs at the server level, but no
+            single layer is foolproof. Authentication adds an independent
+            barrier: even if an attack gets past input validation, it still
+            can&rsquo;t perform privileged operations without your
+            credentials.</li>
+          <li><strong>Shared environments</strong> &mdash; On shared
+            workstations, multi-user servers, or containers with mapped
+            ports, authentication prevents other users or network-adjacent
+            processes from accessing this console or any of its
+            capabilities.</li>
+        </ul>
+
+        <h4 class="sec-intro-subtitle">How it works</h4>
+        <ul class="sec-intro-list">
+          <li><strong>Console Token</strong> &mdash; A secret key generated
+            on first run. Every API request must carry it. Without the token,
+            other processes on your machine can&rsquo;t touch the console.
+            Use the <strong>Copy</strong> button below to share the token
+            with external services, scripts, or tools that need to access
+            the DollhouseMCP API on your behalf.</li>
+          <li><strong>Authenticator (TOTP)</strong> &mdash; An optional second
+            factor from your phone. Even if the token leaks, sensitive actions
+            like rotation still need a 6-digit code from your authenticator
+            app that changes every 30 seconds.</li>
+        </ul>
+
+        <a class="sec-intro-link"
+           href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/console-auth.md"
+           target="_blank" rel="noopener">Full documentation &rarr;</a>
+      </div>
+    </section>
+  </template>
+
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">

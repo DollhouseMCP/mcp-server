@@ -1,12 +1,78 @@
-/* Security tab styles (#1791) — follows permissions.css patterns */
+/* Auth tab styles (#1791) — follows permissions.css patterns */
 
+/* Intro explainer (#1816) */
+/* Intro card spans the full grid width */
+.sec-card--intro {
+  grid-column: 1 / -1;
+}
+
+.sec-intro-summary {
+  font-weight: 400;
+  font-size: 0.8125rem;
+  color: var(--ink-500, #6b7a8d);
+}
+
+.sec-intro-subtitle {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-500, #6b7a8d);
+}
+
+.sec-intro-content p {
+  font-size: 0.875rem;
+  line-height: 1.7;
+  color: var(--ink-700, #324563);
+  margin: 0 0 0.5rem;
+}
+
+.sec-intro-list {
+  margin: 0.25rem 0 0 1.25rem;
+  padding: 0;
+  font-size: 0.8125rem;
+  line-height: 1.7;
+  color: var(--ink-700, #324563);
+}
+
+.sec-intro-list li {
+  margin-bottom: 0.625rem;
+}
+
+.sec-intro-list li strong {
+  color: var(--ink-900, #18243a);
+}
+
+/* Intro doc link */
+
+.sec-intro-link {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--signal, #1e40af);
+  text-decoration: none;
+}
+
+.sec-intro-link:hover {
+  text-decoration: underline;
+}
+
+/* Dashboard grid — single column keeps cards readable at all widths.
+   The token card has too much metadata for a half-width column. */
 .sec-dashboard {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 1rem;
   padding: 1rem;
-  max-width: 1200px;
+  max-width: 720px;
   margin: 0 auto;
+}
+
+@media (min-width: 900px) {
+  .sec-dashboard {
+    grid-template-columns: 1fr 1fr;
+    max-width: 1200px;
+  }
 }
 
 /* Cards */
@@ -21,15 +87,21 @@
   grid-column: 1 / -1;
 }
 
+/* Reset button styles when card header is a <button> for accessibility */
 .sec-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
   padding: 0.75rem 1rem;
   background: var(--paper-base, #f8fbff);
+  border: none;
   border-bottom: 1px solid var(--line, #c8d5e9);
   cursor: pointer;
   user-select: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
 }
 
 .sec-card-header:hover {
