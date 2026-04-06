@@ -288,6 +288,9 @@ describe('Auth tab (security.js) — #1791', () => {
       mockFetchSuccess(win);
       (win as any).DollhouseConsole.security.init();
       (win as any).DollhouseConsole.security.destroy();
+      // Clear the root to simulate a clean slate
+      const root = win.document.getElementById('security-dashboard-root');
+      if (root) root.innerHTML = '';
       // Re-init should work without errors
       (win as any).DollhouseConsole.security.init();
       const cards = win.document.querySelectorAll('.sec-card');

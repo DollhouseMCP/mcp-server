@@ -304,6 +304,56 @@ npm install @dollhousemcp/mcp-server</code></pre>
     <div id="security-dashboard-root"></div>
   </div>
 
+  <!-- Auth tab intro content (#1816) — edit here, not in security.js -->
+  <template id="sec-intro-template">
+    <div class="sec-intro" id="sec-intro">
+      <div class="sec-intro-content">
+        <h2 class="sec-intro-title">Console Authentication</h2>
+
+        <p>This console controls your DollhouseMCP installation &mdash;
+        sessions, permissions, configurations, and logs. Authentication
+        makes sure only <strong>you</strong> have that control.</p>
+
+        <h3 class="sec-intro-subtitle">How it works</h3>
+        <ul class="sec-intro-list">
+          <li><strong>Console Token</strong> &mdash; a secret key generated
+            on first run. Every API request must carry it. Without the token,
+            other processes on your machine can&rsquo;t touch the console.</li>
+          <li><strong>Authenticator (TOTP)</strong> &mdash; an optional second
+            factor from your phone. Even if the token leaks, sensitive actions
+            like rotation still need a 6-digit code from your authenticator
+            app.</li>
+        </ul>
+
+        <h3 class="sec-intro-subtitle">Do I need this?</h3>
+        <ul class="sec-intro-list">
+          <li><strong>Prompt injection defense</strong> &mdash; if your LLM
+            processes untrusted content (documents, web pages, emails), a
+            prompt injection could try to call management APIs. Authentication
+            blocks those attempts &mdash; the attacker doesn&rsquo;t have
+            your token, and TOTP ensures sensitive operations need a code
+            from your phone that no injection can produce.</li>
+          <li><strong>Single-user laptop?</strong> The token is generated
+            automatically &mdash; you&rsquo;re already protected. TOTP adds
+            an extra layer if you want it.</li>
+          <li><strong>Shared workstation or server?</strong> Enable
+            authentication and enroll TOTP &mdash; other users on the machine
+            won&rsquo;t be able to access your console.</li>
+          <li><strong>Containers or VMs?</strong> If ports are mapped beyond
+            localhost, authentication prevents unauthorized access from the
+            network.</li>
+        </ul>
+
+        <div class="sec-intro-actions">
+          <a class="sec-intro-link"
+             href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/console-auth.md"
+             target="_blank" rel="noopener">Full documentation</a>
+          <button class="sec-btn sec-btn--sm" id="sec-intro-dismiss">Got it, don&rsquo;t show again</button>
+        </div>
+      </div>
+    </div>
+  </template>
+
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">
