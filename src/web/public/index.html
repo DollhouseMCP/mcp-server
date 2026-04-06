@@ -306,9 +306,9 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
   <!-- Auth tab intro content (#1816) — edit here, not in security.js -->
   <template id="sec-intro-template">
-    <div class="sec-card sec-card--intro" data-collapsed="true">
+    <div class="sec-card sec-card--intro" data-collapsed="true" role="region" aria-labelledby="sec-intro-title">
       <button class="sec-card-header" type="button" aria-expanded="false">
-        <h3 class="sec-card-title">Console Authentication
+        <h3 class="sec-card-title" id="sec-intro-title">Console Authentication
           <span class="sec-intro-summary">&mdash; how it can protect your sessions, permissions, and configurations</span>
         </h3>
         <span class="sec-card-toggle" aria-hidden="true">&#9662;</span>

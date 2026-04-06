@@ -58,6 +58,17 @@ async function createBrowserEnv() {
       <meta name="dollhouse-console-token" content="${TEST_TOKEN}">
     </head><body>
       <div id="security-dashboard-root"></div>
+      <template id="sec-intro-template">
+        <div class="sec-card sec-card--intro" data-collapsed="true">
+          <button class="sec-card-header" type="button" aria-expanded="false">
+            <h3 class="sec-card-title">Console Authentication</h3>
+            <span class="sec-card-toggle">&#9662;</span>
+          </button>
+          <div class="sec-card-body">
+            <p>Test intro content</p>
+          </div>
+        </div>
+      </template>
     </body></html>`,
     { url: 'http://localhost:5907', runScripts: 'dangerously', pretendToBeVisual: true },
   );
@@ -142,11 +153,20 @@ describe('Auth tab (security.js) — #1791', () => {
       mockFetchSuccess(win);
       (win as any).DollhouseConsole.security.init();
       const headers = win.document.querySelectorAll('.sec-card-header');
-      expect(headers.length).toBe(2); // Token + Authenticator
+      expect(headers.length).toBe(3); // Intro + Token + Authenticator
       headers.forEach((h: Element) => {
         expect(h.tagName.toLowerCase()).toBe('button');
-        expect(h.getAttribute('aria-expanded')).toBe('true');
       });
+    });
+
+    it('clones the intro card from the template', () => {
+      mockFetchSuccess(win);
+      (win as any).DollhouseConsole.security.init();
+      const introCard = win.document.querySelector('.sec-card--intro');
+      expect(introCard).not.toBeNull();
+      expect(introCard!.getAttribute('data-collapsed')).toBe('true');
+      const header = introCard!.querySelector('.sec-card-header');
+      expect(header!.getAttribute('aria-expanded')).toBe('false');
     });
 
     it('is idempotent — calling twice does not duplicate content', () => {
@@ -154,7 +174,7 @@ describe('Auth tab (security.js) — #1791', () => {
       (win as any).DollhouseConsole.security.init();
       (win as any).DollhouseConsole.security.init();
       const cards = win.document.querySelectorAll('.sec-card');
-      expect(cards.length).toBe(2);
+      expect(cards.length).toBe(3); // Intro + Token + Authenticator
     });
   });
 
@@ -230,8 +250,10 @@ describe('Auth tab (security.js) — #1791', () => {
       mockFetchSuccess(win);
       (win as any).DollhouseConsole.security.init();
 
-      const header = win.document.querySelector('.sec-card-header') as HTMLElement;
-      const card = header.parentElement as HTMLElement;
+      // Target a non-intro card (Token or Authenticator) which starts expanded
+      const cards = win.document.querySelectorAll('.sec-card:not(.sec-card--intro)');
+      const card = cards[0] as HTMLElement;
+      const header = card.querySelector('.sec-card-header') as HTMLElement;
       expect(card.dataset.collapsed).toBe('false');
 
       header.click();
@@ -294,7 +316,7 @@ describe('Auth tab (security.js) — #1791', () => {
       // Re-init should work without errors
       (win as any).DollhouseConsole.security.init();
       const cards = win.document.querySelectorAll('.sec-card');
-      expect(cards.length).toBe(2);
+      expect(cards.length).toBe(3); // Intro + Token + Authenticator
     });
   });
 });
