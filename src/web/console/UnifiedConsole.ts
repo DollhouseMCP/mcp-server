@@ -196,6 +196,9 @@ async function startAsLeader(
   // Register the leader as a session
   ingestResult.registerLeaderSession(options.sessionId, process.pid);
 
+  // Register the web console itself so the session indicator is never empty (#1805)
+  ingestResult.registerConsoleSession();
+
   // Start the web server with ingest routes mounted before the SPA fallback
   const webResult = await startWebServer({
     portfolioDir: options.portfolioDir,

@@ -142,7 +142,6 @@
     dropdownBuilt = false;
 
     var count = active.length;
-    if (count === 0) return;
 
     // Box button
     var box = document.createElement('button');
@@ -225,6 +224,21 @@
         nameEl.textContent = displayName(s);
         if (s.color) nameEl.style.color = s.color;
         item.appendChild(nameEl);
+
+        // Auth status badge (#1805)
+        var badge = document.createElement('span');
+        badge.className = 'session-auth-badge';
+        if (s.kind === 'console') {
+          badge.textContent = 'console';
+          badge.dataset.auth = 'console';
+        } else if (s.authenticated) {
+          badge.textContent = 'auth';
+          badge.dataset.auth = 'yes';
+        } else {
+          badge.textContent = 'no auth';
+          badge.dataset.auth = 'no';
+        }
+        item.appendChild(badge);
 
         var uptimeEl = document.createElement('span');
         uptimeEl.className = 'session-dropdown-uptime';

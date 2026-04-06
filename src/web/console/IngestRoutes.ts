@@ -51,6 +51,10 @@ export interface SessionInfo {
   lastHeartbeat: string;
   status: 'active' | 'ended';
   isLeader: boolean;
+  /** Whether this session connected with a valid Bearer token (#1805). */
+  authenticated: boolean;
+  /** Session kind — 'mcp' for MCP stdio sessions, 'console' for the web console itself. */
+  kind: 'mcp' | 'console';
 }
 
 /**
@@ -98,6 +102,8 @@ export interface IngestRoutesResult {
   getSessions: () => SessionInfo[];
   /** Register the leader as a session */
   registerLeaderSession: (sessionId: string, pid: number) => void;
+  /** Register the web console as a session so the indicator is never empty (#1805) */
+  registerConsoleSession: () => void;
 }
 
 /** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
@@ -209,6 +215,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       case 'started': {
         const displayName = namePool.assign(payload.sessionId);
         const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
+        // Follower sessions that reach the ingest endpoint are authenticated
+        // if the auth middleware passed them through (token was valid).
+        const isAuthenticated = Boolean((res as any).locals?.tokenEntry);
         const info: SessionInfo = {
           sessionId: payload.sessionId,
           displayName,
@@ -218,6 +227,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           lastHeartbeat: now,
           status: 'active',
           isLeader: false,
+          authenticated: isAuthenticated,
+          kind: 'mcp',
         };
         sessions.set(payload.sessionId, info);
         logger.info('[IngestRoutes] Session registered', {
@@ -303,6 +314,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     for (const [id, session] of sessions) {
       if (session.status !== 'active') continue;
       if (session.isLeader) continue; // leader manages itself
+      if (session.kind === 'console') continue; // console session has no heartbeat (#1805)
       const age = now - new Date(session.lastHeartbeat).getTime();
       if (age > SESSION_STALE_MS) {
         session.status = 'ended';
@@ -334,9 +346,35 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       lastHeartbeat: new Date().toISOString(),
       status: 'active',
       isLeader: true,
+      authenticated: true,
+      kind: 'mcp',
     });
     logger.info('[IngestRoutes] Leader session registered', { displayName, sessionId, pid, color });
   }
 
-  return { router, getSessions, registerLeaderSession };
+  /**
+   * Register the web console itself as a session (#1805). Ensures the
+   * session indicator always shows at least one entry — the console the
+   * user is currently looking at.
+   */
+  function registerConsoleSession(): void {
+    const consoleId = `console-${process.pid}`;
+    if (sessions.has(consoleId)) return;
+    const displayName = 'Web Console';
+    sessions.set(consoleId, {
+      sessionId: consoleId,
+      displayName,
+      color: '#6366f1', // indigo — distinct from puppet greens/blues
+      pid: process.pid,
+      startedAt: new Date().toISOString(),
+      lastHeartbeat: new Date().toISOString(),
+      status: 'active',
+      isLeader: false,
+      authenticated: true,
+      kind: 'console',
+    });
+    logger.info('[IngestRoutes] Console session registered', { sessionId: consoleId, pid: process.pid });
+  }
+
+  return { router, getSessions, registerLeaderSession, registerConsoleSession };
 }
