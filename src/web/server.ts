@@ -303,7 +303,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');
-  app.use(express.static(publicDir));
+  // Serve static assets but skip index.html — the SPA fallback below
+  // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
+  // meta tag). Without this, express.static serves the raw template
+  // and the browser never gets the auth token (#1780).
+  app.use(express.static(publicDir, { index: false }));
 
   // SPA fallback with console token injection (#1780).
   // Reads index.html on first request, substitutes the {{CONSOLE_TOKEN}} placeholder
