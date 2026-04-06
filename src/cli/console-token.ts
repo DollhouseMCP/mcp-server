@@ -100,7 +100,36 @@ async function executeRotation(
       }
       process.exit(2);
     }
-    throw err;
+    console.error(chalk.red(`Unexpected error during ${operation}: ${err instanceof Error ? err.message : String(err)}`));
+    process.exit(1);
+  }
+}
+
+/**
+ * Format and print the result of a rotation/revocation operation.
+ * Handles both JSON and human-readable output for rotate and revoke.
+ */
+function printRotationResult(
+  result: RotationResult,
+  options: { json?: boolean },
+  operation: 'rotation' | 'revocation',
+): void {
+  if (options.json) {
+    const output = operation === 'rotation'
+      ? { token: result.token, rotatedAt: result.rotatedAt, graceUntil: result.graceUntil }
+      : { revoked: true, newToken: result.token, rotatedAt: result.rotatedAt };
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    const successMsg = operation === 'rotation'
+      ? 'Token rotated successfully.'
+      : 'Token revoked. A new token has been issued.';
+    const statusMsg = operation === 'rotation'
+      ? `Old token valid until: ${new Date(result.graceUntil).toISOString()}`
+      : 'All sessions using the old token will lose access after the grace window.';
+    console.log(chalk.green(successMsg));
+    console.log(result.token);
+    console.log(chalk.gray(`Rotated at: ${result.rotatedAt}`));
+    console.log(chalk.gray(statusMsg));
   }
 }
 
@@ -159,18 +188,7 @@ program
   .option('--code <code>', 'TOTP confirmation code (prompts if omitted)')
   .action(async (options: { json?: boolean; code?: string }) => {
     const result = await executeRotation(options, 'rotation');
-    if (options.json) {
-      console.log(JSON.stringify({
-        token: result.token,
-        rotatedAt: result.rotatedAt,
-        graceUntil: result.graceUntil,
-      }, null, 2));
-    } else {
-      console.log(chalk.green('Token rotated successfully.'));
-      console.log(result.token);
-      console.log(chalk.gray(`Rotated at: ${result.rotatedAt}`));
-      console.log(chalk.gray(`Old token valid until: ${new Date(result.graceUntil).toISOString()}`));
-    }
+    printRotationResult(result, options, 'rotation');
   });
 
 // ── revoke ──────────────────────────────────────────────────────────────
@@ -185,17 +203,7 @@ program
     // When multi-device tokens land, --id <uuid> removes a specific
     // non-primary token from the store.
     const result = await executeRotation(options, 'revocation');
-    if (options.json) {
-      console.log(JSON.stringify({
-        revoked: true,
-        newToken: result.token,
-        rotatedAt: result.rotatedAt,
-      }, null, 2));
-    } else {
-      console.log(chalk.green('Token revoked. A new token has been issued.'));
-      console.log(result.token);
-      console.log(chalk.gray('All sessions using the old token will lose access after the grace window.'));
-    }
+    printRotationResult(result, options, 'revocation');
   });
 
 program.parse(process.argv);
