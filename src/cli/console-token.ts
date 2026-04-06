@@ -20,15 +20,13 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { createInterface } from 'node:readline/promises';
 import { stdin, stdout } from 'node:process';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
 import {
   ConsoleTokenStore,
   readTokenFileRaw,
   TotpError,
   DEFAULT_TOKEN_FILE,
   type ConsoleTokenFile,
-  type MaskedTokenEntry,
+  type RotationResult,
 } from '../web/console/consoleToken.js';
 import { env } from '../config/env.js';
 
@@ -53,9 +51,56 @@ async function promptTotpCode(): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     const code = await rl.question(chalk.cyan('Enter TOTP code (or backup code): '));
-    return code.trim();
+    const trimmed = code.trim();
+    if (!trimmed) {
+      console.error(chalk.red('No confirmation code provided.'));
+      process.exit(2);
+    }
+    return trimmed;
   } finally {
     rl.close();
+  }
+}
+
+/**
+ * Shared rotation logic for both `rotate` and `revoke` commands.
+ * Initializes the store, checks TOTP enrollment, obtains the confirmation
+ * code (from --code flag or interactive prompt), and calls rotatePrimary.
+ *
+ * @param operation - 'rotation' or 'revocation' for user-facing messages
+ */
+async function executeRotation(
+  options: { json?: boolean; code?: string },
+  operation: 'rotation' | 'revocation',
+): Promise<RotationResult> {
+  const filePath = resolveTokenFilePath();
+  const store = new ConsoleTokenStore(filePath);
+  await store.ensureInitialized('CLI');
+
+  if (!store.isTotpEnrolled()) {
+    if (options.json) {
+      console.log(JSON.stringify({ error: 'TOTP enrollment required', code: 'TOTP_REQUIRED' }));
+    } else {
+      console.error(chalk.red(`Token ${operation} requires TOTP enrollment.`));
+      console.error(chalk.gray('Enroll via the Security tab or the TOTP enrollment API.'));
+    }
+    process.exit(2);
+  }
+
+  const code = options.code || await promptTotpCode();
+
+  try {
+    return await store.rotatePrimary(code);
+  } catch (err) {
+    if (err instanceof TotpError) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: err.message, code: err.code }));
+      } else {
+        console.error(chalk.red(`${operation.charAt(0).toUpperCase() + operation.slice(1)} failed: ${err.message}`));
+      }
+      process.exit(2);
+    }
+    throw err;
   }
 }
 
@@ -113,50 +158,18 @@ program
   .option('--json', 'Output as JSON for scripted consumption')
   .option('--code <code>', 'TOTP confirmation code (prompts if omitted)')
   .action(async (options: { json?: boolean; code?: string }) => {
-    const filePath = resolveTokenFilePath();
-    const store = new ConsoleTokenStore(filePath);
-    await store.ensureInitialized('CLI');
-
-    if (!store.isTotpEnrolled()) {
-      if (options.json) {
-        console.log(JSON.stringify({ error: 'TOTP enrollment required', code: 'TOTP_REQUIRED' }));
-      } else {
-        console.error(chalk.red('Token rotation requires TOTP enrollment.'));
-        console.error(chalk.gray('Enroll via the Security tab or the TOTP enrollment API.'));
-      }
-      process.exit(2);
-    }
-
-    const code = options.code || await promptTotpCode();
-    if (!code) {
-      console.error(chalk.red('No confirmation code provided.'));
-      process.exit(2);
-    }
-
-    try {
-      const result = await store.rotatePrimary(code);
-      if (options.json) {
-        console.log(JSON.stringify({
-          token: result.token,
-          rotatedAt: result.rotatedAt,
-          graceUntil: result.graceUntil,
-        }, null, 2));
-      } else {
-        console.log(chalk.green('Token rotated successfully.'));
-        console.log(result.token);
-        console.log(chalk.gray(`Rotated at: ${result.rotatedAt}`));
-        console.log(chalk.gray(`Old token valid until: ${new Date(result.graceUntil).toISOString()}`));
-      }
-    } catch (err) {
-      if (err instanceof TotpError) {
-        if (options.json) {
-          console.log(JSON.stringify({ error: err.message, code: err.code }));
-        } else {
-          console.error(chalk.red('Rotation failed: ' + err.message));
-        }
-        process.exit(2);
-      }
-      throw err;
+    const result = await executeRotation(options, 'rotation');
+    if (options.json) {
+      console.log(JSON.stringify({
+        token: result.token,
+        rotatedAt: result.rotatedAt,
+        graceUntil: result.graceUntil,
+      }, null, 2));
+    } else {
+      console.log(chalk.green('Token rotated successfully.'));
+      console.log(result.token);
+      console.log(chalk.gray(`Rotated at: ${result.rotatedAt}`));
+      console.log(chalk.gray(`Old token valid until: ${new Date(result.graceUntil).toISOString()}`));
     }
   });
 
@@ -170,50 +183,18 @@ program
   .action(async (options: { json?: boolean; code?: string }) => {
     // For Phase 2 with a single primary token, revoke == rotate.
     // When multi-device tokens land, --id <uuid> removes a specific
-    // non-primary token from the store. For now, delegate to rotate.
-    const filePath = resolveTokenFilePath();
-    const store = new ConsoleTokenStore(filePath);
-    await store.ensureInitialized('CLI');
-
-    if (!store.isTotpEnrolled()) {
-      if (options.json) {
-        console.log(JSON.stringify({ error: 'TOTP enrollment required', code: 'TOTP_REQUIRED' }));
-      } else {
-        console.error(chalk.red('Token revocation requires TOTP enrollment.'));
-        console.error(chalk.gray('Enroll via the Security tab or the TOTP enrollment API.'));
-      }
-      process.exit(2);
-    }
-
-    const code = options.code || await promptTotpCode();
-    if (!code) {
-      console.error(chalk.red('No confirmation code provided.'));
-      process.exit(2);
-    }
-
-    try {
-      const result = await store.rotatePrimary(code);
-      if (options.json) {
-        console.log(JSON.stringify({
-          revoked: true,
-          newToken: result.token,
-          rotatedAt: result.rotatedAt,
-        }, null, 2));
-      } else {
-        console.log(chalk.green('Token revoked. A new token has been issued.'));
-        console.log(result.token);
-        console.log(chalk.gray('All sessions using the old token will lose access after the grace window.'));
-      }
-    } catch (err) {
-      if (err instanceof TotpError) {
-        if (options.json) {
-          console.log(JSON.stringify({ error: err.message, code: err.code }));
-        } else {
-          console.error(chalk.red('Revocation failed: ' + err.message));
-        }
-        process.exit(2);
-      }
-      throw err;
+    // non-primary token from the store.
+    const result = await executeRotation(options, 'revocation');
+    if (options.json) {
+      console.log(JSON.stringify({
+        revoked: true,
+        newToken: result.token,
+        rotatedAt: result.rotatedAt,
+      }, null, 2));
+    } else {
+      console.log(chalk.green('Token revoked. A new token has been issued.'));
+      console.log(result.token);
+      console.log(chalk.gray('All sessions using the old token will lose access after the grace window.'));
     }
   });
 

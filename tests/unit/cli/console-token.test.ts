@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Secret, TOTP } from 'otpauth';
@@ -155,7 +155,7 @@ describe('console token CLI operations', () => {
   describe('JSON output structure', () => {
     it('show JSON includes expected fields', async () => {
       const store = new ConsoleTokenStore(tokenFilePath);
-      const entry = await store.ensureInitialized('Kermit');
+      await store.ensureInitialized('Kermit');
 
       const data = await readTokenFileRaw(tokenFilePath);
       const primary = data!.tokens[0];
