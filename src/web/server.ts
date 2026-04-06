@@ -205,7 +205,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       "default-src 'self'",
       "script-src 'self' cdn.jsdelivr.net cdnjs.cloudflare.com",
       "style-src 'self' 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net",
-      "connect-src 'self' raw.githubusercontent.com",
+      "img-src 'self' data:",
+      "connect-src 'self' raw.githubusercontent.com http://127.0.0.1:3939",
       "font-src 'self'",
     ].join('; '));
     next();

@@ -363,18 +363,58 @@
     }
   }
 
-  // Fetch sessions from the API
+  /** Well-known legacy port for pre-authentication DollhouseMCP installs. */
+  var LEGACY_PORT = 3939;
+
+  /**
+   * Fetch sessions from the local API, then probe the legacy port (3939)
+   * for any additional sessions from pre-auth installs running on the same
+   * machine. Legacy sessions are marked as unauthenticated (#1805).
+   */
   function fetchSessions() {
+    var localSessions = [];
+
     DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
-      if (!res.ok) return;
+      if (!res.ok) return { sessions: [] };
       return res.json();
     }).then(function(data) {
-      if (data && data.sessions) {
-        sessions = data.sessions;
+      localSessions = (data && data.sessions) ? data.sessions : [];
+      // Skip federation if we're already on the legacy port
+      if (String(location.port) === String(LEGACY_PORT)) {
+        sessions = localSessions;
         updateSessionIndicator();
         updateSessionFilterOptions();
+        return;
       }
-    }).catch(function() {});
+      // Probe legacy port for additional sessions
+      return fetch('http://127.0.0.1:' + LEGACY_PORT + '/api/sessions', {
+        signal: AbortSignal.timeout(2000),
+      }).then(function(r) { return r.ok ? r.json() : { sessions: [] }; })
+        .catch(function() { return { sessions: [] }; });
+    }).then(function(legacyData) {
+      if (!legacyData) return; // already handled above
+      var legacySessions = (legacyData.sessions || []).filter(function(ls) {
+        return ls.status === 'active';
+      });
+      // Mark legacy sessions and merge (avoid duplicates by sessionId)
+      var localIds = new Set(localSessions.map(function(s) { return s.sessionId; }));
+      var merged = localSessions.slice();
+      for (var i = 0; i < legacySessions.length; i++) {
+        if (!localIds.has(legacySessions[i].sessionId)) {
+          legacySessions[i].authenticated = false;
+          legacySessions[i].kind = legacySessions[i].kind || 'mcp';
+          merged.push(legacySessions[i]);
+        }
+      }
+      sessions = merged;
+      updateSessionIndicator();
+      updateSessionFilterOptions();
+    }).catch(function() {
+      // If everything fails, at least show local sessions
+      sessions = localSessions;
+      updateSessionIndicator();
+      updateSessionFilterOptions();
+    });
   }
 
   // Expose for logs.js integration
