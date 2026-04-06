@@ -2112,9 +2112,9 @@ function safeParseYaml(content) {
     // restart, file deletion), consoleAuth.js fires this event. Show a
     // persistent, idempotent reload banner so the user knows why the UI
     // stopped updating.
-    window.addEventListener('dollhouse:session-expired', function () {
+    globalThis.addEventListener('dollhouse:session-expired', function () {
       if (document.getElementById('session-expired-toast')) return;
-      var toast = document.createElement('div');
+      const toast = document.createElement('div');
       toast.id = 'session-expired-toast';
       toast.setAttribute('role', 'alert');
       toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
