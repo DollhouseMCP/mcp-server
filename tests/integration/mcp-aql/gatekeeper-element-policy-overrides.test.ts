@@ -12,15 +12,11 @@
  * 2. Flag = false (kill switch): the same element's `allow` policy is bypassed —
  *    the operation stays at its route default (CONFIRM_SESSION).
  *
- * The flag cannot be tested via env var in the same Jest process (env is parsed
- * once at module load time). Instead, the kill switch gatekeeper is installed
- * directly on the handler instance:
- *
- *   (mcpAqlHandler as any).gatekeeper = new Gatekeeper(undefined, { allowElementPolicyOverrides: false });
- *
- * This is necessary because MCPAQLHandler stores its Gatekeeper by reference at
- * construction time (`this.gatekeeper = handlers.gatekeeper`) — re-registering in
- * the container does not affect the already-constructed handler instance.
+ * Note: Issue #1653 changed the MCPAQLHandler to auto-confirm operations when
+ * the host has already approved the MCP tool call. As a result, handler-level
+ * tests cannot observe the confirmation requirement. These tests validate policy
+ * resolution at the Gatekeeper.enforce() level, where decisions are visible
+ * before handler auto-confirmation applies.
  *
  * Bootstrap pattern: persona creation requires a confirmed `create_element` session.
  * We use preConfirmAllOperations() to satisfy that for setup, then
@@ -33,6 +29,8 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
+import { PermissionLevel } from '../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import type { ActiveElement } from '../../../src/handlers/mcp-aql/policies/index.js';
 import {
   createPortfolioTestEnvironment,
   preConfirmAllOperations,
@@ -68,10 +66,12 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
    * performs a single type-asserted write in one place, keeping the pattern
    * documented and centralized rather than scattered across test cases.
    */
-  function installKillSwitchGatekeeper(): void {
-    (mcpAqlHandler as any).gatekeeper = new Gatekeeper(undefined, {
+  function installKillSwitchGatekeeper(): Gatekeeper {
+    const killSwitchGatekeeper = new Gatekeeper(undefined, {
       allowElementPolicyOverrides: false,
     });
+    (mcpAqlHandler as any).gatekeeper = killSwitchGatekeeper;
+    return killSwitchGatekeeper;
   }
 
   /**
@@ -109,36 +109,53 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
     expect(activateResult.success).toBe(true);
   }
 
+  /**
+   * Build an ActiveElement array matching what the permissive persona provides.
+   */
+  function buildPermissiveActiveElements(): ActiveElement[] {
+    return [{
+      type: 'persona',
+      name: 'permissive-persona',
+      metadata: {
+        name: 'permissive-persona',
+        description: 'Persona that allows create_element without confirmation',
+        gatekeeper: {
+          allow: ['create_element'],
+        },
+      },
+    }];
+  }
+
   describe('flag = true (default) — element allow policies are applied', () => {
     it('should auto-approve create_element when active persona has allow policy', async () => {
-      // Baseline: create_element without active element policy requires confirmation
-      const baselineResult = await mcpAqlHandler.handleCreate({
+      const gatekeeper = container.resolve<Gatekeeper>('gatekeeper');
+
+      // Baseline: create_element without active element policy requires confirmation.
+      // Gatekeeper.enforce() returns the raw decision before handler auto-confirmation (#1653).
+      const baselineDecision = gatekeeper.enforce({
         operation: 'create_element',
-        params: {
-          element_name: 'probe-skill',
-          element_type: 'skills',
-          description: 'Probe skill',
-          content: '# Probe',
-        },
+        endpoint: 'CREATE',
+        activeElements: [],
       });
-      // No confirmation recorded and no allow policy active — expect confirmation required.
-      // The error must contain 'confirm_operation' (the suggestion to call confirm_operation
-      // to approve), distinguishing a CONFIRM_SESSION response from a hard DENY.
-      expect(baselineResult.success).toBe(false);
-      if (!baselineResult.success) {
-        expect(baselineResult.error).toContain('confirm_operation');
-      }
+      expect(baselineDecision.allowed).toBe(false);
+      expect(baselineDecision.confirmationPending).toBe(true);
+      expect(baselineDecision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
 
       // Bootstrap: pre-confirm so persona creation can proceed, then clear confirmations.
-      // After reset, only the element allow policy drives auto-approval — not a
-      // lingering session confirmation.
       preConfirmAllOperations(container);
       await setupPermissivePersona();
       resetGatekeeperConfirmations(container);
 
       // Now create_element should be auto-approved by the persona's allow policy.
-      // Assert both success and that data is present — confirming the element was
-      // actually created, not just that the gatekeeper returned a truthy result.
+      const elevatedDecision = gatekeeper.enforce({
+        operation: 'create_element',
+        endpoint: 'CREATE',
+        activeElements: buildPermissiveActiveElements(),
+      });
+      expect(elevatedDecision.allowed).toBe(true);
+      expect(elevatedDecision.permissionLevel).toBe(PermissionLevel.AUTO_APPROVE);
+
+      // Also verify end-to-end via handler — element was actually created
       const elevatedResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
@@ -158,32 +175,22 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
   describe('flag = false (kill switch) — element allow policies are bypassed', () => {
     it('should keep create_element at CONFIRM_SESSION even when active persona has allow policy', async () => {
       // Set up the permissive persona FIRST using the normal gatekeeper.
-      // create_element is CONFIRM_SESSION, so we need a pre-confirmed session to
-      // bootstrap persona creation before the kill switch is active.
       preConfirmAllOperations(container);
       await setupPermissivePersona();
 
       // Install the kill switch gatekeeper (fresh session, no confirmations).
-      // See installKillSwitchGatekeeper() for why direct assignment is necessary.
-      installKillSwitchGatekeeper();
+      const killSwitchGatekeeper = installKillSwitchGatekeeper();
 
-      // create_element should still require confirmation — allow policy was bypassed
-      const result = await mcpAqlHandler.handleCreate({
+      // Gatekeeper.enforce() should still require confirmation — allow policy was bypassed
+      const decision = killSwitchGatekeeper.enforce({
         operation: 'create_element',
-        params: {
-          element_name: 'blocked-skill',
-          element_type: 'skills',
-          description: 'Should not be created without confirmation',
-          content: '# Blocked',
-        },
+        endpoint: 'CREATE',
+        activeElements: buildPermissiveActiveElements(),
       });
 
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        // 'confirm_operation' in the error distinguishes CONFIRM_SESSION from a hard DENY —
-        // the operation is waiting for approval, not permanently blocked.
-        expect(result.error).toContain('confirm_operation');
-      }
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
     });
 
     it('should still enforce deny policies when flag is false', async () => {
@@ -264,6 +271,8 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
       // An `allow` policy from one element MUST NOT override a `confirm` policy
       // from another active element, regardless of activation order.
 
+      const gatekeeper = container.resolve<Gatekeeper>('gatekeeper');
+
       preConfirmAllOperations(container);
 
       // Create and activate the allow-policy persona
@@ -308,24 +317,40 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
       resetGatekeeperConfirmations(container);
 
       // With both personas active, confirm-persona's policy must take precedence.
-      // The allow-persona's `allow` cannot override the confirm-persona's `confirm`.
-      const result = await mcpAqlHandler.handleCreate({
-        operation: 'create_element',
-        params: {
-          element_name: 'priority-test-skill',
-          element_type: 'skills',
-          description: 'Should require confirmation despite allow-persona being active',
-          content: '# Priority Test',
+      // Test at Gatekeeper.enforce() level to observe the raw policy decision
+      // before handler auto-confirmation (#1653).
+      const activeElements: ActiveElement[] = [
+        {
+          type: 'persona',
+          name: 'allow-persona',
+          metadata: {
+            name: 'allow-persona',
+            description: 'Persona that would auto-approve create_element',
+            gatekeeper: { allow: ['create_element'] },
+          },
         },
+        {
+          type: 'persona',
+          name: 'confirm-persona',
+          metadata: {
+            name: 'confirm-persona',
+            description: 'Persona that requires confirmation for create_element',
+            gatekeeper: { confirm: ['create_element'] },
+          },
+        },
+      ];
+
+      const decision = gatekeeper.enforce({
+        operation: 'create_element',
+        endpoint: 'CREATE',
+        activeElements,
       });
 
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        // CONFIRM_SESSION (not a hard deny) — 'confirm_operation' is present in the message.
-        // This is the key assertion: the operation is waiting for approval, not permanently
-        // blocked. It proves confirm-persona's policy won over allow-persona's policy.
-        expect(result.error).toContain('confirm_operation');
-      }
+      // CONFIRM_SESSION (not AUTO_APPROVE) — confirm-persona's policy won over
+      // allow-persona's policy, proving the priority hierarchy.
+      expect(decision.allowed).toBe(false);
+      expect(decision.confirmationPending).toBe(true);
+      expect(decision.permissionLevel).toBe(PermissionLevel.CONFIRM_SESSION);
     });
   });
 });
