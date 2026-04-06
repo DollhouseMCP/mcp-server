@@ -22,6 +22,7 @@ debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then
     echo "[pretooluse] $*" >&2
   fi
+  return 0
 }
 
 # Discover the port from the port file
