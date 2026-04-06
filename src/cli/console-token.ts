@@ -51,9 +51,15 @@ async function promptTotpCode(): Promise<string> {
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     const code = await rl.question(chalk.cyan('Enter TOTP code (or backup code): '));
-    const trimmed = code.trim();
+    // Strip whitespace and dashes — users may type backup codes as "XXXX-XXXX"
+    const trimmed = code.trim().replaceAll(/[\s-]/g, '');
     if (!trimmed) {
       console.error(chalk.red('No confirmation code provided.'));
+      process.exit(2);
+    }
+    // Accept 6-digit TOTP codes or 8-char alphanumeric backup codes
+    if (!/^\d{6}$/.test(trimmed) && !/^[0-9A-Za-z]{8}$/.test(trimmed)) {
+      console.error(chalk.red('Invalid code format. Enter a 6-digit TOTP code or an 8-character backup code.'));
       process.exit(2);
     }
     return trimmed;
