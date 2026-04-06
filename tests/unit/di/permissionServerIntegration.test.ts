@@ -149,7 +149,7 @@ describe('Permission Server Integration', () => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
         execFile('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: process.env.PATH ?? '' },
+          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
           expect(error).toBeNull();
@@ -185,7 +185,7 @@ describe('Permission Server Integration', () => {
         // Run hook script with tool input on stdin
         const { spawn } = await import('node:child_process');
         const hookProc = spawn('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: process.env.PATH ?? '' },
+          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
 
