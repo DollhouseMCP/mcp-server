@@ -303,20 +303,28 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');
-  app.use(express.static(publicDir));
+  // Serve static assets but skip index.html — the SPA fallback below
+  // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
+  // meta tag). Without this, express.static serves the raw template
+  // and the browser never gets the auth token (#1780).
+  app.use(express.static(publicDir, { index: false }));
 
   // SPA fallback with console token injection (#1780).
   // Reads index.html on first request, substitutes the {{CONSOLE_TOKEN}} placeholder
-  // with the current token value, and caches the rendered string. Phase 2 will
-  // invalidate this cache on token rotation; Phase 1 tokens are stable so the
-  // cache lives for the life of the process.
+  // with the current token value, and caches the rendered string. The cache is
+  // auto-invalidated when the primary token changes (rotation), so a page reload
+  // after rotation picks up the new token without a server restart.
   let cachedIndexHtml: string | null = null;
+  let cachedTokenValue: string | null = null;
   const indexHtmlPath = join(publicDir, 'index.html');
 
   const renderIndexHtml = async (): Promise<string> => {
-    if (cachedIndexHtml !== null) return cachedIndexHtml;
-    const template = await readFileFs(indexHtmlPath, 'utf8');
     const tokenValue = options.tokenStore?.getPrimaryTokenValue() ?? '';
+    // Auto-invalidate cache when the token changes (rotation).
+    if (cachedIndexHtml !== null && cachedTokenValue === tokenValue) {
+      return cachedIndexHtml;
+    }
+    const template = await readFileFs(indexHtmlPath, 'utf8');
     // Defensive HTML attribute escape. Tokens are strict 64-char lowercase hex
     // today so no escaping is actually needed, but if the token format ever
     // changes this prevents an HTML-injection regression from landing silently.
@@ -327,6 +335,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
     cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escapedToken);
+    cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };
 
