@@ -39,6 +39,23 @@ import {
   type PortfolioTestEnvironment,
 } from '../../helpers/portfolioTestHelper.js';
 
+/**
+ * Build an ActiveElement array matching what the permissive persona provides.
+ */
+function buildPermissiveActiveElements(): ActiveElement[] {
+  return [{
+    type: 'persona',
+    name: 'permissive-persona',
+    metadata: {
+      name: 'permissive-persona',
+      description: 'Persona that allows create_element without confirmation',
+      gatekeeper: {
+        allow: ['create_element'],
+      },
+    },
+  }];
+}
+
 describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -107,23 +124,6 @@ describe('Gatekeeper allowElementPolicyOverrides kill switch (Issue #679/#683)',
       },
     });
     expect(activateResult.success).toBe(true);
-  }
-
-  /**
-   * Build an ActiveElement array matching what the permissive persona provides.
-   */
-  function buildPermissiveActiveElements(): ActiveElement[] {
-    return [{
-      type: 'persona',
-      name: 'permissive-persona',
-      metadata: {
-        name: 'permissive-persona',
-        description: 'Persona that allows create_element without confirmation',
-        gatekeeper: {
-          allow: ['create_element'],
-        },
-      },
-    }];
   }
 
   describe('flag = true (default) — element allow policies are applied', () => {
