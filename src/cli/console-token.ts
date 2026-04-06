@@ -1,0 +1,220 @@
+#!/usr/bin/env node
+
+/**
+ * CLI commands for console token management (#1790).
+ *
+ * Usage:
+ *   dollhouse console token show [--json]
+ *   dollhouse console token rotate [--json]
+ *   dollhouse console token revoke [--id <uuid>] [--json]
+ *
+ * Exit codes:
+ *   0 — success
+ *   1 — user error (missing file, invalid args)
+ *   2 — auth/confirmation failure (wrong TOTP code, not enrolled)
+ *
+ * @since v2.1.0 — Issue #1790
+ */
+
+import { Command } from 'commander';
+import chalk from 'chalk';
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout } from 'node:process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import {
+  ConsoleTokenStore,
+  readTokenFileRaw,
+  TotpError,
+  DEFAULT_TOKEN_FILE,
+  type ConsoleTokenFile,
+  type MaskedTokenEntry,
+} from '../web/console/consoleToken.js';
+import { env } from '../config/env.js';
+
+/** Resolve the token file path from env or default. */
+function resolveTokenFilePath(): string {
+  return env.DOLLHOUSE_CONSOLE_TOKEN_FILE || DEFAULT_TOKEN_FILE;
+}
+
+/** Read token file or exit with error. */
+async function readFileOrExit(filePath: string): Promise<ConsoleTokenFile> {
+  const data = await readTokenFileRaw(filePath);
+  if (!data) {
+    console.error(chalk.red('Token file not found or corrupt: ' + filePath));
+    console.error(chalk.gray('The token file is created automatically when the server starts.'));
+    process.exit(1);
+  }
+  return data;
+}
+
+/** Prompt the user for a TOTP code on stdin. */
+async function promptTotpCode(): Promise<string> {
+  const rl = createInterface({ input: stdin, output: stdout });
+  try {
+    const code = await rl.question(chalk.cyan('Enter TOTP code (or backup code): '));
+    return code.trim();
+  } finally {
+    rl.close();
+  }
+}
+
+// ── Program ─────────────────────────────────────────────────────────────
+
+const program = new Command();
+
+program
+  .name('dollhouse console token')
+  .description('Manage console authentication tokens');
+
+// ── show ────────────────────────────────────────────────────────────────
+
+program
+  .command('show')
+  .description('Print the current primary console token')
+  .option('--json', 'Output as JSON for scripted consumption')
+  .option('--masked', 'Show masked token instead of full value')
+  .action(async (options: { json?: boolean; masked?: boolean }) => {
+    const filePath = resolveTokenFilePath();
+    const data = await readFileOrExit(filePath);
+    const primary = data.tokens[0];
+    if (!primary) {
+      console.error(chalk.red('No tokens found in the token file.'));
+      process.exit(1);
+    }
+
+    if (options.json) {
+      const output: Record<string, unknown> = {
+        id: primary.id,
+        name: primary.name,
+        kind: primary.kind,
+        token: options.masked ? primary.token.slice(0, 8) + '...' : primary.token,
+        scopes: primary.scopes,
+        createdAt: primary.createdAt,
+        lastUsedAt: primary.lastUsedAt,
+        createdVia: primary.createdVia,
+        filePath,
+        totpEnrolled: data.totp.enrolled,
+      };
+      console.log(JSON.stringify(output, null, 2));
+    } else {
+      const tokenDisplay = options.masked
+        ? primary.token.slice(0, 8) + chalk.gray('•'.repeat(56))
+        : primary.token;
+      console.log(tokenDisplay);
+    }
+  });
+
+// ── rotate ──────────────────────────────────────────────────────────────
+
+program
+  .command('rotate')
+  .description('Rotate the primary console token (requires TOTP confirmation)')
+  .option('--json', 'Output as JSON for scripted consumption')
+  .option('--code <code>', 'TOTP confirmation code (prompts if omitted)')
+  .action(async (options: { json?: boolean; code?: string }) => {
+    const filePath = resolveTokenFilePath();
+    const store = new ConsoleTokenStore(filePath);
+    await store.ensureInitialized('CLI');
+
+    if (!store.isTotpEnrolled()) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: 'TOTP enrollment required', code: 'TOTP_REQUIRED' }));
+      } else {
+        console.error(chalk.red('Token rotation requires TOTP enrollment.'));
+        console.error(chalk.gray('Enroll via the Security tab or the TOTP enrollment API.'));
+      }
+      process.exit(2);
+    }
+
+    const code = options.code || await promptTotpCode();
+    if (!code) {
+      console.error(chalk.red('No confirmation code provided.'));
+      process.exit(2);
+    }
+
+    try {
+      const result = await store.rotatePrimary(code);
+      if (options.json) {
+        console.log(JSON.stringify({
+          token: result.token,
+          rotatedAt: result.rotatedAt,
+          graceUntil: result.graceUntil,
+        }, null, 2));
+      } else {
+        console.log(chalk.green('Token rotated successfully.'));
+        console.log(result.token);
+        console.log(chalk.gray(`Rotated at: ${result.rotatedAt}`));
+        console.log(chalk.gray(`Old token valid until: ${new Date(result.graceUntil).toISOString()}`));
+      }
+    } catch (err) {
+      if (err instanceof TotpError) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: err.message, code: err.code }));
+        } else {
+          console.error(chalk.red('Rotation failed: ' + err.message));
+        }
+        process.exit(2);
+      }
+      throw err;
+    }
+  });
+
+// ── revoke ──────────────────────────────────────────────────────────────
+
+program
+  .command('revoke')
+  .description('Revoke a token — rotates the primary to invalidate the current value')
+  .option('--json', 'Output as JSON for scripted consumption')
+  .option('--code <code>', 'TOTP confirmation code (prompts if omitted)')
+  .action(async (options: { json?: boolean; code?: string }) => {
+    // For Phase 2 with a single primary token, revoke == rotate.
+    // When multi-device tokens land, --id <uuid> removes a specific
+    // non-primary token from the store. For now, delegate to rotate.
+    const filePath = resolveTokenFilePath();
+    const store = new ConsoleTokenStore(filePath);
+    await store.ensureInitialized('CLI');
+
+    if (!store.isTotpEnrolled()) {
+      if (options.json) {
+        console.log(JSON.stringify({ error: 'TOTP enrollment required', code: 'TOTP_REQUIRED' }));
+      } else {
+        console.error(chalk.red('Token revocation requires TOTP enrollment.'));
+        console.error(chalk.gray('Enroll via the Security tab or the TOTP enrollment API.'));
+      }
+      process.exit(2);
+    }
+
+    const code = options.code || await promptTotpCode();
+    if (!code) {
+      console.error(chalk.red('No confirmation code provided.'));
+      process.exit(2);
+    }
+
+    try {
+      const result = await store.rotatePrimary(code);
+      if (options.json) {
+        console.log(JSON.stringify({
+          revoked: true,
+          newToken: result.token,
+          rotatedAt: result.rotatedAt,
+        }, null, 2));
+      } else {
+        console.log(chalk.green('Token revoked. A new token has been issued.'));
+        console.log(result.token);
+        console.log(chalk.gray('All sessions using the old token will lose access after the grace window.'));
+      }
+    } catch (err) {
+      if (err instanceof TotpError) {
+        if (options.json) {
+          console.log(JSON.stringify({ error: err.message, code: err.code }));
+        } else {
+          console.error(chalk.red('Revocation failed: ' + err.message));
+        }
+        process.exit(2);
+      }
+      throw err;
+    }
+  });
+
+program.parse(process.argv);
