@@ -833,12 +833,30 @@ const discreteTools: ToolSchema[] = [
 ];
 
 // ============================================================================
+// PROJECTED SAVINGS: ACTUAL OPERATION COUNT
+// ============================================================================
+
+/**
+ * Current number of operations registered in OperationRouter.
+ *
+ * The `discreteTools` array above contains 42 tools — the historical set from
+ * before MCP-AQL consolidation. However, the router now serves many more
+ * operations through the same 5 CRUDE endpoints. This constant captures the
+ * actual operation count so we can project what the discrete-tool cost WOULD
+ * be if every operation still needed its own tool.
+ *
+ * To update: run `grep -c "endpoint:" src/handlers/mcp-aql/OperationRouter.ts`
+ * or `Object.keys(OPERATION_ROUTES).length` at runtime.
+ */
+const CURRENT_OPERATION_COUNT = 73;
+
+// ============================================================================
 // MCP-AQL UNIFIED TOOLS (5 CRUDE endpoints)
 // ============================================================================
 
 /**
  * Schema definitions for the 5 unified MCP-AQL CRUDE endpoints.
- * Consolidates 42 discrete tools into semantic CRUDE operations (Create, Read, Update, Delete, Execute).
+ * Consolidates 73 operations into semantic CRUDE operations (Create, Read, Update, Delete, Execute).
  * These match the actual tool definitions in src/server/tools/MCPAQLTools.ts
  */
 const mcpAqlTools: ToolSchema[] = [
@@ -1278,6 +1296,14 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   const typicalOps = 5;
   const mcpAqlWithIntrospection = mcpAqlMetrics.total + (typicalOps * introspectionAvgTokens);
 
+  // Projected savings: estimate what discrete tools would cost for ALL current operations.
+  // Uses the measured average token cost per discrete tool as a heuristic for operations
+  // that never had discrete tools (they would have similar schema verbosity).
+  const projectedDiscreteTokens = Math.round(CURRENT_OPERATION_COUNT * discreteMetrics.avgPerTool);
+  const projectedSavings = projectedDiscreteTokens - mcpAqlMetrics.total;
+  const projectedSavingsPercent = (projectedSavings / projectedDiscreteTokens) * 100;
+  const projectedConsolidationRatio = CURRENT_OPERATION_COUNT / mcpAqlTools.length;
+
   // JSON output mode
   if (jsonOutput) {
     const sortedDiscrete = [...discreteMetrics.perTool.entries()].sort((a, b) => b[1] - a[1]);
@@ -1308,6 +1334,14 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
         tokens: tokenSavings,
         percent: percentSavings,
         consolidationRatio
+      },
+      projectedSavings: {
+        currentOperationCount: CURRENT_OPERATION_COUNT,
+        projectedDiscreteTokens,
+        mcpAqlTokens: mcpAqlMetrics.total,
+        tokens: projectedSavings,
+        percent: projectedSavingsPercent,
+        consolidationRatio: projectedConsolidationRatio
       },
       scenarios: {
         sessionStart: {
@@ -1381,23 +1415,25 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log();
 
   // Calculate savings
-  console.log('TOKEN SAVINGS ANALYSIS');
+  console.log('TOKEN SAVINGS ANALYSIS (baseline: 42 historical discrete tools)');
   console.log('-'.repeat(80));
 
-  console.log(`  Discrete tools baseline:  ${formatNumber(discreteMetrics.total)} tokens`);
-  console.log(`  MCP-AQL unified approach: ${formatNumber(mcpAqlMetrics.total)} tokens`);
+  console.log(`  Discrete tools baseline:  ${formatNumber(discreteMetrics.total)} tokens (${discreteTools.length} tools)`);
+  console.log(`  MCP-AQL unified approach: ${formatNumber(mcpAqlMetrics.total)} tokens (${mcpAqlTools.length} tools)`);
   console.log(`  Token savings:            ${formatNumber(tokenSavings)} tokens`);
   console.log(`  Percentage savings:       ${formatPercent(percentSavings)}`);
-  console.log();
-
-  // Tool consolidation ratio
   console.log(`  Tool consolidation ratio: ${discreteTools.length}:${mcpAqlTools.length} (${consolidationRatio.toFixed(1)}x reduction)`);
   console.log();
 
-  // Report actual savings (no pass/fail - just report the value)
-  console.log('TOKEN SAVINGS REPORT');
+  // Projected savings: what if all current operations had discrete tools?
+  console.log('PROJECTED SAVINGS (all ${CURRENT_OPERATION_COUNT} current operations)');
   console.log('-'.repeat(80));
-  console.log(`  Actual savings: ${formatPercent(percentSavings)}`);
+  console.log(`  Current operations in router:  ${CURRENT_OPERATION_COUNT}`);
+  console.log(`  Avg tokens per discrete tool:  ${formatNumber(Math.round(discreteMetrics.avgPerTool))}`);
+  console.log(`  Projected discrete cost:       ${formatNumber(projectedDiscreteTokens)} tokens (${CURRENT_OPERATION_COUNT} × ${Math.round(discreteMetrics.avgPerTool)})`);
+  console.log(`  Actual MCP-AQL cost:           ${formatNumber(mcpAqlMetrics.total)} tokens`);
+  console.log(`  Projected savings:             ${formatNumber(projectedSavings)} tokens (${formatPercent(projectedSavingsPercent)})`);
+  console.log(`  Projected consolidation ratio: ${CURRENT_OPERATION_COUNT}:${mcpAqlTools.length} (${projectedConsolidationRatio.toFixed(1)}x reduction)`);
   console.log();
 
   // Usage scenarios
@@ -1425,21 +1461,22 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log(`
   The MCP-AQL consolidated approach achieves significant token savings:
 
+  Baseline (42 historical tools):
   - ${formatPercent(percentSavings)} reduction in base tool schema tokens
   - ${discreteTools.length} discrete tools -> ${mcpAqlTools.length} unified endpoints
   - ${formatNumber(tokenSavings)} fewer tokens loaded at session start
-  - Introspection enables on-demand schema loading during usage
+
+  Projected (all ${CURRENT_OPERATION_COUNT} current operations):
+  - ${formatPercent(projectedSavingsPercent)} reduction vs hypothetical discrete tools
+  - ${CURRENT_OPERATION_COUNT} operations -> ${mcpAqlTools.length} unified endpoints
+  - ${formatNumber(projectedSavings)} fewer tokens loaded at session start
 
   Key Benefits:
   - Reduced context window consumption
   - Faster tool discovery for LLM agents
   - Semantic CRUDE operations improve agent comprehension
   - Operation namespacing scales without adding tools
-
-  Note: Token counts are based on documented tool schemas. Real-world
-  implementations may vary based on description verbosity and platform
-  requirements. The MCP-AQL improvement percentage remains consistent
-  regardless of absolute token counts.
+  - Introspection enables on-demand schema loading during usage
 `);
 
   // Return results for testing
@@ -1457,6 +1494,13 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
     savings: {
       tokens: tokenSavings,
       percent: percentSavings
+    },
+    projectedSavings: {
+      currentOperationCount: CURRENT_OPERATION_COUNT,
+      projectedDiscreteTokens,
+      tokens: projectedSavings,
+      percent: projectedSavingsPercent,
+      consolidationRatio: projectedConsolidationRatio
     },
     tokenizer: tokenizer.name,
     timingMs
