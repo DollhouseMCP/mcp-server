@@ -1093,7 +1093,7 @@
           if (activeLicense && activeLicense.status === 'active' && activeLicense.tier !== 'agpl') {
             const tierLabel = activeLicense.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
             const confirmed = confirm(
-              `You have an active ${tierLabel} license. Switching to AGPL will deactivate it.\n\nAre you sure?`
+              `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
             );
             if (!confirmed) {
               // Restore the previous tier selection
