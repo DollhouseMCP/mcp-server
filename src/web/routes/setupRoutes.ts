@@ -205,7 +205,9 @@ function validateClient(
 
 const VALID_LICENSE_TIERS = new Set(['agpl', 'free-commercial', 'paid-commercial']);
 const VALID_REVENUE_SCALES = new Set(['$1M–$5M', '$5M–$25M', '$25M–$100M', '$100M+']);
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+// Safe from ReDoS: input is pre-checked to ≤254 chars, and {1,64}/{1,253}/{2,63}
+// bounds prevent catastrophic backtracking on any input within that length.
+const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,253}\.[^\s@]{2,63}$/;
 
 /** Sanitize a string field: trim, truncate, return undefined if empty. */
 function sanitize(val: unknown, maxLen: number): string | undefined {
