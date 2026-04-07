@@ -1,0 +1,11 @@
+name = "dollhousemcp-license-email"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+
+[vars]
+FROM_EMAIL = "licensing@dollhousemcp.com"
+FROM_NAME = "DollhouseMCP Licensing"
+REPLY_TO = "sales@dollhousemcp.com"
+
+# PostHog webhook secret — set via `wrangler secret put POSTHOG_WEBHOOK_SECRET`
+# This validates that incoming requests are genuinely from PostHog.
