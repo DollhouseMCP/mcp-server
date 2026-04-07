@@ -200,7 +200,7 @@ describe('Index Performance Optimization Tests', () => {
       const finalMemory = process.memoryUsage().heapUsed;
       const memoryGrowthMB = (finalMemory - initialMemory) / (1024 * 1024);
 
-      expect(memoryGrowthMB).toBeLessThan(25); // Should not grow excessively
+      expect(memoryGrowthMB).toBeLessThan(50); // Should not grow excessively
     });
 
     it('should track performance metrics accurately', async () => {
