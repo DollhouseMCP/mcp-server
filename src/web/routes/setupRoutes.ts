@@ -201,6 +201,12 @@ function validateClient(
   return normalized;
 }
 
+/** Sanitize a string field: trim, truncate, return undefined if empty. */
+function sanitize(val: unknown, maxLen: number): string | undefined {
+  if (typeof val !== 'string' || !val.trim()) return undefined;
+  return val.trim().slice(0, maxLen);
+}
+
 export function createSetupRoutes(): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
@@ -380,12 +386,6 @@ export function createSetupRoutes(): {
     const dir = join(homedir(), '.dollhouse');
     await mkdir(dir, { recursive: true });
     await writeFile(licenseConfigPath, JSON.stringify(data, null, 2), { mode: 0o600 });
-  }
-
-  /** Sanitize a string field: trim, truncate, return undefined if empty. */
-  function sanitize(val: unknown, maxLen: number): string | undefined {
-    if (typeof val !== 'string' || !val.trim()) return undefined;
-    return val.trim().slice(0, maxLen);
   }
 
   /** Validate license form input. Returns error string or null if valid. */

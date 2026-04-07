@@ -921,6 +921,7 @@
           savedBanner.hidden = false;
         }
       } catch (err) {
+        console.debug('License submission failed:', err);
         if (statusEl) {
           statusEl.textContent = 'Network error — is the server running?';
           statusEl.className = 'license-form-status is-error';
@@ -954,7 +955,7 @@
     function showSavedBanner(license) {
       if (license.tier === 'agpl' || !license.attestedAt) return;
       if (!savedBanner || !savedText) return;
-      var tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+      const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
       savedText.textContent = tierLabel + ' license active';
       savedBanner.hidden = false;
     }
@@ -962,9 +963,9 @@
     // Load saved license on page load
     async function loadSavedLicense() {
       try {
-        var res = await fetch('/api/setup/license');
+        const res = await fetch('/api/setup/license');
         if (!res.ok) return;
-        var license = await res.json();
+        const license = await res.json();
         if (!license.tier || !details[license.tier]) return;
         selectTier(license.tier);
         if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
