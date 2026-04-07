@@ -905,17 +905,54 @@
     const resendBtn = document.getElementById('license-resend-btn');
     let countdownInterval = null;
 
+    let verificationPollInterval = null;
+
     function showVerificationUI(email) {
       if (verificationPanel) verificationPanel.hidden = false;
       if (verifyEmailSpan) verifyEmailSpan.textContent = email;
       if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
-      // Start 10-minute countdown
       startCountdown(10 * 60);
+      startVerificationPolling();
     }
 
     function hideVerificationUI() {
       if (verificationPanel) verificationPanel.hidden = true;
       if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+      stopVerificationPolling();
+    }
+
+    /** Poll license status every 3 seconds while verification is pending.
+     *  When the user clicks the verify link in another tab, this tab
+     *  auto-detects the activation and updates without a refresh. */
+    function startVerificationPolling() {
+      stopVerificationPolling();
+      verificationPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/setup/license');
+          if (!res.ok) return;
+          const license = await res.json();
+          if (license.status === 'active') {
+            hideVerificationUI();
+            for (const el of Object.values(details)) {
+              if (el) el.hidden = true;
+            }
+            if (savedBanner && savedText) {
+              const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+              savedText.textContent = tierLabel + ' license verified and activated';
+              savedBanner.hidden = false;
+            }
+          }
+        } catch {
+          // Ignore polling errors
+        }
+      }, 3000);
+    }
+
+    function stopVerificationPolling() {
+      if (verificationPollInterval) {
+        clearInterval(verificationPollInterval);
+        verificationPollInterval = null;
+      }
     }
 
     function startCountdown(seconds) {
