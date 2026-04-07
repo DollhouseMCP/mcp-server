@@ -224,6 +224,17 @@ export interface WizardConfig {
   skippedSections?: string[]; // Track which sections were skipped
 }
 
+export type LicenseTier = 'agpl' | 'free-commercial' | 'paid-commercial';
+
+export interface LicenseConfig {
+  tier: LicenseTier;
+  email?: string;            // Required for commercial tiers
+  attestedAt?: string;       // ISO timestamp of attestation
+  revenueScale?: string;     // Paid commercial: "$1M–$5M", "$5M–$25M", etc.
+  companyName?: string;      // Paid commercial: optional
+  useCase?: string;          // Paid commercial: optional
+}
+
 export interface SourcePriorityConfigData {
   order: string[];  // Array of 'local' | 'github' | 'collection'
   stop_on_first: boolean;
@@ -242,6 +253,7 @@ export interface DollhouseConfig {
   wizard: WizardConfig;
   autoLoad: AutoLoadConfig;
   retentionPolicy: RetentionPolicyConfig;
+  license: LicenseConfig;
   source_priority?: SourcePriorityConfigData;
 }
 
@@ -380,6 +392,9 @@ export class ConfigManager {
       wizard: {
         completed: false,
         dismissed: false
+      },
+      license: {
+        tier: 'agpl'
       },
       /**
        * Retention Policy Configuration (Issue #51)

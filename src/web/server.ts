@@ -43,6 +43,7 @@ const PUBLIC_PATH_PREFIXES = [
   '/api/setup/version',
   '/api/setup/mcpb',
   '/api/setup/detect',
+  '/api/setup/license',
 ];
 
 /** Placeholder in index.html that is replaced with the current console token. */
@@ -247,12 +248,14 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
   // Body limit scoped to setup routes only — ingest routes need 1mb for follower log forwarding
   const setupJsonParser = express.json({ limit: SETUP_BODY_LIMIT, type: 'application/json' });
-  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
+  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler } = createSetupRoutes();
   app.post('/api/setup/install', setupJsonParser, installHandler);
   app.post('/api/setup/open-config', setupJsonParser, openConfigHandler);
   app.get('/api/setup/version', versionHandler);
   app.get('/api/setup/mcpb', mcpbRedirectHandler);
   app.get('/api/setup/detect', detectHandler);
+  app.get('/api/setup/license', getLicenseHandler);
+  app.post('/api/setup/license', setupJsonParser, setLicenseHandler);
   logger.info('[WebUI] Setup routes mounted at /api/setup');
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
@@ -328,7 +331,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   const renderIndexHtml = async (): Promise<string> => {
     const tokenValue = options.tokenStore?.getPrimaryTokenValue() ?? '';
     // Auto-invalidate cache when the token changes (rotation).
-    if (cachedIndexHtml !== null && cachedTokenValue === tokenValue) {
+    // In debug mode, always re-read from disk so UI changes are picked up on reload.
+    if (!isDebug && cachedIndexHtml !== null && cachedTokenValue === tokenValue) {
       return cachedIndexHtml;
     }
     const template = await readFileFs(indexHtmlPath, 'utf8');
