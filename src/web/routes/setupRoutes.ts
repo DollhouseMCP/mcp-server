@@ -220,18 +220,17 @@ function sanitize(val: unknown, maxLen: number): string | undefined {
   return val.trim().slice(0, maxLen);
 }
 
-/** Validate license form input. Returns error string or null if valid. */
 /** Validate email format and commercial acknowledgments. */
 function validateCommercialFields(body: Record<string, unknown>): string | null {
   const { email, telemetryAcknowledged } = body;
   if (!email || typeof email !== 'string') {
-    return 'Email address is required for commercial licenses';
+    return 'Email address is required for Commercial and Enterprise licenses';
   }
   if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
     return 'Please provide a valid email address';
   }
   if (!telemetryAcknowledged) {
-    return 'Telemetry acknowledgment is required for commercial licenses';
+    return 'Telemetry acknowledgment is required for Commercial and Enterprise licenses';
   }
   return null;
 }
@@ -240,10 +239,10 @@ function validateCommercialFields(body: Record<string, unknown>): string | null 
 function validateFreeCommercialFields(body: Record<string, unknown>): string | null {
   const { attributionAcknowledged, revenueAttested } = body;
   if (!attributionAcknowledged) {
-    return 'Attribution acknowledgment is required for free commercial licenses';
+    return 'Attribution acknowledgment is required for Commercial licenses';
   }
   if (!revenueAttested) {
-    return 'Revenue attestation is required for free commercial licenses';
+    return 'Revenue attestation is required for Commercial licenses';
   }
   return null;
 }
