@@ -602,13 +602,40 @@ export function createSetupRoutes(): {
         },
       });
 
-      // Send verification email via PostHog → Worker pipeline
+      // Send verification email directly to Worker for instant delivery.
+      // PostHog event also fires for analytics, but the email can't wait for
+      // PostHog's event pipeline (1-5 min delay).
       try {
-        await capturePostHogLicenseEvent({ ...licenseData, verificationCode: code, eventType: 'verification' });
-        logger.info(`[Setup] Verification email event sent to PostHog: ${licenseData.tier}`);
-      } catch (posthogError) {
-        logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
+        const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
+        const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
+        await fetch(workerUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
+          },
+          body: JSON.stringify({
+            event: 'license_activation',
+            distinct_id: 'direct-verification',
+            properties: {
+              tier: licenseData.tier,
+              email: licenseData.email,
+              event_type: 'verification',
+              verification_code: code,
+              server_version: PACKAGE_VERSION,
+              os: platform(),
+            },
+          }),
+        });
+        logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
+      } catch (workerError) {
+        logger.warn(`[Setup] Direct Worker call failed, falling back to PostHog pipeline: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
       }
+
+      // Also fire PostHog event for analytics (non-blocking, delay is fine)
+      capturePostHogLicenseEvent({ ...licenseData, verificationCode: code, eventType: 'verification' }).catch(
+        (err) => logger.debug(`[Setup] PostHog capture failed: ${err instanceof Error ? err.message : String(err)}`),
+      );
 
       // Return success without exposing the code
       const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
@@ -741,12 +768,32 @@ export function createSetupRoutes(): {
     license.verificationAttempts = 0;
     await writeLicense(license);
 
-    // Send new verification email
+    // Send verification email directly to Worker for instant delivery
     try {
-      await capturePostHogLicenseEvent({ ...license, verificationCode: code, eventType: 'verification' });
-      logger.info(`[Setup] Verification code resent for: ${license.email}`);
-    } catch (posthogError) {
-      logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
+      const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
+      const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
+      await fetch(workerUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
+        },
+        body: JSON.stringify({
+          event: 'license_activation',
+          distinct_id: 'direct-resend',
+          properties: {
+            tier: license.tier,
+            email: license.email,
+            event_type: 'verification',
+            verification_code: code,
+            server_version: PACKAGE_VERSION,
+            os: platform(),
+          },
+        }),
+      });
+      logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
+    } catch (workerError) {
+      logger.warn(`[Setup] Direct Worker call failed: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
     }
 
     res.json({ success: true, message: 'A new verification code has been sent to your email.' });

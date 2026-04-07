@@ -169,13 +169,23 @@ function buildVerificationEmail(
   <h2 style="color: #1a1a2e;">Verify your email address</h2>
   <p>You're registering a <strong>${esc(props.tier === 'paid-commercial' ? 'Enterprise' : 'Commercial')}</strong> license for DollhouseMCP.</p>
 
-  <div style="text-align: center; margin: 24px 0;">
-    <a href="${verifyUrl}" style="display: inline-block; background: #3b82f6; color: #ffffff; font-weight: 600; font-size: 16px; padding: 14px 32px; border-radius: 8px; text-decoration: none;">Verify my email</a>
+  <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin: 24px 0;">
+    <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #1e40af; text-align: center;">On the same computer where DollhouseMCP is installed?</p>
+    <div style="text-align: center;">
+      <a href="${verifyUrl}" style="display: inline-block; background: #3b82f6; color: #ffffff; font-weight: 600; font-size: 16px; padding: 14px 32px; border-radius: 8px; text-decoration: none;">Verify my email</a>
+    </div>
+    <p style="color: #64748b; font-size: 13px; margin: 10px 0 0; text-align: center;">This button opens your DollhouseMCP console and verifies automatically.</p>
   </div>
 
-  <p style="color: #64748b; font-size: 13px; text-align: center;">Or enter this code manually on the Setup page:</p>
-  <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; margin: 12px 0; text-align: center;">
-    <p style="margin: 0; font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1a1a2e; font-family: monospace;">${code}</p>
+  <div style="background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 20px; margin: 24px 0;">
+    <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #92400e; text-align: center;">Reading this on your phone or another device?</p>
+    <p style="margin: 0 0 12px; font-size: 14px; color: #78716c; text-align: center;">Copy this code and paste it into the Setup page on your computer:</p>
+    <div style="background: #ffffff; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; text-align: center;">
+      <a href="mailto:?subject=DollhouseMCP%20Verification%20Code&amp;body=${code}" style="text-decoration: none;">
+        <p style="margin: 0; font-size: 36px; font-weight: 700; letter-spacing: 10px; color: #1a1a2e; font-family: monospace;">${code}</p>
+      </a>
+      <p style="margin: 8px 0 0; font-size: 12px; color: #94a3b8;">Tap the code to share it, or long-press to copy</p>
+    </div>
   </div>
 
   <p style="color: #64748b; font-size: 13px;">This link and code expire in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
