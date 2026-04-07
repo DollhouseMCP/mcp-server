@@ -1070,3 +1070,46 @@
   color: var(--ink-500);
   margin: 0;
 }
+
+/* ── Active license details ──────────────────────────────────────────── */
+
+.license-active-details {
+  margin-top: 0.75rem;
+}
+
+.license-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+
+.license-info-table td {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.license-info-table td:first-child {
+  font-weight: 600;
+  color: var(--ink-700);
+  width: 130px;
+  padding-right: 12px;
+}
+
+.license-info-table td:last-child {
+  color: var(--ink-950);
+}
+
+.license-file-path {
+  font-size: 0.8rem;
+  color: var(--ink-500);
+  margin: 0;
+}
+
+.license-file-path code {
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}

@@ -932,16 +932,7 @@
           if (!res.ok) return;
           const license = await res.json();
           if (license.status === 'active') {
-            hideVerificationUI();
-            for (const el of Object.values(details)) {
-              if (el) el.hidden = true;
-            }
-            activeLicense = license;
-            if (savedBanner && savedText) {
-              const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
-              savedText.textContent = tierLabel + ' license verified and activated';
-              savedBanner.hidden = false;
-            }
+            handleVerifySuccess(license);
           }
         } catch {
           // Ignore polling errors
@@ -1047,17 +1038,8 @@
             return;
           }
 
-          // Verification succeeded — hide everything and show success
-          hideVerificationUI();
-          for (const el of Object.values(details)) {
-            if (el) el.hidden = true;
-          }
-          activeLicense = json.license;
-          if (savedBanner && savedText) {
-            const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
-            savedText.textContent = tierLabel + ' license verified and activated';
-            savedBanner.hidden = false;
-          }
+          // Verification succeeded
+          handleVerifySuccess(json.license);
         } catch (err) {
           console.debug('Verification failed:', err);
           if (verifyStatus) {
@@ -1121,9 +1103,44 @@
           }
           await submitLicense({ tier: 'agpl' }, null, 'AGPL-3.0 license selected');
           activeLicense = null;
+          hideLicenseDetails();
         });
       }
     });
+
+    const licenseDetailsPanel = document.getElementById('license-active-details');
+    const licenseInfoTable = document.getElementById('license-info-table');
+
+    function showLicenseDetails(license) {
+      if (!licenseDetailsPanel || !licenseInfoTable) return;
+      if (!license || license.status !== 'active' || license.tier === 'agpl') {
+        licenseDetailsPanel.hidden = true;
+        return;
+      }
+
+      const tierLabel = license.tier === 'free-commercial' ? 'Free Commercial' : 'Enterprise';
+      const rows = [
+        ['License type', tierLabel],
+        ['Email', license.email || '—'],
+        ['Status', 'Active'],
+        ['Activated', license.verifiedAt ? new Date(license.verifiedAt).toLocaleString() : (license.attestedAt ? new Date(license.attestedAt).toLocaleString() : '—')],
+        ['Telemetry', license.telemetryRequired ? 'Enabled (license requirement)' : 'Not required'],
+      ];
+      if (license.tier === 'paid-commercial') {
+        if (license.revenueScale) rows.push(['Revenue scale', license.revenueScale]);
+        if (license.companyName) rows.push(['Company', license.companyName]);
+        if (license.useCase) rows.push(['Use case', license.useCase]);
+      }
+
+      licenseInfoTable.innerHTML = rows
+        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
+        .join('');
+      licenseDetailsPanel.hidden = false;
+    }
+
+    function hideLicenseDetails() {
+      if (licenseDetailsPanel) licenseDetailsPanel.hidden = true;
+    }
 
     function prefillFreeCommercialForm(license) {
       if (freeForm && license.email) {
@@ -1145,6 +1162,7 @@
       const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
       savedText.textContent = tierLabel + ' license active';
       savedBanner.hidden = false;
+      showLicenseDetails(license);
     }
 
     // Load saved license on page load
@@ -1174,17 +1192,18 @@
       }
     }
 
-    function handleAutoVerifySuccess(json) {
+    function handleVerifySuccess(license) {
       hideVerificationUI();
       for (const el of Object.values(details)) {
         if (el) el.hidden = true;
       }
-      activeLicense = json.license;
+      activeLicense = license;
       if (savedBanner && savedText) {
-        const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+        const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
         savedText.textContent = tierLabel + ' license verified and activated';
         savedBanner.hidden = false;
       }
+      showLicenseDetails(license);
     }
 
     async function handleAutoVerifyFailure(json) {
@@ -1215,7 +1234,7 @@
         });
         const json = await res.json();
         if (res.ok) {
-          handleAutoVerifySuccess(json);
+          handleVerifySuccess(json.license);
         } else {
           await handleAutoVerifyFailure(json);
         }
