@@ -1009,8 +1009,12 @@
             return;
           }
 
-          // Verification succeeded — show activation confirmation
+          // Verification succeeded — hide everything and show success
           hideVerificationUI();
+          // Hide all detail panels so the form can't be resubmitted
+          for (const el of Object.values(details)) {
+            if (el) el.hidden = true;
+          }
           if (savedBanner && savedText) {
             const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
             savedText.textContent = tierLabel + ' license verified and activated';
@@ -1116,6 +1120,9 @@
 
     function handleAutoVerifySuccess(json) {
       hideVerificationUI();
+      for (const el of Object.values(details)) {
+        if (el) el.hidden = true;
+      }
       if (savedBanner && savedText) {
         const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
         savedText.textContent = tierLabel + ' license verified and activated';
