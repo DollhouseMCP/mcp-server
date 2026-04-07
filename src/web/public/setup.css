@@ -725,3 +725,316 @@
   border-radius: 4px;
   font-size: 0.8rem;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+   LICENSE SELECTOR (#1746 Step 3)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.license-section {
+  margin-top: 2.5rem;
+  padding-top: 2rem;
+  border-top: 1px solid var(--line);
+}
+
+.license-heading {
+  font-family: var(--font-heading);
+  font-size: var(--step-2);
+  font-weight: 700;
+  color: var(--ink-950);
+  margin: 0 0 0.3rem;
+}
+
+.license-sub {
+  color: var(--ink-500);
+  margin: 0 0 1.5rem;
+  font-size: var(--step-0);
+}
+
+/* ── Tier buttons ───────────────────────────────────────────────────── */
+
+.license-tiers {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 640px) {
+  .license-tiers {
+    grid-template-columns: 1fr;
+  }
+}
+
+.license-tier {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 1.2rem;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  text-align: left;
+}
+
+.license-tier:hover {
+  border-color: var(--ink-500);
+}
+
+.license-tier:focus-visible {
+  outline: 2px solid var(--signal);
+  outline-offset: 2px;
+}
+
+.license-tier.is-selected {
+  border-color: var(--signal);
+  background: color-mix(in srgb, var(--signal) 6%, var(--paper));
+  box-shadow: 0 0 0 1px var(--signal);
+}
+
+.license-tier-price-label {
+  display: block;
+  font-family: var(--font-heading);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-500);
+  margin-bottom: 0.4rem;
+}
+
+.license-tier-price-label--free {
+  color: #16a34a;
+}
+
+.license-tier-price-label--paid {
+  color: var(--signal);
+}
+
+.license-tier-header {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.license-tier-radio {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--ink-500);
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+  transition: border-color 0.15s;
+}
+
+.license-tier.is-selected .license-tier-radio {
+  border-color: var(--signal);
+}
+
+.license-tier.is-selected .license-tier-radio::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  background: var(--signal);
+  border-radius: 50%;
+}
+
+.license-tier-name {
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+  color: var(--ink-950);
+}
+
+.license-tier-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.license-tier-badge--default {
+  background: color-mix(in srgb, var(--signal) 15%, transparent);
+  color: var(--signal);
+}
+
+.license-tier-price {
+  font-size: 0.8rem;
+  color: var(--ink-500);
+  font-weight: 500;
+}
+
+.license-tier-desc {
+  color: var(--ink-700);
+  font-size: 0.85rem;
+  line-height: 1.4;
+  margin: 0;
+}
+
+/* ── Detail panels ──────────────────────────────────────────────────── */
+
+.license-detail {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  overflow: hidden;
+  animation: license-slide-in 0.2s ease-out;
+}
+
+@keyframes license-slide-in {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.license-detail-content {
+  padding: 1.2rem 1.5rem;
+}
+
+.license-detail-content p {
+  margin: 0 0 0.75rem;
+  color: var(--ink-700);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.license-detail-content a {
+  color: var(--signal);
+  text-decoration: underline;
+}
+
+.license-detail-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--ink-700);
+  font-size: 0.85rem;
+  line-height: 1.8;
+}
+
+/* ── Forms ───────────────────────────────────────────────────────────── */
+
+.license-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.2rem 1.5rem;
+}
+
+.license-form-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--ink-700);
+}
+
+.license-optional {
+  font-weight: 400;
+  color: var(--ink-500);
+}
+
+.license-form-hint {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--ink-500);
+  line-height: 1.4;
+}
+
+.license-form-input,
+.license-form-select,
+.license-form-textarea {
+  font-family: var(--font-body);
+  font-size: 0.9rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-950);
+  transition: border-color 0.15s;
+}
+
+.license-form-input:focus,
+.license-form-select:focus,
+.license-form-textarea:focus {
+  outline: none;
+  border-color: var(--signal);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--signal) 20%, transparent);
+}
+
+.license-form-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--ink-700);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.license-form-check input[type="checkbox"] {
+  margin-top: 0.15rem;
+  flex-shrink: 0;
+  accent-color: var(--signal);
+}
+
+.license-submit-btn {
+  align-self: flex-start;
+  margin-top: 0.25rem;
+}
+
+.license-form-status {
+  font-size: 0.85rem;
+  margin: 0;
+  min-height: 1.2em;
+}
+
+.license-form-status.is-error {
+  color: #dc2626;
+}
+
+.license-form-status.is-success {
+  color: #16a34a;
+}
+
+/* ── Saved confirmation ──────────────────────────────────────────────── */
+
+.license-saved {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  background: color-mix(in srgb, #16a34a 10%, var(--paper));
+  border: 1px solid color-mix(in srgb, #16a34a 30%, var(--line));
+  border-radius: var(--radius-sm);
+  color: #16a34a;
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-top: 0.75rem;
+  animation: license-slide-in 0.2s ease-out;
+}
+
+.license-saved-icon {
+  font-size: 1.1rem;
+}
+
+/* ── Dark mode overrides ─────────────────────────────────────────────── */
+
+[data-theme="dark"] .license-tier {
+  background: var(--surface-1);
+}
+
+[data-theme="dark"] .license-tier.is-selected {
+  background: color-mix(in srgb, var(--signal) 10%, var(--surface-1));
+}
+
+[data-theme="dark"] .license-form-input,
+[data-theme="dark"] .license-form-select,
+[data-theme="dark"] .license-form-textarea {
+  background: var(--surface-2);
+  color: var(--ink-950);
+}

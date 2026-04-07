@@ -25,6 +25,16 @@ import { PACKAGE_VERSION } from '../../generated/version.js';
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { PostHog } from 'posthog-node';
+import { v4 as uuidv4 } from 'uuid';
+
+// PostHog project capture key — write-only by design, safe to expose publicly.
+// This key can ONLY send events to PostHog; it cannot read data, query analytics,
+// configure destinations, or access any other PostHog API. Same key used in
+// src/telemetry/OperationalTelemetry.ts. Verified write-only 2026-04-07.
+// Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
+const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
 /** Allowed client identifiers — must match install-mcp's --client values */
 const ALLOWED_CLIENTS = new Set([
@@ -196,12 +206,140 @@ function validateClient(
   return normalized;
 }
 
+// ── License helpers (module scope for SonarCloud S7721) ──────────────
+
+const VALID_LICENSE_TIERS = new Set(['agpl', 'free-commercial', 'paid-commercial']);
+const VALID_REVENUE_SCALES = new Set(['$1M–$5M', '$5M–$25M', '$25M–$100M', '$100M+']);
+// Safe from ReDoS: input is pre-checked to ≤254 chars, and {1,64}/{1,253}/{2,63}
+// bounds prevent catastrophic backtracking on any input within that length.
+const EMAIL_PATTERN = /^[^\s@]{1,64}@[^\s@]{1,253}\.[^\s@]{2,63}$/;
+
+/** Sanitize a string field: trim, truncate, return undefined if empty. */
+function sanitize(val: unknown, maxLen: number): string | undefined {
+  if (typeof val !== 'string' || !val.trim()) return undefined;
+  return val.trim().slice(0, maxLen);
+}
+
+/** Validate email format and commercial acknowledgments. */
+function validateCommercialFields(body: Record<string, unknown>): string | null {
+  const { email, telemetryAcknowledged } = body;
+  if (!email || typeof email !== 'string') {
+    return 'Email address is required for Commercial and Enterprise licenses';
+  }
+  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    return 'Please provide a valid email address';
+  }
+  if (!telemetryAcknowledged) {
+    return 'Telemetry acknowledgment is required for Commercial and Enterprise licenses';
+  }
+  return null;
+}
+
+/** Validate free-commercial specific fields. */
+function validateFreeCommercialFields(body: Record<string, unknown>): string | null {
+  const { attributionAcknowledged, revenueAttested } = body;
+  if (!attributionAcknowledged) {
+    return 'Attribution acknowledgment is required for Commercial licenses';
+  }
+  if (!revenueAttested) {
+    return 'Revenue attestation is required for Commercial licenses';
+  }
+  return null;
+}
+
+/** Validate enterprise specific fields. */
+function validateEnterpriseFields(body: Record<string, unknown>): string | null {
+  const { revenueScale, companyName, useCase } = body;
+  if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
+    return `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}`;
+  }
+  if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
+    return 'Company name is required for Enterprise licenses';
+  }
+  if (!useCase || typeof useCase !== 'string' || !useCase.trim()) {
+    return 'Use case is required for Enterprise licenses';
+  }
+  return null;
+}
+
+/** Validate license form input. Returns error string or null if valid. */
+function validateLicenseInput(body: Record<string, unknown>): string | null {
+  const { tier } = body;
+  if (!tier || !VALID_LICENSE_TIERS.has(tier as string)) {
+    return `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}`;
+  }
+  if (tier !== 'agpl') {
+    const commercialError = validateCommercialFields(body);
+    if (commercialError) return commercialError;
+  }
+  if (tier === 'free-commercial') {
+    const freeError = validateFreeCommercialFields(body);
+    if (freeError) return freeError;
+  }
+  if (tier === 'paid-commercial') {
+    const enterpriseError = validateEnterpriseFields(body);
+    if (enterpriseError) return enterpriseError;
+  }
+  return null;
+}
+
+/** Build license data object from validated input. */
+function buildLicenseData(body: Record<string, unknown>): Record<string, unknown> {
+  const { tier, email, revenueScale, companyName, useCase } = body;
+  const data: Record<string, unknown> = { tier };
+  if (tier !== 'agpl') {
+    data.email = sanitize(email, 254);
+    data.attestedAt = new Date().toISOString();
+    data.telemetryRequired = true;
+  }
+  if (tier === 'paid-commercial') {
+    if (revenueScale) data.revenueScale = revenueScale;
+    if (companyName) data.companyName = sanitize(companyName, 200);
+    if (useCase) data.useCase = sanitize(useCase, 500);
+  }
+  return data;
+}
+
+/** Send license_activation event to PostHog for commercial tiers. */
+async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>): Promise<void> {
+  const posthog = new PostHog(POSTHOG_PROJECT_KEY, {
+    host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
+    flushAt: 1,
+    flushInterval: 5000,
+  });
+  let installId: string;
+  try {
+    const idPath = join(homedir(), '.dollhouse', '.telemetry-id');
+    installId = (await readFile(idPath, 'utf-8')).trim();
+  } catch {
+    installId = uuidv4();
+  }
+  posthog.capture({
+    distinctId: installId,
+    event: 'license_activation',
+    properties: {
+      tier: licenseData.tier,
+      email: licenseData.email,
+      server_version: PACKAGE_VERSION,
+      os: platform(),
+      ...(licenseData.tier === 'paid-commercial' ? {
+        revenue_scale: licenseData.revenueScale,
+        company_name: licenseData.companyName,
+        use_case: licenseData.useCase,
+      } : {}),
+    },
+  });
+  await posthog.shutdown();
+}
+
 export function createSetupRoutes(): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
   versionHandler: (req: Request, res: Response) => Promise<void>;
   mcpbRedirectHandler: (req: Request, res: Response) => Promise<void>;
   detectHandler: (req: Request, res: Response) => Promise<void>;
+  getLicenseHandler: (req: Request, res: Response) => Promise<void>;
+  setLicenseHandler: (req: Request, res: Response) => Promise<void>;
 } {
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -355,7 +493,83 @@ export function createSetupRoutes(): {
     res.redirect(url);
   };
 
-  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler };
+  // ── License selection ────────────────────────────────────────────────
+  const licenseConfigPath = join(homedir(), '.dollhouse', 'license.json');
+
+  async function readLicense(): Promise<Record<string, unknown>> {
+    try {
+      const raw = await readFile(licenseConfigPath, 'utf-8');
+      return JSON.parse(raw);
+    } catch {
+      return { tier: 'agpl' };
+    }
+  }
+
+  async function writeLicense(data: Record<string, unknown>): Promise<void> {
+    const dir = join(homedir(), '.dollhouse');
+    await mkdir(dir, { recursive: true });
+    await writeFile(licenseConfigPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+  }
+
+  const getLicenseHandler = async (_req: Request, res: Response): Promise<void> => {
+    res.json(await readLicense());
+  };
+
+  const licenseRateLimiter = new SlidingWindowRateLimiter(5, 60_000); // 5 requests/minute
+
+  const setLicenseHandler = async (req: Request, res: Response): Promise<void> => {
+    if (!licenseRateLimiter.tryAcquire()) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'setupRoutes.setLicenseHandler',
+        details: 'License endpoint rate limit exceeded (5 req/min)',
+      });
+      res.status(429).json({ error: 'Too many license requests. Please try again in a minute.' });
+      return;
+    }
+
+    const body = req.body ?? {};
+    const validationError = validateLicenseInput(body);
+    if (validationError) {
+      res.status(400).json({ error: validationError });
+      return;
+    }
+
+    const licenseData = buildLicenseData(body);
+
+    try {
+      await writeLicense(licenseData);
+      logger.info(`[Setup] License updated to: ${licenseData.tier}`);
+
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONFIG_UPDATED',
+        severity: 'LOW',
+        source: 'setupRoutes.setLicenseHandler',
+        details: `License tier changed to: ${licenseData.tier}`,
+        additionalData: {
+          tier: licenseData.tier,
+          email: licenseData.tier === 'agpl' ? undefined : licenseData.email,
+        },
+      });
+
+      if (licenseData.tier !== 'agpl') {
+        try {
+          await capturePostHogLicenseEvent(licenseData);
+          logger.info(`[Setup] License event sent to PostHog: ${licenseData.tier}`);
+        } catch (posthogError) {
+          logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
+        }
+      }
+
+      res.json({ success: true, license: licenseData });
+    } catch (error) {
+      logger.error('[Setup] Failed to save license', { error });
+      res.status(500).json({ error: 'Failed to save license configuration' });
+    }
+  };
+
+  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler };
 }
 
 /**

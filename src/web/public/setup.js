@@ -827,6 +827,163 @@
     }
   };
 
+  // ── License selector (#1746) ──────────────────────────────────────────
+
+  function initLicense() {
+    const tiers = document.getElementById('license-tiers');
+    if (!tiers) return;
+
+    const tierButtons = tiers.querySelectorAll('.license-tier');
+    const details = {
+      'agpl': document.getElementById('license-detail-agpl'),
+      'free-commercial': document.getElementById('license-detail-free-commercial'),
+      'paid-commercial': document.getElementById('license-detail-paid-commercial'),
+    };
+    const savedBanner = document.getElementById('license-saved');
+    const savedText = document.getElementById('license-saved-text');
+
+    function selectTier(tier) {
+      // Update button states
+      tierButtons.forEach(btn => {
+        const selected = btn.dataset.tier === tier;
+        btn.classList.toggle('is-selected', selected);
+        btn.setAttribute('aria-pressed', String(selected));
+      });
+      // Show/hide detail panels
+      for (const [key, el] of Object.entries(details)) {
+        if (el) el.hidden = key !== tier;
+      }
+      // Hide saved banner when switching
+      if (savedBanner) savedBanner.hidden = true;
+    }
+
+    // Click handlers for tier buttons
+    tierButtons.forEach(btn => {
+      btn.addEventListener('click', () => selectTier(btn.dataset.tier));
+    });
+
+    // Form submission: Free Commercial
+    const freeForm = document.getElementById('license-form-free-commercial');
+    if (freeForm) {
+      freeForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const status = document.getElementById('license-status-free-commercial');
+        const data = new FormData(freeForm);
+        await submitLicense({
+          tier: 'free-commercial',
+          email: data.get('email'),
+          telemetryAcknowledged: !!data.get('telemetry'),
+          attributionAcknowledged: !!data.get('attribution'),
+          revenueAttested: !!data.get('attestation'),
+        }, status, 'Commercial license activated');
+      });
+    }
+
+    // Form submission: Paid Commercial
+    const paidForm = document.getElementById('license-form-paid-commercial');
+    if (paidForm) {
+      paidForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const status = document.getElementById('license-status-paid-commercial');
+        const data = new FormData(paidForm);
+        await submitLicense({
+          tier: 'paid-commercial',
+          email: data.get('email'),
+          revenueScale: data.get('revenueScale'),
+          companyName: data.get('companyName') || undefined,
+          useCase: data.get('useCase') || undefined,
+          telemetryAcknowledged: !!data.get('telemetry'),
+        }, status, 'Enterprise inquiry sent — our team will reach out within 2 business days');
+      });
+    }
+
+    async function submitLicense(body, statusEl, successMsg) {
+      if (statusEl) {
+        statusEl.textContent = '';
+        statusEl.className = 'license-form-status';
+      }
+      try {
+        const res = await fetch('/api/setup/license', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          if (statusEl) {
+            statusEl.textContent = json.error || 'Failed to save';
+            statusEl.className = 'license-form-status is-error';
+          }
+          return;
+        }
+        if (statusEl) {
+          statusEl.textContent = '';
+          statusEl.className = 'license-form-status is-success';
+        }
+        if (savedBanner && savedText) {
+          savedText.textContent = successMsg;
+          savedBanner.hidden = false;
+        }
+      } catch (err) {
+        console.debug('License submission failed:', err);
+        if (statusEl) {
+          statusEl.textContent = 'Network error — is the server running?';
+          statusEl.className = 'license-form-status is-error';
+        }
+      }
+    }
+
+    // AGPL selection: save immediately (no form needed)
+    tierButtons.forEach(btn => {
+      if (btn.dataset.tier === 'agpl') {
+        btn.addEventListener('click', async () => {
+          await submitLicense({ tier: 'agpl' }, null, 'AGPL-3.0 license selected');
+        });
+      }
+    });
+
+    function prefillFreeCommercialForm(license) {
+      if (freeForm && license.email) {
+        freeForm.querySelector('[name="email"]').value = license.email;
+      }
+    }
+
+    function prefillEnterpriseForm(license) {
+      if (!paidForm) return;
+      if (license.email) paidForm.querySelector('[name="email"]').value = license.email;
+      if (license.revenueScale) paidForm.querySelector('[name="revenueScale"]').value = license.revenueScale;
+      if (license.companyName) paidForm.querySelector('[name="companyName"]').value = license.companyName;
+      if (license.useCase) paidForm.querySelector('[name="useCase"]').value = license.useCase;
+    }
+
+    function showSavedBanner(license) {
+      if (license.tier === 'agpl' || !license.attestedAt) return;
+      if (!savedBanner || !savedText) return;
+      const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+      savedText.textContent = tierLabel + ' license active';
+      savedBanner.hidden = false;
+    }
+
+    // Load saved license on page load
+    async function loadSavedLicense() {
+      try {
+        const res = await fetch('/api/setup/license');
+        if (!res.ok) return;
+        const license = await res.json();
+        if (!license.tier || !details[license.tier]) return;
+        selectTier(license.tier);
+        if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
+        if (license.tier === 'paid-commercial') prefillEnterpriseForm(license);
+        showSavedBanner(license);
+      } catch (err) {
+        // Default AGPL is fine — log for debugging only
+        if (typeof console !== 'undefined') console.debug('License load skipped:', err);
+      }
+    }
+
+    loadSavedLicense();
+  }
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
@@ -839,4 +996,5 @@
   initOpenButtons();
   fetchVersion();
   fetchDetection();
+  initLicense();
 })();
