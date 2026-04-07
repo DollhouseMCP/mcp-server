@@ -1114,18 +1114,34 @@
       }
     }
 
+    function handleAutoVerifySuccess(json) {
+      hideVerificationUI();
+      if (savedBanner && savedText) {
+        const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+        savedText.textContent = tierLabel + ' license verified and activated';
+        savedBanner.hidden = false;
+      }
+    }
+
+    async function handleAutoVerifyFailure(json) {
+      const license = await (await fetch('/api/setup/license')).json();
+      if (license.status === 'pending' && license.email) {
+        showVerificationUI(license.email);
+      }
+      if (verifyStatus) {
+        verifyStatus.textContent = json.error || 'Verification failed';
+        verifyStatus.className = 'license-form-status is-error';
+      }
+    }
+
     // Auto-verify from email click-through link (#verify=CODE)
     async function checkHashVerification() {
-      const hash = window.location.hash;
-      const match = hash.match(/^#verify=(\d{6})$/);
+      const hash = globalThis.location.hash;
+      const match = /^#verify=(\d{6})$/.exec(hash);
       if (!match) return;
 
       const code = match[1];
-      // Clear hash so it doesn't re-trigger on reload
-      history.replaceState(null, '', window.location.pathname + '#setup');
-
-      // Show the setup tab
-      if (typeof switchToTab === 'function') switchToTab('setup');
+      history.replaceState(null, '', globalThis.location.pathname + '#setup');
 
       try {
         const res = await fetch('/api/setup/license/verify', {
@@ -1135,22 +1151,9 @@
         });
         const json = await res.json();
         if (res.ok) {
-          hideVerificationUI();
-          if (savedBanner && savedText) {
-            const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
-            savedText.textContent = tierLabel + ' license verified and activated';
-            savedBanner.hidden = false;
-          }
+          handleAutoVerifySuccess(json);
         } else {
-          // Code was wrong or expired — show the verification UI so they can retry
-          const license = await (await fetch('/api/setup/license')).json();
-          if (license.status === 'pending' && license.email) {
-            showVerificationUI(license.email);
-          }
-          if (verifyStatus) {
-            verifyStatus.textContent = json.error || 'Verification failed';
-            verifyStatus.className = 'license-form-status is-error';
-          }
+          await handleAutoVerifyFailure(json);
         }
       } catch (err) {
         console.debug('Auto-verification failed:', err);

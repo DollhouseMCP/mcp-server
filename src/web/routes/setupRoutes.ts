@@ -343,6 +343,12 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
       ...(eventType === 'verification' ? {
         verification_code: licenseData.verificationCode,
       } : {}),
+      ...(eventType === 'activation' ? {
+        verification_time_ms: licenseData.verification_time_ms,
+        verification_time_seconds: licenseData.verification_time_ms
+          ? Math.round((licenseData.verification_time_ms as number) / 1000) : undefined,
+        verification_attempts: licenseData.verification_attempts,
+      } : {}),
       ...(licenseData.tier === 'paid-commercial' ? {
         revenue_scale: licenseData.revenueScale,
         company_name: licenseData.companyName,
@@ -580,6 +586,7 @@ export function createSetupRoutes(): {
       licenseData.verificationCode = code;
       licenseData.verificationExpiry = new Date(Date.now() + VERIFICATION_CODE_TTL_MS).toISOString();
       licenseData.verificationAttempts = 0;
+      licenseData.verificationRequestedAt = new Date().toISOString();
       await writeLicense(licenseData);
 
       logger.info(`[Setup] License pending verification: ${licenseData.tier} (${licenseData.email})`);
@@ -671,14 +678,20 @@ export function createSetupRoutes(): {
     }
 
     // Code is correct — activate license
+    const verifiedAt = new Date().toISOString();
+    const requestedAt = license.verificationRequestedAt as string | undefined;
+    const timeToVerifyMs = requestedAt ? Date.now() - new Date(requestedAt).getTime() : undefined;
+    const attemptsUsed = ((license.verificationAttempts as number) ?? 0) + 1;
+
     license.status = 'active';
-    license.verifiedAt = new Date().toISOString();
+    license.verifiedAt = verifiedAt;
     delete license.verificationCode;
     delete license.verificationExpiry;
     delete license.verificationAttempts;
+    delete license.verificationRequestedAt;
     await writeLicense(license);
 
-    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email})`);
+    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email}) — ${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CONFIG_UPDATED',
@@ -688,9 +701,15 @@ export function createSetupRoutes(): {
       additionalData: { tier: license.tier, email: license.email },
     });
 
-    // Send confirmation email + PostHog activation event
+    // Send confirmation email + PostHog activation event with analytics
     try {
-      await capturePostHogLicenseEvent({ ...license, eventType: 'activation' });
+      await capturePostHogLicenseEvent({
+        ...license,
+        eventType: 'activation',
+        verification_time_ms: timeToVerifyMs,
+        verification_attempts: attemptsUsed,
+        verification_method: code.length === 6 ? 'code_or_click' : 'unknown',
+      });
       logger.info(`[Setup] License activation event sent to PostHog: ${license.tier}`);
     } catch (posthogError) {
       logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
