@@ -28,7 +28,11 @@ import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.j
 import { PostHog } from 'posthog-node';
 import { v4 as uuidv4 } from 'uuid';
 
-// PostHog project key (write-only, safe to expose) — same key as OperationalTelemetry
+// PostHog project capture key — write-only by design, safe to expose publicly.
+// This key can ONLY send events to PostHog; it cannot read data, query analytics,
+// configure destinations, or access any other PostHog API. Same key used in
+// src/telemetry/OperationalTelemetry.ts. Verified write-only 2026-04-07.
+// Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
 /** Allowed client identifiers — must match install-mcp's --client values */

@@ -245,6 +245,7 @@ async function sendEmail(params: EmailParams): Promise<void> {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Resend API error (${response.status}): ${text}`);
+    console.error(`Resend API error (${response.status}):`, text);
+    throw new Error('Email delivery failed');
   }
 }
