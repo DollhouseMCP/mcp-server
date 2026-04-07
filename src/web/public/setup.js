@@ -936,6 +936,7 @@
             for (const el of Object.values(details)) {
               if (el) el.hidden = true;
             }
+            activeLicense = license;
             if (savedBanner && savedText) {
               const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
               savedText.textContent = tierLabel + ' license verified and activated';
@@ -1048,10 +1049,10 @@
 
           // Verification succeeded — hide everything and show success
           hideVerificationUI();
-          // Hide all detail panels so the form can't be resubmitted
           for (const el of Object.values(details)) {
             if (el) el.hidden = true;
           }
+          activeLicense = json.license;
           if (savedBanner && savedText) {
             const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
             savedText.textContent = tierLabel + ' license verified and activated';
@@ -1100,11 +1101,26 @@
       });
     }
 
-    // AGPL selection: save immediately (no form needed)
+    // Track whether the user has an active commercial license
+    let activeLicense = null;
+
+    // AGPL selection: confirm if downgrading from active commercial license
     tierButtons.forEach(btn => {
       if (btn.dataset.tier === 'agpl') {
         btn.addEventListener('click', async () => {
+          if (activeLicense && activeLicense.status === 'active' && activeLicense.tier !== 'agpl') {
+            const tierLabel = activeLicense.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+            const confirmed = confirm(
+              `You have an active ${tierLabel} license. Switching to AGPL will deactivate it.\n\nAre you sure?`
+            );
+            if (!confirmed) {
+              // Restore the previous tier selection
+              selectTier(activeLicense.tier);
+              return;
+            }
+          }
           await submitLicense({ tier: 'agpl' }, null, 'AGPL-3.0 license selected');
+          activeLicense = null;
         });
       }
     });
@@ -1148,7 +1164,10 @@
           return;
         }
 
-        if (license.status === 'active') showSavedBanner(license);
+        if (license.status === 'active') {
+          activeLicense = license;
+          showSavedBanner(license);
+        }
       } catch (err) {
         // Default AGPL is fine — log for debugging only
         if (typeof console !== 'undefined') console.debug('License load skipped:', err);
@@ -1160,6 +1179,7 @@
       for (const el of Object.values(details)) {
         if (el) el.hidden = true;
       }
+      activeLicense = json.license;
       if (savedBanner && savedText) {
         const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
         savedText.textContent = tierLabel + ' license verified and activated';
