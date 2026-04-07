@@ -25,6 +25,7 @@ import { PACKAGE_VERSION } from '../../generated/version.js';
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { PostHog } from 'posthog-node';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -482,6 +483,12 @@ export function createSetupRoutes(): {
 
   const setLicenseHandler = async (req: Request, res: Response): Promise<void> => {
     if (!licenseRateLimiter.tryAcquire()) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'setupRoutes.setLicenseHandler',
+        details: 'License endpoint rate limit exceeded (5 req/min)',
+      });
       res.status(429).json({ error: 'Too many license requests. Please try again in a minute.' });
       return;
     }
@@ -498,6 +505,17 @@ export function createSetupRoutes(): {
     try {
       await writeLicense(licenseData);
       logger.info(`[Setup] License updated to: ${licenseData.tier}`);
+
+      SecurityMonitor.logSecurityEvent({
+        type: 'CONFIG_UPDATED',
+        severity: 'LOW',
+        source: 'setupRoutes.setLicenseHandler',
+        details: `License tier changed to: ${licenseData.tier}`,
+        additionalData: {
+          tier: licenseData.tier,
+          email: licenseData.tier !== 'agpl' ? licenseData.email : undefined,
+        },
+      });
 
       if (licenseData.tier !== 'agpl') {
         try {

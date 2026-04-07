@@ -11,11 +11,10 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
-import { readFile, writeFile, unlink, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { readFile, writeFile, unlink } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { join, dirname } from 'node:path';
+import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -35,14 +34,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (savedLicense !== null) {
-    await writeFile(LICENSE_PATH, savedLicense, { mode: 0o600 });
-  } else {
+  if (savedLicense === null) {
     try {
       await unlink(LICENSE_PATH);
     } catch {
       // file didn't exist before tests — nothing to clean up
     }
+  } else {
+    await writeFile(LICENSE_PATH, savedLicense, { mode: 0o600 });
   }
 });
 
@@ -533,7 +532,7 @@ describe('License Routes — Security', () => {
 
       for (const input of adversarialInputs) {
         const start = performance.now();
-        EMAIL_PATTERN.test(input);
+        const _result = EMAIL_PATTERN.test(input);
         const elapsed = performance.now() - start;
 
         // Each test should complete in well under 100ms

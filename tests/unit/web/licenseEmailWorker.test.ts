@@ -117,7 +117,14 @@ const originalFetch = globalThis.fetch;
 function installFetchMock(responseOverride?: { ok: boolean; status: number; text: string }) {
   capturedEmails = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    let url: string;
+    if (typeof input === 'string') {
+      url = input;
+    } else if (input instanceof URL) {
+      url = input.toString();
+    } else {
+      url = input.url;
+    }
     if (url === 'https://api.resend.com/emails') {
       const body = JSON.parse(init?.body as string);
       capturedEmails.push(body);
