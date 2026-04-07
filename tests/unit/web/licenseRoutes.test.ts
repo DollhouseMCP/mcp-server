@@ -674,17 +674,17 @@ describe('License Routes — Email Verification', () => {
     });
   });
 
+  async function setupPendingLicense(): Promise<string> {
+    await request(app)
+      .post('/api/setup/license')
+      .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+      .expect(200);
+
+    const raw = await readFile(LICENSE_PATH, 'utf-8');
+    return JSON.parse(raw).verificationCode;
+  }
+
   describe('POST /api/setup/license/verify', () => {
-    async function setupPendingLicense(): Promise<string> {
-      await request(app)
-        .post('/api/setup/license')
-        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
-        .expect(200);
-
-      const raw = await readFile(LICENSE_PATH, 'utf-8');
-      return JSON.parse(raw).verificationCode;
-    }
-
     it('activates license with correct code', async () => {
       const code = await setupPendingLicense();
 

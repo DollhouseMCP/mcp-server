@@ -46,13 +46,56 @@ interface PostHogEvent {
   timestamp?: string;
 }
 
+/** Handle verification event: send verification code email. */
+async function handleVerification(props: PostHogEvent['properties'], env: Env): Promise<void> {
+  if (!props.verification_code) {
+    throw new Error('Missing verification_code for verification event');
+  }
+  const verificationEmail = buildVerificationEmail(props, env);
+  await sendEmail({
+    from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+    to: props.email,
+    replyTo: env.REPLY_TO,
+    subject: verificationEmail.subject,
+    html: verificationEmail.html,
+    env,
+  });
+}
+
+/** Handle activation event: send confirmation email (+ sales notification for Enterprise). */
+async function handleActivation(props: PostHogEvent['properties'], env: Env): Promise<void> {
+  const { subject, html } = props.tier === 'paid-commercial'
+    ? buildEnterpriseEmail(props, env)
+    : buildCommercialEmail(props, env);
+
+  await sendEmail({
+    from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+    to: props.email,
+    replyTo: env.REPLY_TO,
+    subject,
+    html,
+    env,
+  });
+
+  if (props.tier === 'paid-commercial') {
+    const salesNotification = buildSalesNotification(props);
+    await sendEmail({
+      from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+      to: env.REPLY_TO,
+      replyTo: props.email,
+      subject: salesNotification.subject,
+      html: salesNotification.html,
+      env,
+    });
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 });
     }
 
-    // Validate PostHog webhook secret
     if (env.POSTHOG_WEBHOOK_SECRET) {
       const secret = request.headers.get('x-posthog-secret');
       if (secret !== env.POSTHOG_WEBHOOK_SECRET) {
@@ -71,53 +114,16 @@ export default {
       return new Response('Ignored: not a license_activation event', { status: 200 });
     }
 
-    const { tier, email, event_type, verification_code } = event.properties;
+    const { tier, email, event_type } = event.properties;
     if (!email || !tier) {
       return new Response('Missing required fields: tier, email', { status: 400 });
     }
 
     try {
       if (event_type === 'verification') {
-        // Step 1: Send verification code email
-        if (!verification_code) {
-          return new Response('Missing verification_code for verification event', { status: 400 });
-        }
-        const verificationEmail = buildVerificationEmail(event.properties, env);
-        await sendEmail({
-          from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-          to: email,
-          replyTo: env.REPLY_TO,
-          subject: verificationEmail.subject,
-          html: verificationEmail.html,
-          env,
-        });
+        await handleVerification(event.properties, env);
       } else {
-        // Step 2: Send confirmation email (after verification succeeds)
-        const { subject, html } = tier === 'paid-commercial'
-          ? buildEnterpriseEmail(event.properties, env)
-          : buildCommercialEmail(event.properties, env);
-
-        await sendEmail({
-          from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-          to: email,
-          replyTo: env.REPLY_TO,
-          subject,
-          html,
-          env,
-        });
-
-        // For Enterprise, also notify the sales team
-        if (tier === 'paid-commercial') {
-          const salesNotification = buildSalesNotification(event.properties);
-          await sendEmail({
-            from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-            to: env.REPLY_TO,
-            replyTo: email,
-            subject: salesNotification.subject,
-            html: salesNotification.html,
-            env,
-          });
-        }
+        await handleActivation(event.properties, env);
       }
 
       return new Response(JSON.stringify({ success: true, tier, email, event_type: event_type ?? 'activation' }), {

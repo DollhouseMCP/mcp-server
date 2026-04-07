@@ -930,7 +930,7 @@
         }
         const m = Math.floor(remaining / 60);
         const s = remaining % 60;
-        verifyTimer.textContent = 'Code expires in ' + m + ':' + String(s).padStart(2, '0');
+        verifyTimer.textContent = `Code expires in ${m}:${String(s).padStart(2, '0')}`;
         remaining--;
       }
       update();
@@ -1038,17 +1038,15 @@
             headers: { 'Content-Type': 'application/json' },
           });
           const json = await res.json();
-          if (!res.ok) {
-            if (verifyStatus) {
-              verifyStatus.textContent = json.error || 'Failed to resend';
-              verifyStatus.className = 'license-form-status is-error';
-            }
-          } else {
+          if (res.ok) {
             if (verifyStatus) {
               verifyStatus.textContent = 'New code sent. Check your email.';
               verifyStatus.className = 'license-form-status is-success';
             }
             startCountdown(10 * 60);
+          } else if (verifyStatus) {
+            verifyStatus.textContent = json.error || 'Failed to resend';
+            verifyStatus.className = 'license-form-status is-error';
           }
         } catch (err) {
           console.debug('Resend failed:', err);
