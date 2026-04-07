@@ -60,6 +60,10 @@ describe('License Routes — API Endpoints', () => {
     app.post('/api/setup/license', setLicenseHandler);
   });
 
+  // Common acknowledgment flags for commercial tiers
+  const COMMERCIAL_ACKS = { telemetryAcknowledged: true, attributionAcknowledged: true, revenueAttested: true };
+  const ENTERPRISE_ACKS = { telemetryAcknowledged: true };
+
   // ── POST /api/setup/license — Validation ────────────────────────────
 
   describe('POST /api/setup/license — License Validation', () => {
@@ -76,7 +80,7 @@ describe('License Routes — API Endpoints', () => {
     it('accepts valid free-commercial with email', async () => {
       const res = await request(app)
         .post('/api/setup/license')
-        .send({ tier: 'free-commercial', email: 'dev@example.com' })
+        .send({ tier: 'free-commercial', email: 'dev@example.com', ...COMMERCIAL_ACKS })
         .expect(200);
 
       expect(res.body.success).toBe(true);
@@ -94,6 +98,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$5M–$25M',
           companyName: 'Big Corp Inc.',
           useCase: 'Internal tooling platform',
+          ...ENTERPRISE_ACKS,
         })
         .expect(200);
 
@@ -172,6 +177,7 @@ describe('License Routes — API Endpoints', () => {
           email: 'ent@corp.com',
           companyName: 'Corp',
           useCase: 'Internal use',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -187,6 +193,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$999B',
           companyName: 'Corp',
           useCase: 'Internal use',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -201,6 +208,7 @@ describe('License Routes — API Endpoints', () => {
           email: 'ent@corp.com',
           revenueScale: '$1M–$5M',
           useCase: 'Internal use',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -216,6 +224,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: '   ',
           useCase: 'Internal use',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -230,6 +239,7 @@ describe('License Routes — API Endpoints', () => {
           email: 'ent@corp.com',
           revenueScale: '$1M–$5M',
           companyName: 'Corp',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -245,6 +255,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: 'Corp',
           useCase: '  \t\n  ',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -262,6 +273,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: '  Big Corp  ',
           useCase: '  Internal tooling  ',
+          telemetryAcknowledged: true,
         })
         .expect(200);
 
@@ -281,6 +293,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: longCompany,
           useCase: longUseCase,
+          telemetryAcknowledged: true,
         })
         .expect(200);
 
@@ -299,7 +312,7 @@ describe('License Routes — API Endpoints', () => {
 
       const res = await request(app)
         .post('/api/setup/license')
-        .send({ tier: 'free-commercial', email: xssEmail })
+        .send({ tier: 'free-commercial', email: xssEmail, ...COMMERCIAL_ACKS })
         .expect(200);
 
       // Verify the email is stored as a plain string, not interpreted
@@ -319,6 +332,7 @@ describe('License Routes — API Endpoints', () => {
             revenueScale,
             companyName: 'Test Corp',
             useCase: 'Testing',
+            ...ENTERPRISE_ACKS,
           });
 
         // Accept 200 or 429 (rate limit from sequential requests)
@@ -342,7 +356,7 @@ describe('License Routes — API Endpoints', () => {
     it('free-commercial includes attestedAt as ISO timestamp', async () => {
       const res = await request(app)
         .post('/api/setup/license')
-        .send({ tier: 'free-commercial', email: 'dev@example.com' })
+        .send({ tier: 'free-commercial', email: 'dev@example.com', ...COMMERCIAL_ACKS })
         .expect(200);
 
       const attestedAt = res.body.license.attestedAt;
@@ -375,7 +389,7 @@ describe('License Routes — API Endpoints', () => {
       // First, set a license
       await request(app)
         .post('/api/setup/license')
-        .send({ tier: 'free-commercial', email: 'roundtrip@example.com' })
+        .send({ tier: 'free-commercial', email: 'roundtrip@example.com', ...COMMERCIAL_ACKS })
         .expect(200);
 
       // Then retrieve it
@@ -471,6 +485,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: { inject: true },
           useCase: 'Testing',
+          telemetryAcknowledged: true,
         })
         .expect(400);
 
@@ -486,6 +501,7 @@ describe('License Routes — API Endpoints', () => {
           revenueScale: '$1M–$5M',
           companyName: 'Corp',
           useCase: ['array', 'not', 'string'],
+          telemetryAcknowledged: true,
         })
         .expect(400);
 

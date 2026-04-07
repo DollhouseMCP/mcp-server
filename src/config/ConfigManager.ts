@@ -230,9 +230,10 @@ export interface LicenseConfig {
   tier: LicenseTier;
   email?: string;            // Required for commercial tiers
   attestedAt?: string;       // ISO timestamp of attestation
+  telemetryRequired?: boolean; // true for commercial tiers (license condition)
   revenueScale?: string;     // Paid commercial: "$1M–$5M", "$5M–$25M", etc.
-  companyName?: string;      // Paid commercial: optional
-  useCase?: string;          // Paid commercial: optional
+  companyName?: string;      // Paid commercial: required
+  useCase?: string;          // Paid commercial: required
 }
 
 export interface SourcePriorityConfigData {

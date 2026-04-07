@@ -115,6 +115,19 @@ export default {
   },
 };
 
+// ── HTML escaping ────────────────────────────────────────────────────
+
+/** Escape HTML special characters to prevent XSS in email templates. */
+function esc(str: string | undefined | null): string {
+  if (!str) return '';
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // ── Email templates ──────────────────────────────────────────────────
 
 function buildCommercialEmail(
@@ -138,9 +151,9 @@ function buildCommercialEmail(
     </ul>
   </div>
 
-  <p><strong>License ID:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">${props.email}-commercial-${new Date().toISOString().slice(0, 10)}</code></p>
+  <p><strong>License ID:</strong> <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px;">${esc(props.email)}-commercial-${new Date().toISOString().slice(0, 10)}</code></p>
   <p><strong>Activated:</strong> ${new Date().toUTCString()}</p>
-  <p><strong>Server version:</strong> ${props.server_version ?? 'unknown'}</p>
+  <p><strong>Server version:</strong> ${esc(props.server_version)}</p>
 
   <p>This license is valid as long as your organization meets the revenue threshold. If your revenue exceeds $1M USD, please upgrade to an Enterprise license.</p>
 
@@ -168,9 +181,9 @@ function buildEnterpriseEmail(
   <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 16px; margin: 20px 0;">
     <p style="margin: 0 0 8px; font-weight: 600;">Your inquiry details:</p>
     <ul style="margin: 0; padding-left: 20px;">
-      <li><strong>Company:</strong> ${props.company_name ?? 'Not provided'}</li>
-      <li><strong>Revenue scale:</strong> ${props.revenue_scale ?? 'Not provided'}</li>
-      <li><strong>Use case:</strong> ${props.use_case ?? 'Not provided'}</li>
+      <li><strong>Company:</strong> ${esc(props.company_name) || 'Not provided'}</li>
+      <li><strong>Revenue scale:</strong> ${esc(props.revenue_scale) || 'Not provided'}</li>
+      <li><strong>Use case:</strong> ${esc(props.use_case) || 'Not provided'}</li>
     </ul>
   </div>
 
@@ -196,19 +209,19 @@ function buildSalesNotification(
   props: PostHogEvent['properties'],
 ): { subject: string; html: string } {
   return {
-    subject: `[Enterprise Inquiry] ${props.company_name ?? props.email} — ${props.revenue_scale ?? 'unknown scale'}`,
+    subject: `[Enterprise Inquiry] ${(props.company_name ?? props.email).replace(/[<>"]/g, '')} — ${(props.revenue_scale ?? 'unknown scale').replace(/[<>"]/g, '')}`,
     html: `
 <!DOCTYPE html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a2e; max-width: 600px; margin: 0 auto; padding: 24px;">
   <h2>New Enterprise License Inquiry</h2>
 
   <table style="border-collapse: collapse; width: 100%;">
-    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Email</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;"><a href="mailto:${props.email}">${props.email}</a></td></tr>
-    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Company</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${props.company_name ?? '—'}</td></tr>
-    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Revenue Scale</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${props.revenue_scale ?? '—'}</td></tr>
-    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Use Case</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${props.use_case ?? '—'}</td></tr>
-    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Server Version</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${props.server_version ?? '—'}</td></tr>
-    <tr><td style="padding: 8px; font-weight: 600;">OS</td><td style="padding: 8px;">${props.os ?? '—'}</td></tr>
+    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Email</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;"><a href="mailto:${esc(props.email)}">${esc(props.email)}</a></td></tr>
+    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Company</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${esc(props.company_name) || '—'}</td></tr>
+    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Revenue Scale</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${esc(props.revenue_scale) || '—'}</td></tr>
+    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Use Case</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${esc(props.use_case) || '—'}</td></tr>
+    <tr><td style="padding: 8px; border-bottom: 1px solid #e2e8f0; font-weight: 600;">Server Version</td><td style="padding: 8px; border-bottom: 1px solid #e2e8f0;">${esc(props.server_version) || '—'}</td></tr>
+    <tr><td style="padding: 8px; font-weight: 600;">OS</td><td style="padding: 8px;">${esc(props.os) || '—'}</td></tr>
   </table>
 
   <p style="margin-top: 16px;">Reply directly to this email to respond to the customer.</p>

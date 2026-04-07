@@ -872,7 +872,10 @@
         await submitLicense({
           tier: 'free-commercial',
           email: data.get('email'),
-        }, status, 'Free Commercial license activated');
+          telemetryAcknowledged: !!data.get('telemetry'),
+          attributionAcknowledged: !!data.get('attribution'),
+          revenueAttested: !!data.get('attestation'),
+        }, status, 'Commercial license activated');
       });
     }
 
@@ -889,6 +892,7 @@
           revenueScale: data.get('revenueScale'),
           companyName: data.get('companyName') || undefined,
           useCase: data.get('useCase') || undefined,
+          telemetryAcknowledged: !!data.get('telemetry'),
         }, status, 'Enterprise inquiry sent — our team will reach out within 2 business days');
       });
     }

@@ -280,7 +280,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
           <form class="license-form" id="license-form-free-commercial" autocomplete="off">
             <label class="license-form-label">
               Email address
-              <input class="license-form-input" type="email" name="email" required placeholder="you@company.com" />
+              <input class="license-form-input" type="email" name="email" required maxlength="254" placeholder="you@company.com" />
               <span class="license-form-hint">Your license confirmation will be sent to this address. A valid email is required to receive your license.</span>
             </label>
             <label class="license-form-check">
@@ -305,7 +305,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
           <form class="license-form" id="license-form-paid-commercial" autocomplete="off">
             <label class="license-form-label">
               Email address
-              <input class="license-form-input" type="email" name="email" required placeholder="you@company.com" />
+              <input class="license-form-input" type="email" name="email" required maxlength="254" placeholder="you@company.com" />
               <span class="license-form-hint">Your license confirmation will be sent to this address. A valid email is required to receive your license.</span>
             </label>
             <label class="license-form-label">
@@ -320,11 +320,11 @@ npm install @dollhousemcp/mcp-server</code></pre>
             </label>
             <label class="license-form-label">
               Company name
-              <input class="license-form-input" type="text" name="companyName" required placeholder="Acme Corp" />
+              <input class="license-form-input" type="text" name="companyName" required maxlength="200" placeholder="Acme Corp" />
             </label>
             <label class="license-form-label">
               Use case
-              <textarea class="license-form-textarea" name="useCase" rows="2" required placeholder="Brief description of how you're using DollhouseMCP"></textarea>
+              <textarea class="license-form-textarea" name="useCase" rows="2" required maxlength="500" placeholder="Brief description of how you're using DollhouseMCP"></textarea>
             </label>
             <label class="license-form-check">
               <input type="checkbox" name="telemetry" required />

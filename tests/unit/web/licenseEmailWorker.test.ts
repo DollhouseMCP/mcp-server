@@ -308,17 +308,14 @@ describe('License Email Worker', () => {
         );
         await worker.fetch(req, env);
 
-        // The current implementation uses template literals and does NOT
-        // sanitize HTML. This test documents the current behavior.
-        // A future improvement should add HTML escaping.
         const customerHtml = capturedEmails[0].html;
         const salesHtml = capturedEmails[1].html;
 
-        // Verify the raw script tag appears (unsanitized) -- this documents
-        // a known gap. When sanitization is added, update this test to verify
-        // that <script> is escaped (e.g., &lt;script&gt;).
-        expect(customerHtml).toContain('<script>alert("xss")</script>');
-        expect(salesHtml).toContain('<script>alert("xss")</script>');
+        // Verify the script tag is HTML-escaped, not rendered raw
+        expect(customerHtml).not.toContain('<script>');
+        expect(salesHtml).not.toContain('<script>');
+        expect(customerHtml).toContain('&lt;script&gt;');
+        expect(salesHtml).toContain('&lt;script&gt;');
       });
     });
   });

@@ -222,10 +222,11 @@ function sanitize(val: unknown, maxLen: number): string | undefined {
 
 /** Validate license form input. Returns error string or null if valid. */
 function validateLicenseInput(body: Record<string, unknown>): string | null {
-  const { tier, email, revenueScale, companyName, useCase } = body;
+  const { tier, email, revenueScale, companyName, useCase, telemetryAcknowledged, attributionAcknowledged, revenueAttested } = body;
   if (!tier || !VALID_LICENSE_TIERS.has(tier as string)) {
     return `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}`;
   }
+  // Commercial tiers: require email + acknowledgments
   if (tier !== 'agpl') {
     if (!email || typeof email !== 'string') {
       return 'Email address is required for commercial licenses';
@@ -233,7 +234,20 @@ function validateLicenseInput(body: Record<string, unknown>): string | null {
     if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
       return 'Please provide a valid email address';
     }
+    if (!telemetryAcknowledged) {
+      return 'Telemetry acknowledgment is required for commercial licenses';
+    }
   }
+  // Free commercial: require attribution + revenue attestation
+  if (tier === 'free-commercial') {
+    if (!attributionAcknowledged) {
+      return 'Attribution acknowledgment is required for free commercial licenses';
+    }
+    if (!revenueAttested) {
+      return 'Revenue attestation is required for free commercial licenses';
+    }
+  }
+  // Enterprise: require all fields
   if (tier === 'paid-commercial') {
     if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
       return `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}`;
@@ -255,6 +269,7 @@ function buildLicenseData(body: Record<string, unknown>): Record<string, unknown
   if (tier !== 'agpl') {
     data.email = sanitize(email, 254);
     data.attestedAt = new Date().toISOString();
+    data.telemetryRequired = true;
   }
   if (tier === 'paid-commercial') {
     if (revenueScale) data.revenueScale = revenueScale;
