@@ -121,11 +121,11 @@ export default {
 function esc(str: string | undefined | null): string {
   if (!str) return '';
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 // ── Email templates ──────────────────────────────────────────────────
@@ -209,7 +209,7 @@ function buildSalesNotification(
   props: PostHogEvent['properties'],
 ): { subject: string; html: string } {
   return {
-    subject: `[Enterprise Inquiry] ${(props.company_name ?? props.email).replace(/[<>"]/g, '')} — ${(props.revenue_scale ?? 'unknown scale').replace(/[<>"]/g, '')}`,
+    subject: `[Enterprise Inquiry] ${(props.company_name ?? props.email).replaceAll('<', '').replaceAll('>', '').replaceAll('"', '')} — ${(props.revenue_scale ?? 'unknown scale').replaceAll('<', '').replaceAll('>', '').replaceAll('"', '')}`,
     html: `
 <!DOCTYPE html>
 <html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a2e; max-width: 600px; margin: 0 auto; padding: 24px;">

@@ -221,43 +221,65 @@ function sanitize(val: unknown, maxLen: number): string | undefined {
 }
 
 /** Validate license form input. Returns error string or null if valid. */
+/** Validate email format and commercial acknowledgments. */
+function validateCommercialFields(body: Record<string, unknown>): string | null {
+  const { email, telemetryAcknowledged } = body;
+  if (!email || typeof email !== 'string') {
+    return 'Email address is required for commercial licenses';
+  }
+  if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+    return 'Please provide a valid email address';
+  }
+  if (!telemetryAcknowledged) {
+    return 'Telemetry acknowledgment is required for commercial licenses';
+  }
+  return null;
+}
+
+/** Validate free-commercial specific fields. */
+function validateFreeCommercialFields(body: Record<string, unknown>): string | null {
+  const { attributionAcknowledged, revenueAttested } = body;
+  if (!attributionAcknowledged) {
+    return 'Attribution acknowledgment is required for free commercial licenses';
+  }
+  if (!revenueAttested) {
+    return 'Revenue attestation is required for free commercial licenses';
+  }
+  return null;
+}
+
+/** Validate enterprise specific fields. */
+function validateEnterpriseFields(body: Record<string, unknown>): string | null {
+  const { revenueScale, companyName, useCase } = body;
+  if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
+    return `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}`;
+  }
+  if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
+    return 'Company name is required for Enterprise licenses';
+  }
+  if (!useCase || typeof useCase !== 'string' || !useCase.trim()) {
+    return 'Use case is required for Enterprise licenses';
+  }
+  return null;
+}
+
+/** Validate license form input. Returns error string or null if valid. */
 function validateLicenseInput(body: Record<string, unknown>): string | null {
-  const { tier, email, revenueScale, companyName, useCase, telemetryAcknowledged, attributionAcknowledged, revenueAttested } = body;
+  const { tier } = body;
   if (!tier || !VALID_LICENSE_TIERS.has(tier as string)) {
     return `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}`;
   }
-  // Commercial tiers: require email + acknowledgments
   if (tier !== 'agpl') {
-    if (!email || typeof email !== 'string') {
-      return 'Email address is required for commercial licenses';
-    }
-    if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
-      return 'Please provide a valid email address';
-    }
-    if (!telemetryAcknowledged) {
-      return 'Telemetry acknowledgment is required for commercial licenses';
-    }
+    const commercialError = validateCommercialFields(body);
+    if (commercialError) return commercialError;
   }
-  // Free commercial: require attribution + revenue attestation
   if (tier === 'free-commercial') {
-    if (!attributionAcknowledged) {
-      return 'Attribution acknowledgment is required for free commercial licenses';
-    }
-    if (!revenueAttested) {
-      return 'Revenue attestation is required for free commercial licenses';
-    }
+    const freeError = validateFreeCommercialFields(body);
+    if (freeError) return freeError;
   }
-  // Enterprise: require all fields
   if (tier === 'paid-commercial') {
-    if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
-      return `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}`;
-    }
-    if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
-      return 'Company name is required for Enterprise licenses';
-    }
-    if (!useCase || typeof useCase !== 'string' || !useCase.trim()) {
-      return 'Use case is required for Enterprise licenses';
-    }
+    const enterpriseError = validateEnterpriseFields(body);
+    if (enterpriseError) return enterpriseError;
   }
   return null;
 }
