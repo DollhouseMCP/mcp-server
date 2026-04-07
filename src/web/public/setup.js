@@ -1114,7 +1114,51 @@
       }
     }
 
+    // Auto-verify from email click-through link (#verify=CODE)
+    async function checkHashVerification() {
+      const hash = window.location.hash;
+      const match = hash.match(/^#verify=(\d{6})$/);
+      if (!match) return;
+
+      const code = match[1];
+      // Clear hash so it doesn't re-trigger on reload
+      history.replaceState(null, '', window.location.pathname + '#setup');
+
+      // Show the setup tab
+      if (typeof switchToTab === 'function') switchToTab('setup');
+
+      try {
+        const res = await fetch('/api/setup/license/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const json = await res.json();
+        if (res.ok) {
+          hideVerificationUI();
+          if (savedBanner && savedText) {
+            const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+            savedText.textContent = tierLabel + ' license verified and activated';
+            savedBanner.hidden = false;
+          }
+        } else {
+          // Code was wrong or expired — show the verification UI so they can retry
+          const license = await (await fetch('/api/setup/license')).json();
+          if (license.status === 'pending' && license.email) {
+            showVerificationUI(license.email);
+          }
+          if (verifyStatus) {
+            verifyStatus.textContent = json.error || 'Verification failed';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+      } catch (err) {
+        console.debug('Auto-verification failed:', err);
+      }
+    }
+
     loadSavedLicense();
+    checkHashVerification();
   }
 
   // ── Init ──────────────────────────────────────────────────────────────
