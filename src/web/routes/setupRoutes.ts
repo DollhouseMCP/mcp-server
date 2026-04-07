@@ -513,7 +513,7 @@ export function createSetupRoutes(): {
         details: `License tier changed to: ${licenseData.tier}`,
         additionalData: {
           tier: licenseData.tier,
-          email: licenseData.tier !== 'agpl' ? licenseData.email : undefined,
+          email: licenseData.tier === 'agpl' ? undefined : licenseData.email,
         },
       });
 

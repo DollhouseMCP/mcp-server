@@ -590,11 +590,14 @@ describe('License Routes — Security', () => {
         .expect(200);
 
       // Verify the file was written with restrictive permissions
-      const { stat } = await import('node:fs/promises');
-      const stats = await stat(LICENSE_PATH);
-      // Check owner-only read/write (0o600) — mask out file type bits
-      const mode = stats.mode & 0o777;
-      expect(mode).toBe(0o600);
+      // Windows does not support Unix file permissions — skip this check there
+      if (process.platform !== 'win32') {
+        const { stat } = await import('node:fs/promises');
+        const stats = await stat(LICENSE_PATH);
+        // Check owner-only read/write (0o600) — mask out file type bits
+        const mode = stats.mode & 0o777;
+        expect(mode).toBe(0o600);
+      }
     });
   });
 });
