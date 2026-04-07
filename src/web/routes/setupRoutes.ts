@@ -382,101 +382,113 @@ export function createSetupRoutes(): {
     await writeFile(licenseConfigPath, JSON.stringify(data, null, 2), { mode: 0o600 });
   }
 
+  /** Sanitize a string field: trim, truncate, return undefined if empty. */
+  function sanitize(val: unknown, maxLen: number): string | undefined {
+    if (typeof val !== 'string' || !val.trim()) return undefined;
+    return val.trim().slice(0, maxLen);
+  }
+
+  /** Validate license form input. Returns error string or null if valid. */
+  function validateLicenseInput(body: Record<string, unknown>): string | null {
+    const { tier, email, revenueScale, companyName, useCase } = body;
+    if (!tier || !VALID_LICENSE_TIERS.has(tier as string)) {
+      return `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}`;
+    }
+    if (tier !== 'agpl' && (!email || typeof email !== 'string' || !email.includes('@'))) {
+      return 'Email address is required for commercial licenses';
+    }
+    if (tier === 'paid-commercial') {
+      if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
+        return `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}`;
+      }
+      if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
+        return 'Company name is required for Enterprise licenses';
+      }
+      if (!useCase || typeof useCase !== 'string' || !useCase.trim()) {
+        return 'Use case is required for Enterprise licenses';
+      }
+    }
+    return null;
+  }
+
+  /** Build license data object from validated input. */
+  function buildLicenseData(body: Record<string, unknown>): Record<string, unknown> {
+    const { tier, email, revenueScale, companyName, useCase } = body;
+    const data: Record<string, unknown> = { tier };
+    if (tier !== 'agpl') {
+      data.email = sanitize(email, 254);
+      data.attestedAt = new Date().toISOString();
+    }
+    if (tier === 'paid-commercial') {
+      if (revenueScale) data.revenueScale = revenueScale;
+      if (companyName) data.companyName = sanitize(companyName, 200);
+      if (useCase) data.useCase = sanitize(useCase, 500);
+    }
+    return data;
+  }
+
+  /** Send license_activation event to PostHog for commercial tiers. */
+  async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>): Promise<void> {
+    const posthog = new PostHog(POSTHOG_PROJECT_KEY, {
+      host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
+      flushAt: 1,
+      flushInterval: 5000,
+    });
+    let installId: string;
+    try {
+      const idPath = join(homedir(), '.dollhouse', '.telemetry-id');
+      installId = (await readFile(idPath, 'utf-8')).trim();
+    } catch {
+      installId = uuidv4();
+    }
+    posthog.capture({
+      distinctId: installId,
+      event: 'license_activation',
+      properties: {
+        tier: licenseData.tier,
+        email: licenseData.email,
+        server_version: PACKAGE_VERSION,
+        os: platform(),
+        ...(licenseData.tier === 'paid-commercial' ? {
+          revenue_scale: licenseData.revenueScale,
+          company_name: licenseData.companyName,
+          use_case: licenseData.useCase,
+        } : {}),
+      },
+    });
+    await posthog.shutdown();
+  }
+
   const getLicenseHandler = async (_req: Request, res: Response): Promise<void> => {
     res.json(await readLicense());
   };
 
+  const licenseRateLimiter = new SlidingWindowRateLimiter(5, 60_000); // 5 requests/minute
+
   const setLicenseHandler = async (req: Request, res: Response): Promise<void> => {
-    const { tier, email, revenueScale, companyName, useCase } = req.body ?? {};
-
-    if (!tier || !VALID_LICENSE_TIERS.has(tier)) {
-      res.status(400).json({ error: `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}` });
+    if (!licenseRateLimiter.tryAcquire()) {
+      res.status(429).json({ error: 'Too many license requests. Please try again in a minute.' });
       return;
     }
 
-    // Commercial tiers require email
-    if (tier !== 'agpl' && (!email || typeof email !== 'string' || !email.includes('@'))) {
-      res.status(400).json({ error: 'Email address is required for commercial licenses' });
+    const body = req.body ?? {};
+    const validationError = validateLicenseInput(body);
+    if (validationError) {
+      res.status(400).json({ error: validationError });
       return;
     }
 
-    // Enterprise: require revenue scale, company name, and use case
-    if (tier === 'paid-commercial') {
-      if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale)) {
-        res.status(400).json({ error: `Revenue scale is required. Must be one of: ${[...VALID_REVENUE_SCALES].join(', ')}` });
-        return;
-      }
-      if (!companyName || typeof companyName !== 'string' || !companyName.trim()) {
-        res.status(400).json({ error: 'Company name is required for Enterprise licenses' });
-        return;
-      }
-      if (!useCase || typeof useCase !== 'string' || !useCase.trim()) {
-        res.status(400).json({ error: 'Use case is required for Enterprise licenses' });
-        return;
-      }
-    }
-
-    // Sanitize string fields
-    const sanitize = (val: unknown, maxLen: number): string | undefined => {
-      if (typeof val !== 'string' || !val.trim()) return undefined;
-      return val.trim().slice(0, maxLen);
-    };
-
-    const licenseData: Record<string, unknown> = { tier };
-    if (tier !== 'agpl') {
-      licenseData.email = sanitize(email, 254);
-      licenseData.attestedAt = new Date().toISOString();
-    }
-    if (tier === 'paid-commercial') {
-      if (revenueScale) licenseData.revenueScale = revenueScale;
-      if (companyName) licenseData.companyName = sanitize(companyName, 200);
-      if (useCase) licenseData.useCase = sanitize(useCase, 500);
-    }
+    const licenseData = buildLicenseData(body);
 
     try {
       await writeLicense(licenseData);
-      logger.info(`[Setup] License updated to: ${tier}`);
+      logger.info(`[Setup] License updated to: ${licenseData.tier}`);
 
-      // Capture license event to PostHog for commercial tiers.
-      // Commercial licenses require telemetry as a license condition.
-      // AGPL selections are not tracked (no telemetry requirement).
-      if (tier !== 'agpl') {
+      if (licenseData.tier !== 'agpl') {
         try {
-          const posthog = new PostHog(POSTHOG_PROJECT_KEY, {
-            host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
-            flushAt: 1,
-            flushInterval: 5000,
-          });
-
-          // Read or generate install ID for consistent tracking
-          let installId: string;
-          try {
-            const idPath = join(homedir(), '.dollhouse', '.telemetry-id');
-            installId = (await readFile(idPath, 'utf-8')).trim();
-          } catch {
-            installId = uuidv4();
-          }
-
-          posthog.capture({
-            distinctId: installId,
-            event: 'license_activation',
-            properties: {
-              tier,
-              email: licenseData.email,
-              server_version: PACKAGE_VERSION,
-              os: platform(),
-              ...(tier === 'paid-commercial' ? {
-                revenue_scale: licenseData.revenueScale,
-                company_name: licenseData.companyName,
-                use_case: licenseData.useCase,
-              } : {}),
-            },
-          });
-
-          await posthog.shutdown();
-          logger.info(`[Setup] License event sent to PostHog: ${tier}`);
+          await capturePostHogLicenseEvent(licenseData);
+          logger.info(`[Setup] License event sent to PostHog: ${licenseData.tier}`);
         } catch (posthogError) {
-          // Fail gracefully — license is saved locally regardless
           logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
         }
       }

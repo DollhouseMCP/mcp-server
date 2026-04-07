@@ -937,32 +937,43 @@
       }
     });
 
+    function prefillFreeCommercialForm(license) {
+      if (freeForm && license.email) {
+        freeForm.querySelector('[name="email"]').value = license.email;
+      }
+    }
+
+    function prefillEnterpriseForm(license) {
+      if (!paidForm) return;
+      if (license.email) paidForm.querySelector('[name="email"]').value = license.email;
+      if (license.revenueScale) paidForm.querySelector('[name="revenueScale"]').value = license.revenueScale;
+      if (license.companyName) paidForm.querySelector('[name="companyName"]').value = license.companyName;
+      if (license.useCase) paidForm.querySelector('[name="useCase"]').value = license.useCase;
+    }
+
+    function showSavedBanner(license) {
+      if (license.tier === 'agpl' || !license.attestedAt) return;
+      if (!savedBanner || !savedText) return;
+      var tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+      savedText.textContent = tierLabel + ' license active';
+      savedBanner.hidden = false;
+    }
+
     // Load saved license on page load
     async function loadSavedLicense() {
       try {
-        const res = await fetch('/api/setup/license');
+        var res = await fetch('/api/setup/license');
         if (!res.ok) return;
-        const license = await res.json();
-        if (license.tier && details[license.tier]) {
-          selectTier(license.tier);
-          // Pre-fill forms with saved data
-          if (license.tier === 'free-commercial' && freeForm && license.email) {
-            freeForm.querySelector('[name="email"]').value = license.email;
-          }
-          if (license.tier === 'paid-commercial' && paidForm) {
-            if (license.email) paidForm.querySelector('[name="email"]').value = license.email;
-            if (license.revenueScale) paidForm.querySelector('[name="revenueScale"]').value = license.revenueScale;
-            if (license.companyName) paidForm.querySelector('[name="companyName"]').value = license.companyName;
-            if (license.useCase) paidForm.querySelector('[name="useCase"]').value = license.useCase;
-          }
-          // Show saved banner if already configured (non-AGPL)
-          if (license.tier !== 'agpl' && license.attestedAt && savedBanner && savedText) {
-            const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
-            savedText.textContent = tierLabel + ' license active';
-            savedBanner.hidden = false;
-          }
-        }
-      } catch { /* ignore — default AGPL is fine */ }
+        var license = await res.json();
+        if (!license.tier || !details[license.tier]) return;
+        selectTier(license.tier);
+        if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
+        if (license.tier === 'paid-commercial') prefillEnterpriseForm(license);
+        showSavedBanner(license);
+      } catch (err) {
+        // Default AGPL is fine — log for debugging only
+        if (typeof console !== 'undefined') console.debug('License load skipped:', err);
+      }
     }
 
     loadSavedLicense();

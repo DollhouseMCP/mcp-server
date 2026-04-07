@@ -106,8 +106,8 @@ export default {
         headers: { 'Content-Type': 'application/json' },
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return new Response(JSON.stringify({ error: message }), {
+      console.error('License email worker error:', error);
+      return new Response(JSON.stringify({ error: 'Internal server error' }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       });
