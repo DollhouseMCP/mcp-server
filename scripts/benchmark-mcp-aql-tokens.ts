@@ -851,6 +851,105 @@ const discreteTools: ToolSchema[] = [
 const CURRENT_OPERATION_COUNT = 73;
 
 // ============================================================================
+// CROSS-SERVER MCP-AQL COST MODEL
+// ============================================================================
+
+/**
+ * CRUDE endpoint token cost model, derived from Apple Mail adapter measurements.
+ *
+ * Each CRUDE endpoint has a fixed base cost (schema, annotations, prose) plus a
+ * marginal per-operation cost (the operation name listed in the description).
+ * The marginal cost is tiny (~6 tokens per operation name) because only names
+ * are listed — not full schemas. Parameter schemas are served on-demand via
+ * the `introspect` operation and are componentalized using MCP-AQL's schema
+ * system, so they don't inflate the tool listing.
+ *
+ * Measured from Apple Mail adapter (37 operations, 5 endpoints, 987 tokens):
+ *   Base per endpoint: ~150 tokens (schema boilerplate + description prose)
+ *   Marginal per op:   ~6 tokens (operation name in description list)
+ *
+ * Note on marginal cost:
+ *   The ~6 token marginal cost applies when a new operation maps naturally to
+ *   an existing CRUDE endpoint — the endpoint just lists one more name. A
+ *   bespoke operation that doesn't fit existing mutation patterns will still
+ *   only cost ~6 tokens in the tool listing, but its introspection schema
+ *   (served on-demand) will reflect its unique parameter structure. Either way,
+ *   the model's context cost at session start remains the same.
+ *
+ * Note: DollhouseMCP's CRUDE endpoints (1,815 tokens) are heavier because they
+ * include usage examples and richer descriptions. The model below reflects a
+ * typical adapter without those extras.
+ */
+const CRUDE_ENDPOINT_BASE_TOKENS = 150;
+const CRUDE_PER_OP_TOKENS = 6;
+
+/**
+ * Average token cost per discrete tool, measured from 42 DollhouseMCP discrete tools.
+ * Used as a heuristic for servers whose discrete tools haven't been measured directly.
+ */
+const AVG_TOKENS_PER_DISCRETE_TOOL = 169;
+
+/**
+ * Known and candidate MCP-AQL adapter targets.
+ * Each entry: [name, operation_count, measured_crude_tokens | null]
+ */
+const CROSS_SERVER_TARGETS: Array<[string, number, number | null]> = [
+  ['DollhouseMCP', 73, 1815],      // measured
+  ['Apple Mail', 37, 987],          // measured
+  ['GitHub API', 20, null],         // candidate
+  ['Playwright', 21, null],         // candidate
+  ['SonarQube', 28, null],          // candidate
+  ['Obsidian', 12, null],           // candidate
+];
+
+/**
+ * Estimate CRUDE endpoint token cost for a server with N operations.
+ * Uses measured value if available, otherwise the model:
+ *   5 endpoints × base_cost + operation_count × per_op_cost
+ */
+function estimateCrudeCost(ops: number, measured: number | null): number {
+  return measured ?? Math.round(5 * CRUDE_ENDPOINT_BASE_TOKENS + CRUDE_PER_OP_TOKENS * ops);
+}
+
+/**
+ * Run cross-server savings projection.
+ */
+function projectCrossServerSavings() {
+  const results = CROSS_SERVER_TARGETS.map(([name, ops, measured]) => {
+    const discreteTokens = ops * AVG_TOKENS_PER_DISCRETE_TOOL;
+    const crudeTokens = estimateCrudeCost(ops, measured);
+    const saved = discreteTokens - crudeTokens;
+    const percent = (saved / discreteTokens) * 100;
+    return { name, ops, discreteTokens, crudeTokens, saved, percent, measured: measured !== null };
+  });
+
+  const totalDiscrete = results.reduce((s, r) => s + r.discreteTokens, 0);
+  const totalCrude = results.reduce((s, r) => s + r.crudeTokens, 0);
+  const totalOps = results.reduce((s, r) => s + r.ops, 0);
+  const totalSaved = totalDiscrete - totalCrude;
+  const totalPercent = (totalSaved / totalDiscrete) * 100;
+
+  return {
+    servers: results,
+    totals: {
+      serverCount: results.length,
+      totalOps,
+      totalDiscreteTools: totalOps,
+      totalCrudeTools: results.length * 5,
+      totalDiscreteTokens: totalDiscrete,
+      totalCrudeTokens: totalCrude,
+      totalSaved,
+      totalPercent,
+    },
+    model: {
+      endpointBaseTokens: CRUDE_ENDPOINT_BASE_TOKENS,
+      perOpTokens: CRUDE_PER_OP_TOKENS,
+      avgDiscreteTokens: AVG_TOKENS_PER_DISCRETE_TOOL,
+    },
+  };
+}
+
+// ============================================================================
 // MCP-AQL UNIFIED TOOLS (5 CRUDE endpoints)
 // ============================================================================
 
@@ -1357,7 +1456,8 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
           savings: Math.round(discreteMetrics.total - mcpAqlWithIntrospection),
           savingsPercent: ((discreteMetrics.total - mcpAqlWithIntrospection) / discreteMetrics.total) * 100
         }
-      }
+      },
+      crossServer: projectCrossServerSavings()
     };
     console.log(JSON.stringify(jsonResult, null, 2));
     return jsonResult;
@@ -1454,6 +1554,26 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log(`    Savings:  ${formatNumber(Math.round(discreteMetrics.total - mcpAqlWithIntrospection))} tokens (${formatPercent(((discreteMetrics.total - mcpAqlWithIntrospection) / discreteMetrics.total) * 100)})`);
   console.log();
 
+  // Cross-server analysis
+  const crossServer = projectCrossServerSavings();
+  console.log('CROSS-SERVER MCP-AQL SAVINGS PROJECTION');
+  console.log('-'.repeat(80));
+  console.log(`  Cost model: ${CRUDE_ENDPOINT_BASE_TOKENS}/endpoint × 5 + ${CRUDE_PER_OP_TOKENS} tokens per listed operation`);
+  console.log(`  (derived from DollhouseMCP and Apple Mail adapter measurements)`);
+  console.log();
+  console.log(`  ${'Server'.padEnd(25)} ${'Ops'.padStart(5)} ${'Discrete'.padStart(10)} ${'CRUDE'.padStart(10)} ${'Saved'.padStart(10)} ${'%'.padStart(7)}`);
+  console.log(`  ${'-'.repeat(25)} ${'-'.repeat(5)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(7)}`);
+  for (const s of crossServer.servers) {
+    const src = s.measured ? '' : ' (est)';
+    console.log(`  ${s.name.padEnd(25)} ${String(s.ops).padStart(5)} ${formatNumber(s.discreteTokens).padStart(10)} ${(formatNumber(s.crudeTokens) + src).padStart(15)} ${formatNumber(s.saved).padStart(10)} ${formatPercent(s.percent).padStart(7)}`);
+  }
+  const t = crossServer.totals;
+  console.log(`  ${'-'.repeat(25)} ${'-'.repeat(5)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(7)}`);
+  console.log(`  ${'TOTAL'.padEnd(25)} ${String(t.totalOps).padStart(5)} ${formatNumber(t.totalDiscreteTokens).padStart(10)} ${formatNumber(t.totalCrudeTokens).padStart(15)} ${formatNumber(t.totalSaved).padStart(10)} ${formatPercent(t.totalPercent).padStart(7)}`);
+  console.log();
+  console.log(`  Tool surface: ${t.totalDiscreteTools} discrete -> ${t.totalCrudeTools} CRUDE tools (${Math.round((1 - t.totalCrudeTools / t.totalDiscreteTools) * 100)}% fewer)`);
+  console.log();
+
   // Summary
   console.log('='.repeat(80));
   console.log('  SUMMARY');
@@ -1461,22 +1581,18 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log(`
   The MCP-AQL consolidated approach achieves significant token savings:
 
-  Baseline (42 historical tools):
+  DollhouseMCP (baseline vs 42 historical tools):
   - ${formatPercent(percentSavings)} reduction in base tool schema tokens
   - ${discreteTools.length} discrete tools -> ${mcpAqlTools.length} unified endpoints
-  - ${formatNumber(tokenSavings)} fewer tokens loaded at session start
 
-  Projected (all ${CURRENT_OPERATION_COUNT} current operations):
+  DollhouseMCP (projected vs all ${CURRENT_OPERATION_COUNT} current operations):
   - ${formatPercent(projectedSavingsPercent)} reduction vs hypothetical discrete tools
   - ${CURRENT_OPERATION_COUNT} operations -> ${mcpAqlTools.length} unified endpoints
-  - ${formatNumber(projectedSavings)} fewer tokens loaded at session start
 
-  Key Benefits:
-  - Reduced context window consumption
-  - Faster tool discovery for LLM agents
-  - Semantic CRUDE operations improve agent comprehension
-  - Operation namespacing scales without adding tools
-  - Introspection enables on-demand schema loading during usage
+  Cross-server (${t.serverCount} servers, ${t.totalOps} operations):
+  - ${formatPercent(t.totalPercent)} reduction across all adapted/candidate servers
+  - ${t.totalDiscreteTools} discrete tools -> ${t.totalCrudeTools} CRUDE endpoints
+  - ${formatNumber(t.totalSaved)} fewer tokens in model context
 `);
 
   // Return results for testing
@@ -1502,6 +1618,7 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
       percent: projectedSavingsPercent,
       consolidationRatio: projectedConsolidationRatio
     },
+    crossServer: crossServer,
     tokenizer: tokenizer.name,
     timingMs
   };

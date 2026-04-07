@@ -247,4 +247,29 @@ describe('MCP-AQL Token Economics', () => {
       expect(mcpAqlTools.length).toBe(5);
     });
   });
+
+  describe('Cross-Server Savings Model', () => {
+    it('should project at least 80% total savings across all servers', async () => {
+      const results = await runTokenBenchmark();
+
+      expect(results.crossServer.totals.totalPercent).toBeGreaterThanOrEqual(80);
+    });
+
+    it('should include measured data from at least 2 adapters', async () => {
+      const results = await runTokenBenchmark();
+
+      const measuredCount = results.crossServer.servers.filter(
+        (s: any) => s.measured
+      ).length;
+      expect(measuredCount).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should reduce tool surface by at least 80%', async () => {
+      const results = await runTokenBenchmark();
+      const t = results.crossServer.totals;
+
+      const toolReduction = 1 - t.totalCrudeTools / t.totalDiscreteTools;
+      expect(toolReduction).toBeGreaterThanOrEqual(0.8);
+    });
+  });
 });
