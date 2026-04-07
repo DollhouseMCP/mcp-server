@@ -297,25 +297,45 @@ interface EmailParams {
   env: Env;
 }
 
-async function sendEmail(params: EmailParams): Promise<void> {
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${params.env.RESEND_API_KEY}`,
-    },
-    body: JSON.stringify({
-      from: `${params.from.name} <${params.from.email}>`,
-      to: [params.to],
-      reply_to: params.replyTo,
-      subject: params.subject,
-      html: params.html,
-    }),
-  });
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 500;
 
-  if (!response.ok) {
+async function sendEmail(params: EmailParams): Promise<void> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+    }
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${params.env.RESEND_API_KEY}`,
+      },
+      body: JSON.stringify({
+        from: `${params.from.name} <${params.from.email}>`,
+        to: [params.to],
+        reply_to: params.replyTo,
+        subject: params.subject,
+        html: params.html,
+      }),
+    });
+
+    if (response.ok) return;
+
     const text = await response.text();
-    console.error(`Resend API error (${response.status}):`, text);
-    throw new Error('Email delivery failed');
+    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status}):`, text);
+
+    // Don't retry on client errors (400, 401, 403, 422) — only server/rate errors
+    if (response.status < 500 && response.status !== 429) {
+      throw new Error('Email delivery failed');
+    }
+
+    lastError = new Error('Email delivery failed');
   }
+
+  throw lastError ?? new Error('Email delivery failed');
 }
