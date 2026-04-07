@@ -107,7 +107,7 @@ export default {
       });
     } catch (error) {
       console.error('License email worker error:', error);
-      return new Response(JSON.stringify({ error: 'Internal server error' }), {
+      return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       });

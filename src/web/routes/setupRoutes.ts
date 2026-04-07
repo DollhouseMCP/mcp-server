@@ -394,8 +394,15 @@ export function createSetupRoutes(): {
     if (!tier || !VALID_LICENSE_TIERS.has(tier as string)) {
       return `Invalid license tier. Must be one of: ${[...VALID_LICENSE_TIERS].join(', ')}`;
     }
-    if (tier !== 'agpl' && (!email || typeof email !== 'string' || !email.includes('@'))) {
-      return 'Email address is required for commercial licenses';
+    // RFC 5322 simplified: local@domain.tld, max 254 chars
+    const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (tier !== 'agpl') {
+      if (!email || typeof email !== 'string') {
+        return 'Email address is required for commercial licenses';
+      }
+      if (email.length > 254 || !EMAIL_PATTERN.test(email)) {
+        return 'Please provide a valid email address';
+      }
     }
     if (tier === 'paid-commercial') {
       if (!revenueScale || !VALID_REVENUE_SCALES.has(revenueScale as string)) {
