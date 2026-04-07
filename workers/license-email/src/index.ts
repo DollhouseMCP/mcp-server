@@ -26,6 +26,7 @@ interface Env {
   FROM_NAME: string;
   REPLY_TO: string;
   POSTHOG_WEBHOOK_SECRET?: string;
+  RESEND_API_KEY: string;
 }
 
 interface PostHogEvent {
@@ -84,6 +85,7 @@ export default {
         replyTo: env.REPLY_TO,
         subject,
         html,
+        env,
       });
 
       // For Enterprise, also notify the sales team
@@ -95,6 +97,7 @@ export default {
           replyTo: email,
           subject: salesNotification.subject,
           html: salesNotification.html,
+          env,
         });
       }
 
@@ -213,7 +216,7 @@ function buildSalesNotification(
   };
 }
 
-// ── MailChannels API ─────────────────────────────────────────────────
+// ── Resend API ───────────────────────────────────────────────────────
 
 interface EmailParams {
   from: { name: string; email: string };
@@ -221,23 +224,27 @@ interface EmailParams {
   replyTo: string;
   subject: string;
   html: string;
+  env: Env;
 }
 
 async function sendEmail(params: EmailParams): Promise<void> {
-  const response = await fetch('https://api.mailchannels.net/tx/v1/send', {
+  const response = await fetch('https://api.resend.com/emails', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${params.env.RESEND_API_KEY}`,
+    },
     body: JSON.stringify({
-      personalizations: [{ to: [{ email: params.to }] }],
-      from: { name: params.from.name, email: params.from.email },
-      reply_to: { email: params.replyTo },
+      from: `${params.from.name} <${params.from.email}>`,
+      to: [params.to],
+      reply_to: params.replyTo,
       subject: params.subject,
-      content: [{ type: 'text/html', value: params.html }],
+      html: params.html,
     }),
   });
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`MailChannels API error (${response.status}): ${text}`);
+    throw new Error(`Resend API error (${response.status}): ${text}`);
   }
 }

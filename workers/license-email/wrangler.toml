@@ -7,5 +7,6 @@ FROM_EMAIL = "licensing@dollhousemcp.com"
 FROM_NAME = "DollhouseMCP Licensing"
 REPLY_TO = "sales@dollhousemcp.com"
 
-# PostHog webhook secret — set via `wrangler secret put POSTHOG_WEBHOOK_SECRET`
-# This validates that incoming requests are genuinely from PostHog.
+# Secrets (set via `wrangler secret put <NAME>`):
+# - POSTHOG_WEBHOOK_SECRET: validates incoming requests from PostHog
+# - RESEND_API_KEY: Resend.com API key for sending emails
