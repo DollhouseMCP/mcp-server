@@ -180,12 +180,12 @@ function buildVerificationEmail(
   <div style="background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 20px; margin: 24px 0;">
     <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #92400e; text-align: center;">Reading this on your phone or another device?</p>
     <p style="margin: 0 0 12px; font-size: 14px; color: #78716c; text-align: center;">Copy this code and paste it into the Setup page on your computer:</p>
-    <div style="background: #ffffff; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px; text-align: center;">
-      <a href="mailto:?subject=DollhouseMCP%20Verification%20Code&amp;body=${code}" style="text-decoration: none;">
-        <p style="margin: 0; font-size: 36px; font-weight: 700; letter-spacing: 10px; color: #1a1a2e; font-family: monospace;">${code}</p>
-      </a>
-      <p style="margin: 8px 0 0; font-size: 12px; color: #94a3b8;">Tap the code to share it, or long-press to copy</p>
-    </div>
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 0 auto;">
+      <tr>
+        <td style="background: #ffffff; border: 2px solid #e2e8f0; border-radius: 12px; padding: 18px 28px; text-align: center; font-size: 36px; font-weight: 700; letter-spacing: 10px; color: #1a1a2e; font-family: monospace;">${code.split('').join(' ')}</td>
+      </tr>
+    </table>
+    <p style="margin: 10px 0 0; font-size: 13px; color: #78716c; text-align: center;">Type this code on the DollhouseMCP Setup page on your computer</p>
   </div>
 
   <p style="color: #64748b; font-size: 13px;">This link and code expire in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
