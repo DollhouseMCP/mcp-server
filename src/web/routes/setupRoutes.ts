@@ -26,6 +26,7 @@ const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { randomInt } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -206,6 +207,21 @@ function validateClient(
   return normalized;
 }
 
+// ── License verification ─────────────────────────────────────────────
+
+const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const VERIFICATION_MAX_ATTEMPTS = 5;
+
+/** Generate a cryptographically random 6-digit verification code. */
+function generateVerificationCode(): string {
+  return String(randomInt(100000, 999999));
+}
+
+/** Check if a verification code has expired. */
+function isCodeExpired(expiresAt: string): boolean {
+  return new Date(expiresAt).getTime() < Date.now();
+}
+
 // ── License helpers (module scope for SonarCloud S7721) ──────────────
 
 const VALID_LICENSE_TIERS = new Set(['agpl', 'free-commercial', 'paid-commercial']);
@@ -314,14 +330,19 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
   } catch {
     installId = uuidv4();
   }
+  const eventType = (licenseData.eventType as string) ?? 'activation';
   posthog.capture({
     distinctId: installId,
     event: 'license_activation',
     properties: {
       tier: licenseData.tier,
       email: licenseData.email,
+      event_type: eventType,
       server_version: PACKAGE_VERSION,
       os: platform(),
+      ...(eventType === 'verification' ? {
+        verification_code: licenseData.verificationCode,
+      } : {}),
       ...(licenseData.tier === 'paid-commercial' ? {
         revenue_scale: licenseData.revenueScale,
         company_name: licenseData.companyName,
@@ -340,6 +361,8 @@ export function createSetupRoutes(): {
   detectHandler: (req: Request, res: Response) => Promise<void>;
   getLicenseHandler: (req: Request, res: Response) => Promise<void>;
   setLicenseHandler: (req: Request, res: Response) => Promise<void>;
+  verifyLicenseHandler: (req: Request, res: Response) => Promise<void>;
+  resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -512,7 +535,10 @@ export function createSetupRoutes(): {
   }
 
   const getLicenseHandler = async (_req: Request, res: Response): Promise<void> => {
-    res.json(await readLicense());
+    const license = await readLicense();
+    // Never expose verification internals to client
+    const { verificationCode: _code, verificationAttempts: _attempts, ...publicLicense } = license;
+    res.json(publicLicense);
   };
 
   const licenseRateLimiter = new SlidingWindowRateLimiter(5, 60_000); // 5 requests/minute
@@ -539,37 +565,175 @@ export function createSetupRoutes(): {
     const licenseData = buildLicenseData(body);
 
     try {
+      if (licenseData.tier === 'agpl') {
+        // AGPL: activate immediately, no verification needed
+        licenseData.status = 'active';
+        await writeLicense(licenseData);
+        logger.info('[Setup] License set to AGPL (active, no verification)');
+        res.json({ success: true, license: licenseData });
+        return;
+      }
+
+      // Commercial tiers: save as pending, generate verification code
+      const code = generateVerificationCode();
+      licenseData.status = 'pending';
+      licenseData.verificationCode = code;
+      licenseData.verificationExpiry = new Date(Date.now() + VERIFICATION_CODE_TTL_MS).toISOString();
+      licenseData.verificationAttempts = 0;
       await writeLicense(licenseData);
-      logger.info(`[Setup] License updated to: ${licenseData.tier}`);
+
+      logger.info(`[Setup] License pending verification: ${licenseData.tier} (${licenseData.email})`);
 
       SecurityMonitor.logSecurityEvent({
         type: 'CONFIG_UPDATED',
         severity: 'LOW',
         source: 'setupRoutes.setLicenseHandler',
-        details: `License tier changed to: ${licenseData.tier}`,
+        details: `License verification initiated: ${licenseData.tier}`,
         additionalData: {
           tier: licenseData.tier,
-          email: licenseData.tier === 'agpl' ? undefined : licenseData.email,
+          email: licenseData.email,
         },
       });
 
-      if (licenseData.tier !== 'agpl') {
-        try {
-          await capturePostHogLicenseEvent(licenseData);
-          logger.info(`[Setup] License event sent to PostHog: ${licenseData.tier}`);
-        } catch (posthogError) {
-          logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
-        }
+      // Send verification email via PostHog → Worker pipeline
+      try {
+        await capturePostHogLicenseEvent({ ...licenseData, verificationCode: code, eventType: 'verification' });
+        logger.info(`[Setup] Verification email event sent to PostHog: ${licenseData.tier}`);
+      } catch (posthogError) {
+        logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
       }
 
-      res.json({ success: true, license: licenseData });
+      // Return success without exposing the code
+      const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
+      res.json({ success: true, license: publicData, verificationRequired: true });
     } catch (error) {
       logger.error('[Setup] Failed to save license', { error });
       res.status(500).json({ error: 'Failed to save license configuration' });
     }
   };
 
-  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler };
+  const verifyRateLimiter = new SlidingWindowRateLimiter(5, 60_000); // 5 attempts/minute
+
+  const verifyLicenseHandler = async (req: Request, res: Response): Promise<void> => {
+    if (!verifyRateLimiter.tryAcquire()) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'MEDIUM',
+        source: 'setupRoutes.verifyLicenseHandler',
+        details: 'Verification endpoint rate limit exceeded (5 req/min)',
+      });
+      res.status(429).json({ error: 'Too many verification attempts. Please try again in a minute.' });
+      return;
+    }
+
+    const { code } = req.body ?? {};
+    if (!code || typeof code !== 'string' || !/^\d{6}$/.test(code)) {
+      res.status(400).json({ error: 'Please enter a valid 6-digit verification code' });
+      return;
+    }
+
+    const license = await readLicense();
+    if (license.status !== 'pending') {
+      res.status(400).json({ error: 'No pending license verification. Please submit the license form first.' });
+      return;
+    }
+
+    // Check expiry
+    if (!license.verificationExpiry || isCodeExpired(license.verificationExpiry as string)) {
+      license.status = 'expired';
+      await writeLicense(license);
+      res.status(400).json({ error: 'Verification code has expired. Please submit the form again to receive a new code.' });
+      return;
+    }
+
+    // Check max attempts
+    const attempts = ((license.verificationAttempts as number) ?? 0) + 1;
+    if (attempts > VERIFICATION_MAX_ATTEMPTS) {
+      license.status = 'expired';
+      await writeLicense(license);
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'HIGH',
+        source: 'setupRoutes.verifyLicenseHandler',
+        details: `Verification max attempts exceeded for: ${license.email}`,
+      });
+      res.status(400).json({ error: 'Too many failed attempts. Please submit the form again to receive a new code.' });
+      return;
+    }
+
+    // Validate code
+    if (code !== license.verificationCode) {
+      license.verificationAttempts = attempts;
+      await writeLicense(license);
+      const remaining = VERIFICATION_MAX_ATTEMPTS - attempts;
+      res.status(400).json({ error: `Incorrect verification code. ${remaining} attempt${remaining === 1 ? '' : 's'} remaining.` });
+      return;
+    }
+
+    // Code is correct — activate license
+    license.status = 'active';
+    license.verifiedAt = new Date().toISOString();
+    delete license.verificationCode;
+    delete license.verificationExpiry;
+    delete license.verificationAttempts;
+    await writeLicense(license);
+
+    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email})`);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONFIG_UPDATED',
+      severity: 'LOW',
+      source: 'setupRoutes.verifyLicenseHandler',
+      details: `License activated after email verification: ${license.tier}`,
+      additionalData: { tier: license.tier, email: license.email },
+    });
+
+    // Send confirmation email + PostHog activation event
+    try {
+      await capturePostHogLicenseEvent({ ...license, eventType: 'activation' });
+      logger.info(`[Setup] License activation event sent to PostHog: ${license.tier}`);
+    } catch (posthogError) {
+      logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
+    }
+
+    const { verificationCode: _c, verificationAttempts: _a, verificationExpiry: _e, ...publicLicense } = license;
+    res.json({ success: true, license: publicLicense });
+  };
+
+  const resendRateLimiter = new SlidingWindowRateLimiter(3, 120_000); // 3 resends per 2 minutes
+
+  const resendVerificationHandler = async (_req: Request, res: Response): Promise<void> => {
+    if (!resendRateLimiter.tryAcquire()) {
+      res.status(429).json({ error: 'Please wait before requesting another code.' });
+      return;
+    }
+
+    const license = await readLicense();
+    if (license.status !== 'pending' && license.status !== 'expired') {
+      res.status(400).json({ error: 'No pending license verification.' });
+      return;
+    }
+
+    // Generate new code and reset
+    const code = generateVerificationCode();
+    license.status = 'pending';
+    license.verificationCode = code;
+    license.verificationExpiry = new Date(Date.now() + VERIFICATION_CODE_TTL_MS).toISOString();
+    license.verificationAttempts = 0;
+    await writeLicense(license);
+
+    // Send new verification email
+    try {
+      await capturePostHogLicenseEvent({ ...license, verificationCode: code, eventType: 'verification' });
+      logger.info(`[Setup] Verification code resent for: ${license.email}`);
+    } catch (posthogError) {
+      logger.debug(`[Setup] PostHog capture failed: ${posthogError instanceof Error ? posthogError.message : String(posthogError)}`);
+    }
+
+    res.json({ success: true, message: 'A new verification code has been sent to your email.' });
+  };
+
+  return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler };
 }
 
 /**

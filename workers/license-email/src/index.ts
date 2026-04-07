@@ -35,6 +35,8 @@ interface PostHogEvent {
   properties: {
     tier: 'free-commercial' | 'paid-commercial';
     email: string;
+    event_type?: 'verification' | 'activation';
+    verification_code?: string;
     server_version?: string;
     os?: string;
     revenue_scale?: string;
@@ -69,39 +71,56 @@ export default {
       return new Response('Ignored: not a license_activation event', { status: 200 });
     }
 
-    const { tier, email } = event.properties;
+    const { tier, email, event_type, verification_code } = event.properties;
     if (!email || !tier) {
       return new Response('Missing required fields: tier, email', { status: 400 });
     }
 
-    const { subject, html } = tier === 'paid-commercial'
-      ? buildEnterpriseEmail(event.properties, env)
-      : buildCommercialEmail(event.properties, env);
-
     try {
-      await sendEmail({
-        from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-        to: email,
-        replyTo: env.REPLY_TO,
-        subject,
-        html,
-        env,
-      });
-
-      // For Enterprise, also notify the sales team
-      if (tier === 'paid-commercial') {
-        const salesNotification = buildSalesNotification(event.properties);
+      if (event_type === 'verification') {
+        // Step 1: Send verification code email
+        if (!verification_code) {
+          return new Response('Missing verification_code for verification event', { status: 400 });
+        }
+        const verificationEmail = buildVerificationEmail(event.properties, env);
         await sendEmail({
           from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-          to: env.REPLY_TO,
-          replyTo: email,
-          subject: salesNotification.subject,
-          html: salesNotification.html,
+          to: email,
+          replyTo: env.REPLY_TO,
+          subject: verificationEmail.subject,
+          html: verificationEmail.html,
           env,
         });
+      } else {
+        // Step 2: Send confirmation email (after verification succeeds)
+        const { subject, html } = tier === 'paid-commercial'
+          ? buildEnterpriseEmail(event.properties, env)
+          : buildCommercialEmail(event.properties, env);
+
+        await sendEmail({
+          from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+          to: email,
+          replyTo: env.REPLY_TO,
+          subject,
+          html,
+          env,
+        });
+
+        // For Enterprise, also notify the sales team
+        if (tier === 'paid-commercial') {
+          const salesNotification = buildSalesNotification(event.properties);
+          await sendEmail({
+            from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+            to: env.REPLY_TO,
+            replyTo: email,
+            subject: salesNotification.subject,
+            html: salesNotification.html,
+            env,
+          });
+        }
       }
 
-      return new Response(JSON.stringify({ success: true, tier, email }), {
+      return new Response(JSON.stringify({ success: true, tier, email, event_type: event_type ?? 'activation' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -129,6 +148,34 @@ function esc(str: string | undefined | null): string {
 }
 
 // ── Email templates ──────────────────────────────────────────────────
+
+function buildVerificationEmail(
+  props: PostHogEvent['properties'],
+  env: Env,
+): { subject: string; html: string } {
+  const code = esc(props.verification_code);
+  return {
+    subject: `DollhouseMCP — Your verification code is ${code}`,
+    html: `
+<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a2e; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #1a1a2e;">Verify your email address</h2>
+  <p>You're registering a <strong>${esc(props.tier === 'paid-commercial' ? 'Enterprise' : 'Commercial')}</strong> license for DollhouseMCP.</p>
+
+  <div style="background: #f8fafc; border: 2px solid #e2e8f0; border-radius: 12px; padding: 24px; margin: 24px 0; text-align: center;">
+    <p style="margin: 0 0 8px; font-size: 14px; color: #64748b;">Your verification code:</p>
+    <p style="margin: 0; font-size: 36px; font-weight: 700; letter-spacing: 8px; color: #1a1a2e; font-family: monospace;">${code}</p>
+  </div>
+
+  <p>Enter this code on the DollhouseMCP Setup page to complete your license registration.</p>
+  <p style="color: #64748b; font-size: 13px;">This code expires in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
+
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">DollhouseMCP &mdash; AI customization through modular elements<br>
+  <a href="https://github.com/DollhouseMCP/mcp-server" style="color: #3b82f6;">github.com/DollhouseMCP/mcp-server</a></p>
+</body></html>`,
+  };
+}
 
 function buildCommercialEmail(
   props: PostHogEvent['properties'],

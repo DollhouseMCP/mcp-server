@@ -897,6 +897,46 @@
       });
     }
 
+    const verificationPanel = document.getElementById('license-verification');
+    const verifyForm = document.getElementById('license-verify-form');
+    const verifyEmailSpan = document.getElementById('license-verify-email');
+    const verifyStatus = document.getElementById('license-verify-status');
+    const verifyTimer = document.getElementById('license-verify-timer');
+    const resendBtn = document.getElementById('license-resend-btn');
+    let countdownInterval = null;
+
+    function showVerificationUI(email) {
+      if (verificationPanel) verificationPanel.hidden = false;
+      if (verifyEmailSpan) verifyEmailSpan.textContent = email;
+      if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+      // Start 10-minute countdown
+      startCountdown(10 * 60);
+    }
+
+    function hideVerificationUI() {
+      if (verificationPanel) verificationPanel.hidden = true;
+      if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+    }
+
+    function startCountdown(seconds) {
+      if (countdownInterval) clearInterval(countdownInterval);
+      let remaining = seconds;
+      function update() {
+        if (!verifyTimer) return;
+        if (remaining <= 0) {
+          verifyTimer.textContent = 'Code expired. Click "Resend code" to get a new one.';
+          clearInterval(countdownInterval);
+          return;
+        }
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        verifyTimer.textContent = 'Code expires in ' + m + ':' + String(s).padStart(2, '0');
+        remaining--;
+      }
+      update();
+      countdownInterval = setInterval(update, 1000);
+    }
+
     async function submitLicense(body, statusEl, successMsg) {
       if (statusEl) {
         statusEl.textContent = '';
@@ -916,10 +956,23 @@
           }
           return;
         }
+
+        // Commercial tiers: show verification code input
+        if (json.verificationRequired) {
+          if (statusEl) {
+            statusEl.textContent = 'Check your email for a verification code.';
+            statusEl.className = 'license-form-status is-success';
+          }
+          showVerificationUI(body.email);
+          return;
+        }
+
+        // AGPL or already verified: show success
         if (statusEl) {
           statusEl.textContent = '';
           statusEl.className = 'license-form-status is-success';
         }
+        hideVerificationUI();
         if (savedBanner && savedText) {
           savedText.textContent = successMsg;
           savedBanner.hidden = false;
@@ -931,6 +984,81 @@
           statusEl.className = 'license-form-status is-error';
         }
       }
+    }
+
+    // Verification form submission
+    if (verifyForm) {
+      verifyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = new FormData(verifyForm);
+        const code = data.get('code');
+        if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          const json = await res.json();
+          if (!res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Verification failed';
+              verifyStatus.className = 'license-form-status is-error';
+            }
+            return;
+          }
+
+          // Verification succeeded — show activation confirmation
+          hideVerificationUI();
+          if (savedBanner && savedText) {
+            const tierLabel = json.license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+            savedText.textContent = tierLabel + ' license verified and activated';
+            savedBanner.hidden = false;
+          }
+        } catch (err) {
+          console.debug('Verification failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error — is the server running?';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+      });
+    }
+
+    // Resend verification code
+    if (resendBtn) {
+      resendBtn.addEventListener('click', async () => {
+        resendBtn.disabled = true;
+        if (verifyStatus) { verifyStatus.textContent = 'Sending new code...'; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/resend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const json = await res.json();
+          if (!res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Failed to resend';
+              verifyStatus.className = 'license-form-status is-error';
+            }
+          } else {
+            if (verifyStatus) {
+              verifyStatus.textContent = 'New code sent. Check your email.';
+              verifyStatus.className = 'license-form-status is-success';
+            }
+            startCountdown(10 * 60);
+          }
+        } catch (err) {
+          console.debug('Resend failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+        setTimeout(() => { resendBtn.disabled = false; }, 5000);
+      });
     }
 
     // AGPL selection: save immediately (no form needed)
@@ -974,7 +1102,14 @@
         selectTier(license.tier);
         if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
         if (license.tier === 'paid-commercial') prefillEnterpriseForm(license);
-        showSavedBanner(license);
+
+        // Show verification UI if license is pending
+        if (license.status === 'pending' && license.email) {
+          showVerificationUI(license.email);
+          return;
+        }
+
+        if (license.status === 'active') showSavedBanner(license);
       } catch (err) {
         // Default AGPL is fine — log for debugging only
         if (typeof console !== 'undefined') console.debug('License load skipped:', err);
