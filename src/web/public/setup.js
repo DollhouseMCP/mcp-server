@@ -313,7 +313,7 @@
     const channelLabel = currentChannel === 'latest' ? '' : ` (${currentChannel})`;
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
       if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
-      btn.textContent = isPinned ? `Install v${pinnedVersion}` : `Install Now${channelLabel}`;
+      btn.textContent = isPinned ? `Configure v${pinnedVersion}` : `Configure Now${channelLabel}`;
     });
 
     // Update auto-install badges and descriptions
@@ -337,7 +337,7 @@
 
   // ── Install buttons ────────────────────────────────────────────────────
 
-  /** Handle Install Now button click */
+  /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
     const client = btn.dataset.installClient;
     if (!client) return;
@@ -346,7 +346,7 @@
     const originalText = btn.textContent;
 
     btn.disabled = true;
-    btn.textContent = 'Installing...';
+    btn.textContent = 'Configuring...';
     btn.classList.add('is-loading');
     if (status) {
       status.textContent = '';
@@ -708,7 +708,7 @@
       installBtn.classList.add('is-match');
     } else {
       const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
-      installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      installBtn.textContent = isPinned ? `Configure v${pinnedVersion}` : 'Configure Now';
       installBtn.disabled = false;
       installBtn.classList.remove('is-match');
     }
@@ -779,12 +779,12 @@
   const openBtnHtml = (openClient) =>
     openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${openClient}">Open config file</button>` : '';
 
-  /** Build the Install Now + CLI terminal command section */
+  /** Build the Configure Now + CLI terminal command section */
   const renderInstallSection = (p) => {
     let html = '';
     if (p.installClient) {
       html += '<div class="setup-method setup-method-primary">';
-      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
+      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Configure Now</button>`;
       html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
     }
     if (p.cli) {

@@ -358,17 +358,17 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
-  describe('Install Now buttons (static panels)', () => {
-    it('has Install Now for claude (in HTML)', () => {
+  describe('Configure Now buttons (static panels)', () => {
+    it('has Configure Now for claude (in HTML)', () => {
       expect(html).toContain('data-install-client="claude"');
     });
 
-    it('has Install Now for claude-code (in HTML)', () => {
+    it('has Configure Now for claude-code (in HTML)', () => {
       expect(html).toContain('data-install-client="claude-code"');
     });
   });
 
-  describe('Install Now buttons (generated panels)', () => {
+  describe('Configure Now buttons (generated panels)', () => {
     it('JS PLATFORMS registry defines installClient for generated platforms', () => {
       const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
       for (const client of generatedWithInstall) {
@@ -648,7 +648,7 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
     it('shows channel label on install button when non-stable', () => {
       expect(js).toContain("channelLabel");
-      expect(js).toContain("`Install Now${channelLabel}`");
+      expect(js).toContain("`Configure Now${channelLabel}`");
     });
 
     it('updates hint text on channel change', () => {
@@ -786,7 +786,7 @@ describe('Setup Tab — Regressions', () => {
   });
 
   describe('UX copy quality', () => {
-    it('auto-install leads with action not mechanism', () => {
+    it('auto-configure leads with action not mechanism', () => {
       // "Pulls the latest version" should come before "Uses npx"
       const pullsIdx = html.indexOf('Pulls the latest version');
       const usesNpxIdx = html.indexOf('Uses <code>npx @latest</code>');
@@ -964,7 +964,7 @@ describe('Setup Tab — Regressions', () => {
 
     it('JS updates button label to show pinned version', () => {
       expect(js).toContain('updateInstallButtonLabels');
-      expect(js).toContain('Install v${pinnedVersion}');
+      expect(js).toContain('Configure v${pinnedVersion}');
     });
   });
 
@@ -1188,7 +1188,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('platforms with installClient have an Install Now button', () => {
+  it('platforms with installClient have a Configure Now button', () => {
     const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
     for (const p of withInstall) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1198,7 +1198,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('LM Studio does not have an Install Now button', () => {
+  it('LM Studio does not have a Configure Now button', () => {
     const panel = document.getElementById('setup-panel-lmstudio');
     const btn = panel?.querySelector('.setup-install-btn');
     expect(btn).toBeNull();
