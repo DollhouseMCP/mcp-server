@@ -1090,6 +1090,14 @@
   vertical-align: top;
 }
 
+.license-info-table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
 .license-info-table td:first-child {
   font-weight: 600;
   color: var(--ink-700);

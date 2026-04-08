@@ -1090,7 +1090,7 @@
     tierButtons.forEach(btn => {
       if (btn.dataset.tier === 'agpl') {
         btn.addEventListener('click', async () => {
-          if (activeLicense && activeLicense.status === 'active' && activeLicense.tier !== 'agpl') {
+          if (activeLicense?.status === 'active' && activeLicense?.tier !== 'agpl') {
             const tierLabel = activeLicense.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
             const confirmed = confirm(
               `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
@@ -1109,11 +1109,17 @@
     });
 
     const licenseDetailsPanel = document.getElementById('license-active-details');
-    const licenseInfoTable = document.getElementById('license-info-table');
+    const licenseInfoTable = document.getElementById('license-info-tbody');
+
+    function formatActivationDate(license) {
+      if (license.verifiedAt) return new Date(license.verifiedAt).toLocaleString();
+      if (license.attestedAt) return new Date(license.attestedAt).toLocaleString();
+      return '—';
+    }
 
     function showLicenseDetails(license) {
       if (!licenseDetailsPanel || !licenseInfoTable) return;
-      if (!license || license.status !== 'active' || license.tier === 'agpl') {
+      if (license?.status !== 'active' || license?.tier === 'agpl') {
         licenseDetailsPanel.hidden = true;
         return;
       }
@@ -1123,7 +1129,7 @@
         ['License type', tierLabel],
         ['Email', license.email || '—'],
         ['Status', 'Active'],
-        ['Activated', license.verifiedAt ? new Date(license.verifiedAt).toLocaleString() : (license.attestedAt ? new Date(license.attestedAt).toLocaleString() : '—')],
+        ['Activated', formatActivationDate(license)],
         ['Telemetry', license.telemetryRequired ? 'Enabled (license requirement)' : 'Not required'],
       ];
       if (license.tier === 'paid-commercial') {
