@@ -115,6 +115,41 @@ describe('Setup Routes — API Endpoints', () => {
       }
     });
 
+    it('accepts channel parameter for release channel installs', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'beta' });
+
+      // Should not get 400 — channel is valid
+      expect(res.status).not.toBe(400);
+    });
+
+    it('accepts rc channel parameter', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'rc' });
+
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores invalid channel values (falls back to latest)', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'nightly' });
+
+      // Invalid channel is silently ignored, not rejected — falls back to @latest
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores channel with shell injection attempt', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: '; rm -rf /' });
+
+      // Invalid channel ignored, falls back to @latest — no 500
+      expect(res.status).not.toBe(500);
+    });
+
     it('normalizes client name to lowercase', async () => {
       const res = await request(app)
         .post('/api/setup/install')
@@ -495,6 +530,38 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
+  describe('Release channel selector', () => {
+    it('has channel selector fieldset', () => {
+      expect(html).toContain('id="setup-channel-toggle"');
+    });
+
+    it('has channel select dropdown', () => {
+      expect(html).toContain('id="setup-channel-select"');
+    });
+
+    it('has Stable, Release Candidate, and Beta options', () => {
+      expect(html).toContain('value="latest"');
+      expect(html).toContain('value="rc"');
+      expect(html).toContain('value="beta"');
+      expect(html).toContain('>Stable<');
+      expect(html).toContain('>Release Candidate<');
+      expect(html).toContain('>Beta<');
+    });
+
+    it('defaults to Stable', () => {
+      expect(html).toContain('value="latest" selected');
+    });
+
+    it('has accessible hint text linked via aria-describedby', () => {
+      expect(html).toContain('aria-describedby="setup-channel-hint"');
+      expect(html).toContain('id="setup-channel-hint"');
+    });
+
+    it('has Release channel legend', () => {
+      expect(html).toContain('Release channel');
+    });
+  });
+
   describe('Verify section', () => {
     it('has verification prompt', () => {
       expect(html).toContain('What DollhouseMCP tools do you have available?');
@@ -555,6 +622,40 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
   });
 
+  describe('Channel selector logic', () => {
+    it('tracks currentChannel state', () => {
+      expect(js).toContain("let currentChannel = 'latest'");
+    });
+
+    it('has channel hints for all three channels', () => {
+      expect(js).toContain('CHANNEL_HINTS');
+      expect(js).toContain("latest:");
+      expect(js).toContain("rc:");
+      expect(js).toContain("beta:");
+    });
+
+    it('buildConfigs accepts channel parameter with default', () => {
+      expect(js).toMatch(/function buildConfigs\(version,\s*channel\s*=\s*'latest'\)/);
+    });
+
+    it('passes channel to buildConfigs on selector change', () => {
+      expect(js).toContain("configs = buildConfigs(pinnedVersion, currentChannel)");
+    });
+
+    it('sends channel in install payload when non-stable', () => {
+      expect(js).toContain('payload.channel = currentChannel');
+    });
+
+    it('shows channel label on install button when non-stable', () => {
+      expect(js).toContain("channelLabel");
+      expect(js).toContain("`Install Now${channelLabel}`");
+    });
+
+    it('updates hint text on channel change', () => {
+      expect(js).toContain("hint.textContent = CHANNEL_HINTS[currentChannel]");
+    });
+  });
+
   describe('Functions', () => {
     it('exports OS detection', () => {
       expect(js).toContain('detectOS');
@@ -562,6 +663,10 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
     it('exports method toggle init', () => {
       expect(js).toContain('initMethodToggle');
+    });
+
+    it('exports channel selector init', () => {
+      expect(js).toContain('initChannelSelector');
     });
 
     it('exports platform tabs init', () => {
@@ -627,6 +732,17 @@ describe('Setup Tab — CSS Integrity', () => {
   it('has responsive styles', () => {
     expect(css).toContain('@media');
     expect(css).toContain('max-width: 640px');
+  });
+
+  it('defines channel selector styles', () => {
+    expect(css).toContain('.setup-channel-toggle');
+    expect(css).toContain('.setup-channel-select');
+    expect(css).toContain('.setup-channel-hint');
+    expect(css).toContain('.setup-channel-legend');
+  });
+
+  it('channel select has focus state', () => {
+    expect(css).toContain('.setup-channel-select:focus');
   });
 });
 
@@ -849,6 +965,42 @@ describe('Setup Tab — Regressions', () => {
     it('JS updates button label to show pinned version', () => {
       expect(js).toContain('updateInstallButtonLabels');
       expect(js).toContain('Install v${pinnedVersion}');
+    });
+  });
+
+  describe('Channel selector regression', () => {
+    it('channel selector initializes after method toggle', () => {
+      const methodIdx = js.indexOf('initMethodToggle()');
+      const channelIdx = js.indexOf('initChannelSelector()');
+      expect(methodIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(methodIdx);
+    });
+
+    it('channel defaults to latest on page load', () => {
+      expect(js).toContain("let currentChannel = 'latest'");
+    });
+
+    it('no hardcoded @beta or @rc package references in source', () => {
+      expect(js).not.toContain('@dollhousemcp/mcp-server@rc');
+      expect(js).not.toContain('@dollhousemcp/mcp-server@beta');
+    });
+
+    it('channel selector updates configs on change', () => {
+      expect(js).toContain('updateAllConfigs(currentMethod)');
+    });
+
+    it('backend allowlists channel values', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain("ALLOWED_INSTALL_CHANNELS");
+      expect(ts).toContain("'latest'");
+      expect(ts).toContain("'beta'");
+      expect(ts).toContain("'rc'");
+    });
+
+    it('backend normalizes channel input', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain('UnicodeValidator.normalize(channel)');
     });
   });
 
