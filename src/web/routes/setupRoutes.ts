@@ -441,21 +441,26 @@ export function createSetupRoutes(): {
     const normalizedClient = validateClient(req, res, ALLOWED_CLIENTS);
     if (!normalizedClient) return;
 
-    // Validate version if provided — must be semver-like (no shell injection)
-    const { version } = req.body as { version?: string };
+    // Validate version or channel if provided — must be semver-like or a known channel (no shell injection)
+    const ALLOWED_CHANNELS = new Set(['latest', 'beta', 'rc']);
+    const { version, channel } = req.body as { version?: string; channel?: string };
     const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
     if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
       res.status(400).json({ error: 'Invalid version format. Expected semver (e.g., 2.0.2)' });
       return;
     }
+    // Channel overrides version for auto-updating installs (beta, rc, latest)
+    const effectiveVersion = channel && ALLOWED_CHANNELS.has(channel) && channel !== 'latest'
+      ? channel
+      : normalizedVersion;
 
-    const tag = normalizedVersion ? `@${normalizedVersion}` : '@latest';
+    const tag = effectiveVersion ? `@${effectiveVersion}` : '@latest';
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await runInstallMcp(normalizedClient, normalizedVersion);
+      const output = await runInstallMcp(normalizedClient, effectiveVersion);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
-      res.json({ success: true, output, client: normalizedClient, version: normalizedVersion || 'latest' });
+      res.json({ success: true, output, client: normalizedClient, version: effectiveVersion || 'latest' });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn(`[Setup] Install failed for ${normalizedClient}: ${message}`);

@@ -39,24 +39,25 @@
   const npxCmd = (tag) => `npx -y ${PKG}@${tag}`;
 
   /** Build all platform configs for a given pinned version */
-  function buildConfigs(version) {
+  function buildConfigs(version, channel) {
+    const ch = channel || 'latest';
     const result = {};
     for (const { id, rootKey, cli, toml } of PLATFORMS) {
       const entry = {
         npx: cli
-          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd('latest')}`, isTerminal: true }
-          : jsonConfig(rootKey, npxCmd('latest')),
+          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(ch)}`, isTerminal: true }
+          : jsonConfig(rootKey, npxCmd(ch)),
         global: cli
           ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(version)}`, isTerminal: true }
           : jsonConfig(rootKey, npxCmd(version)),
       };
       if (cli) {
-        entry.npxJson = jsonConfig(rootKey, npxCmd('latest'));
+        entry.npxJson = jsonConfig(rootKey, npxCmd(ch));
         entry.globalJson = jsonConfig(rootKey, npxCmd(version));
       }
       if (toml) {
         const tomlBlock = (tag) => `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${tag}"]`;
-        entry.npxToml = { code: tomlBlock('latest') };
+        entry.npxToml = { code: tomlBlock(ch) };
         entry.globalToml = { code: tomlBlock(version) };
       }
       result[id] = entry;
@@ -66,7 +67,8 @@
 
   // Start with a placeholder version, update once we fetch from server
   let pinnedVersion = 'latest';
-  let configs = buildConfigs(pinnedVersion);
+  let currentChannel = 'latest';
+  let configs = buildConfigs(pinnedVersion, currentChannel);
 
   // ── Current method state ──────────────────────────────────────────────
 
@@ -133,6 +135,28 @@
 
     buttons.forEach((btn) => {
       btn.addEventListener('click', () => handleToggle(btn));
+    });
+  };
+
+  // ── Channel selector ──────────────────────────────────────────────────
+
+  const CHANNEL_HINTS = {
+    latest: 'Recommended for most users.',
+    rc: 'Preview of the next stable release. May have minor issues.',
+    beta: 'Cutting-edge features. May be unstable.',
+  };
+
+  const initChannelSelector = () => {
+    const select = document.getElementById('setup-channel-select');
+    const hint = document.getElementById('setup-channel-hint');
+    if (!select) return;
+
+    select.addEventListener('change', () => {
+      currentChannel = select.value;
+      if (hint) hint.textContent = CHANNEL_HINTS[currentChannel] || '';
+      configs = buildConfigs(pinnedVersion, currentChannel);
+      updateAllConfigs(currentMethod);
+      updateInstallButtonLabels();
     });
   };
 
@@ -285,9 +309,10 @@
     const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
 
     // Update Install buttons
+    const channelLabel = currentChannel === 'latest' ? '' : ` (${currentChannel})`;
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
       if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
-      btn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      btn.textContent = isPinned ? `Install v${pinnedVersion}` : `Install Now${channelLabel}`;
     });
 
     // Update auto-install badges and descriptions
@@ -331,6 +356,8 @@
       const payload = { client };
       if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
         payload.version = pinnedVersion;
+      } else if (currentChannel !== 'latest') {
+        payload.channel = currentChannel;
       }
 
       const res = await DollhouseAuth.apiFetch('/api/setup/install', {
@@ -524,8 +551,8 @@
       pinnedVersion = data.latest?.version || data.running?.version || pinnedVersion;
       if (pinnedVersion === 'latest') return;
 
-      // Rebuild configs with real version
-      configs = buildConfigs(pinnedVersion);
+      // Rebuild configs with real version and current channel
+      configs = buildConfigs(pinnedVersion, currentChannel);
 
       // Update prereq section
       const versionLabel = document.getElementById('pinned-version-label');
@@ -1259,6 +1286,7 @@
   renderGeneratedPanels();
   highlightOSPaths(os);
   initMethodToggle();
+  initChannelSelector();
   initPlatformTabs();
   initCopyButtons();
   initInstallButtons();

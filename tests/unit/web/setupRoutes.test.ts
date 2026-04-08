@@ -728,8 +728,8 @@ describe('Setup Tab — Regressions', () => {
       expect(js).toContain('pinned-local-cmd');
     });
 
-    it('rebuilds configs with fetched version', () => {
-      expect(js).toContain('configs = buildConfigs(pinnedVersion)');
+    it('rebuilds configs with fetched version and channel', () => {
+      expect(js).toContain('configs = buildConfigs(pinnedVersion, currentChannel)');
     });
   });
 
