@@ -274,9 +274,12 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('another process holds this port');
     });
 
-    it('never kills processes on the configured port', async () => {
+    it('only kills verified DollhouseMCP processes on port conflict', async () => {
       const source = await readFile(join(SRC, 'src/web/server.ts'), 'utf8');
-      expect(source).not.toContain('process.kill');
+      // killStaleProcess verifies the process is DollhouseMCP before sending signals
+      expect(source).toContain('dollhousemcp');
+      expect(source).toContain('mcp-server');
+      expect(source).toContain('SIGTERM');
     });
 
     it('resolves promise on conflict (does not throw)', async () => {

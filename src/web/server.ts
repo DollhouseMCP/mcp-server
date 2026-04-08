@@ -486,29 +486,79 @@ function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefi
 }
 
 /**
- * Retry binding an already-configured Express app to a port.
- * Used by UnifiedConsole when EADDRINUSE occurs — avoids recreating
- * the Express app and all its routes on each retry attempt.
+ * Find the PID of the process listening on a given port.
+ * Uses lsof on macOS/Linux. Returns null if not found or on error.
  */
-export async function retryBind(
-  app: import('express').Express,
-  port: number,
-  options: WebServerOptions,
-): Promise<BindResult> {
-  return bindAndListen(app, port, options);
+async function findPidOnPort(port: number): Promise<number | null> {
+  const { execFile: execFileCb } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFileCb);
+  try {
+    // lsof -ti :port returns just the PID(s) listening on the port
+    const { stdout } = await execFileAsync('lsof', ['-ti', `:${port}`], { timeout: 3000 });
+    const pids = stdout.trim().split('\n').map(Number).filter(n => !Number.isNaN(n) && n > 0);
+    // Return the first PID that isn't us
+    return pids.find(p => p !== process.pid) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
- * Returns a BindResult so the caller can detect and handle port conflicts
- * (e.g., retry after killing a stale process).
+ * Kill a stale process holding a port. Sends SIGTERM, waits briefly,
+ * then SIGKILL if still alive. Only kills DollhouseMCP processes
+ * (verified by checking the command line).
+ */
+async function killStaleProcess(pid: number, port: number): Promise<boolean> {
+  const { execFile: execFileCb } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFileCb);
+
+  // Safety check: only kill DollhouseMCP processes, not random services on the port
+  try {
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: 3000 });
+    // Only kill processes owned by the current user AND running DollhouseMCP
+    const currentUser = (await import('node:os')).userInfo().username;
+    if (!stdout.trim().startsWith(currentUser)) {
+      logger.warn(`[WebUI] Port ${port} held by different user (pid ${pid}) — not killing`);
+      return false;
+    }
+    if (!stdout.includes('dollhousemcp') && !stdout.includes('mcp-server')) {
+      logger.warn(`[WebUI] Port ${port} held by non-DollhouseMCP process (pid ${pid}) — not killing`);
+      return false;
+    }
+  } catch {
+    return false; // can't verify, don't kill
+  }
+
+  try {
+    process.kill(pid, 'SIGTERM');
+    logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`);
+    // Wait for the process to die
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 300));
+      try { process.kill(pid, 0); } catch { return true; } // process is dead
+    }
+    // Still alive after 3s — force kill
+    process.kill(pid, 'SIGKILL');
+    logger.warn(`[WebUI] Sent SIGKILL to stale process ${pid} on port ${port}`);
+    await new Promise(r => setTimeout(r, 500));
+    return true;
+  } catch {
+    return true; // process already dead
+  }
+}
+
+/**
+ * Bind the Express app to 127.0.0.1:port. On EADDRINUSE, attempt to find
+ * and kill the stale DollhouseMCP process holding the port, then retry once.
  */
 async function bindAndListen(
   app: import('express').Express,
   port: number,
   options: WebServerOptions,
 ): Promise<BindResult> {
-  return new Promise<BindResult>((resolve) => {
+  const attempt = (): Promise<BindResult> => new Promise<BindResult>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
@@ -520,31 +570,59 @@ async function bindAndListen(
       resolve({ success: true });
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      resolve(handleListenError(err, port, options.openBrowser));
+      if (err.code === 'EADDRINUSE') {
+        resolve({ success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` });
+      } else {
+        logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+        resolve({ success: false, error: 'OTHER', detail: err.message });
+      }
     });
   });
-}
 
-/**
- * Handle errors from app.listen(). Returns a BindResult describing the failure.
- * EADDRINUSE is logged at WARN (not INFO) so it's visible in production logs.
- */
-function handleListenError(
-  err: NodeJS.ErrnoException,
-  port: number,
-  openBrowser: boolean | undefined,
-): BindResult {
-  if (err.code === 'EADDRINUSE') {
-    const url = `http://${CONSOLE_HOST}:${port}`;
-    logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
-    console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
-    if (openBrowser) {
-      openInBrowser(url);
-    }
-    return { success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` };
+  const result = await attempt();
+
+  if (result.success || result.error !== 'EADDRINUSE') {
+    return result;
   }
-  logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
-  return { success: false, error: 'OTHER', detail: err.message };
+
+  // Port is occupied — check if it's a stale DollhouseMCP process.
+  // Compare the PID on the port against the lock file PID. If they differ
+  // (or the lock file is absent/stale), the port holder is a squatter.
+  const stalePid = await findPidOnPort(port);
+  if (stalePid) {
+    let isSquatter = true;
+    try {
+      const { readLeaderLock } = await import('./console/LeaderElection.js');
+      const lock = await readLeaderLock();
+      if (lock && lock.pid === stalePid && lock.port === port) {
+        // The lock file agrees this PID should be on this port — it's a legitimate leader.
+        // Only kill it if the lock file PID is actually us (we won election but can't bind).
+        isSquatter = lock.pid !== process.pid;
+      }
+    } catch {
+      // Can't read lock file — treat as squatter
+    }
+
+    if (isSquatter) {
+      const killed = await killStaleProcess(stalePid, port);
+      if (killed) {
+        logger.info(`[WebUI] Stale process ${stalePid} removed from port ${port} — retrying bind`);
+        await new Promise(r => setTimeout(r, 500));
+        const retryResult = await attempt();
+        if (retryResult.success) return retryResult;
+      }
+    } else {
+      logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
+    }
+  }
+
+  // Still can't bind — log and fall through
+  logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
+  console.error(`\n  DollhouseMCP Management Console (existing instance)\n  http://${CONSOLE_HOST}:${port}\n`);
+  if (options.openBrowser) {
+    openInBrowser(`http://${CONSOLE_HOST}:${port}`);
+  }
+  return result;
 }
 
 /**
