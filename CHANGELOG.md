@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.11-rc.1] - 2026-04-08
+
+Release candidate for v2.0.11 — console auth, permissions, licensing, port 41715, channel selector
+
 ## [Unreleased] — Phase 2 authenticated console
 
 ### Breaking: Web console default port moved from 3939 → 41715
