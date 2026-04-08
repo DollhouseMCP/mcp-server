@@ -573,12 +573,60 @@ export interface OpenBrowserOptions {
   metricsSink?: MemoryMetricsSink;
 }
 
+/**
+ * Self-provision sinks, token store, and ingest routes, then start the web
+ * server. Extracted from openPortfolioBrowser to keep cognitive complexity
+ * manageable (SonarCloud S3776).
+ */
+async function startFallbackServer(options: OpenBrowserOptions, port: number): Promise<void> {
+  let memorySink = options.memorySink;
+  let metricsSink = options.metricsSink;
+
+  if (!memorySink) {
+    const { MemoryLogSink: LogSink } = await import('../logging/sinks/MemoryLogSink.js');
+    memorySink = new LogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink: MetricsSink } = await import('../metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MetricsSink(240);
+  }
+
+  // Reuse cached token store — two instances on the same file can race on writes.
+  if (!cachedTokenStore) {
+    const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
+    const { pickRandomPuppetName } = await import('./console/SessionNames.js');
+    cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
+    catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
+  }
+
+  // logBroadcast is deferred — wired after startWebServer returns the real broadcast fn.
+  let liveBroadcast: ((entry: import('../logging/types.js').UnifiedLogEntry) => void) | undefined;
+  const { createIngestRoutes } = await import('./console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (entry) => liveBroadcast?.(entry),
+  });
+  ingestResult.registerConsoleSession();
+
+  const webResult = await startWebServer({
+    portfolioDir: options.portfolioDir,
+    port,
+    openBrowser: false,
+    mcpAqlHandler: options.mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    tokenStore: cachedTokenStore,
+    additionalRouters: [ingestResult.router],
+  });
+
+  liveBroadcast = webResult.logBroadcast;
+}
+
 export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise<BrowserOpenResult> {
   const targetPort = options.port || DEFAULT_PORT;
   const baseUrl = `http://${CONSOLE_HOST}:${targetPort}`;
 
   // Build URL with optional tab hash and query parameters
-  // Format: http://host:port/#tab?key=value&key=value
   let url = baseUrl;
   if (options.tab) {
     const qs = options.urlParams ? new URLSearchParams(options.urlParams).toString() : '';
@@ -591,54 +639,7 @@ export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise
   const alreadyRunning = serverRunning;
 
   if (!serverRunning) {
-    // Self-provision sinks and token store so the console has full functionality.
-    // Without these, the Auth/Logs/Metrics/Sessions tabs would all be empty (#1850).
-    let memorySink = options.memorySink;
-    let metricsSink = options.metricsSink;
-
-    if (!memorySink) {
-      const { MemoryLogSink: LogSink } = await import('../logging/sinks/MemoryLogSink.js');
-      memorySink = new LogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
-    }
-    if (!metricsSink) {
-      const { MemoryMetricsSink: MetricsSink } = await import('../metrics/sinks/MemoryMetricsSink.js');
-      metricsSink = new MetricsSink(240);
-    }
-
-    // Initialize token store for Auth tab routes.
-    // Reuse the cached instance if one exists from a prior call — two
-    // ConsoleTokenStore instances on the same file can race on writes.
-    if (!cachedTokenStore) {
-      const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
-      const { pickRandomPuppetName } = await import('./console/SessionNames.js');
-      cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-      try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
-      catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
-    }
-    const tokenStore = cachedTokenStore;
-
-    // Create ingest routes so Sessions tab works.
-    // logBroadcast is deferred — wired after startWebServer returns the real broadcast fn.
-    let liveBroadcast: ((entry: import('../logging/types.js').UnifiedLogEntry) => void) | undefined;
-    const { createIngestRoutes } = await import('./console/IngestRoutes.js');
-    const ingestResult = createIngestRoutes({
-      logBroadcast: (entry) => liveBroadcast?.(entry),
-    });
-    ingestResult.registerConsoleSession();
-
-    const webResult = await startWebServer({
-      portfolioDir: options.portfolioDir,
-      port: targetPort,
-      openBrowser: false,
-      mcpAqlHandler: options.mcpAqlHandler,
-      memorySink,
-      metricsSink,
-      tokenStore,
-      additionalRouters: [ingestResult.router],
-    });
-
-    // Wire the live broadcast so follower log POSTs reach SSE clients
-    liveBroadcast = webResult.logBroadcast;
+    await startFallbackServer(options, targetPort);
   }
 
   const browserResult = await openInBrowser(url);
