@@ -236,6 +236,11 @@ export interface LicenseConfig {
   useCase?: string;          // Paid commercial: required
 }
 
+export interface ConsoleConfig {
+  /** Web console port. Overridden by DOLLHOUSE_WEB_CONSOLE_PORT env var or --port CLI flag. */
+  port: number;
+}
+
 export interface SourcePriorityConfigData {
   order: string[];  // Array of 'local' | 'github' | 'collection'
   stop_on_first: boolean;
@@ -255,6 +260,7 @@ export interface DollhouseConfig {
   autoLoad: AutoLoadConfig;
   retentionPolicy: RetentionPolicyConfig;
   license: LicenseConfig;
+  console: ConsoleConfig;
   source_priority?: SourcePriorityConfigData;
 }
 
@@ -396,6 +402,9 @@ export class ConfigManager {
       },
       license: {
         tier: 'agpl'
+      },
+      console: {
+        port: 41715
       },
       /**
        * Retention Policy Configuration (Issue #51)
