@@ -795,8 +795,9 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
 
     (async () => {
       const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+      // CLI flag parsed early; config file resolved after container bootstrap (#1840)
       const portArg = process.argv.find(a => a.startsWith('--port='));
-      const port = portArg ? parseInt(portArg.split('=')[1], 10) : undefined;
+      const cliPort = portArg ? parseInt(portArg.split('=')[1], 10) : undefined;
       const noBrowser = process.argv.includes('--no-open');
 
       let mcpAqlHandler;
@@ -853,8 +854,26 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
       }
 
+      // Resolve port: CLI flag → config file → env var → default (#1840)
+      let resolvedPort = cliPort;
+      if (!resolvedPort) {
+        try {
+          const { readFile } = await import('node:fs/promises');
+          const yaml = await import('js-yaml');
+          const configPath = path.join(os.homedir(), '.dollhouse', 'config.yml');
+          const raw = await readFile(configPath, 'utf8');
+          const parsed = yaml.load(raw, { schema: yaml.FAILSAFE_SCHEMA }) as any;
+          const configPort = parsed?.console?.port ? Number(parsed.console.port) : undefined;
+          if (configPort && configPort >= 1024 && configPort <= 65535) {
+            resolvedPort = configPort;
+          }
+        } catch {
+          // Config file not available — fall through to env var default
+        }
+      }
+
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+      await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
 
       // Listen for quit commands on stdin (standalone --web mode only).
       // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.

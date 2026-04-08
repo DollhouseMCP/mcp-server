@@ -237,7 +237,13 @@ export interface LicenseConfig {
 }
 
 export interface ConsoleConfig {
-  /** Web console port. Overridden by DOLLHOUSE_WEB_CONSOLE_PORT env var or --port CLI flag. */
+  /**
+   * Web console port (1024–65535). Resolution hierarchy:
+   *   1. --port CLI flag (standalone --web mode only)
+   *   2. This config value (~/.dollhouse/config.yml → console.port)
+   *   3. DOLLHOUSE_WEB_CONSOLE_PORT env var
+   *   4. Default: 41715
+   */
   port: number;
 }
 
