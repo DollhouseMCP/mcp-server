@@ -793,7 +793,8 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     }
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
-    console.error("[DollhouseMCP] Server startup failed", error); // Added error object
+    console.error("[DollhouseMCP] Server startup failed",
+      process.env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
     process.exit(1);
   }
 }
