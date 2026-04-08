@@ -126,6 +126,10 @@
   margin: 0 0 1.2rem;
 }
 
+.setup-channel-toggle[hidden] {
+  display: none;
+}
+
 .setup-channel-legend {
   font-family: var(--font-heading);
   font-size: var(--step--1);

@@ -138,6 +138,11 @@
     buttons.forEach((btn) => {
       btn.addEventListener('click', () => handleToggle(btn));
     });
+
+    // Sync initial visibility — if the browser restored a non-default
+    // active button (e.g. pinned was selected before reload), apply
+    // the hidden state now without waiting for a click.
+    if (channelToggle) channelToggle.hidden = currentMethod === 'global';
   };
 
   // ── Channel selector ──────────────────────────────────────────────────
