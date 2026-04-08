@@ -161,9 +161,16 @@ export async function sweepStalePortFiles(customDir?: string): Promise<number> {
       if (!match) continue;
       const pid = Number(match[1]);
 
-      // Check if process is alive via signal-0
+      // Check if process is alive via signal-0.
+      // ESRCH = process doesn't exist (dead). EPERM = process exists but
+      // owned by another user (alive — don't touch their port file).
       let alive = false;
-      try { process.kill(pid, 0); alive = true; } catch { /* dead */ }
+      try {
+        process.kill(pid, 0);
+        alive = true;
+      } catch (err: any) {
+        alive = err?.code === 'EPERM'; // EPERM = alive but different user
+      }
 
       if (!alive) {
         try {

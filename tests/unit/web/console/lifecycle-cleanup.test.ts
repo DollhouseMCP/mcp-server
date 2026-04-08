@@ -66,8 +66,16 @@ describe('Process Lifecycle Cleanup (#1856)', () => {
       // Current process is alive
       expect(() => process.kill(process.pid, 0)).not.toThrow();
 
-      // Non-existent PID throws
+      // Non-existent PID throws ESRCH
       expect(() => process.kill(99999999, 0)).toThrow();
+    });
+
+    it('EPERM is treated as alive (different user process)', async () => {
+      const LeaderElection = await import('../../../../src/web/console/LeaderElection.js');
+      // PID 1 (init/launchd) is always alive but owned by root — EPERM on signal-0
+      if (process.getuid && process.getuid() !== 0) {
+        expect(LeaderElection.isProcessAlive(1)).toBe(true);
+      }
     });
 
     it('sweepStalePortFiles removes dead PID files from custom dir', async () => {
