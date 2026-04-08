@@ -65,10 +65,30 @@ const SETUP_BODY_LIMIT = '1kb';
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
+/** Active HTTP server instance — tracked so _resetServerState can close it. */
+let activeHttpServer: import('node:http').Server | null = null;
+/** Cached token store for openPortfolioBrowser — prevents duplicate instances on the same file. */
+let cachedTokenStore: ConsoleTokenStore | null = null;
 
 /** Check whether the web server has been started in this process. */
 export function isWebServerRunning(): boolean {
   return serverRunning;
+}
+
+/**
+ * Reset module-level server state. Exported for testing only —
+ * allows tests to exercise startWebServer/bindAndListen without
+ * interference from prior runs in the same process.
+ * @internal
+ */
+export function _resetServerState(): void {
+  if (activeHttpServer) {
+    activeHttpServer.close();
+    activeHttpServer = null;
+  }
+  serverRunning = false;
+  serverPort = DEFAULT_PORT;
+  cachedTokenStore = null;
 }
 
 /**
@@ -107,6 +127,15 @@ export interface WebServerOptions {
 }
 
 /**
+ * Result of attempting to bind the HTTP server to a port.
+ */
+export interface BindResult {
+  success: boolean;
+  error?: 'EADDRINUSE' | 'OTHER';
+  detail?: string;
+}
+
+/**
  * Result of starting the web server, including hooks for DI wiring.
  */
 export interface WebServerResult {
@@ -116,6 +145,8 @@ export interface WebServerResult {
   logBroadcast?: (entry: import('../logging/types.js').UnifiedLogEntry) => void;
   /** Metrics snapshot function — call with each snapshot to push to SSE clients */
   metricsOnSnapshot?: (snapshot: import('../metrics/types.js').MetricSnapshot) => void;
+  /** Result of the port binding attempt */
+  bindResult?: BindResult;
 }
 
 /**
@@ -392,7 +423,7 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Bind to localhost only — handle port conflicts gracefully.
   // Extracted to a helper to keep startWebServer's cognitive complexity manageable.
-  await bindAndListen(app, port, options);
+  result.bindResult = await bindAndListen(app, port, options);
 
   return result;
 }
@@ -455,52 +486,65 @@ function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefi
 }
 
 /**
+ * Retry binding an already-configured Express app to a port.
+ * Used by UnifiedConsole when EADDRINUSE occurs — avoids recreating
+ * the Express app and all its routes on each retry attempt.
+ */
+export async function retryBind(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<BindResult> {
+  return bindAndListen(app, port, options);
+}
+
+/**
  * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
- * Resolves on either success or EADDRINUSE — the web console is optional
- * and never blocks server startup on a port conflict.
+ * Returns a BindResult so the caller can detect and handle port conflicts
+ * (e.g., retry after killing a stale process).
  */
 async function bindAndListen(
   app: import('express').Express,
   port: number,
   options: WebServerOptions,
-): Promise<void> {
-  await new Promise<void>((resolve) => {
+): Promise<BindResult> {
+  return new Promise<BindResult>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
+      activeHttpServer = httpServer;
       printStartupBanner(port, options.tokenStore);
       if (options.openBrowser) {
         openInBrowser(`http://${CONSOLE_HOST}:${port}`);
       }
-      resolve();
+      resolve({ success: true });
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      handleListenError(err, port, options.openBrowser);
-      resolve();
+      resolve(handleListenError(err, port, options.openBrowser));
     });
   });
 }
 
 /**
- * Handle errors from app.listen(). EADDRINUSE is treated as "another leader
- * is already running" — we log and optionally open the existing console.
- * Any other error is logged but does not throw.
+ * Handle errors from app.listen(). Returns a BindResult describing the failure.
+ * EADDRINUSE is logged at WARN (not INFO) so it's visible in production logs.
  */
 function handleListenError(
   err: NodeJS.ErrnoException,
   port: number,
   openBrowser: boolean | undefined,
-): void {
+): BindResult {
   if (err.code === 'EADDRINUSE') {
     const url = `http://${CONSOLE_HOST}:${port}`;
-    logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
+    logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
     console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
     if (openBrowser) {
       openInBrowser(url);
     }
-  } else {
-    logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+    return { success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` };
   }
+  logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+  return { success: false, error: 'OTHER', detail: err.message };
 }
 
 /**
@@ -516,30 +560,86 @@ function handleListenError(
  * @param port - Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`)
  * @returns Result with URL, server status, and browser open status
  */
-export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string, urlParams?: Record<string, string>): Promise<BrowserOpenResult> {
-  const targetPort = port || DEFAULT_PORT;
+/**
+ * Options for opening the portfolio browser.
+ */
+export interface OpenBrowserOptions {
+  portfolioDir: string;
+  port?: number;
+  mcpAqlHandler?: MCPAQLHandler;
+  tab?: string;
+  urlParams?: Record<string, string>;
+  memorySink?: MemoryLogSink;
+  metricsSink?: MemoryMetricsSink;
+}
+
+/**
+ * Self-provision sinks, token store, and ingest routes, then start the web
+ * server. Extracted from openPortfolioBrowser to keep cognitive complexity
+ * manageable (SonarCloud S3776).
+ */
+async function startFallbackServer(options: OpenBrowserOptions, port: number): Promise<void> {
+  let memorySink = options.memorySink;
+  let metricsSink = options.metricsSink;
+
+  if (!memorySink) {
+    const { MemoryLogSink: LogSink } = await import('../logging/sinks/MemoryLogSink.js');
+    memorySink = new LogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink: MetricsSink } = await import('../metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MetricsSink(240);
+  }
+
+  // Reuse cached token store — two instances on the same file can race on writes.
+  if (!cachedTokenStore) {
+    const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
+    const { pickRandomPuppetName } = await import('./console/SessionNames.js');
+    cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
+    catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
+  }
+
+  // logBroadcast is deferred — wired after startWebServer returns the real broadcast fn.
+  let liveBroadcast: ((entry: import('../logging/types.js').UnifiedLogEntry) => void) | undefined;
+  const { createIngestRoutes } = await import('./console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (entry) => liveBroadcast?.(entry),
+  });
+  ingestResult.registerConsoleSession();
+
+  const webResult = await startWebServer({
+    portfolioDir: options.portfolioDir,
+    port,
+    openBrowser: false,
+    mcpAqlHandler: options.mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    tokenStore: cachedTokenStore,
+    additionalRouters: [ingestResult.router],
+  });
+
+  liveBroadcast = webResult.logBroadcast;
+}
+
+export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise<BrowserOpenResult> {
+  const targetPort = options.port || DEFAULT_PORT;
   const baseUrl = `http://${CONSOLE_HOST}:${targetPort}`;
 
   // Build URL with optional tab hash and query parameters
-  // Format: http://host:port/#tab?key=value&key=value
   let url = baseUrl;
-  if (tab) {
-    const qs = urlParams ? new URLSearchParams(urlParams).toString() : '';
-    url = `${baseUrl}/#${tab}${qs ? '?' + qs : ''}`;
-  } else if (urlParams && Object.keys(urlParams).length > 0) {
-    const qs = new URLSearchParams(urlParams).toString();
+  if (options.tab) {
+    const qs = options.urlParams ? new URLSearchParams(options.urlParams).toString() : '';
+    url = `${baseUrl}/#${options.tab}${qs ? '?' + qs : ''}`;
+  } else if (options.urlParams && Object.keys(options.urlParams).length > 0) {
+    const qs = new URLSearchParams(options.urlParams).toString();
     url = `${baseUrl}/#portfolio?${qs}`;
   }
 
   const alreadyRunning = serverRunning;
 
   if (!serverRunning) {
-    await startWebServer({
-      portfolioDir,
-      port: targetPort,
-      openBrowser: false, // We'll open manually below to capture the result
-      mcpAqlHandler,
-    });
+    await startFallbackServer(options, targetPort);
   }
 
   const browserResult = await openInBrowser(url);

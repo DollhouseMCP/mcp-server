@@ -25,7 +25,12 @@ import {
   startHeartbeat,
   registerLeaderCleanup,
   detectLegacyLeader,
+  deleteLeaderLock,
+  claimLeadership,
+  readLeaderLock,
+  LOCK_VERSION,
   type ElectionResult,
+  type ConsoleLeaderInfo,
 } from './LeaderElection.js';
 import { createIngestRoutes } from './IngestRoutes.js';
 import {
@@ -43,6 +48,12 @@ import { env } from '../../config/env.js';
  *   3. 41715 (hardcoded default in env.ts)
  */
 const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+
+/** Guard against concurrent promotion attempts from the same process (#1850). */
+let promotionInProgress = false;
+/** Track promotion attempts to prevent infinite loops if the port is permanently unavailable. */
+let promotionAttempts = 0;
+const MAX_PROMOTION_ATTEMPTS = 3;
 
 /**
  * Options for starting the unified console.
@@ -161,7 +172,7 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
   if (election.role === 'leader') {
     return startAsLeader(options, election, consolePort);
   } else {
-    return startAsFollower(options, election);
+    return startAsFollower(options, election, consolePort);
   }
 }
 
@@ -208,8 +219,9 @@ async function startAsLeader(
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
 
-  // Start the web server with ingest routes mounted before the SPA fallback
-  const webResult = await startWebServer({
+  // Start the web server with ingest routes mounted before the SPA fallback.
+  // If the port is occupied by a stale process, retry with exponential backoff.
+  const serverOpts = {
     portfolioDir: options.portfolioDir,
     memorySink: options.memorySink,
     metricsSink: options.metricsSink,
@@ -217,7 +229,30 @@ async function startAsLeader(
     additionalRouters: [ingestResult.router],
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
-  });
+  };
+  const BIND_RETRY_DELAYS = env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS?.length
+    ? env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS
+    : [1000, 2000, 4000];
+  const webResult = await startWebServer(serverOpts);
+
+  // If the port is occupied, retry the bind only — don't recreate the Express
+  // app and routes (startWebServer early-returns when serverRunning is false
+  // but the app is already configured). We call retryBind on the existing app.
+  if (webResult.bindResult && !webResult.bindResult.success && webResult.bindResult.error === 'EADDRINUSE' && webResult.app) {
+    const { retryBind } = await import('../server.js');
+    for (let i = 0; i < BIND_RETRY_DELAYS.length; i++) {
+      logger.warn(`[UnifiedConsole] Port ${consolePort} occupied — retry ${i + 1}/${BIND_RETRY_DELAYS.length} in ${BIND_RETRY_DELAYS[i]}ms`);
+      await new Promise(r => setTimeout(r, BIND_RETRY_DELAYS[i]));
+      const retryResult = await retryBind(webResult.app, consolePort, serverOpts);
+      if (retryResult.success) {
+        webResult.bindResult = retryResult;
+        break;
+      }
+    }
+    if (webResult.bindResult && !webResult.bindResult.success) {
+      logger.error(`[UnifiedConsole] Leader failed to bind port ${consolePort} after ${BIND_RETRY_DELAYS.length} retries — console unavailable`);
+    }
+  }
 
   // Wire SSE broadcasts for this leader's own events
   options.wireSSEBroadcasts(webResult, options.metricsSink);
@@ -264,6 +299,7 @@ async function startAsLeader(
 async function startAsFollower(
   options: UnifiedConsoleOptions,
   election: ElectionResult,
+  consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
@@ -278,12 +314,21 @@ async function startAsFollower(
     logger.debug('[UnifiedConsole] No console auth token file found; follower will POST without Bearer header');
   }
 
-  // Register a forwarding log sink
-  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId, authToken);
+  // Declare sessionHeartbeat before the sink so the closure can capture it.
+  // Both are initialized before the callback could possibly fire (needs 5+ failed flushes).
+  let sessionHeartbeat: SessionHeartbeat;
+
+  // Register a forwarding log sink with leader-death callback (#1850).
+  // When the leader is unreachable after MAX_CONSECUTIVE_FAILURES, the callback
+  // triggers self-promotion so the follower takes over as leader.
+  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId, authToken, () => {
+    promoteToLeader(options, forwardingSink, sessionHeartbeat, consolePort)
+      .catch(err => logger.error('[UnifiedConsole] Promotion crashed', { error: String(err) }));
+  });
   options.registerLogSink(forwardingSink);
 
   // Start session heartbeat to the leader
-  const sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
+  sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
   await sessionHeartbeat.start();
 
   logger.info('[UnifiedConsole] Follower started', {
@@ -300,4 +345,81 @@ async function startAsFollower(
       await forwardingSink.close();
     },
   };
+}
+
+/**
+ * Attempt to promote a follower to leader after detecting leader death (#1850).
+ *
+ * Triggered by the LeaderForwardingLogSink.onLeaderDeath callback when the
+ * leader becomes unreachable. Performs a full re-election: stops forwarding,
+ * deletes the stale lock, claims leadership, and starts the full leader path.
+ *
+ * Guarded by `promotionInProgress` to prevent two concurrent promotions
+ * (e.g., if both the log sink and a future metrics sink detect death).
+ */
+async function promoteToLeader(
+  options: UnifiedConsoleOptions,
+  forwardingSink: LeaderForwardingLogSink,
+  sessionHeartbeat: SessionHeartbeat,
+  consolePort: number,
+): Promise<void> {
+  if (promotionInProgress) {
+    logger.info('[UnifiedConsole] Promotion already in progress — skipping duplicate');
+    return;
+  }
+  promotionAttempts++;
+  if (promotionAttempts > MAX_PROMOTION_ATTEMPTS) {
+    logger.error(`[UnifiedConsole] Promotion attempt ${promotionAttempts} exceeds max (${MAX_PROMOTION_ATTEMPTS}) — giving up`);
+    return;
+  }
+  promotionInProgress = true;
+
+  try {
+    logger.warn('[UnifiedConsole] Leader death detected — attempting self-promotion');
+
+    // 1. Stop the forwarding infrastructure
+    await sessionHeartbeat.stop();
+    await forwardingSink.close();
+
+    // 2. Delete the stale lock file and claim leadership
+    await deleteLeaderLock();
+
+    const now = new Date().toISOString();
+    const myInfo: ConsoleLeaderInfo = {
+      version: LOCK_VERSION,
+      pid: process.pid,
+      port: consolePort,
+      sessionId: options.sessionId,
+      startedAt: now,
+      heartbeat: now,
+    };
+
+    const claimed = await claimLeadership(myInfo);
+
+    if (!claimed) {
+      // Another follower beat us — become a follower of the new leader
+      logger.info('[UnifiedConsole] Lost promotion race — re-electing as follower of new leader');
+      const newLeader = await readLeaderLock();
+      if (newLeader) {
+        const newElection: ElectionResult = { role: 'follower', leaderInfo: newLeader };
+        await startAsFollower(options, newElection, consolePort);
+      } else {
+        logger.error('[UnifiedConsole] Promotion failed — no leader available after lost race');
+      }
+      promotionInProgress = false;
+      return;
+    }
+
+    // 3. Start the full leader path with all sinks wired
+    logger.info('[UnifiedConsole] Promotion succeeded — starting as leader');
+    const election: ElectionResult = { role: 'leader', leaderInfo: myInfo };
+    await startAsLeader(options, election, consolePort);
+
+    promotionInProgress = false;
+  } catch (err) {
+    logger.error('[UnifiedConsole] Promotion failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    promotionInProgress = false;
+  }
 }
