@@ -5,6 +5,7 @@
 import { env } from './config/env.js';
 
 import * as path from 'path';
+import { realpathSync } from 'node:fs';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
@@ -742,12 +743,30 @@ export class DollhouseMCPServer implements IToolHandler {
 
 // Only start the server if this file is being run directly (not imported by tests)
 // Handle different execution methods (direct, npx, CLI)
-const scriptPath = process.argv?.[1] ? path.normalize(process.argv[1]) : '';
+//
+// Bug fix: npx creates symlinks in .bin/ (e.g. .bin/mcp-server → dist/index.js).
+// Node.js keeps the symlink path in process.argv[1], so without resolving it,
+// isDirectExecution missed the dist/index.js suffix and the server never started.
+const rawScriptPath = process.argv?.[1] ?? '';
+let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
+try {
+  scriptPath = realpathSync(scriptPath);
+} catch {
+  if (process.env.DOLLHOUSE_DEBUG) {
+    console.error(`[DEBUG] Symlink resolution failed for ${rawScriptPath} — using original path`);
+  }
+}
 const isDirectExecution =
   scriptPath.endsWith(`${path.sep}dist${path.sep}index.js`) ||
   scriptPath.endsWith(`${path.sep}src${path.sep}index.ts`);
-const isNpxExecution = process.env.npm_execpath?.includes('npx');
-const isCliExecution = process.argv[1]?.endsWith('/dollhousemcp') || process.argv[1]?.endsWith('\\dollhousemcp');
+// Modern npm (v7+) runs npx as "npm exec" — npm_execpath may point to
+// npm-cli.js instead of npx-cli.js. Detect both legacy and modern npx.
+const isNpxExecution =
+  process.env.npm_execpath?.includes('npx') ||
+  process.env.npm_command === 'exec';
+// Match all registered bin entry names from package.json "bin" field
+const binName = path.basename(rawScriptPath);
+const isCliExecution = binName === 'dollhousemcp' || binName === 'mcp-server';
 const isTest = process.env.JEST_WORKER_ID; // This is set when Jest runs tests
 const isTestMode = process.env.TEST_MODE === 'true'; // Check for TEST_MODE environment variable
 const dollhouseDebugFlag = process.env.DOLLHOUSE_DEBUG?.toLowerCase();
@@ -774,7 +793,8 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     }
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
-    console.error("[DollhouseMCP] Server startup failed", error); // Added error object
+    console.error("[DollhouseMCP] Server startup failed",
+      process.env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
     process.exit(1);
   }
 }
