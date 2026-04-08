@@ -111,10 +111,9 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('ConfigManager.readPortFromYaml');
     });
 
-    it('validates config port is in valid range (1024-65535)', async () => {
+    it('validates config port via validatePort()', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      expect(source).toContain('configPort >= 1024');
-      expect(source).toContain('configPort <= 65535');
+      expect(source).toContain('validatePort(ConfigManager.readPortFromYaml');
     });
 
     it('size-limits config file before parsing (64KB)', async () => {
@@ -131,6 +130,82 @@ describe('Console port configuration (#1840)', () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
       // cliPort || resolvePortFromConfig() — CLI checked first via ||
       expect(source).toContain('cliPort || await resolvePortFromConfig()');
+    });
+  });
+
+  // ── validatePort branded type ───────────────────────────────────────
+
+  describe('validatePort()', () => {
+    let validatePort: (value: unknown) => number | undefined;
+
+    beforeAll(async () => {
+      const mod = await import('../../../src/config/ConfigManager.js');
+      validatePort = mod.validatePort;
+    });
+
+    it('accepts valid port numbers', () => {
+      expect(validatePort(41715)).toBe(41715);
+      expect(validatePort(1024)).toBe(1024);
+      expect(validatePort(65535)).toBe(65535);
+      expect(validatePort(8080)).toBe(8080);
+    });
+
+    it('accepts string port numbers', () => {
+      expect(validatePort('9000')).toBe(9000);
+      expect(validatePort('41715')).toBe(41715);
+    });
+
+    it('rejects privileged ports', () => {
+      expect(validatePort(80)).toBeUndefined();
+      expect(validatePort(443)).toBeUndefined();
+      expect(validatePort(0)).toBeUndefined();
+      expect(validatePort(1023)).toBeUndefined();
+    });
+
+    it('rejects ports above max', () => {
+      expect(validatePort(65536)).toBeUndefined();
+      expect(validatePort(70000)).toBeUndefined();
+    });
+
+    it('rejects non-numeric values', () => {
+      expect(validatePort('abc')).toBeUndefined();
+      expect(validatePort(null)).toBeUndefined();
+      expect(validatePort(undefined)).toBeUndefined();
+      expect(validatePort(NaN)).toBeUndefined();
+      expect(validatePort(Infinity)).toBeUndefined();
+    });
+
+    it('floors fractional ports', () => {
+      expect(validatePort(8080.7)).toBe(8080);
+    });
+  });
+
+  // ── Runtime validation in updateSetting ────────────────────────────────
+
+  describe('updateSetting runtime validation for console.port', () => {
+    it('ConfigManager validates console.port on set', async () => {
+      const source = await readFile(join(SRC, 'src/config/ConfigManager.ts'), 'utf8');
+      expect(source).toContain("path === 'console.port'");
+      expect(source).toContain('validatePort(value)');
+      expect(source).toContain('Invalid port');
+    });
+  });
+
+  // ── Debug logging ─────────────────────────────────────────────────────
+
+  describe('port resolution debug logging', () => {
+    it('resolvePortFromConfig logs resolution steps', async () => {
+      const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
+      expect(source).toContain('[PortConfig] Resolved port');
+      expect(source).toContain('[PortConfig] No valid port');
+      expect(source).toContain('[PortConfig] Config file not found');
+    });
+
+    it('UnifiedConsole logs resolved port source', async () => {
+      const source = await readFile(join(SRC, 'src/web/console/UnifiedConsole.ts'), 'utf8');
+      expect(source).toContain('[UnifiedConsole] Port resolved');
+      expect(source).toContain('from config file');
+      expect(source).toContain('from env/default');
     });
   });
 

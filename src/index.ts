@@ -789,11 +789,20 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
     const { readFile } = await import('node:fs/promises');
     const configPath = path.join(os.homedir(), '.dollhouse', 'config.yml');
     const raw = await readFile(configPath, 'utf8');
-    if (raw.length > 64 * 1024) return undefined; // 64KB size limit
-    const { ConfigManager } = await import('./config/ConfigManager.js');
-    const configPort = ConfigManager.readPortFromYaml(raw);
-    return configPort && configPort >= 1024 && configPort <= 65535 ? configPort : undefined;
+    if (raw.length > 64 * 1024) {
+      logger.debug('[PortConfig] Config file exceeds 64KB — skipping');
+      return undefined;
+    }
+    const { ConfigManager, validatePort } = await import('./config/ConfigManager.js');
+    const configPort = validatePort(ConfigManager.readPortFromYaml(raw));
+    if (configPort) {
+      logger.debug(`[PortConfig] Resolved port ${configPort} from config file`);
+      return configPort;
+    }
+    logger.debug('[PortConfig] No valid port in config file — using env/default');
+    return undefined;
   } catch {
+    logger.debug('[PortConfig] Config file not found — using env/default');
     return undefined;
   }
 }

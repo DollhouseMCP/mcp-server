@@ -136,6 +136,8 @@ export async function warnIfLegacyConsolePresent(
 export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promise<UnifiedConsoleResult> {
   // Resolve port: options (config file) → env var → default
   const consolePort = options.port || DEFAULT_CONSOLE_PORT;
+  logger.debug(`[UnifiedConsole] Port resolved: ${consolePort}` +
+    (options.port ? ' (from config file)' : ` (from env/default)`));
 
   // Legacy-leader detection (#1794) — warn the user if a pre-auth
   // DollhouseMCP console is running alongside this authenticated one.

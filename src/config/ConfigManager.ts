@@ -236,6 +236,18 @@ export interface LicenseConfig {
   useCase?: string;          // Paid commercial: required
 }
 
+/** Branded type for validated port numbers (1024–65535). */
+export type PortNumber = number & { readonly __brand: 'PortNumber' };
+
+/** Validate and brand a port number. Returns undefined if invalid. */
+export function validatePort(value: unknown): PortNumber | undefined {
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (typeof num !== 'number' || !Number.isFinite(num)) return undefined;
+  const port = Math.floor(num);
+  if (port < 1024 || port > 65535) return undefined;
+  return port as PortNumber;
+}
+
 export interface ConsoleConfig {
   /**
    * Web console port (1024–65535). Resolution hierarchy:
@@ -673,6 +685,18 @@ export class ConfigManager {
     
     // SECURITY: Validate path to prevent prototype pollution
     validatePropertyPath(path, 'path');
+
+    // Runtime validation for known typed settings (#1840)
+    if (path === 'console.port') {
+      const validated = validatePort(value);
+      if (!validated) {
+        return {
+          success: false,
+          message: `Invalid port: ${value}. Must be an integer between 1024 and 65535.`,
+        };
+      }
+      value = validated;
+    }
 
     const keys = path.split('.');
     let current: any = this.config;
