@@ -859,13 +859,16 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       if (!resolvedPort) {
         try {
           const { readFile } = await import('node:fs/promises');
-          const yaml = await import('js-yaml');
           const configPath = path.join(os.homedir(), '.dollhouse', 'config.yml');
           const raw = await readFile(configPath, 'utf8');
-          const parsed = yaml.load(raw, { schema: yaml.FAILSAFE_SCHEMA }) as any;
-          const configPort = parsed?.console?.port ? Number(parsed.console.port) : undefined;
-          if (configPort && configPort >= 1024 && configPort <= 65535) {
-            resolvedPort = configPort;
+          // Security: size-limit config file (64KB max, matching SecureYamlParser)
+          // and use ConfigManager's YAML loading which applies FAILSAFE_SCHEMA.
+          if (raw.length <= 64 * 1024) {
+            const { ConfigManager } = await import('./config/ConfigManager.js');
+            const configPort = ConfigManager.readPortFromYaml(raw);
+            if (configPort && configPort >= 1024 && configPort <= 65535) {
+              resolvedPort = configPort;
+            }
           }
         } catch {
           // Config file not available — fall through to env var default

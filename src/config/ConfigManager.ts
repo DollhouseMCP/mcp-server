@@ -291,6 +291,23 @@ export class ConfigManager {
   private readonly fileOperations: IFileOperationsService;
   private os: typeof os;
 
+  /**
+   * Extract console.port from raw YAML config content without full
+   * ConfigManager initialization. Uses FAILSAFE_SCHEMA for security
+   * (no code execution). Returns undefined if not found or invalid.
+   */
+  static readPortFromYaml(yamlContent: string): number | undefined {
+    try {
+      const parsed = yaml.load(yamlContent, { schema: yaml.FAILSAFE_SCHEMA }) as Record<string, any> | null;
+      const raw = parsed?.console?.port;
+      if (raw === undefined || raw === null) return undefined;
+      const port = Number(raw);
+      return Number.isFinite(port) ? port : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   constructor(fileOperations: IFileOperationsService, osModule: typeof os) {
     this.fileOperations = fileOperations;
     this.os = osModule;

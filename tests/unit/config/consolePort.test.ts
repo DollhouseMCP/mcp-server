@@ -95,9 +95,9 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('cliPort');
     });
 
-    it('reads config file for port when no CLI flag', async () => {
+    it('reads config file for port via ConfigManager.readPortFromYaml', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      expect(source).toContain("parsed?.console?.port");
+      expect(source).toContain('ConfigManager.readPortFromYaml');
     });
 
     it('validates config port is in valid range (1024-65535)', async () => {
@@ -106,9 +106,9 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('configPort <= 65535');
     });
 
-    it('uses FAILSAFE_SCHEMA for secure YAML parsing', async () => {
+    it('size-limits config file before parsing (64KB)', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      expect(source).toContain('FAILSAFE_SCHEMA');
+      expect(source).toContain('raw.length <= 64 * 1024');
     });
 
     it('passes resolvedPort to startWebServer', async () => {
@@ -118,59 +118,62 @@ describe('Console port configuration (#1840)', () => {
 
     it('CLI flag takes precedence over config file', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      // cliPort is checked first, config file only if !cliPort
       const cliIdx = source.indexOf('let resolvedPort = cliPort');
-      const configIdx = source.indexOf("parsed?.console?.port");
+      const configIdx = source.indexOf('ConfigManager.readPortFromYaml');
       expect(cliIdx).toBeGreaterThan(-1);
       expect(configIdx).toBeGreaterThan(cliIdx);
     });
   });
 
-  // ── YAML parsing edge cases ────────────────────────────────────────────
+  // ── ConfigManager.readPortFromYaml ───────────────────────────────────
 
-  describe('YAML port parsing edge cases', () => {
-    it('handles valid port number', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('console:\n  port: 9000\n', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = Number(parsed?.console?.port);
-      expect(port).toBe(9000);
-      expect(port >= 1024 && port <= 65535).toBe(true);
+  describe('ConfigManager.readPortFromYaml', () => {
+    let readPortFromYaml: (yaml: string) => number | undefined;
+
+    beforeAll(async () => {
+      const { ConfigManager } = await import('../../../src/config/ConfigManager.js');
+      readPortFromYaml = ConfigManager.readPortFromYaml;
     });
 
-    it('rejects non-numeric port', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('console:\n  port: "abc"\n', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = Number(parsed?.console?.port);
-      expect(Number.isNaN(port)).toBe(true);
-      expect(port >= 1024 && port <= 65535).toBe(false);
+    it('parses valid port number', () => {
+      expect(readPortFromYaml('console:\n  port: 9000\n')).toBe(9000);
     });
 
-    it('rejects privileged port', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('console:\n  port: 80\n', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = Number(parsed?.console?.port);
-      expect(port >= 1024 && port <= 65535).toBe(false);
+    it('parses default port', () => {
+      expect(readPortFromYaml('console:\n  port: 41715\n')).toBe(41715);
     });
 
-    it('rejects port above max', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('console:\n  port: 70000\n', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = Number(parsed?.console?.port);
-      expect(port >= 1024 && port <= 65535).toBe(false);
+    it('returns undefined for non-numeric port', () => {
+      expect(readPortFromYaml('console:\n  port: abc\n')).toBeUndefined();
     });
 
-    it('handles missing console section', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('user:\n  name: test\n', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = parsed?.console?.port ? Number(parsed.console.port) : undefined;
-      expect(port).toBeUndefined();
+    it('returns undefined for missing console section', () => {
+      expect(readPortFromYaml('user:\n  name: test\n')).toBeUndefined();
     });
 
-    it('handles empty config file', async () => {
-      const yaml = await import('js-yaml');
-      const parsed = yaml.load('', { schema: yaml.FAILSAFE_SCHEMA }) as any;
-      const port = parsed?.console?.port ? Number(parsed?.console?.port) : undefined;
-      expect(port).toBeUndefined();
+    it('returns undefined for empty config', () => {
+      expect(readPortFromYaml('')).toBeUndefined();
+    });
+
+    it('returns undefined for malformed YAML', () => {
+      expect(readPortFromYaml('{{{')).toBeUndefined();
+    });
+
+    it('returns port below valid range (caller must validate)', () => {
+      // readPortFromYaml returns the number; range validation is the caller's job
+      const port = readPortFromYaml('console:\n  port: 80\n');
+      expect(port).toBe(80);
+    });
+
+    it('returns port above valid range (caller must validate)', () => {
+      const port = readPortFromYaml('console:\n  port: 70000\n');
+      expect(port).toBe(70000);
+    });
+
+    it('uses FAILSAFE_SCHEMA (no code execution)', async () => {
+      const source = await readFile(join(SRC, 'src/config/ConfigManager.ts'), 'utf8');
+      expect(source).toContain('readPortFromYaml');
+      expect(source).toContain('FAILSAFE_SCHEMA');
     });
   });
 
