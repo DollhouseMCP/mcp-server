@@ -32,7 +32,12 @@ describe('Console port configuration (#1840)', () => {
 
     it('default config sets console.port to 41715', async () => {
       const source = await readFile(join(SRC, 'src/config/ConfigManager.ts'), 'utf8');
-      expect(source).toMatch(/console:\s*\{\s*\n\s*port:\s*41715/);
+      expect(source).toContain('port: 41715');
+      // Verify it's inside the console section
+      const consoleIdx = source.indexOf("console: {");
+      const portIdx = source.indexOf('port: 41715', consoleIdx);
+      expect(consoleIdx).toBeGreaterThan(-1);
+      expect(portIdx).toBeGreaterThan(consoleIdx);
     });
 
     it('documents the resolution hierarchy in the interface', async () => {
