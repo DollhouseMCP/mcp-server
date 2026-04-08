@@ -51,6 +51,9 @@ const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 
 /** Guard against concurrent promotion attempts from the same process (#1850). */
 let promotionInProgress = false;
+/** Track promotion attempts to prevent infinite loops if the port is permanently unavailable. */
+let promotionAttempts = 0;
+const MAX_PROMOTION_ATTEMPTS = 3;
 
 /**
  * Options for starting the unified console.
@@ -227,15 +230,24 @@ async function startAsLeader(
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   };
-  const BIND_RETRY_DELAYS = env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS ?? [1000, 2000, 4000];
-  let webResult = await startWebServer(serverOpts);
+  const BIND_RETRY_DELAYS = env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS?.length
+    ? env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS
+    : [1000, 2000, 4000];
+  const webResult = await startWebServer(serverOpts);
 
-  if (webResult.bindResult && !webResult.bindResult.success && webResult.bindResult.error === 'EADDRINUSE') {
+  // If the port is occupied, retry the bind only — don't recreate the Express
+  // app and routes (startWebServer early-returns when serverRunning is false
+  // but the app is already configured). We call retryBind on the existing app.
+  if (webResult.bindResult && !webResult.bindResult.success && webResult.bindResult.error === 'EADDRINUSE' && webResult.app) {
+    const { retryBind } = await import('../server.js');
     for (let i = 0; i < BIND_RETRY_DELAYS.length; i++) {
       logger.warn(`[UnifiedConsole] Port ${consolePort} occupied — retry ${i + 1}/${BIND_RETRY_DELAYS.length} in ${BIND_RETRY_DELAYS[i]}ms`);
       await new Promise(r => setTimeout(r, BIND_RETRY_DELAYS[i]));
-      webResult = await startWebServer(serverOpts);
-      if (!webResult.bindResult || webResult.bindResult.success) break;
+      const retryResult = await retryBind(webResult.app, consolePort, serverOpts);
+      if (retryResult.success) {
+        webResult.bindResult = retryResult;
+        break;
+      }
     }
     if (webResult.bindResult && !webResult.bindResult.success) {
       logger.error(`[UnifiedConsole] Leader failed to bind port ${consolePort} after ${BIND_RETRY_DELAYS.length} retries — console unavailable`);
@@ -353,6 +365,11 @@ async function promoteToLeader(
 ): Promise<void> {
   if (promotionInProgress) {
     logger.info('[UnifiedConsole] Promotion already in progress — skipping duplicate');
+    return;
+  }
+  promotionAttempts++;
+  if (promotionAttempts > MAX_PROMOTION_ATTEMPTS) {
+    logger.error(`[UnifiedConsole] Promotion attempt ${promotionAttempts} exceeds max (${MAX_PROMOTION_ATTEMPTS}) — giving up`);
     return;
   }
   promotionInProgress = true;

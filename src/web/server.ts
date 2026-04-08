@@ -65,6 +65,10 @@ const SETUP_BODY_LIMIT = '1kb';
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
+/** Active HTTP server instance — tracked so _resetServerState can close it. */
+let activeHttpServer: import('node:http').Server | null = null;
+/** Cached token store for openPortfolioBrowser — prevents duplicate instances on the same file. */
+let cachedTokenStore: ConsoleTokenStore | null = null;
 
 /** Check whether the web server has been started in this process. */
 export function isWebServerRunning(): boolean {
@@ -78,8 +82,13 @@ export function isWebServerRunning(): boolean {
  * @internal
  */
 export function _resetServerState(): void {
+  if (activeHttpServer) {
+    activeHttpServer.close();
+    activeHttpServer = null;
+  }
   serverRunning = false;
   serverPort = DEFAULT_PORT;
+  cachedTokenStore = null;
 }
 
 /**
@@ -477,6 +486,19 @@ function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefi
 }
 
 /**
+ * Retry binding an already-configured Express app to a port.
+ * Used by UnifiedConsole when EADDRINUSE occurs — avoids recreating
+ * the Express app and all its routes on each retry attempt.
+ */
+export async function retryBind(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<BindResult> {
+  return bindAndListen(app, port, options);
+}
+
+/**
  * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
  * Returns a BindResult so the caller can detect and handle port conflicts
  * (e.g., retry after killing a stale process).
@@ -490,6 +512,7 @@ async function bindAndListen(
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
+      activeHttpServer = httpServer;
       printStartupBanner(port, options.tokenStore);
       if (options.openBrowser) {
         openInBrowser(`http://${CONSOLE_HOST}:${port}`);
@@ -582,19 +605,28 @@ export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise
       metricsSink = new MetricsSink(240);
     }
 
-    // Initialize token store for Auth tab routes
-    const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
-    const { pickRandomPuppetName } = await import('./console/SessionNames.js');
-    const tokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-    try { await tokenStore.ensureInitialized(pickRandomPuppetName()); }
-    catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
+    // Initialize token store for Auth tab routes.
+    // Reuse the cached instance if one exists from a prior call — two
+    // ConsoleTokenStore instances on the same file can race on writes.
+    if (!cachedTokenStore) {
+      const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
+      const { pickRandomPuppetName } = await import('./console/SessionNames.js');
+      cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+      try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
+      catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
+    }
+    const tokenStore = cachedTokenStore;
 
-    // Create ingest routes so Sessions tab works
+    // Create ingest routes so Sessions tab works.
+    // logBroadcast is deferred — wired after startWebServer returns the real broadcast fn.
+    let liveBroadcast: ((entry: import('../logging/types.js').UnifiedLogEntry) => void) | undefined;
     const { createIngestRoutes } = await import('./console/IngestRoutes.js');
-    const ingestResult = createIngestRoutes({ logBroadcast: () => {} });
+    const ingestResult = createIngestRoutes({
+      logBroadcast: (entry) => liveBroadcast?.(entry),
+    });
     ingestResult.registerConsoleSession();
 
-    await startWebServer({
+    const webResult = await startWebServer({
       portfolioDir: options.portfolioDir,
       port: targetPort,
       openBrowser: false,
@@ -604,6 +636,9 @@ export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise
       tokenStore,
       additionalRouters: [ingestResult.router],
     });
+
+    // Wire the live broadcast so follower log POSTs reach SSE clients
+    liveBroadcast = webResult.logBroadcast;
   }
 
   const browserResult = await openInBrowser(url);
