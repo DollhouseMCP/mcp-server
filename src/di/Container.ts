@@ -985,6 +985,10 @@ export class DollhouseContainer {
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
+      // Sweep stale port files from prior sessions before starting (#1856)
+      const { sweepStalePortFiles } = await import('../web/portDiscovery.js');
+      await sweepStalePortFiles();
+
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
       const sessionId = activationStore.getSessionId();
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
@@ -1647,6 +1651,12 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    // Close the HTTP server first so the port is freed immediately (#1856)
+    try {
+      const { shutdownWebServer } = await import('../web/server.js');
+      shutdownWebServer();
+    } catch { /* web server not started */ }
+
     // Close MetricsManager before general disposal (flush final snapshot)
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');

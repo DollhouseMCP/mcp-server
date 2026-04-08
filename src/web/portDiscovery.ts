@@ -18,7 +18,7 @@
 import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, writeFile, unlink, readdir } from 'node:fs/promises';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
@@ -132,6 +132,52 @@ export function registerPortCleanup(): void {
   process.once('exit', exitCleanup);
   process.once('SIGTERM', exitCleanup);
   process.once('SIGINT', exitCleanup);
+  process.once('SIGHUP', exitCleanup);
+}
+
+/**
+ * Sweep stale port files from ~/.dollhouse/run/ on startup (#1856).
+ *
+ * Scans for permission-server-{pid}.port files and removes any whose PID
+ * is no longer alive. This prevents unbounded accumulation of port files
+ * from crashed or abandoned sessions.
+ *
+ * Safe to call on every startup — only removes files for dead processes.
+ */
+export async function sweepStalePortFiles(): Promise<number> {
+  try {
+    await mkdir(RUN_DIR, { recursive: true });
+    const files = await readdir(RUN_DIR);
+    const portFiles = files.filter(f => /^permission-server-\d+\.port$/.test(f));
+    let removed = 0;
+
+    for (const file of portFiles) {
+      const match = file.match(/^permission-server-(\d+)\.port$/);
+      if (!match) continue;
+      const pid = Number(match[1]);
+
+      // Check if process is alive via signal-0
+      let alive = false;
+      try { process.kill(pid, 0); alive = true; } catch { /* dead */ }
+
+      if (!alive) {
+        try {
+          await unlink(join(RUN_DIR, file));
+          removed++;
+        } catch { /* already gone */ }
+      }
+    }
+
+    if (removed > 0) {
+      logger.info(`[PortDiscovery] Swept ${removed} stale port files from ${RUN_DIR}`);
+    }
+    return removed;
+  } catch (err) {
+    logger.debug('[PortDiscovery] Stale port file sweep failed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 0;
+  }
 }
 
 /**

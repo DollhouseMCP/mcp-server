@@ -239,10 +239,44 @@ describe('Console Lifecycle Integration (#1850)', () => {
       await writeFile(join(runDir, 'permission-server.port'), '41715');
 
       // All 6 files exist — this is the accumulation problem
-      const { readdir } = await import('node:fs/promises');
-      const files = await readdir(runDir);
+      const { readdir: readDir } = await import('node:fs/promises');
+      const files = await readDir(runDir);
       const portFiles = files.filter(f => f.includes('permission-server'));
       expect(portFiles.length).toBe(6);
+    });
+
+    it('stale port files are swept by manual sweep logic', async () => {
+      // Write files for dead PIDs and one for our own (alive) PID
+      for (let i = 0; i < 5; i++) {
+        await writeFile(join(runDir, `permission-server-${99999990 + i}.port`), '41715');
+      }
+      await writeFile(join(runDir, `permission-server-${process.pid}.port`), '41715');
+      await writeFile(join(runDir, 'permission-server.port'), '41715'); // latest file — not PID-keyed
+
+      // Sweep: same logic as sweepStalePortFiles
+      const { readdir: readDir, unlink: unlinkFile } = await import('node:fs/promises');
+      const files = await readDir(runDir);
+      const pidFiles = files.filter(f => /^permission-server-\d+\.port$/.test(f));
+      let removed = 0;
+
+      for (const file of pidFiles) {
+        const match = file.match(/^permission-server-(\d+)\.port$/);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        let alive = false;
+        try { process.kill(pid, 0); alive = true; } catch { /* dead */ }
+        if (!alive) {
+          await unlinkFile(join(runDir, file));
+          removed++;
+        }
+      }
+
+      expect(removed).toBe(5); // 5 dead PIDs swept
+      const remaining = await readDir(runDir);
+      const remainingPid = remaining.filter(f => /^permission-server-\d+\.port$/.test(f));
+      expect(remainingPid.length).toBe(1); // Only our PID survives
+      // The non-PID-keyed 'permission-server.port' should also survive
+      expect(remaining).toContain('permission-server.port');
     });
   });
 

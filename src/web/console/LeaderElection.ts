@@ -358,4 +358,5 @@ export function registerLeaderCleanup(): void {
   process.once('exit', cleanup);
   process.once('SIGTERM', cleanup);
   process.once('SIGINT', cleanup);
+  process.once('SIGHUP', cleanup);
 }
