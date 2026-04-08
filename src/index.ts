@@ -749,7 +749,13 @@ export class DollhouseMCPServer implements IToolHandler {
 // isDirectExecution missed the dist/index.js suffix and the server never started.
 const rawScriptPath = process.argv?.[1] ?? '';
 let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
-try { scriptPath = realpathSync(scriptPath); } catch { /* symlink target missing — use original */ }
+try {
+  scriptPath = realpathSync(scriptPath);
+} catch {
+  if (process.env.DOLLHOUSE_DEBUG) {
+    console.error(`[DEBUG] Symlink resolution failed for ${rawScriptPath} — using original path`);
+  }
+}
 const isDirectExecution =
   scriptPath.endsWith(`${path.sep}dist${path.sep}index.js`) ||
   scriptPath.endsWith(`${path.sep}src${path.sep}index.ts`);
