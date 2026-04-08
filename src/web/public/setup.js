@@ -1159,6 +1159,10 @@
         return;
       }
 
+      // Hide the activation form for the active tier — the details panel replaces it (#1841)
+      var activeForm = details[license.tier];
+      if (activeForm) activeForm.hidden = true;
+
       const tierLabel = license.tier === 'free-commercial' ? 'Free Commercial' : 'Enterprise';
       const rows = [
         ['License type', tierLabel],
