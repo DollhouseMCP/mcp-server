@@ -779,6 +779,25 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
   }
 }
 
+/**
+ * Resolve the console port from config file, with range validation.
+ * Used by standalone --web mode when no CLI --port flag is provided.
+ * Returns undefined if the config file is missing or the port is invalid.
+ */
+async function resolvePortFromConfig(): Promise<number | undefined> {
+  try {
+    const { readFile } = await import('node:fs/promises');
+    const configPath = path.join(os.homedir(), '.dollhouse', 'config.yml');
+    const raw = await readFile(configPath, 'utf8');
+    if (raw.length > 64 * 1024) return undefined; // 64KB size limit
+    const { ConfigManager } = await import('./config/ConfigManager.js');
+    const configPort = ConfigManager.readPortFromYaml(raw);
+    return configPort && configPort >= 1024 && configPort <= 65535 ? configPort : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
   // Issue #704: --web flag starts the portfolio web UI instead of MCP server
   const isWebMode = process.argv.includes('--web');
@@ -797,7 +816,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
       // CLI flag parsed early; config file resolved after container bootstrap (#1840)
       const portArg = process.argv.find(a => a.startsWith('--port='));
-      const cliPort = portArg ? parseInt(portArg.split('=')[1], 10) : undefined;
+      const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
       const noBrowser = process.argv.includes('--no-open');
 
       let mcpAqlHandler;
@@ -855,25 +874,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       }
 
       // Resolve port: CLI flag → config file → env var → default (#1840)
-      let resolvedPort = cliPort;
-      if (!resolvedPort) {
-        try {
-          const { readFile } = await import('node:fs/promises');
-          const configPath = path.join(os.homedir(), '.dollhouse', 'config.yml');
-          const raw = await readFile(configPath, 'utf8');
-          // Security: size-limit config file (64KB max, matching SecureYamlParser)
-          // and use ConfigManager's YAML loading which applies FAILSAFE_SCHEMA.
-          if (raw.length <= 64 * 1024) {
-            const { ConfigManager } = await import('./config/ConfigManager.js');
-            const configPort = ConfigManager.readPortFromYaml(raw);
-            if (configPort && configPort >= 1024 && configPort <= 65535) {
-              resolvedPort = configPort;
-            }
-          }
-        } catch {
-          // Config file not available — fall through to env var default
-        }
-      }
+      const resolvedPort = cliPort || await resolvePortFromConfig();
 
       const { startWebServer } = await import('./web/server.js');
       await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });

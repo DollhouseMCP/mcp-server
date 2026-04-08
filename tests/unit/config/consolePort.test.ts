@@ -100,7 +100,13 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('cliPort');
     });
 
-    it('reads config file for port via ConfigManager.readPortFromYaml', async () => {
+    it('uses resolvePortFromConfig helper function', async () => {
+      const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
+      expect(source).toContain('async function resolvePortFromConfig');
+      expect(source).toContain('resolvePortFromConfig()');
+    });
+
+    it('resolvePortFromConfig uses ConfigManager.readPortFromYaml', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
       expect(source).toContain('ConfigManager.readPortFromYaml');
     });
@@ -113,7 +119,7 @@ describe('Console port configuration (#1840)', () => {
 
     it('size-limits config file before parsing (64KB)', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      expect(source).toContain('raw.length <= 64 * 1024');
+      expect(source).toContain('raw.length > 64 * 1024');
     });
 
     it('passes resolvedPort to startWebServer', async () => {
@@ -123,10 +129,8 @@ describe('Console port configuration (#1840)', () => {
 
     it('CLI flag takes precedence over config file', async () => {
       const source = await readFile(join(SRC, 'src/index.ts'), 'utf8');
-      const cliIdx = source.indexOf('let resolvedPort = cliPort');
-      const configIdx = source.indexOf('ConfigManager.readPortFromYaml');
-      expect(cliIdx).toBeGreaterThan(-1);
-      expect(configIdx).toBeGreaterThan(cliIdx);
+      // cliPort || resolvePortFromConfig() — CLI checked first via ||
+      expect(source).toContain('cliPort || await resolvePortFromConfig()');
     });
   });
 
