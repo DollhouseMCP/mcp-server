@@ -54,22 +54,20 @@
       + '<div class="sec-dashboard">'
 
       // Token panel
-      + '<div class="sec-card" data-collapsed="false">'
-      +   '<button class="sec-card-header" type="button" aria-expanded="true">'
+      + '<div class="sec-card">'
+      +   '<div class="sec-card-header">'
       +     '<h3 class="sec-card-title">Console Token</h3>'
-      +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
-      +   '</button>'
+      +   '</div>'
       +   '<div class="sec-card-body">'
       +     '<div id="sec-token-content">Loading...</div>'
       +   '</div>'
       + '</div>'
 
       // Authenticator panel
-      + '<div class="sec-card" data-collapsed="false">'
-      +   '<button class="sec-card-header" type="button" aria-expanded="true">'
+      + '<div class="sec-card">'
+      +   '<div class="sec-card-header">'
       +     '<h3 class="sec-card-title">Authenticator (TOTP &mdash; Time-based One-Time Password)</h3>'
-      +     '<span class="sec-card-toggle" aria-hidden="true">&#9662;</span>'
-      +   '</button>'
+      +   '</div>'
       +   '<div class="sec-card-body">'
       +     '<div id="sec-totp-content">Loading...</div>'
       +   '</div>'
@@ -342,16 +340,15 @@
       });
   }
 
-  /** Attach collapse/expand behavior to all card headers. Since headers
-   *  are <button> elements, Enter/Space keyboard activation is native. */
-  function attachCardToggles() {
-    document.querySelectorAll('.sec-card-header').forEach(function (header) {
-      header.addEventListener('click', function () {
-        var card = header.parentElement;
-        var collapsed = card.dataset.collapsed === 'true';
-        card.dataset.collapsed = collapsed ? 'false' : 'true';
-        header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
-      });
+  /** Attach collapse/expand to the intro card only (not token/TOTP panels). */
+  function attachIntroToggle() {
+    var intro = document.querySelector('.sec-card--intro .sec-card-header');
+    if (!intro) return;
+    intro.addEventListener('click', function () {
+      var card = intro.parentElement;
+      var collapsed = card.dataset.collapsed === 'true';
+      card.dataset.collapsed = collapsed ? 'false' : 'true';
+      intro.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
     });
   }
 
@@ -375,7 +372,7 @@
         }
       }
     }
-    attachCardToggles();
+    attachIntroToggle();
     poll();
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);
   }

@@ -87,14 +87,25 @@
   grid-column: 1 / -1;
 }
 
-/* Reset button styles when card header is a <button> for accessibility */
 .sec-card-header {
+  padding: 0.75rem 1rem;
+  background: var(--paper-base, #f8fbff);
+  border-bottom: 1px solid var(--line, #c8d5e9);
+}
+
+.sec-card-title {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink-900, #18243a);
+}
+
+/* Collapse/expand — intro card only */
+.sec-card--intro .sec-card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 0.75rem 1rem;
-  background: var(--paper-base, #f8fbff);
   border: none;
   border-bottom: 1px solid var(--line, #c8d5e9);
   cursor: pointer;
@@ -104,15 +115,8 @@
   text-align: left;
 }
 
-.sec-card-header:hover {
+.sec-card--intro .sec-card-header:hover {
   background: var(--surface-2, #f8fbff);
-}
-
-.sec-card-title {
-  margin: 0;
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--ink-900, #18243a);
 }
 
 .sec-card-toggle {

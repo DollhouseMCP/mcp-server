@@ -148,29 +148,38 @@ test.describe('TOTP panel', () => {
   });
 });
 
-// ── Card collapse/expand ────────────────────────────────────────────────
+// ── Card layout ─────────────────────────────────────────────────────────
 
-test.describe('Card collapse/expand', () => {
-  test('cards start expanded', async ({ page }) => {
+test.describe('Card layout', () => {
+  test('token and TOTP cards are always expanded (no collapse)', async ({ page }) => {
     await goToAuthTab(page);
-    const firstCard = page.locator('.sec-card').first();
-    const body = firstCard.locator('.sec-card-body');
-    await expect(body).toBeVisible();
+    // Token card body
+    const tokenBody = page.locator('#sec-token-content');
+    await expect(tokenBody).toBeVisible();
+    // TOTP card body
+    const totpBody = page.locator('#sec-totp-content');
+    await expect(totpBody).toBeVisible();
+    // Neither card should have a toggle chevron
+    const tokenCard = page.locator('#sec-token-content').locator('..').locator('..');
+    await expect(tokenCard.locator('.sec-card-toggle')).toHaveCount(0);
   });
 
-  test('clicking header collapses and re-expands card', async ({ page }) => {
+  test('intro card starts collapsed and can be expanded', async ({ page }) => {
     await goToAuthTab(page);
-    const firstCard = page.locator('.sec-card').first();
-    const header = firstCard.locator('.sec-card-header');
-    const body = firstCard.locator('.sec-card-body');
+    const introCard = page.locator('.sec-card--intro');
+    const body = introCard.locator('.sec-card-body');
+    const header = introCard.locator('.sec-card-header');
 
-    // Collapse
-    await header.click();
+    // Starts collapsed
     await expect(body).not.toBeVisible();
 
-    // Re-expand
+    // Click to expand
     await header.click();
     await expect(body).toBeVisible();
+
+    // Click to collapse again
+    await header.click();
+    await expect(body).not.toBeVisible();
   });
 });
 
