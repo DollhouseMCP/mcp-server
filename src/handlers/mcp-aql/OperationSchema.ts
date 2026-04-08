@@ -939,6 +939,8 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       '{ operation: "list_elements", element_type: "persona", params: { aggregate: { count: true, group_by: "category" } } }',
       // Response: { count: 42, element_type: "persona", groups: { "assistant": 15, "creative": 12, "technical": 15 } }
       '{ operation: "list_elements", element_type: "persona", params: { fields: "minimal" } }',
+      // TIP: For visual browsing, use open_portfolio_browser instead:
+      // { operation: "open_portfolio_browser", params: { tab: "portfolio", type: "persona" } }
     ],
   },
   get_element: {
@@ -1688,6 +1690,8 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     examples: [
       '{ operation: "search_elements", params: { query: "creative" } }',
       '{ operation: "search_elements", element_type: "persona", params: { query: "assistant", pageSize: 10 } }',
+      // TIP: For visual search, use open_portfolio_browser with q parameter:
+      // { operation: "open_portfolio_browser", params: { tab: "portfolio", q: "creative" } }
     ],
   },
   query_elements: {

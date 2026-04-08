@@ -485,25 +485,14 @@ function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefi
   console.error(`  Type "q" or "quit" to exit.\n`);
 }
 
-/**
- * Retry binding an already-configured Express app to a port.
- * Used by UnifiedConsole when EADDRINUSE occurs — avoids recreating
- * the Express app and all its routes on each retry attempt.
- */
-export async function retryBind(
-  app: import('express').Express,
-  port: number,
-  options: WebServerOptions,
-): Promise<BindResult> {
-  return bindAndListen(app, port, options);
-}
+// Stale process recovery — extracted to StaleProcessRecovery.ts for independent testing (#1850).
+import { recoverStalePort } from './console/StaleProcessRecovery.js';
+export { findPidOnPort, killStaleProcess, recoverStalePort } from './console/StaleProcessRecovery.js';
 
 /**
- * Bind the Express app to 127.0.0.1:port and handle success/conflict paths.
- * Returns a BindResult so the caller can detect and handle port conflicts
- * (e.g., retry after killing a stale process).
+ * Attempt a single port bind. Returns a BindResult without any recovery logic.
  */
-async function bindAndListen(
+function attemptBind(
   app: import('express').Express,
   port: number,
   options: WebServerOptions,
@@ -520,31 +509,41 @@ async function bindAndListen(
       resolve({ success: true });
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
-      resolve(handleListenError(err, port, options.openBrowser));
+      if (err.code === 'EADDRINUSE') {
+        resolve({ success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` });
+      } else {
+        logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+        resolve({ success: false, error: 'OTHER', detail: err.message });
+      }
     });
   });
 }
 
 /**
- * Handle errors from app.listen(). Returns a BindResult describing the failure.
- * EADDRINUSE is logged at WARN (not INFO) so it's visible in production logs.
+ * Bind the Express app to 127.0.0.1:port. On EADDRINUSE, attempt to find
+ * and kill the stale DollhouseMCP process holding the port, then retry once.
  */
-function handleListenError(
-  err: NodeJS.ErrnoException,
+async function bindAndListen(
+  app: import('express').Express,
   port: number,
-  openBrowser: boolean | undefined,
-): BindResult {
-  if (err.code === 'EADDRINUSE') {
-    const url = `http://${CONSOLE_HOST}:${port}`;
-    logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
-    console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
-    if (openBrowser) {
-      openInBrowser(url);
-    }
-    return { success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` };
+  options: WebServerOptions,
+): Promise<BindResult> {
+  const result = await attemptBind(app, port, options);
+  if (result.success || result.error !== 'EADDRINUSE') return result;
+
+  // Port occupied — attempt stale process recovery and retry
+  if (await recoverStalePort(port)) {
+    const retryResult = await attemptBind(app, port, options);
+    if (retryResult.success) return retryResult;
   }
-  logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
-  return { success: false, error: 'OTHER', detail: err.message };
+
+  // Still can't bind — fall through with warning
+  logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
+  console.error(`\n  DollhouseMCP Management Console (existing instance)\n  http://${CONSOLE_HOST}:${port}\n`);
+  if (options.openBrowser) {
+    openInBrowser(`http://${CONSOLE_HOST}:${port}`);
+  }
+  return result;
 }
 
 /**
