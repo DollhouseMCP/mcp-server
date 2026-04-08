@@ -19,6 +19,7 @@ import type { ILogSink, UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
+import { env } from '../../config/env.js';
 
 /** Maximum entries to buffer when leader is unreachable */
 const MAX_BUFFER_SIZE = 10_000;
@@ -35,8 +36,8 @@ const INITIAL_BACKOFF_MS = 1_000;
 /** Maximum backoff delay (ms) */
 const MAX_BACKOFF_MS = 30_000;
 
-/** Give up forwarding after this many consecutive failures */
-const MAX_CONSECUTIVE_FAILURES = 5;
+/** Give up forwarding after this many consecutive failures (#1850: configurable via env) */
+const MAX_CONSECUTIVE_FAILURES = env.DOLLHOUSE_CONSOLE_MAX_FORWARD_FAILURES;
 
 /** HTTP request timeout (ms) */
 const REQUEST_TIMEOUT_MS = 5_000;

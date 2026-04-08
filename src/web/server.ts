@@ -72,6 +72,17 @@ export function isWebServerRunning(): boolean {
 }
 
 /**
+ * Reset module-level server state. Exported for testing only —
+ * allows tests to exercise startWebServer/bindAndListen without
+ * interference from prior runs in the same process.
+ * @internal
+ */
+export function _resetServerState(): void {
+  serverRunning = false;
+  serverPort = DEFAULT_PORT;
+}
+
+/**
  * Options for starting the web server.
  */
 export interface WebServerOptions {

@@ -227,7 +227,7 @@ async function startAsLeader(
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   };
-  const BIND_RETRY_DELAYS = [1000, 2000, 4000];
+  const BIND_RETRY_DELAYS = env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS ?? [1000, 2000, 4000];
   let webResult = await startWebServer(serverOpts);
 
   if (webResult.bindResult && !webResult.bindResult.success && webResult.bindResult.error === 'EADDRINUSE') {

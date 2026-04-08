@@ -197,6 +197,23 @@ const envSchema = z.object({
   DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE: z.string().optional(),
 
   /**
+   * Issue #1850: Retry delays (in ms) when the leader fails to bind the console
+   * port due to EADDRINUSE. Each value is a successive backoff delay.
+   * Default: 1s, 2s, 4s (7s total). Increase for slow or remote environments.
+   */
+  DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS: z.string()
+    .optional()
+    .transform(v => v ? v.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 0) : undefined),
+
+  /**
+   * Issue #1850: Number of consecutive forwarding failures before a follower
+   * declares the leader dead and attempts self-promotion. Higher values reduce
+   * false positives in high-latency environments but delay recovery.
+   * Default: 10.
+   */
+  DOLLHOUSE_CONSOLE_MAX_FORWARD_FAILURES: z.coerce.number().int().min(1).max(100).default(10),
+
+  /**
    * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)
    * for privileged actions like token rotation. Default is true for safety;
    * set to false for headless CI and scripted deployments that need to rotate
