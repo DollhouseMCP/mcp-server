@@ -208,6 +208,68 @@ test.describe('Auth API endpoints respond (not 404)', () => {
   });
 });
 
+// ── Tab init on reload — all lazy-init tabs (#1837) ─────────────────────
+//
+// The bug: switchToTab() was called without lazyInitTab() on the
+// localStorage restore path, so the tab panel was visible but empty.
+// These tests simulate that exact flow: visit tab (sets localStorage),
+// then navigate to "/" (no hash) and verify the JS module initialized.
+
+test.describe('Tab content initializes on reload (#1837)', () => {
+  test('Auth tab has content after reload', async ({ page }) => {
+    // 1. Visit Auth tab — sets localStorage
+    await page.goto('/#security');
+    await page.locator('[data-tab="security"]').click();
+    await page.locator('.sec-dashboard').waitFor({ state: 'visible', timeout: 10_000 });
+
+    // 2. Reload without hash — forces localStorage restore path
+    await page.goto('/');
+
+    // 3. Verify the security module initialized (not just tab visible)
+    await expect(page.locator('#sec-token-content')).not.toHaveText('Loading...', { timeout: 10_000 });
+    await expect(page.locator('#sec-totp-content')).not.toHaveText('Loading...', { timeout: 10_000 });
+  });
+
+  test('Logs tab has content after reload', async ({ page }) => {
+    await page.goto('/#logs');
+    await page.locator('[data-tab="logs"]').click();
+    // Wait for SSE status indicator
+    await page.locator('text=connected').or(page.locator('text=reconnecting')).waitFor({ timeout: 10_000 });
+
+    await page.goto('/');
+
+    // Verify logs module initialized — filter controls should be present
+    await expect(page.locator('select').first()).toBeVisible({ timeout: 10_000 });
+    // SSE should be connecting/connected
+    await expect(page.locator('text=connected').or(page.locator('text=reconnecting'))).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('Metrics tab has content after reload', async ({ page }) => {
+    await page.goto('/#metrics');
+    await page.locator('[data-tab="metrics"]').click();
+    // Wait for at least "System Health" panel to appear
+    await page.locator('text=System Health').waitFor({ timeout: 10_000 });
+
+    await page.goto('/');
+
+    // Verify metrics module initialized — panels should be present
+    await expect(page.locator('text=System Health')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=Cache Efficiency')).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('Permissions tab has content after reload', async ({ page }) => {
+    await page.goto('/#permissions');
+    await page.locator('[data-tab="permissions"]').click();
+    await page.locator('text=Autonomy Overview').waitFor({ timeout: 10_000 });
+
+    await page.goto('/');
+
+    // Verify permissions module initialized — sections should be present
+    await expect(page.locator('text=Autonomy Overview')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('text=Live Decision Feed')).toBeVisible({ timeout: 10_000 });
+  });
+});
+
 // ── Security headers ────────────────────────────────────────────────────
 
 test.describe('Security headers', () => {
