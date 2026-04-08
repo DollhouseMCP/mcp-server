@@ -54,6 +54,7 @@ tests/coverage-integration/
 
 # Test results
 test-results/
+playwright-report/
 
 # Integration test temporary files
 .test-tmp/
