@@ -3,7 +3,7 @@
  * Verifies that the server correctly identifies different execution methods
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals';
 
 /**
@@ -137,7 +137,7 @@ describe('Execution Detection Logic', () => {
 
     test('should detect dollhousemcp bin entry on Windows', () => {
       if (path.sep !== '\\') return; // path.basename only splits on native separator
-      const { isCliExecution } = detectExecution('C:\\Users\\user\\AppData\\Roaming\\npm\\dollhousemcp', {});
+      const { isCliExecution } = detectExecution(String.raw`C:\Users\user\AppData\Roaming\npm\dollhousemcp`, {});
       expect(isCliExecution).toBe(true);
     });
 
@@ -148,7 +148,7 @@ describe('Execution Detection Logic', () => {
 
     test('should detect mcp-server bin entry on Windows', () => {
       if (path.sep !== '\\') return; // path.basename only splits on native separator
-      const { isCliExecution } = detectExecution('C:\\Users\\user\\AppData\\Roaming\\npm\\mcp-server', {});
+      const { isCliExecution } = detectExecution(String.raw`C:\Users\user\AppData\Roaming\npm\mcp-server`, {});
       expect(isCliExecution).toBe(true);
     });
 
