@@ -890,10 +890,14 @@
         btn.classList.toggle('is-selected', selected);
         btn.setAttribute('aria-pressed', String(selected));
       });
-      // Show/hide detail panels
+      // Show/hide detail panels. If the selected tier has an active license,
+      // keep the form hidden — showLicenseDetails() will display the details
+      // card instead (#1841).
+      var hideForm = activeLicense?.status === 'active' && activeLicense?.tier === tier && tier !== 'agpl';
       for (const [key, el] of Object.entries(details)) {
-        if (el) el.hidden = key !== tier;
+        if (el) el.hidden = key !== tier || hideForm;
       }
+      if (hideForm) showLicenseDetails(activeLicense);
       // Hide saved banner when switching
       if (savedBanner) savedBanner.hidden = true;
     }
@@ -1137,9 +1141,9 @@
               `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
             );
             if (!confirmed) {
-              // Restore the previous tier selection and re-hide the form
+              // Restore the previous tier selection (selectTier handles
+              // re-hiding the form when activeLicense is set)
               selectTier(activeLicense.tier);
-              showLicenseDetails(activeLicense);
               return;
             }
           }
