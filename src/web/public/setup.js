@@ -39,8 +39,8 @@
   const npxCmd = (tag) => `npx -y ${PKG}@${tag}`;
 
   /** Build all platform configs for a given pinned version */
-  function buildConfigs(version, channel) {
-    const ch = channel || 'latest';
+  function buildConfigs(version, channel = 'latest') {
+    const ch = channel;
     const result = {};
     for (const { id, rootKey, cli, toml } of PLATFORMS) {
       const entry = {
@@ -140,6 +140,7 @@
 
   // ── Channel selector ──────────────────────────────────────────────────
 
+  /** User-facing descriptions for each release channel, shown below the selector. */
   const CHANNEL_HINTS = {
     latest: 'Recommended for most users.',
     rc: 'Preview of the next stable release. May have minor issues.',

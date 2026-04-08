@@ -55,6 +55,9 @@ const ALLOWED_CLIENTS = new Set([
   'codex',
 ]);
 
+/** Allowed release channels for the install endpoint. */
+const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
+
 /** Rate limit: 5 installs per minute */
 const installLimiter = new SlidingWindowRateLimiter(5, 60_000);
 
@@ -442,16 +445,17 @@ export function createSetupRoutes(): {
     if (!normalizedClient) return;
 
     // Validate version or channel if provided — must be semver-like or a known channel (no shell injection)
-    const ALLOWED_CHANNELS = new Set(['latest', 'beta', 'rc']);
     const { version, channel } = req.body as { version?: string; channel?: string };
     const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
     if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
       res.status(400).json({ error: 'Invalid version format. Expected semver (e.g., 2.0.2)' });
       return;
     }
-    // Channel overrides version for auto-updating installs (beta, rc, latest)
-    const effectiveVersion = channel && ALLOWED_CHANNELS.has(channel) && channel !== 'latest'
-      ? channel
+    // Channel overrides version for auto-updating installs (beta, rc, latest).
+    // Normalize and validate against the allowlist to prevent injection.
+    const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
+    const effectiveVersion = normalizedChannel && ALLOWED_INSTALL_CHANNELS.has(normalizedChannel) && normalizedChannel !== 'latest'
+      ? normalizedChannel
       : normalizedVersion;
 
     const tag = effectiveVersion ? `@${effectiveVersion}` : '@latest';
