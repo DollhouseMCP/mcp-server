@@ -49,6 +49,15 @@ function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
+/** Helper matching the same logic as StaleProcessRecovery.ts binary detection. */
+function isDollhouseProcess(cmdLine: string): boolean {
+  const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
+    cmdLine.includes('.bin/dollhousemcp');
+  const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
+    cmdLine.includes('dist/index.js');
+  return isDollhouseBin || isMcpServerBin;
+}
+
 describe('Stale Process Recovery (#1850)', () => {
 
   // ── findPidOnPort ─────────────────────────────────────────────────────
@@ -93,13 +102,17 @@ describe('Stale Process Recovery (#1850)', () => {
         });
         child.unref();
 
+        const childPid = child.pid;
+        expect(childPid).toBeDefined();
+        if (!childPid) return;
+
         try {
           // Should refuse — command is 'node -e setTimeout...' not mcp-server
-          expect(await Recovery.killStaleProcess(child.pid!, 41715)).toBe(false);
+          expect(await Recovery.killStaleProcess(childPid, 41715)).toBe(false);
           // Verify child is still alive
-          expect(() => process.kill(child.pid!, 0)).not.toThrow();
+          expect(() => process.kill(childPid, 0)).not.toThrow();
         } finally {
-          try { process.kill(child.pid!, 'SIGKILL'); } catch { /* dead */ }
+          try { process.kill(childPid, 'SIGKILL'); } catch { /* dead */ }
         }
       }, 10000);
     }
@@ -259,15 +272,6 @@ describe('Stale Process Recovery (#1850)', () => {
   // ── Safety: binary path detection ─────────────────────────────────────
 
   describe('binary path detection safety', () => {
-    // Helper matching the same logic as StaleProcessRecovery.ts
-    function isDollhouseProcess(cmdLine: string): boolean {
-      const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
-        cmdLine.includes('.bin/dollhousemcp');
-      const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
-        cmdLine.includes('dist/index.js');
-      return isDollhouseBin || isMcpServerBin;
-    }
-
     it('rejects paths that only contain mcp-server as a directory', () => {
       expect(isDollhouseProcess('/Users/mick/Developer/mcp-server/node_modules/.bin/jest')).toBe(false);
     });

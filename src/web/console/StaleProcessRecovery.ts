@@ -59,18 +59,25 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFileCb);
 
+  // Security verification flow — three checks must pass before we kill:
+  // 1. Process must be owned by the current OS user (prevents cross-user kills)
+  // 2. Command line must match a DollhouseMCP binary path (prevents killing other services)
+  // 3. If both fail or ps can't run, we refuse — safe default is to not kill
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: 1000 });
+
+    // Check 1: User ownership — only kill our own processes
     const currentUser = (await import('node:os')).userInfo().username;
     if (!stdout.trim().startsWith(currentUser)) {
-      logger.warn(`[WebUI] Port ${port} held by different user (pid ${pid}) — not killing`);
+      await logger.warn(`[WebUI] Port ${port} held by different user (pid ${pid}) — not killing`);
       return false;
     }
+
+    // Check 2: Binary identity — must be .bin/mcp-server, .bin/dollhousemcp,
+    // /bin/dollhousemcp (global install), or dist/index.js (direct node execution).
+    // NOT just 'mcp-server' anywhere in the path — that would match Jest workers
+    // running from within the mcp-server project directory.
     const cmdLine = stdout.trim();
-    // Check that the process is actually running a DollhouseMCP binary, not just
-    // a process whose working directory contains 'mcp-server' (e.g., a test runner).
-    // Match: .bin/dollhousemcp, .bin/mcp-server, /bin/dollhousemcp, dist/index.js,
-    // or 'node ... --web' with dist/index.js in the arguments.
     const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
       cmdLine.includes('.bin/dollhousemcp');
     const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
@@ -81,7 +88,8 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
     }
     await logger.debug(`[WebUI] Verified stale process ${pid} is DollhouseMCP`, { cmdLine });
   } catch (err) {
-    logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill`, {
+    // Check 3: If we can't verify, don't kill — safe default
+    await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill`, {
       error: err instanceof Error ? err.message : String(err),
     });
     return false;
