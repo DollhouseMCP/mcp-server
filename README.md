@@ -48,7 +48,7 @@
 - **Edit** any existing element to refine it
 - **Browse** the [community collection](https://dollhousemcp.github.io/collection/) and install elements made by other users
 
-Your **portfolio** (`~/.dollhouse/portfolio/`) is a local folder that holds all your Dollhouse elements. It ships with 38 starters — including the **dollhouse-expert-suite** ensemble (persona + knowledge base) you can activate for guided help. Everything you create or install lands here. Share back to the community or sync to GitHub whenever you're ready.
+Your **portfolio** (`~/.dollhouse/portfolio/` on macOS/Linux, `%USERPROFILE%\.dollhouse\portfolio\` on Windows) is a local folder that holds all your Dollhouse elements. It ships with 38 starters — including the **dollhouse-expert-suite** ensemble (persona + knowledge base) you can activate for guided help. Everything you create or install lands here. Share back to the community or sync to GitHub whenever you're ready.
 
 ---
 
@@ -213,7 +213,7 @@ Policies stack across all active elements. If one persona allows an operation bu
 
 ## Portfolio
 
-Your Dollhouse elements live in a local portfolio at `~/.dollhouse/portfolio/`. Ask your AI to "open the portfolio browser" (or call `open_portfolio_browser` via MCP-AQL) to browse them visually. Activation is done through the LLM — ask it to "activate the Dollhouse code review persona" and it handles the rest.
+Your Dollhouse elements live in a local portfolio at `~/.dollhouse/portfolio/` (macOS/Linux) or `%USERPROFILE%\.dollhouse\portfolio\` (Windows). Ask your AI to "open the portfolio browser" (or call `open_portfolio_browser` via MCP-AQL) to browse them visually. Activation is done through the LLM — ask it to "activate the Dollhouse code review persona" and it handles the rest.
 
 <div align="center">
   <img src="docs/assets/portfolio-browser.png" alt="DollhouseMCP Portfolio Browser" width="700" />
