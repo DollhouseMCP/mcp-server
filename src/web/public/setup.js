@@ -829,6 +829,12 @@
 
   // ── License selector (#1746) ──────────────────────────────────────────
 
+  function formatActivationDate(license) {
+    if (license.verifiedAt) return new Date(license.verifiedAt).toLocaleString();
+    if (license.attestedAt) return new Date(license.attestedAt).toLocaleString();
+    return '—';
+  }
+
   function initLicense() {
     const tiers = document.getElementById('license-tiers');
     if (!tiers) return;
@@ -1110,12 +1116,6 @@
 
     const licenseDetailsPanel = document.getElementById('license-active-details');
     const licenseInfoTable = document.getElementById('license-info-tbody');
-
-    function formatActivationDate(license) {
-      if (license.verifiedAt) return new Date(license.verifiedAt).toLocaleString();
-      if (license.attestedAt) return new Date(license.attestedAt).toLocaleString();
-      return '—';
-    }
 
     function showLicenseDetails(license) {
       if (!licenseDetailsPanel || !licenseInfoTable) return;
