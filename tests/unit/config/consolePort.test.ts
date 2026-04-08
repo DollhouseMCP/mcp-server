@@ -271,7 +271,7 @@ describe('Console port configuration (#1840)', () => {
 
     it('logs and opens existing console on conflict', async () => {
       const source = await readFile(join(SRC, 'src/web/server.ts'), 'utf8');
-      expect(source).toContain('opening existing console');
+      expect(source).toContain('another process holds this port');
     });
 
     it('never kills processes on the configured port', async () => {
@@ -281,12 +281,12 @@ describe('Console port configuration (#1840)', () => {
 
     it('resolves promise on conflict (does not throw)', async () => {
       const source = await readFile(join(SRC, 'src/web/server.ts'), 'utf8');
-      // The error handler calls resolve(), not reject()
+      // The error handler calls resolve(handleListenError(...)), not reject()
       const errorSection = source.slice(
         source.indexOf("httpServer.on('error'"),
         source.indexOf('});', source.indexOf("httpServer.on('error'")) + 10,
       );
-      expect(errorSection).toContain('resolve()');
+      expect(errorSection).toContain('resolve(');
       expect(errorSection).not.toContain('reject(');
     });
   });
