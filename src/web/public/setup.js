@@ -39,24 +39,25 @@
   const npxCmd = (tag) => `npx -y ${PKG}@${tag}`;
 
   /** Build all platform configs for a given pinned version */
-  function buildConfigs(version) {
+  function buildConfigs(version, channel = 'latest') {
+    const ch = channel;
     const result = {};
     for (const { id, rootKey, cli, toml } of PLATFORMS) {
       const entry = {
         npx: cli
-          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd('latest')}`, isTerminal: true }
-          : jsonConfig(rootKey, npxCmd('latest')),
+          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(ch)}`, isTerminal: true }
+          : jsonConfig(rootKey, npxCmd(ch)),
         global: cli
           ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(version)}`, isTerminal: true }
           : jsonConfig(rootKey, npxCmd(version)),
       };
       if (cli) {
-        entry.npxJson = jsonConfig(rootKey, npxCmd('latest'));
+        entry.npxJson = jsonConfig(rootKey, npxCmd(ch));
         entry.globalJson = jsonConfig(rootKey, npxCmd(version));
       }
       if (toml) {
         const tomlBlock = (tag) => `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${tag}"]`;
-        entry.npxToml = { code: tomlBlock('latest') };
+        entry.npxToml = { code: tomlBlock(ch) };
         entry.globalToml = { code: tomlBlock(version) };
       }
       result[id] = entry;
@@ -66,7 +67,8 @@
 
   // Start with a placeholder version, update once we fetch from server
   let pinnedVersion = 'latest';
-  let configs = buildConfigs(pinnedVersion);
+  let currentChannel = 'latest';
+  let configs = buildConfigs(pinnedVersion, currentChannel);
 
   // ── Current method state ──────────────────────────────────────────────
 
@@ -111,6 +113,7 @@
     // Cache DOM elements queried on every toggle click
     const prereq = document.getElementById('setup-pinned-prereq');
     const mcpbSection = document.getElementById('setup-mcpb-section');
+    const channelToggle = document.getElementById('setup-channel-toggle');
 
     const handleToggle = (btn) => {
       const method = btn.dataset.method;
@@ -125,6 +128,7 @@
 
       if (prereq) prereq.hidden = method !== 'global';
       if (mcpbSection) mcpbSection.hidden = method !== 'global';
+      if (channelToggle) channelToggle.hidden = method === 'global';
 
       updateAllConfigs(method);
       updateInstallButtonLabels();
@@ -133,6 +137,34 @@
 
     buttons.forEach((btn) => {
       btn.addEventListener('click', () => handleToggle(btn));
+    });
+
+    // Sync initial visibility — if the browser restored a non-default
+    // active button (e.g. pinned was selected before reload), apply
+    // the hidden state now without waiting for a click.
+    if (channelToggle) channelToggle.hidden = currentMethod === 'global';
+  };
+
+  // ── Channel selector ──────────────────────────────────────────────────
+
+  /** User-facing descriptions for each release channel, shown below the selector. */
+  const CHANNEL_HINTS = {
+    latest: 'Recommended for most users.',
+    rc: 'Preview of the next stable release. May have minor issues.',
+    beta: 'Cutting-edge features. May be unstable.',
+  };
+
+  const initChannelSelector = () => {
+    const select = document.getElementById('setup-channel-select');
+    const hint = document.getElementById('setup-channel-hint');
+    if (!select) return;
+
+    select.addEventListener('change', () => {
+      currentChannel = select.value;
+      if (hint) hint.textContent = CHANNEL_HINTS[currentChannel] || '';
+      configs = buildConfigs(pinnedVersion, currentChannel);
+      updateAllConfigs(currentMethod);
+      updateInstallButtonLabels();
     });
   };
 
@@ -285,9 +317,10 @@
     const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
 
     // Update Install buttons
+    const channelLabel = currentChannel === 'latest' ? '' : ` (${currentChannel})`;
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
       if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
-      btn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      btn.textContent = isPinned ? `Configure v${pinnedVersion}` : `Configure Now${channelLabel}`;
     });
 
     // Update auto-install badges and descriptions
@@ -311,7 +344,7 @@
 
   // ── Install buttons ────────────────────────────────────────────────────
 
-  /** Handle Install Now button click */
+  /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
     const client = btn.dataset.installClient;
     if (!client) return;
@@ -320,7 +353,7 @@
     const originalText = btn.textContent;
 
     btn.disabled = true;
-    btn.textContent = 'Installing...';
+    btn.textContent = 'Configuring...';
     btn.classList.add('is-loading');
     if (status) {
       status.textContent = '';
@@ -331,6 +364,8 @@
       const payload = { client };
       if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
         payload.version = pinnedVersion;
+      } else if (currentChannel !== 'latest') {
+        payload.channel = currentChannel;
       }
 
       const res = await DollhouseAuth.apiFetch('/api/setup/install', {
@@ -524,8 +559,8 @@
       pinnedVersion = data.latest?.version || data.running?.version || pinnedVersion;
       if (pinnedVersion === 'latest') return;
 
-      // Rebuild configs with real version
-      configs = buildConfigs(pinnedVersion);
+      // Rebuild configs with real version and current channel
+      configs = buildConfigs(pinnedVersion, currentChannel);
 
       // Update prereq section
       const versionLabel = document.getElementById('pinned-version-label');
@@ -680,7 +715,7 @@
       installBtn.classList.add('is-match');
     } else {
       const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
-      installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      installBtn.textContent = isPinned ? `Configure v${pinnedVersion}` : 'Configure Now';
       installBtn.disabled = false;
       installBtn.classList.remove('is-match');
     }
@@ -751,12 +786,12 @@
   const openBtnHtml = (openClient) =>
     openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${openClient}">Open config file</button>` : '';
 
-  /** Build the Install Now + CLI terminal command section */
+  /** Build the Configure Now + CLI terminal command section */
   const renderInstallSection = (p) => {
     let html = '';
     if (p.installClient) {
       html += '<div class="setup-method setup-method-primary">';
-      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
+      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Configure Now</button>`;
       html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
     }
     if (p.cli) {
@@ -1259,6 +1294,7 @@
   renderGeneratedPanels();
   highlightOSPaths(os);
   initMethodToggle();
+  initChannelSelector();
   initPlatformTabs();
   initCopyButtons();
   initInstallButtons();

@@ -115,6 +115,41 @@ describe('Setup Routes — API Endpoints', () => {
       }
     });
 
+    it('accepts channel parameter for release channel installs', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'beta' });
+
+      // Should not get 400 — channel is valid
+      expect(res.status).not.toBe(400);
+    });
+
+    it('accepts rc channel parameter', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'rc' });
+
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores invalid channel values (falls back to latest)', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'nightly' });
+
+      // Invalid channel is silently ignored, not rejected — falls back to @latest
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores channel with shell injection attempt', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: '; rm -rf /' });
+
+      // Invalid channel ignored, falls back to @latest — no 500
+      expect(res.status).not.toBe(500);
+    });
+
     it('normalizes client name to lowercase', async () => {
       const res = await request(app)
         .post('/api/setup/install')
@@ -323,17 +358,17 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
-  describe('Install Now buttons (static panels)', () => {
-    it('has Install Now for claude (in HTML)', () => {
+  describe('Configure Now buttons (static panels)', () => {
+    it('has Configure Now for claude (in HTML)', () => {
       expect(html).toContain('data-install-client="claude"');
     });
 
-    it('has Install Now for claude-code (in HTML)', () => {
+    it('has Configure Now for claude-code (in HTML)', () => {
       expect(html).toContain('data-install-client="claude-code"');
     });
   });
 
-  describe('Install Now buttons (generated panels)', () => {
+  describe('Configure Now buttons (generated panels)', () => {
     it('JS PLATFORMS registry defines installClient for generated platforms', () => {
       const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
       for (const client of generatedWithInstall) {
@@ -495,6 +530,38 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
+  describe('Release channel selector', () => {
+    it('has channel selector fieldset', () => {
+      expect(html).toContain('id="setup-channel-toggle"');
+    });
+
+    it('has channel select dropdown', () => {
+      expect(html).toContain('id="setup-channel-select"');
+    });
+
+    it('has Stable, Release Candidate, and Beta options', () => {
+      expect(html).toContain('value="latest"');
+      expect(html).toContain('value="rc"');
+      expect(html).toContain('value="beta"');
+      expect(html).toContain('>Stable<');
+      expect(html).toContain('>Release Candidate<');
+      expect(html).toContain('>Beta<');
+    });
+
+    it('defaults to Stable', () => {
+      expect(html).toContain('value="latest" selected');
+    });
+
+    it('has accessible hint text linked via aria-describedby', () => {
+      expect(html).toContain('aria-describedby="setup-channel-hint"');
+      expect(html).toContain('id="setup-channel-hint"');
+    });
+
+    it('has Release channel legend', () => {
+      expect(html).toContain('Release channel');
+    });
+  });
+
   describe('Verify section', () => {
     it('has verification prompt', () => {
       expect(html).toContain('What DollhouseMCP tools do you have available?');
@@ -555,6 +622,40 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
   });
 
+  describe('Channel selector logic', () => {
+    it('tracks currentChannel state', () => {
+      expect(js).toContain("let currentChannel = 'latest'");
+    });
+
+    it('has channel hints for all three channels', () => {
+      expect(js).toContain('CHANNEL_HINTS');
+      expect(js).toContain("latest:");
+      expect(js).toContain("rc:");
+      expect(js).toContain("beta:");
+    });
+
+    it('buildConfigs accepts channel parameter with default', () => {
+      expect(js).toMatch(/function buildConfigs\(version,\s*channel\s*=\s*'latest'\)/);
+    });
+
+    it('passes channel to buildConfigs on selector change', () => {
+      expect(js).toContain("configs = buildConfigs(pinnedVersion, currentChannel)");
+    });
+
+    it('sends channel in install payload when non-stable', () => {
+      expect(js).toContain('payload.channel = currentChannel');
+    });
+
+    it('shows channel label on install button when non-stable', () => {
+      expect(js).toContain("channelLabel");
+      expect(js).toContain("`Configure Now${channelLabel}`");
+    });
+
+    it('updates hint text on channel change', () => {
+      expect(js).toContain("hint.textContent = CHANNEL_HINTS[currentChannel]");
+    });
+  });
+
   describe('Functions', () => {
     it('exports OS detection', () => {
       expect(js).toContain('detectOS');
@@ -562,6 +663,10 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
     it('exports method toggle init', () => {
       expect(js).toContain('initMethodToggle');
+    });
+
+    it('exports channel selector init', () => {
+      expect(js).toContain('initChannelSelector');
     });
 
     it('exports platform tabs init', () => {
@@ -628,6 +733,22 @@ describe('Setup Tab — CSS Integrity', () => {
     expect(css).toContain('@media');
     expect(css).toContain('max-width: 640px');
   });
+
+  it('defines channel selector styles', () => {
+    expect(css).toContain('.setup-channel-toggle');
+    expect(css).toContain('.setup-channel-select');
+    expect(css).toContain('.setup-channel-hint');
+    expect(css).toContain('.setup-channel-legend');
+  });
+
+  it('channel select has focus state', () => {
+    expect(css).toContain('.setup-channel-select:focus');
+  });
+
+  it('channel toggle has hidden attribute override to prevent display:flex conflict', () => {
+    expect(css).toContain('.setup-channel-toggle[hidden]');
+    expect(css).toContain('display: none');
+  });
 });
 
 // ── Regression tests ──────────────────────────────────────────────────
@@ -670,7 +791,7 @@ describe('Setup Tab — Regressions', () => {
   });
 
   describe('UX copy quality', () => {
-    it('auto-install leads with action not mechanism', () => {
+    it('auto-configure leads with action not mechanism', () => {
       // "Pulls the latest version" should come before "Uses npx"
       const pullsIdx = html.indexOf('Pulls the latest version');
       const usesNpxIdx = html.indexOf('Uses <code>npx @latest</code>');
@@ -728,8 +849,8 @@ describe('Setup Tab — Regressions', () => {
       expect(js).toContain('pinned-local-cmd');
     });
 
-    it('rebuilds configs with fetched version', () => {
-      expect(js).toContain('configs = buildConfigs(pinnedVersion)');
+    it('rebuilds configs with fetched version and channel', () => {
+      expect(js).toContain('configs = buildConfigs(pinnedVersion, currentChannel)');
     });
   });
 
@@ -848,7 +969,48 @@ describe('Setup Tab — Regressions', () => {
 
     it('JS updates button label to show pinned version', () => {
       expect(js).toContain('updateInstallButtonLabels');
-      expect(js).toContain('Install v${pinnedVersion}');
+      expect(js).toContain('Configure v${pinnedVersion}');
+    });
+  });
+
+  describe('Channel selector regression', () => {
+    it('channel selector initializes after method toggle', () => {
+      const methodIdx = js.indexOf('initMethodToggle()');
+      const channelIdx = js.indexOf('initChannelSelector()');
+      expect(methodIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(methodIdx);
+    });
+
+    it('channel defaults to latest on page load', () => {
+      expect(js).toContain("let currentChannel = 'latest'");
+    });
+
+    it('no hardcoded @beta or @rc package references in source', () => {
+      expect(js).not.toContain('@dollhousemcp/mcp-server@rc');
+      expect(js).not.toContain('@dollhousemcp/mcp-server@beta');
+    });
+
+    it('channel selector updates configs on change', () => {
+      expect(js).toContain('updateAllConfigs(currentMethod)');
+    });
+
+    it('backend allowlists channel values', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain("ALLOWED_INSTALL_CHANNELS");
+      expect(ts).toContain("'latest'");
+      expect(ts).toContain("'beta'");
+      expect(ts).toContain("'rc'");
+    });
+
+    it('backend normalizes channel input', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain('UnicodeValidator.normalize(channel)');
+    });
+
+    it('channel selector hidden on init when pinned mode is active', () => {
+      // The init sync line must apply hidden state without waiting for a click
+      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
     });
   });
 
@@ -1036,7 +1198,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('platforms with installClient have an Install Now button', () => {
+  it('platforms with installClient have a Configure Now button', () => {
     const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
     for (const p of withInstall) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1046,7 +1208,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('LM Studio does not have an Install Now button', () => {
+  it('LM Studio does not have a Configure Now button', () => {
     const panel = document.getElementById('setup-panel-lmstudio');
     const btn = panel?.querySelector('.setup-install-btn');
     expect(btn).toBeNull();
