@@ -113,6 +113,7 @@
     // Cache DOM elements queried on every toggle click
     const prereq = document.getElementById('setup-pinned-prereq');
     const mcpbSection = document.getElementById('setup-mcpb-section');
+    const channelToggle = document.getElementById('setup-channel-toggle');
 
     const handleToggle = (btn) => {
       const method = btn.dataset.method;
@@ -127,6 +128,7 @@
 
       if (prereq) prereq.hidden = method !== 'global';
       if (mcpbSection) mcpbSection.hidden = method !== 'global';
+      if (channelToggle) channelToggle.hidden = method === 'global';
 
       updateAllConfigs(method);
       updateInstallButtonLabels();
