@@ -196,6 +196,9 @@ const envSchema = z.object({
    */
   DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE: z.string().optional(),
 
+  // Leader/Follower Recovery (#1850)
+  // ============================================================================
+
   /**
    * Issue #1850: Retry delays (in ms) when the leader fails to bind the console
    * port due to EADDRINUSE. Each value is a successive backoff delay.
