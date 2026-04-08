@@ -71,6 +71,8 @@ export class LeaderForwardingLogSink implements ILogSink {
     private readonly sessionId: string,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
+    /** Callback invoked when the leader is presumed dead after MAX_CONSECUTIVE_FAILURES (#1850). */
+    private readonly onLeaderDeath?: () => void,
   ) {
     this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
@@ -160,6 +162,11 @@ export class LeaderForwardingLogSink implements ILogSink {
         if (this.flushTimer) {
           clearInterval(this.flushTimer);
           this.flushTimer = null;
+        }
+        // Notify the orchestrator so it can attempt follower-to-leader promotion (#1850).
+        // Fired asynchronously so handleFailure completes cleanly before promotion runs.
+        if (this.onLeaderDeath) {
+          queueMicrotask(() => this.onLeaderDeath!());
         }
       }
       return;

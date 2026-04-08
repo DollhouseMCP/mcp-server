@@ -62,7 +62,7 @@ const HEARTBEAT_INTERVAL_MS = 10_000;
 const HEARTBEAT_STALE_MS = 30_000;
 
 /** Current lock file schema version */
-const LOCK_VERSION = 1;
+export const LOCK_VERSION = 1;
 
 /**
  * Information stored in the leader lock file.
