@@ -50,8 +50,9 @@ describe('Process Lifecycle Cleanup (#1856)', () => {
     });
 
     it('PID extraction from port filename works', () => {
+      const PORT_FILE_RE = /^permission-server-(\d+)\.port$/;
       const extract = (filename: string): number | null => {
-        const match = filename.match(/^permission-server-(\d+)\.port$/);
+        const match = PORT_FILE_RE.exec(filename);
         return match ? Number(match[1]) : null;
       };
 
@@ -69,29 +70,14 @@ describe('Process Lifecycle Cleanup (#1856)', () => {
       expect(() => process.kill(99999999, 0)).toThrow();
     });
 
-    it('simulated sweep removes dead PID files from temp dir', async () => {
+    it('sweepStalePortFiles removes dead PID files from custom dir', async () => {
       // Write files for dead and alive PIDs
       await writeFile(join(runDir, 'permission-server-99999991.port'), '41715');
       await writeFile(join(runDir, 'permission-server-99999992.port'), '41715');
       await writeFile(join(runDir, `permission-server-${process.pid}.port`), '41715');
 
-      // Manual sweep — same logic as sweepStalePortFiles but on temp dir
-      const files = await readdir(runDir);
-      const portFiles = files.filter(f => /^permission-server-\d+\.port$/.test(f));
-      let removed = 0;
-
-      for (const file of portFiles) {
-        const match = file.match(/^permission-server-(\d+)\.port$/);
-        if (!match) continue;
-        const pid = Number(match[1]);
-        let alive = false;
-        try { process.kill(pid, 0); alive = true; } catch { /* dead */ }
-        if (!alive) {
-          const { unlink } = await import('node:fs/promises');
-          await unlink(join(runDir, file));
-          removed++;
-        }
-      }
+      const { sweepStalePortFiles } = await import('../../../../src/web/portDiscovery.js');
+      const removed = await sweepStalePortFiles(runDir);
 
       expect(removed).toBe(2); // Two dead PIDs
       const remaining = await readdir(runDir);

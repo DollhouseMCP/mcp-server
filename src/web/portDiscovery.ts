@@ -142,17 +142,22 @@ export function registerPortCleanup(): void {
  * is no longer alive. This prevents unbounded accumulation of port files
  * from crashed or abandoned sessions.
  *
+ * Note: This only removes metadata files, not processes or ports. The port
+ * binding itself (in bindAndListen) is atomic via listen(). There is no race
+ * between sweeping files and binding — they operate on independent resources.
+ *
  * Safe to call on every startup — only removes files for dead processes.
  */
-export async function sweepStalePortFiles(): Promise<number> {
+export async function sweepStalePortFiles(customDir?: string): Promise<number> {
   try {
-    await mkdir(RUN_DIR, { recursive: true });
-    const files = await readdir(RUN_DIR);
-    const portFiles = files.filter(f => /^permission-server-\d+\.port$/.test(f));
+    const dir = customDir || RUN_DIR;
+    await mkdir(dir, { recursive: true });
+    const files = await readdir(dir);
+    const PORT_FILE_RE = /^permission-server-(\d+)\.port$/;
     let removed = 0;
 
-    for (const file of portFiles) {
-      const match = file.match(/^permission-server-(\d+)\.port$/);
+    for (const file of files) {
+      const match = PORT_FILE_RE.exec(file);
       if (!match) continue;
       const pid = Number(match[1]);
 
@@ -162,14 +167,14 @@ export async function sweepStalePortFiles(): Promise<number> {
 
       if (!alive) {
         try {
-          await unlink(join(RUN_DIR, file));
+          await unlink(join(dir, file));
           removed++;
         } catch { /* already gone */ }
       }
     }
 
     if (removed > 0) {
-      logger.info(`[PortDiscovery] Swept ${removed} stale port files from ${RUN_DIR}`);
+      logger.info(`[PortDiscovery] Swept ${removed} stale port files from ${dir}`);
     }
     return removed;
   } catch (err) {
