@@ -37,13 +37,24 @@ export async function findPidOnPort(port: number): Promise<number | null> {
   const { execFile: execFileCb } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFileCb);
-  try {
-    const { stdout } = await execFileAsync('lsof', ['-ti', `:${port}`], { timeout: 1000 });
-    const pids = stdout.trim().split('\n').map(Number).filter(n => !Number.isNaN(n) && n > 0);
-    return pids.find(p => p !== process.pid) ?? null;
-  } catch {
-    return null;
+
+  // Try lsof first (macOS + most Linux), fall back to fuser (minimal Linux/Docker)
+  for (const cmd of [
+    { bin: 'lsof', args: ['-ti', `:${port}`] },
+    { bin: 'fuser', args: [`${port}/tcp`] },
+  ]) {
+    try {
+      const { stdout, stderr } = await execFileAsync(cmd.bin, cmd.args, { timeout: 1000 });
+      // fuser outputs to stderr on some systems
+      const output = (stdout || stderr || '').trim();
+      const pids = output.split(/[\s\n]+/).map(Number).filter(n => !Number.isNaN(n) && n > 0);
+      const otherPid = pids.find(p => p !== process.pid);
+      if (otherPid) return otherPid;
+    } catch {
+      continue; // command not found or no results — try next
+    }
   }
+  return null;
 }
 
 /**

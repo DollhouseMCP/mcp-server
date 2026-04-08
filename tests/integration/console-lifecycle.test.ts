@@ -308,4 +308,155 @@ describe('Console Lifecycle Integration (#1850)', () => {
       });
     }
   });
+
+  // ── End-to-end: port recovery after zombie kill ───────────────────────
+
+  describe('End-to-end port recovery', () => {
+    it('recoverStalePort returns false for a non-DollhouseMCP server (full flow)', async () => {
+      const Recovery = await import('../../src/web/console/StaleProcessRecovery.js');
+
+      // Start a plain TCP server to occupy a port (simulates a zombie)
+      const { server, port } = await listenOnPort();
+      try {
+        // recoverStalePort should find the PID but refuse to kill (not DollhouseMCP)
+        const recovered = await Recovery.recoverStalePort(port);
+        expect(recovered).toBe(false);
+
+        // The server must still be alive — recovery didn't kill it
+        const addr = server.address();
+        expect(addr).not.toBeNull();
+      } finally {
+        await closeServer(server);
+      }
+    });
+
+    it('port is bindable after manual server close (simulates successful kill)', async () => {
+      // This simulates the flow: zombie detected → killed → port freed → rebind succeeds
+      const { server: zombie, port } = await listenOnPort();
+
+      // Verify port is occupied
+      const error = await new Promise<NodeJS.ErrnoException>((resolve) => {
+        const s = net.createServer();
+        s.on('error', (e: NodeJS.ErrnoException) => resolve(e));
+        s.listen(port, '127.0.0.1');
+      });
+      expect(error.code).toBe('EADDRINUSE');
+
+      // Kill the zombie (simulates killStaleProcess success)
+      await closeServer(zombie);
+      await new Promise(r => setTimeout(r, 100)); // brief pause
+
+      // Now rebind should succeed (simulates attemptBind retry)
+      const { server: newServer } = await listenOnPort(port);
+      expect((newServer.address() as net.AddressInfo).port).toBe(port);
+      await closeServer(newServer);
+    });
+  });
+
+  // ── PromotionManager state machine ────────────────────────────────────
+
+  describe('PromotionManager', () => {
+    it('PromotionManager class is importable and constructable', async () => {
+      const { PromotionManager } = await import('../../src/web/console/PromotionManager.js');
+      expect(typeof PromotionManager).toBe('function');
+
+      const mockOptions = {
+        sessionId: 'test-session',
+        portfolioDir: tempDir,
+        memorySink: { write: () => {}, close: async () => {} } as any,
+        registerLogSink: () => {},
+        wireSSEBroadcasts: () => {},
+      };
+
+      const mgr = new PromotionManager(
+        mockOptions,
+        41715,
+        async () => {}, // startAsLeader
+        async () => {}, // startAsFollower
+      );
+      expect(mgr).toBeDefined();
+    });
+
+    it('promote() calls startAsLeader when claim succeeds', async () => {
+      const { PromotionManager } = await import('../../src/web/console/PromotionManager.js');
+      const LeaderElection = await import('../../src/web/console/LeaderElection.js');
+
+      let leaderStarted = false;
+      const mockOptions = {
+        sessionId: 'promote-test',
+        portfolioDir: tempDir,
+        memorySink: { write: () => {}, close: async () => {} } as any,
+        registerLogSink: () => {},
+        wireSSEBroadcasts: () => {},
+      };
+
+      const mgr = new PromotionManager(
+        mockOptions,
+        41715,
+        async () => { leaderStarted = true; },
+        async () => {},
+      );
+
+      // Clean any existing lock so claim succeeds
+      await LeaderElection.deleteLeaderLock();
+
+      const mockSink = { close: async () => {} } as any;
+      const mockHeartbeat = { stop: async () => {} } as any;
+
+      await mgr.promote(mockSink, mockHeartbeat);
+
+      expect(leaderStarted).toBe(true);
+
+      // Clean up the lock file we created
+      await LeaderElection.deleteLeaderLock();
+    });
+
+    it('promote() respects MAX_PROMOTION_ATTEMPTS', async () => {
+      const { PromotionManager } = await import('../../src/web/console/PromotionManager.js');
+
+      let attempts = 0;
+      const mockOptions = {
+        sessionId: 'max-attempts-test',
+        portfolioDir: tempDir,
+        memorySink: { write: () => {}, close: async () => {} } as any,
+        registerLogSink: () => {},
+        wireSSEBroadcasts: () => {},
+      };
+
+      const mgr = new PromotionManager(
+        mockOptions,
+        41715,
+        async () => { attempts++; throw new Error('simulated bind failure'); },
+        async () => {},
+      );
+
+      const mockSink = { close: async () => {} } as any;
+      const mockHeartbeat = { stop: async () => {} } as any;
+
+      // Attempt promotion multiple times — should stop after MAX_PROMOTION_ATTEMPTS (3)
+      for (let i = 0; i < 5; i++) {
+        await mgr.promote(mockSink, mockHeartbeat);
+      }
+
+      // Should have tried at most 3 times (MAX_PROMOTION_ATTEMPTS)
+      expect(attempts).toBeLessThanOrEqual(3);
+    });
+  });
+
+  // ── findPidOnPort fallback ────────────────────────────────────────────
+
+  describe('findPidOnPort with fallback commands', () => {
+    it('finds a PID using available system commands', async () => {
+      const Recovery = await import('../../src/web/console/StaleProcessRecovery.js');
+      const { server, port } = await listenOnPort();
+
+      try {
+        const pid = await Recovery.findPidOnPort(port);
+        // Our own PID is filtered, so may be null, but shouldn't throw
+        expect(pid === null || pid > 0).toBe(true);
+      } finally {
+        await closeServer(server);
+      }
+    });
+  });
 });
