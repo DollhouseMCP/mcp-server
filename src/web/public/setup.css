@@ -1038,3 +1038,86 @@
   background: var(--surface-2);
   color: var(--ink-950);
 }
+
+/* ── Verification code input ─────────────────────────────────────────── */
+
+.license-verification {
+  animation: license-slide-in 0.2s ease-out;
+}
+
+.license-verify-intro {
+  margin: 0;
+  color: var(--ink-700);
+  font-size: 0.9rem;
+}
+
+.license-code-input {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  letter-spacing: 0.3em;
+  text-align: center;
+  max-width: 200px;
+}
+
+.license-verify-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.license-verify-timer {
+  font-size: 0.8rem;
+  color: var(--ink-500);
+  margin: 0;
+}
+
+/* ── Active license details ──────────────────────────────────────────── */
+
+.license-active-details {
+  margin-top: 0.75rem;
+}
+
+.license-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  margin-bottom: 12px;
+}
+
+.license-info-table td {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.license-info-table thead {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
+
+.license-info-table td:first-child {
+  font-weight: 600;
+  color: var(--ink-700);
+  width: 130px;
+  padding-right: 12px;
+}
+
+.license-info-table td:last-child {
+  color: var(--ink-950);
+}
+
+.license-file-path {
+  font-size: 0.8rem;
+  color: var(--ink-500);
+  margin: 0;
+}
+
+.license-file-path code {
+  background: var(--surface-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 0.78rem;
+}

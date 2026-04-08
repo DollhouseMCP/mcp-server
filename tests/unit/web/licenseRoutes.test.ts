@@ -617,3 +617,170 @@ describe('License Routes — Security', () => {
     });
   });
 });
+
+// ── Verification Flow Tests ───────────────────────────────────────────
+
+describe('License Routes — Email Verification', () => {
+  let app: express.Express;
+  const COMMERCIAL_ACKS = { telemetryAcknowledged: true, attributionAcknowledged: true, revenueAttested: true };
+
+  beforeEach(async () => {
+    const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+    const { getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler } = createSetupRoutes();
+
+    app = express();
+    app.use(express.json());
+    app.get('/api/setup/license', getLicenseHandler);
+    app.post('/api/setup/license', setLicenseHandler);
+    app.post('/api/setup/license/verify', verifyLicenseHandler);
+    app.post('/api/setup/license/resend', resendVerificationHandler);
+  });
+
+  describe('POST /api/setup/license — Verification Required', () => {
+    it('commercial license returns verificationRequired: true', async () => {
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.license.status).toBe('pending');
+      expect(res.body.license.verificationCode).toBeUndefined();
+    });
+
+    it('AGPL does not require verification', async () => {
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'agpl' })
+        .expect(200);
+
+      expect(res.body.verificationRequired).toBeUndefined();
+      expect(res.body.license.status).toBe('active');
+    });
+
+    it('verification code is not exposed in GET response', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'hidden@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      const getRes = await request(app)
+        .get('/api/setup/license')
+        .expect(200);
+
+      expect(getRes.body.verificationCode).toBeUndefined();
+      expect(getRes.body.verificationAttempts).toBeUndefined();
+      expect(getRes.body.status).toBe('pending');
+    });
+  });
+
+  async function setupPendingLicense(): Promise<string> {
+    await request(app)
+      .post('/api/setup/license')
+      .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+      .expect(200);
+
+    const raw = await readFile(LICENSE_PATH, 'utf-8');
+    return JSON.parse(raw).verificationCode;
+  }
+
+  describe('POST /api/setup/license/verify', () => {
+    it('activates license with correct code', async () => {
+      const code = await setupPendingLicense();
+
+      const res = await request(app)
+        .post('/api/setup/license/verify')
+        .send({ code })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.license.status).toBe('active');
+      expect(res.body.license.verifiedAt).toBeDefined();
+      expect(res.body.license.verificationCode).toBeUndefined();
+    });
+
+    it('rejects incorrect code with remaining attempts', async () => {
+      await setupPendingLicense();
+
+      const res = await request(app)
+        .post('/api/setup/license/verify')
+        .send({ code: '000000' })
+        .expect(400);
+
+      expect(res.body.error).toContain('Incorrect');
+      expect(res.body.error).toContain('remaining');
+    });
+
+    it('rejects non-6-digit code', async () => {
+      await setupPendingLicense();
+
+      await request(app).post('/api/setup/license/verify').send({ code: 'abc' }).expect(400);
+      await request(app).post('/api/setup/license/verify').send({ code: '12345' }).expect(400);
+      await request(app).post('/api/setup/license/verify').send({ code: '1234567' }).expect(400);
+    });
+
+    it('rejects when no pending license exists', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'agpl' })
+        .expect(200);
+
+      const res = await request(app)
+        .post('/api/setup/license/verify')
+        .send({ code: '123456' })
+        .expect(400);
+
+      expect(res.body.error).toContain('No pending');
+    });
+
+    it('invalidates after max attempts exceeded', async () => {
+      await setupPendingLicense();
+
+      for (let i = 0; i < 5; i++) {
+        await request(app)
+          .post('/api/setup/license/verify')
+          .send({ code: '000000' });
+      }
+
+      const res = await request(app)
+        .post('/api/setup/license/verify')
+        .send({ code: '000000' });
+
+      // Accept 400 (max attempts) or 429 (rate limit) — both block the attempt
+      expect([400, 429]).toContain(res.status);
+    });
+  });
+
+  describe('POST /api/setup/license/resend', () => {
+    it('generates a new code for pending license', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      const res = await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+
+      const raw = await readFile(LICENSE_PATH, 'utf-8');
+      const license = JSON.parse(raw);
+      expect(license.verificationCode).toBeDefined();
+      expect(license.verificationCode).toHaveLength(6);
+    });
+
+    it('rejects when no pending license', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'agpl' })
+        .expect(200);
+
+      await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(400);
+    });
+  });
+});

@@ -829,6 +829,12 @@
 
   // ── License selector (#1746) ──────────────────────────────────────────
 
+  function formatActivationDate(license) {
+    if (license.verifiedAt) return new Date(license.verifiedAt).toLocaleString();
+    if (license.attestedAt) return new Date(license.attestedAt).toLocaleString();
+    return '—';
+  }
+
   function initLicense() {
     const tiers = document.getElementById('license-tiers');
     if (!tiers) return;
@@ -897,6 +903,75 @@
       });
     }
 
+    const verificationPanel = document.getElementById('license-verification');
+    const verifyForm = document.getElementById('license-verify-form');
+    const verifyEmailSpan = document.getElementById('license-verify-email');
+    const verifyStatus = document.getElementById('license-verify-status');
+    const verifyTimer = document.getElementById('license-verify-timer');
+    const resendBtn = document.getElementById('license-resend-btn');
+    let countdownInterval = null;
+
+    let verificationPollInterval = null;
+
+    function showVerificationUI(email) {
+      if (verificationPanel) verificationPanel.hidden = false;
+      if (verifyEmailSpan) verifyEmailSpan.textContent = email;
+      if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+      startCountdown(10 * 60);
+      startVerificationPolling();
+    }
+
+    function hideVerificationUI() {
+      if (verificationPanel) verificationPanel.hidden = true;
+      if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+      stopVerificationPolling();
+    }
+
+    /** Poll license status every 3 seconds while verification is pending.
+     *  When the user clicks the verify link in another tab, this tab
+     *  auto-detects the activation and updates without a refresh. */
+    function startVerificationPolling() {
+      stopVerificationPolling();
+      verificationPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/setup/license');
+          if (!res.ok) return;
+          const license = await res.json();
+          if (license.status === 'active') {
+            handleVerifySuccess(license);
+          }
+        } catch {
+          // Ignore polling errors
+        }
+      }, 3000);
+    }
+
+    function stopVerificationPolling() {
+      if (verificationPollInterval) {
+        clearInterval(verificationPollInterval);
+        verificationPollInterval = null;
+      }
+    }
+
+    function startCountdown(seconds) {
+      if (countdownInterval) clearInterval(countdownInterval);
+      let remaining = seconds;
+      function update() {
+        if (!verifyTimer) return;
+        if (remaining <= 0) {
+          verifyTimer.textContent = 'Code expired. Click "Resend code" to get a new one.';
+          clearInterval(countdownInterval);
+          return;
+        }
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        verifyTimer.textContent = `Code expires in ${m}:${String(s).padStart(2, '0')}`;
+        remaining--;
+      }
+      update();
+      countdownInterval = setInterval(update, 1000);
+    }
+
     async function submitLicense(body, statusEl, successMsg) {
       if (statusEl) {
         statusEl.textContent = '';
@@ -916,10 +991,23 @@
           }
           return;
         }
+
+        // Commercial tiers: show verification code input
+        if (json.verificationRequired) {
+          if (statusEl) {
+            statusEl.textContent = 'Check your email for a verification code.';
+            statusEl.className = 'license-form-status is-success';
+          }
+          showVerificationUI(body.email);
+          return;
+        }
+
+        // AGPL or already verified: show success
         if (statusEl) {
           statusEl.textContent = '';
           statusEl.className = 'license-form-status is-success';
         }
+        hideVerificationUI();
         if (savedBanner && savedText) {
           savedText.textContent = successMsg;
           savedBanner.hidden = false;
@@ -933,14 +1021,132 @@
       }
     }
 
-    // AGPL selection: save immediately (no form needed)
+    // Verification form submission
+    if (verifyForm) {
+      verifyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = new FormData(verifyForm);
+        const code = data.get('code');
+        if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          const json = await res.json();
+          if (!res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Verification failed';
+              verifyStatus.className = 'license-form-status is-error';
+            }
+            return;
+          }
+
+          // Verification succeeded
+          handleVerifySuccess(json.license);
+        } catch (err) {
+          console.debug('Verification failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error — is the server running?';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+      });
+    }
+
+    // Resend verification code
+    if (resendBtn) {
+      resendBtn.addEventListener('click', async () => {
+        resendBtn.disabled = true;
+        if (verifyStatus) { verifyStatus.textContent = 'Sending new code...'; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/resend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const json = await res.json();
+          if (res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = 'New code sent. Check your email.';
+              verifyStatus.className = 'license-form-status is-success';
+            }
+            startCountdown(10 * 60);
+          } else if (verifyStatus) {
+            verifyStatus.textContent = json.error || 'Failed to resend';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        } catch (err) {
+          console.debug('Resend failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+        setTimeout(() => { resendBtn.disabled = false; }, 5000);
+      });
+    }
+
+    // Track whether the user has an active commercial license
+    let activeLicense = null;
+
+    // AGPL selection: confirm if downgrading from active commercial license
     tierButtons.forEach(btn => {
       if (btn.dataset.tier === 'agpl') {
         btn.addEventListener('click', async () => {
+          if (activeLicense?.status === 'active' && activeLicense?.tier !== 'agpl') {
+            const tierLabel = activeLicense.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+            const confirmed = confirm(
+              `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
+            );
+            if (!confirmed) {
+              // Restore the previous tier selection
+              selectTier(activeLicense.tier);
+              return;
+            }
+          }
           await submitLicense({ tier: 'agpl' }, null, 'AGPL-3.0 license selected');
+          activeLicense = null;
+          hideLicenseDetails();
         });
       }
     });
+
+    const licenseDetailsPanel = document.getElementById('license-active-details');
+    const licenseInfoTable = document.getElementById('license-info-tbody');
+
+    function showLicenseDetails(license) {
+      if (!licenseDetailsPanel || !licenseInfoTable) return;
+      if (license?.status !== 'active' || license?.tier === 'agpl') {
+        licenseDetailsPanel.hidden = true;
+        return;
+      }
+
+      const tierLabel = license.tier === 'free-commercial' ? 'Free Commercial' : 'Enterprise';
+      const rows = [
+        ['License type', tierLabel],
+        ['Email', license.email || '—'],
+        ['Status', 'Active'],
+        ['Activated', formatActivationDate(license)],
+        ['Telemetry', license.telemetryRequired ? 'Enabled (license requirement)' : 'Not required'],
+      ];
+      if (license.tier === 'paid-commercial') {
+        if (license.revenueScale) rows.push(['Revenue scale', license.revenueScale]);
+        if (license.companyName) rows.push(['Company', license.companyName]);
+        if (license.useCase) rows.push(['Use case', license.useCase]);
+      }
+
+      licenseInfoTable.innerHTML = rows
+        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
+        .join('');
+      licenseDetailsPanel.hidden = false;
+    }
+
+    function hideLicenseDetails() {
+      if (licenseDetailsPanel) licenseDetailsPanel.hidden = true;
+    }
 
     function prefillFreeCommercialForm(license) {
       if (freeForm && license.email) {
@@ -962,6 +1168,7 @@
       const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
       savedText.textContent = tierLabel + ' license active';
       savedBanner.hidden = false;
+      showLicenseDetails(license);
     }
 
     // Load saved license on page load
@@ -974,14 +1181,76 @@
         selectTier(license.tier);
         if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
         if (license.tier === 'paid-commercial') prefillEnterpriseForm(license);
-        showSavedBanner(license);
+
+        // Show verification UI if license is pending
+        if (license.status === 'pending' && license.email) {
+          showVerificationUI(license.email);
+          return;
+        }
+
+        if (license.status === 'active') {
+          activeLicense = license;
+          showSavedBanner(license);
+        }
       } catch (err) {
         // Default AGPL is fine — log for debugging only
         if (typeof console !== 'undefined') console.debug('License load skipped:', err);
       }
     }
 
+    function handleVerifySuccess(license) {
+      hideVerificationUI();
+      for (const el of Object.values(details)) {
+        if (el) el.hidden = true;
+      }
+      activeLicense = license;
+      if (savedBanner && savedText) {
+        const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+        savedText.textContent = tierLabel + ' license verified and activated';
+        savedBanner.hidden = false;
+      }
+      showLicenseDetails(license);
+    }
+
+    async function handleAutoVerifyFailure(json) {
+      const license = await (await fetch('/api/setup/license')).json();
+      if (license.status === 'pending' && license.email) {
+        showVerificationUI(license.email);
+      }
+      if (verifyStatus) {
+        verifyStatus.textContent = json.error || 'Verification failed';
+        verifyStatus.className = 'license-form-status is-error';
+      }
+    }
+
+    // Auto-verify from email click-through link (#verify=CODE)
+    async function checkHashVerification() {
+      const hash = globalThis.location.hash;
+      const match = /^#verify=(\d{6})$/.exec(hash);
+      if (!match) return;
+
+      const code = match[1];
+      history.replaceState(null, '', globalThis.location.pathname + '#setup');
+
+      try {
+        const res = await fetch('/api/setup/license/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const json = await res.json();
+        if (res.ok) {
+          handleVerifySuccess(json.license);
+        } else {
+          await handleAutoVerifyFailure(json);
+        }
+      } catch (err) {
+        console.debug('Auto-verification failed:', err);
+      }
+    }
+
     loadSavedLicense();
+    checkHashVerification();
   }
 
   // ── Init ──────────────────────────────────────────────────────────────

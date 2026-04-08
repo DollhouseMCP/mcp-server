@@ -35,6 +35,8 @@ interface PostHogEvent {
   properties: {
     tier: 'free-commercial' | 'paid-commercial';
     email: string;
+    event_type?: 'verification' | 'activation';
+    verification_code?: string;
     server_version?: string;
     os?: string;
     revenue_scale?: string;
@@ -44,13 +46,56 @@ interface PostHogEvent {
   timestamp?: string;
 }
 
+/** Handle verification event: send verification code email. */
+async function handleVerification(props: PostHogEvent['properties'], env: Env): Promise<void> {
+  if (!props.verification_code) {
+    throw new Error('Missing verification_code for verification event');
+  }
+  const verificationEmail = buildVerificationEmail(props, env);
+  await sendEmail({
+    from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+    to: props.email,
+    replyTo: env.REPLY_TO,
+    subject: verificationEmail.subject,
+    html: verificationEmail.html,
+    env,
+  });
+}
+
+/** Handle activation event: send confirmation email (+ sales notification for Enterprise). */
+async function handleActivation(props: PostHogEvent['properties'], env: Env): Promise<void> {
+  const { subject, html } = props.tier === 'paid-commercial'
+    ? buildEnterpriseEmail(props, env)
+    : buildCommercialEmail(props, env);
+
+  await sendEmail({
+    from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+    to: props.email,
+    replyTo: env.REPLY_TO,
+    subject,
+    html,
+    env,
+  });
+
+  if (props.tier === 'paid-commercial') {
+    const salesNotification = buildSalesNotification(props);
+    await sendEmail({
+      from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
+      to: env.REPLY_TO,
+      replyTo: props.email,
+      subject: salesNotification.subject,
+      html: salesNotification.html,
+      env,
+    });
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 });
     }
 
-    // Validate PostHog webhook secret
     if (env.POSTHOG_WEBHOOK_SECRET) {
       const secret = request.headers.get('x-posthog-secret');
       if (secret !== env.POSTHOG_WEBHOOK_SECRET) {
@@ -69,39 +114,19 @@ export default {
       return new Response('Ignored: not a license_activation event', { status: 200 });
     }
 
-    const { tier, email } = event.properties;
+    const { tier, email, event_type } = event.properties;
     if (!email || !tier) {
       return new Response('Missing required fields: tier, email', { status: 400 });
     }
 
-    const { subject, html } = tier === 'paid-commercial'
-      ? buildEnterpriseEmail(event.properties, env)
-      : buildCommercialEmail(event.properties, env);
-
     try {
-      await sendEmail({
-        from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-        to: email,
-        replyTo: env.REPLY_TO,
-        subject,
-        html,
-        env,
-      });
-
-      // For Enterprise, also notify the sales team
-      if (tier === 'paid-commercial') {
-        const salesNotification = buildSalesNotification(event.properties);
-        await sendEmail({
-          from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
-          to: env.REPLY_TO,
-          replyTo: email,
-          subject: salesNotification.subject,
-          html: salesNotification.html,
-          env,
-        });
+      if (event_type === 'verification') {
+        await handleVerification(event.properties, env);
+      } else {
+        await handleActivation(event.properties, env);
       }
 
-      return new Response(JSON.stringify({ success: true, tier, email }), {
+      return new Response(JSON.stringify({ success: true, tier, email, event_type: event_type ?? 'activation' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -129,6 +154,54 @@ function esc(str: string | undefined | null): string {
 }
 
 // ── Email templates ──────────────────────────────────────────────────
+
+function buildVerificationEmail(
+  props: PostHogEvent['properties'],
+  env: Env,
+): { subject: string; html: string } {
+  const code = esc(props.verification_code);
+  const verifyUrl = `http://dollhouse.localhost:41715#verify=${code}`;
+  return {
+    subject: `DollhouseMCP — Verify your email to activate your license`,
+    html: `
+<!DOCTYPE html>
+<html><body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a2e; max-width: 600px; margin: 0 auto; padding: 24px;">
+  <h2 style="color: #1a1a2e;">Verify your email address</h2>
+  <p>You're registering a <strong>${esc(props.tier === 'paid-commercial' ? 'Enterprise' : 'Commercial')}</strong> license for DollhouseMCP.</p>
+
+  <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 20px; margin: 24px 0;">
+    <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #1e40af; text-align: center;">On the same computer where DollhouseMCP is installed?</p>
+    <div style="text-align: center;">
+      <a href="${verifyUrl}" style="display: inline-block; background: #3b82f6; color: #ffffff; font-weight: 600; font-size: 16px; padding: 14px 32px; border-radius: 8px; text-decoration: none;">Verify my email</a>
+    </div>
+    <p style="color: #64748b; font-size: 13px; margin: 10px 0 0; text-align: center;">This button opens your DollhouseMCP console and verifies automatically.</p>
+  </div>
+
+  <div style="background: #fefce8; border: 1px solid #fde68a; border-radius: 8px; padding: 20px; margin: 24px 0;">
+    <p style="margin: 0 0 12px; font-size: 15px; font-weight: 600; color: #92400e; text-align: center;">Reading this on your phone or another device?</p>
+    <p style="margin: 0 0 12px; font-size: 14px; color: #78716c; text-align: center;">Copy this code and paste it into the Setup page on your computer:</p>
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+      <tr>
+        <td align="center">
+          <table role="presentation" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="background: #ffffff; border: 2px solid #e2e8f0; border-radius: 12px; padding: 16px 32px; font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1a1a2e; font-family: 'Courier New', Courier, monospace; white-space: nowrap;">${code}</td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    <p style="margin: 10px 0 0; font-size: 13px; color: #78716c; text-align: center;">Long-press the code to copy it, then paste on the Setup page</p>
+  </div>
+
+  <p style="color: #64748b; font-size: 13px;">This link and code expire in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
+
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;">
+  <p style="font-size: 12px; color: #64748b;">DollhouseMCP &mdash; AI customization through modular elements<br>
+  <a href="https://github.com/DollhouseMCP/mcp-server" style="color: #3b82f6;">github.com/DollhouseMCP/mcp-server</a></p>
+</body></html>`,
+  };
+}
 
 function buildCommercialEmail(
   props: PostHogEvent['properties'],
@@ -240,25 +313,45 @@ interface EmailParams {
   env: Env;
 }
 
-async function sendEmail(params: EmailParams): Promise<void> {
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${params.env.RESEND_API_KEY}`,
-    },
-    body: JSON.stringify({
-      from: `${params.from.name} <${params.from.email}>`,
-      to: [params.to],
-      reply_to: params.replyTo,
-      subject: params.subject,
-      html: params.html,
-    }),
-  });
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 500;
 
-  if (!response.ok) {
+async function sendEmail(params: EmailParams): Promise<void> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const backoff = INITIAL_BACKOFF_MS * Math.pow(2, attempt - 1);
+      await new Promise(resolve => setTimeout(resolve, backoff));
+    }
+
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${params.env.RESEND_API_KEY}`,
+      },
+      body: JSON.stringify({
+        from: `${params.from.name} <${params.from.email}>`,
+        to: [params.to],
+        reply_to: params.replyTo,
+        subject: params.subject,
+        html: params.html,
+      }),
+    });
+
+    if (response.ok) return;
+
     const text = await response.text();
-    console.error(`Resend API error (${response.status}):`, text);
-    throw new Error('Email delivery failed');
+    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status}):`, text);
+
+    // Don't retry on client errors (400, 401, 403, 422) — only server/rate errors
+    if (response.status < 500 && response.status !== 429) {
+      throw new Error('Email delivery failed');
+    }
+
+    lastError = new Error('Email delivery failed');
   }
+
+  throw lastError ?? new Error('Email delivery failed');
 }

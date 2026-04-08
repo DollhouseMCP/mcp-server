@@ -335,10 +335,36 @@ npm install @dollhousemcp/mcp-server</code></pre>
           </form>
         </div>
 
+        <!-- Verification code input (shown after commercial form submit) -->
+        <div class="license-detail license-verification" id="license-verification" hidden>
+          <form class="license-form" id="license-verify-form" autocomplete="off">
+            <p class="license-verify-intro">We sent a 6-digit verification code to <strong id="license-verify-email"></strong>.</p>
+            <label class="license-form-label">
+              Verification code
+              <input class="license-form-input license-code-input" type="text" name="code" required maxlength="6" pattern="\d{6}" placeholder="000000" inputmode="numeric" autocomplete="one-time-code" />
+            </label>
+            <div class="license-verify-actions">
+              <button class="setup-btn setup-btn-primary license-submit-btn" type="submit">Verify</button>
+              <button class="setup-btn setup-btn-secondary" type="button" id="license-resend-btn">Resend code</button>
+            </div>
+            <p class="license-form-status" id="license-verify-status"></p>
+            <p class="license-verify-timer" id="license-verify-timer"></p>
+          </form>
+        </div>
+
         <!-- Saved confirmation (shown after successful save) -->
         <div class="license-saved" id="license-saved" hidden>
           <span class="license-saved-icon">&#10003;</span>
           <span class="license-saved-text" id="license-saved-text">License saved</span>
+        </div>
+
+        <!-- License details (shown when a commercial license is active) -->
+        <div class="license-detail license-active-details" id="license-active-details" hidden>
+          <div class="license-detail-content">
+            <h4 style="margin: 0 0 12px;">Your license</h4>
+            <table class="license-info-table" id="license-info-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody id="license-info-tbody"></tbody></table>
+            <p class="license-file-path">License file: <code>~/.dollhouse/license.json</code></p>
+          </div>
         </div>
       </div>
 
