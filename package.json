@@ -178,7 +178,7 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@eslint/js": "^9.38.0",
+    "@eslint/js": "^10.0.1",
     "@jest/globals": "^30.3.0",
     "@modelcontextprotocol/inspector": "^0.21.1",
     "@playwright/test": "^1.59.1",
