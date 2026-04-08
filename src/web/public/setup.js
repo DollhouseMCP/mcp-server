@@ -1137,8 +1137,9 @@
               `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
             );
             if (!confirmed) {
-              // Restore the previous tier selection
+              // Restore the previous tier selection and re-hide the form
               selectTier(activeLicense.tier);
+              showLicenseDetails(activeLicense);
               return;
             }
           }
