@@ -10,10 +10,7 @@
  * at each decision point in the leader/follower lifecycle.
  */
 
-import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { describe, it, expect, jest } from '@jest/globals';
 import * as net from 'node:net';
 
 // ─── LeaderElection: stale lock detection ────────────────────────────────────
