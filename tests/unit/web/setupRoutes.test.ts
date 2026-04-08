@@ -744,6 +744,11 @@ describe('Setup Tab — CSS Integrity', () => {
   it('channel select has focus state', () => {
     expect(css).toContain('.setup-channel-select:focus');
   });
+
+  it('channel toggle has hidden attribute override to prevent display:flex conflict', () => {
+    expect(css).toContain('.setup-channel-toggle[hidden]');
+    expect(css).toContain('display: none');
+  });
 });
 
 // ── Regression tests ──────────────────────────────────────────────────
@@ -1001,6 +1006,11 @@ describe('Setup Tab — Regressions', () => {
     it('backend normalizes channel input', () => {
       const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
       expect(ts).toContain('UnicodeValidator.normalize(channel)');
+    });
+
+    it('channel selector hidden on init when pinned mode is active', () => {
+      // The init sync line must apply hidden state without waiting for a click
+      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
     });
   });
 
