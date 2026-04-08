@@ -171,8 +171,8 @@ describe('Console port configuration (#1840)', () => {
       expect(validatePort('abc')).toBeUndefined();
       expect(validatePort(null)).toBeUndefined();
       expect(validatePort(undefined)).toBeUndefined();
-      expect(validatePort(NaN)).toBeUndefined();
-      expect(validatePort(Infinity)).toBeUndefined();
+      expect(validatePort(Number.NaN)).toBeUndefined();
+      expect(validatePort(Number.POSITIVE_INFINITY)).toBeUndefined();
     });
 
     it('floors fractional ports', () => {
