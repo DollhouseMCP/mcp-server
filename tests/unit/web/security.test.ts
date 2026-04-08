@@ -149,13 +149,18 @@ describe('Auth tab (security.js) — #1791', () => {
       expect(root!.querySelector('#sec-totp-content')).not.toBeNull();
     });
 
-    it('creates collapsible card headers', () => {
+    it('has static headers on token/TOTP cards and a collapsible intro card', () => {
       mockFetchSuccess(win);
       (win as any).DollhouseConsole.security.init();
       const headers = win.document.querySelectorAll('.sec-card-header');
       expect(headers.length).toBe(3); // Intro + Token + Authenticator
-      headers.forEach((h: Element) => {
-        expect(h.tagName.toLowerCase()).toBe('button');
+      // Intro card header is a <button> (collapsible)
+      const introHeader = win.document.querySelector('.sec-card--intro .sec-card-header');
+      expect(introHeader!.tagName.toLowerCase()).toBe('button');
+      // Token and TOTP card headers are <div> (static)
+      const nonIntroHeaders = win.document.querySelectorAll('.sec-card:not(.sec-card--intro) .sec-card-header');
+      nonIntroHeaders.forEach((h: Element) => {
+        expect(h.tagName.toLowerCase()).toBe('div');
       });
     });
 
@@ -246,23 +251,34 @@ describe('Auth tab (security.js) — #1791', () => {
   });
 
   describe('card collapse toggle', () => {
-    it('collapses a card when header is clicked', async () => {
+    it('intro card collapses and expands when header is clicked', async () => {
       mockFetchSuccess(win);
       (win as any).DollhouseConsole.security.init();
 
-      // Target a non-intro card (Token or Authenticator) which starts expanded
-      const cards = win.document.querySelectorAll('.sec-card:not(.sec-card--intro)');
-      const card = cards[0] as HTMLElement;
-      const header = card.querySelector('.sec-card-header') as HTMLElement;
-      expect(card.dataset.collapsed).toBe('false');
+      const introCard = win.document.querySelector('.sec-card--intro') as HTMLElement;
+      const header = introCard.querySelector('.sec-card-header') as HTMLElement;
+      expect(introCard.dataset.collapsed).toBe('true'); // starts collapsed
 
       header.click();
-      expect(card.dataset.collapsed).toBe('true');
-      expect(header.getAttribute('aria-expanded')).toBe('false');
-
-      header.click();
-      expect(card.dataset.collapsed).toBe('false');
+      expect(introCard.dataset.collapsed).toBe('false');
       expect(header.getAttribute('aria-expanded')).toBe('true');
+
+      header.click();
+      expect(introCard.dataset.collapsed).toBe('true');
+      expect(header.getAttribute('aria-expanded')).toBe('false');
+    });
+
+    it('token and TOTP cards have no collapse behavior', async () => {
+      mockFetchSuccess(win);
+      (win as any).DollhouseConsole.security.init();
+
+      const cards = win.document.querySelectorAll('.sec-card:not(.sec-card--intro)');
+      cards.forEach((card: Element) => {
+        // No data-collapsed attribute
+        expect((card as HTMLElement).dataset.collapsed).toBeUndefined();
+        // No toggle chevron
+        expect(card.querySelector('.sec-card-toggle')).toBeNull();
+      });
     });
   });
 

@@ -841,8 +841,20 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       });
       ingestResult.registerConsoleSession();
 
+      // Initialize console token store so Auth tab routes mount (#1825).
+      // Mirrors UnifiedConsole.ts:startAsLeader() — without this,
+      // /api/console/totp and /api/console/token return 404.
+      const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
+      const { pickRandomPuppetName } = await import('./web/console/SessionNames.js');
+      const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+      try {
+        await tokenStore.ensureInitialized(pickRandomPuppetName());
+      } catch (err) {
+        console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
+      }
+
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router] });
+      await startWebServer({ portfolioDir, port, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
 
       // Listen for quit commands on stdin (standalone --web mode only).
       // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.

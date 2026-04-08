@@ -2069,6 +2069,7 @@ function safeParseYaml(content) {
       const savedTab = localStorage.getItem(TAB_KEY);
       if (savedTab) {
         switchToTab(savedTab);
+        lazyInitTab(savedTab, tabInits);
       } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
         localStorage.setItem(SETUP_SEEN_KEY, '1');
         switchToTab('setup');

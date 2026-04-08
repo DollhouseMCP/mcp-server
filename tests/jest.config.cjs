@@ -26,7 +26,8 @@ const config = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/tests/integration/',   // Integration tests run via jest.integration.config.cjs
-    '/tests/performance/'    // Performance tests run separately to avoid resource contention
+    '/tests/performance/',   // Performance tests run separately to avoid resource contention
+    '/tests/playwright/'     // Playwright browser tests run via npx playwright test
   ],
   collectCoverageFrom: [
     'src/**/*.ts',
