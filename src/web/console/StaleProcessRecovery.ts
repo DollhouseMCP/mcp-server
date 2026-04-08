@@ -69,11 +69,12 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
     const cmdLine = stdout.trim();
     // Check that the process is actually running a DollhouseMCP binary, not just
     // a process whose working directory contains 'mcp-server' (e.g., a test runner).
-    // We look for the binary names in .bin/ paths or as standalone commands.
-    const isDollhouseBin = /\bdollhousemcp\b/.test(cmdLine) && cmdLine.includes('.bin/dollhousemcp');
-    const isMcpServerBin = /\bmcp-server\b/.test(cmdLine) && (
-      cmdLine.includes('.bin/mcp-server') || cmdLine.includes('dist/index.js')
-    );
+    // Match: .bin/dollhousemcp, .bin/mcp-server, /bin/dollhousemcp, dist/index.js,
+    // or 'node ... --web' with dist/index.js in the arguments.
+    const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
+      cmdLine.includes('.bin/dollhousemcp');
+    const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
+      cmdLine.includes('dist/index.js');
     if (!isDollhouseBin && !isMcpServerBin) {
       await logger.warn(`[WebUI] Port ${port} held by non-DollhouseMCP process (pid ${pid}) — not killing`, { cmdLine });
       return false;
