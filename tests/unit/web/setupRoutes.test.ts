@@ -1123,6 +1123,87 @@ describe('Setup Tab — Regressions', () => {
   });
 });
 
+// ── License form visibility regression (#1841) ──────────────────────────
+// Ensures the activation form is hidden when a commercial license is active,
+// and restored correctly during tier switching.
+
+describe('Setup Tab — License Form Visibility (#1841)', () => {
+  let js: string;
+  let html: string;
+
+  beforeAll(async () => {
+    js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+  });
+
+  describe('HTML structure', () => {
+    it('has license detail panels for free-commercial and paid-commercial', () => {
+      expect(html).toContain('id="license-detail-free-commercial"');
+      expect(html).toContain('id="license-detail-paid-commercial"');
+    });
+
+    it('has license active details panel', () => {
+      expect(html).toContain('id="license-active-details"');
+    });
+
+    it('license active details panel is hidden by default', () => {
+      const match = /id="license-active-details"[^>]*/.exec(html);
+      expect(match?.[0]).toContain('hidden');
+    });
+  });
+
+  describe('JS: showLicenseDetails hides activation form', () => {
+    it('hides the activation form for the active tier', () => {
+      expect(js).toContain('const activeForm = details[license.tier]');
+      expect(js).toContain('activeForm.hidden = true');
+    });
+
+    it('uses const not var for activeForm', () => {
+      expect(js).not.toMatch(/var activeForm\b/);
+    });
+  });
+
+  describe('JS: selectTier handles active license', () => {
+    it('checks activeLicense when selecting a tier', () => {
+      expect(js).toContain("activeLicense?.status === 'active'");
+      expect(js).toContain("activeLicense?.tier === tier");
+    });
+
+    it('calls showLicenseDetails when returning to active tier', () => {
+      // selectTier must call showLicenseDetails(activeLicense) when hideForm is true
+      expect(js).toContain('if (hideForm) showLicenseDetails(activeLicense)');
+    });
+
+    it('uses const not var for hideForm', () => {
+      expect(js).not.toMatch(/var hideForm\b/);
+    });
+  });
+
+  describe('JS: AGPL downgrade cancel restores state', () => {
+    it('calls selectTier on cancel to restore previous tier', () => {
+      expect(js).toContain('selectTier(activeLicense.tier)');
+    });
+
+    it('does not need separate showLicenseDetails call on cancel (selectTier handles it)', () => {
+      // The AGPL cancel path should NOT have its own showLicenseDetails call
+      // because selectTier now handles it centrally
+      const agplSection = js.slice(
+        js.indexOf('AGPL selection: confirm'),
+        js.indexOf('const licenseDetailsPanel')
+      );
+      const showDetailsCount = (agplSection.match(/showLicenseDetails/g) || []).length;
+      expect(showDetailsCount).toBe(0);
+    });
+  });
+
+  describe('JS: loadSavedLicense shows details on page load', () => {
+    it('calls showSavedBanner which calls showLicenseDetails', () => {
+      expect(js).toContain('showSavedBanner(license)');
+      expect(js).toContain('showLicenseDetails(license)');
+    });
+  });
+});
+
 // ── Generated panel DOM validation ────────────────────────────────────
 // Uses JSDOM to execute setup.js against the actual HTML template,
 // then validates the rendered DOM output programmatically.
