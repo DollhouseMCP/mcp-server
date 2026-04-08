@@ -44,9 +44,11 @@ describe('Stale Process Recovery (#1850)', () => {
     const port2 = await getFreePort();
     expect(await recoverStalePort(port2)).toBe(false);
 
-    // --- platform: ps supports user= and command= ---
-    const { stdout } = await execAsync('ps', ['-p', String(process.pid), '-o', 'user=,command='], { timeout: 1000 });
-    expect(stdout.trim().length).toBeGreaterThan(0);
-    expect(stdout).toContain(userInfo().username);
+    // --- platform: ps supports user= and command= (Unix only) ---
+    if (process.platform !== 'win32') {
+      const { stdout } = await execAsync('ps', ['-p', String(process.pid), '-o', 'user=,command='], { timeout: 1000 });
+      expect(stdout.trim().length).toBeGreaterThan(0);
+      expect(stdout).toContain(userInfo().username);
+    }
   }, 15000);
 });
