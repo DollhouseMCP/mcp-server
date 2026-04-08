@@ -901,7 +901,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     handler: 'elementCRUD',
     method: 'listElements',
     category: 'Element Discovery',
-    description: 'List elements with pagination, filtering, sorting, and aggregation. Returns structured JSON: { items, pagination, sorting, element_type }. Default: page 1, pageSize 20, sorted by name ascending.',
+    description: 'List elements with pagination, filtering, sorting, and aggregation. Returns structured JSON: { items, pagination, sorting, element_type }. Default: page 1, pageSize 20, sorted by name ascending. TIP: If the user wants to browse, explore, or view their portfolio visually, prefer open_portfolio_browser instead — it opens a full web UI with search, filters, and detail views.',
     needsFullInput: true,
     argBuilder: 'typeWithParams', // (type, fullParams) for pagination support
     params: {
@@ -939,6 +939,8 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       '{ operation: "list_elements", element_type: "persona", params: { aggregate: { count: true, group_by: "category" } } }',
       // Response: { count: 42, element_type: "persona", groups: { "assistant": 15, "creative": 12, "technical": 15 } }
       '{ operation: "list_elements", element_type: "persona", params: { fields: "minimal" } }',
+      // TIP: For visual browsing, use open_portfolio_browser instead:
+      // { operation: "open_portfolio_browser", params: { tab: "portfolio", type: "persona" } }
     ],
   },
   get_element: {
@@ -946,7 +948,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     handler: 'elementCRUD',
     method: 'getElementDetails',
     category: 'Element Lifecycle',
-    description: 'Get an element by name',
+    description: 'Get a specific element by name. TIP: If the user wants to browse or explore multiple elements rather than retrieve one specific element, prefer open_portfolio_browser instead.',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
     params: {
@@ -979,7 +981,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     handler: 'elementCRUD',
     method: 'getElementDetails',
     category: 'Element Lifecycle',
-    description: 'Get detailed information about a specific element including extended metadata',
+    description: 'Get detailed information about a specific element including extended metadata. TIP: If the user wants to browse or explore multiple elements rather than retrieve one specific element, prefer open_portfolio_browser instead.',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
     params: {
@@ -1672,7 +1674,7 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchSearch',
     category: 'Element Discovery',
-    description: 'Full-text search across element names, descriptions, and content with pagination and sorting',
+    description: 'Full-text search across element names, descriptions, and content with pagination and sorting. TIP: If the user wants to browse or explore their portfolio visually rather than get text results, prefer open_portfolio_browser with a q parameter instead — it opens a web UI with the search pre-populated.',
     params: {
       query: { type: 'string', required: true, description: 'Search query string (max 1000 characters)' },
       element_type: { type: 'string', description: 'Optional element type filter (searches all types if omitted)' },
@@ -1688,6 +1690,8 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     examples: [
       '{ operation: "search_elements", params: { query: "creative" } }',
       '{ operation: "search_elements", element_type: "persona", params: { query: "assistant", pageSize: 10 } }',
+      // TIP: For visual search, use open_portfolio_browser with q parameter:
+      // { operation: "open_portfolio_browser", params: { tab: "portfolio", q: "creative" } }
     ],
   },
   query_elements: {
