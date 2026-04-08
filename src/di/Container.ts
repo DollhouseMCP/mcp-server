@@ -993,6 +993,10 @@ export class DollhouseContainer {
       const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
       const logManager = this.resolve<LogManager>('LogManager');
 
+      // Resolve console port: config file → env var → default (#1840)
+      const configManager = this.resolve<ConfigManager>('ConfigManager');
+      const configPort = configManager.getSetting<number>('console.port');
+
       const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
       const result = await startUnifiedConsole({
         sessionId,
@@ -1002,6 +1006,7 @@ export class DollhouseContainer {
         mcpAqlHandler,
         registerLogSink: (sink) => logManager.registerSink(sink),
         wireSSEBroadcasts: (webResult, mSink) => this.wireSSEBroadcasts(webResult, mSink),
+        port: configPort,
       });
 
       logger.info(`[Container] Web console started as ${result.role}`);

@@ -36,12 +36,13 @@ import { ConsoleTokenStore } from './consoleToken.js';
 import { env } from '../../config/env.js';
 
 /**
- * Port for the unified console leader — single source of truth is the
- * `DOLLHOUSE_WEB_CONSOLE_PORT` env var (defaulted in `src/config/env.ts`).
- * Kept as a local const so the constant name still shows up in this file
- * and in log output, but every runtime reference flows through env.
+ * Default console port from the env var. Used as fallback when no port
+ * is provided via config file or options. The resolution hierarchy is:
+ *   1. options.port (from config file, resolved by the DI container)
+ *   2. DOLLHOUSE_WEB_CONSOLE_PORT env var
+ *   3. 41715 (hardcoded default in env.ts)
  */
-const CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 
 /**
  * Options for starting the unified console.
@@ -61,6 +62,8 @@ export interface UnifiedConsoleOptions {
   registerLogSink: (sink: { write(entry: UnifiedLogEntry): void; flush(): Promise<void>; close(): Promise<void> }) => void;
   /** Callback to wire SSE broadcasts after web server starts */
   wireSSEBroadcasts: (webResult: { logBroadcast?: (entry: UnifiedLogEntry) => void; metricsOnSnapshot?: (snapshot: MetricSnapshot) => void }, metricsSink?: MemoryMetricsSink) => void;
+  /** Console port override from config file. Falls back to env var if not provided. */
+  port?: number;
 }
 
 /**
@@ -131,14 +134,19 @@ export async function warnIfLegacyConsolePresent(
  * or sets up event forwarding (follower).
  */
 export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promise<UnifiedConsoleResult> {
+  // Resolve port: options (config file) → env var → default
+  const consolePort = options.port || DEFAULT_CONSOLE_PORT;
+  logger.debug(`[UnifiedConsole] Port resolved: ${consolePort}` +
+    (options.port ? ' (from config file)' : ` (from env/default)`));
+
   // Legacy-leader detection (#1794) — warn the user if a pre-auth
   // DollhouseMCP console is running alongside this authenticated one.
   // They will coexist fine because of port + lock + token file isolation,
   // but the user should know both exist so the differing security posture
   // between them doesn't look like a bug.
-  await warnIfLegacyConsolePresent(CONSOLE_PORT);
+  await warnIfLegacyConsolePresent(consolePort);
 
-  let election = await electLeader(options.sessionId, CONSOLE_PORT);
+  let election = await electLeader(options.sessionId, consolePort);
 
   // If we lost the election, check if the leader is actually running a web console.
   // An MCP stdio process may hold leadership but not serve web routes.
@@ -146,12 +154,12 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
   if (election.role === 'follower') {
     const reachable = await isLeaderWebConsoleReachable(election.leaderInfo);
     if (!reachable) {
-      election = await forceClaimLeadership(options.sessionId, CONSOLE_PORT);
+      election = await forceClaimLeadership(options.sessionId, consolePort);
     }
   }
 
   if (election.role === 'leader') {
-    return startAsLeader(options, election);
+    return startAsLeader(options, election, consolePort);
   } else {
     return startAsFollower(options, election);
   }
@@ -159,12 +167,13 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
 
 /**
  * Start as the console leader.
- * Binds the configured web console port (see `DOLLHOUSE_WEB_CONSOLE_PORT`
- * in `src/config/env.ts`), mounts all routes including ingestion, starts heartbeat.
+ * Binds the resolved console port (config file → env var → default),
+ * mounts all routes including ingestion, starts heartbeat.
  */
 async function startAsLeader(
   options: UnifiedConsoleOptions,
   election: ElectionResult,
+  consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
   const { pickRandomPuppetName } = await import('./SessionNames.js');
@@ -204,7 +213,7 @@ async function startAsLeader(
     portfolioDir: options.portfolioDir,
     memorySink: options.memorySink,
     metricsSink: options.metricsSink,
-    port: CONSOLE_PORT,
+    port: consolePort,
     additionalRouters: [ingestResult.router],
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
@@ -234,14 +243,14 @@ async function startAsLeader(
   registerLeaderCleanup();
 
   logger.info('[UnifiedConsole] Leader started', {
-    sessionId: options.sessionId, port: CONSOLE_PORT, pid: process.pid,
+    sessionId: options.sessionId, port: consolePort, pid: process.pid,
     role: 'leader', ingestRoutes: ['/api/ingest/logs', '/api/ingest/metrics', '/api/ingest/session', '/api/sessions'],
   });
 
   return {
     role: 'leader',
     election,
-    port: CONSOLE_PORT,
+    port: consolePort,
     cleanup: async () => {
       stopHeartbeat();
     },
