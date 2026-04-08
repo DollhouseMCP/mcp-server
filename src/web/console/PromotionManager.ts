@@ -19,8 +19,7 @@ import {
   type ElectionResult,
   type ConsoleLeaderInfo,
 } from './LeaderElection.js';
-import type { LeaderForwardingLogSink } from './LeaderForwardingSink.js';
-import type { SessionHeartbeat } from './LeaderForwardingSink.js';
+import type { LeaderForwardingLogSink, SessionHeartbeat } from './LeaderForwardingSink.js';
 import type { UnifiedConsoleOptions } from './UnifiedConsole.js';
 
 const MAX_PROMOTION_ATTEMPTS = 3;
@@ -64,9 +63,12 @@ export class PromotionManager {
     }
 
     this.inProgress = true;
+    const startMs = Date.now();
 
     try {
-      logger.warn(`[PromotionManager] Leader death detected — promotion attempt ${this.attempts}/${MAX_PROMOTION_ATTEMPTS}`);
+      logger.warn(`[PromotionManager] Leader death detected — promotion attempt ${this.attempts}/${MAX_PROMOTION_ATTEMPTS}`, {
+        sessionId: this.options.sessionId, pid: process.pid, port: this.consolePort, attempt: this.attempts,
+      });
 
       await sessionHeartbeat.stop();
       await forwardingSink.close();
@@ -83,13 +85,18 @@ export class PromotionManager {
       };
 
       const claimed = await claimLeadership(myInfo);
+      const durationMs = Date.now() - startMs;
 
       if (claimed) {
-        logger.info('[PromotionManager] Promotion succeeded — starting as leader');
+        logger.info('[PromotionManager] Promotion succeeded — starting as leader', {
+          sessionId: this.options.sessionId, port: this.consolePort, durationMs, attempt: this.attempts,
+        });
         const election: ElectionResult = { role: 'leader', leaderInfo: myInfo };
         await this.startAsLeader(this.options, election, this.consolePort);
       } else {
-        logger.info('[PromotionManager] Lost promotion race — following new leader');
+        logger.info('[PromotionManager] Lost promotion race — following new leader', {
+          sessionId: this.options.sessionId, durationMs, attempt: this.attempts,
+        });
         const newLeader = await readLeaderLock();
         if (newLeader) {
           const election: ElectionResult = { role: 'follower', leaderInfo: newLeader };
@@ -101,6 +108,7 @@ export class PromotionManager {
     } catch (err) {
       logger.error('[PromotionManager] Promotion failed', {
         error: err instanceof Error ? err.message : String(err),
+        durationMs: Date.now() - startMs, attempt: this.attempts,
       });
     } finally {
       this.inProgress = false;
