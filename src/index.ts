@@ -851,14 +851,21 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       // Pre-flight: kill any stale DollhouseMCP process squatting on our port
       // BEFORE any container/server setup. This is the definitive fix for #1850 —
       // clear the port first, then start cleanly.
+      // Race condition note: a new process could grab the port between kill and
+      // our bind, but recoverStalePort's TOCTOU mitigation (500ms lock file
+      // re-read) and bindAndListen's own recovery handle that edge case.
+      const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
       try {
-        const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
         const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
         const recovered = await recoverStalePort(targetPort);
         if (recovered) {
           console.error(`  Cleared stale process from port ${targetPort}\n`);
         }
-      } catch { /* recovery failure is non-fatal — bindAndListen will handle EADDRINUSE */ }
+      } catch (err) {
+        // Non-fatal — bindAndListen will handle EADDRINUSE as a fallback.
+        // Log so operators can diagnose recovery failures.
+        console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
 
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
