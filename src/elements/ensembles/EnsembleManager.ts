@@ -849,7 +849,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @param identifier - Ensemble name or identifier
    * @returns Deactivation result with success status and message
    */
-  async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string }> {
+  async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
     // PERFORMANCE FIX: Use findByName() instead of list()
     const ensemble = await this.findByName(identifier);
 
@@ -876,7 +876,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.deactivated(ElementType.ENSEMBLE, ensemble.metadata.name)
+      message: ElementMessages.deactivated(ElementType.ENSEMBLE, ensemble.metadata.name),
+      ensemble
     };
   }
 
