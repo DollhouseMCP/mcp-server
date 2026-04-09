@@ -864,6 +864,14 @@ export class DollhouseContainer {
     await this.deferredPolicyExport();
     await this.deferredLogHooks(timer);
     await this.deferredMetricsCollectors(timer);
+
+    // Sweep stale port files from prior sessions before any port operations (#1856).
+    // Runs unconditionally — stale files accumulate regardless of DOLLHOUSE_WEB_CONSOLE.
+    try {
+      const { sweepStalePortFiles } = await import('../web/portDiscovery.js');
+      await sweepStalePortFiles();
+    } catch { /* sweep failure is non-fatal */ }
+
     await this.deferredWebConsole(timer);
     await this.deferredPermissionServer(timer);
     await this.deferredDangerZoneInit(timer);
@@ -984,10 +992,6 @@ export class DollhouseContainer {
     timer.startPhase('web_console', false);
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return;
-
-      // Sweep stale port files from prior sessions before starting (#1856)
-      const { sweepStalePortFiles } = await import('../web/portDiscovery.js');
-      await sweepStalePortFiles();
 
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
       const sessionId = activationStore.getSessionId();
