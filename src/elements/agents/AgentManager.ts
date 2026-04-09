@@ -201,11 +201,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       // Normalize goal input before validation - LLMs may pass string or object
       // Strip 'content' from metadata to prevent it from overwriting the positional
       // content param (which is the agent's instructions text) in the validation call.
-      const { content: referenceContent, ...metadataWithoutContent } = (metadata || {}) as Record<string, unknown>;
-      const normalizedMetadata: Partial<AgentMetadataV2> = { ...metadataWithoutContent } as Partial<AgentMetadataV2>;
-      if ((metadata as Partial<AgentMetadataV2>)?.goal !== undefined) {
+      const { content: referenceContent, ...metadataWithoutContent } = metadata ?? {};
+      const normalizedMetadata: Partial<AgentMetadataV2> = {
+        ...metadataWithoutContent
+      };
+      if (metadata?.goal !== undefined) {
         normalizedMetadata.goal = this.normalizeGoalInput(
-          (metadata as Partial<AgentMetadataV2>).goal as string | Partial<AgentGoalConfig>
+          metadata.goal as string | Partial<AgentGoalConfig>
         );
       }
 
@@ -217,11 +219,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         description,
         ...normalizedMetadata
       };
-      const primaryText = typeof content === 'string' && content.trim().length > 0
-        ? content
-        : (typeof referenceContent === 'string' && referenceContent.trim().length > 0
-          ? referenceContent
-          : undefined);
+      const primaryText = this.getPrimaryValidationText(content, referenceContent);
       if (primaryText !== undefined) {
         validationInput.content = primaryText;
       }
@@ -2195,6 +2193,16 @@ export class AgentManager extends BaseElementManager<Agent> {
       lines.push(description);
     }
     return lines.join('\n');
+  }
+
+  private getPrimaryValidationText(content: string, referenceContent: unknown): string | undefined {
+    if (typeof content === 'string' && content.trim().length > 0) {
+      return content;
+    }
+    if (typeof referenceContent === 'string' && referenceContent.trim().length > 0) {
+      return referenceContent;
+    }
+    return undefined;
   }
 
   /**
