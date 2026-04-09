@@ -239,20 +239,26 @@ describe('createElement helper', () => {
   });
 
   describe('template creation', () => {
-    it('should create template with content', async () => {
+    it('should create template with metadata routed through the metadata field', async () => {
       const result = await createElement(mockContext, {
         name: 'email-template',
         type: ElementType.TEMPLATE,
         description: 'Email template',
         content: 'Dear {{name}}, ...',
-        metadata: { variables: ['name'] },
+        metadata: {
+          category: 'email',
+          variables: [{ name: 'name', type: 'string', required: true }],
+        },
       });
 
       expect(mockContext.templateManager.create).toHaveBeenCalledWith(
         expect.objectContaining({
           content: 'Dear {{name}}, ...',
-          variables: ['name'],
-        })
+          metadata: {
+            category: 'email',
+            variables: [{ name: 'name', type: 'string', required: true }],
+          },
+        }),
       );
       expect(result.content[0].text).toContain('✅');
     });

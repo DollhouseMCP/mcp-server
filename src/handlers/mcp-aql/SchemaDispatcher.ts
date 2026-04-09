@@ -595,6 +595,14 @@ function buildArgs(
         }
       }
 
+      const isTemplate = resolvedType === ElementType.TEMPLATE || resolvedType === 'template';
+      if (isTemplate && params.variables !== undefined) {
+        const currentMetadata = result.metadata as Record<string, unknown> | undefined;
+        if (!currentMetadata || currentMetadata.variables === undefined) {
+          result.metadata = { ...currentMetadata, variables: params.variables };
+        }
+      }
+
       // Agent V2 fields: goal, activates, tools, systemPrompt, autonomy, resilience
       const isAgent = resolvedType === ElementType.AGENT || resolvedType === 'agent';
       if (isAgent) {

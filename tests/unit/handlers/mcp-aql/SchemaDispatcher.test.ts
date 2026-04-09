@@ -424,6 +424,30 @@ describe('SchemaDispatcher', () => {
       );
     });
 
+    it('should merge top-level template variables into metadata on create_element', async () => {
+      await SchemaDispatcher.dispatch(
+        'create_element',
+        {
+          element_name: 'RenderTemplate',
+          description: 'A renderable template',
+          content: 'Hello {{name}}',
+          variables: [{ name: 'name', type: 'string', required: true }],
+        },
+        registryWithElementCRUD,
+        { operation: 'create_element', elementType: 'template', params: {} }
+      );
+
+      expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          elementName: 'RenderTemplate',
+          elementType: 'template',
+          metadata: {
+            variables: [{ name: 'name', type: 'string', required: true }],
+          },
+        })
+      );
+    });
+
     it('should throw if type cannot be resolved from any source', async () => {
       await expect(
         SchemaDispatcher.dispatch(
