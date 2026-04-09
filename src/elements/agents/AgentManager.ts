@@ -348,6 +348,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Cache the element after successful creation
       this.cacheElement(agent, filename);
+      await this.storageLayer.notifySaved(filename, absolutePath);
       // Note: No reload() here — cacheElement() stores the element correctly.
       // See Issue #491 for why PersonaManager's reload-after-create was removed.
 

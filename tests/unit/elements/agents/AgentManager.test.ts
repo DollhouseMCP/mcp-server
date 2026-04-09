@@ -137,6 +137,22 @@ describe('AgentManager', () => {
       );
     });
 
+    it('should notify the storage layer after creating a new agent', async () => {
+      const notifySavedSpy = jest.spyOn((agentManager as any).storageLayer, 'notifySaved');
+
+      const result = await agentManager.create(
+        'indexed-agent',
+        'A test agent',
+        'Agent instructions here'
+      );
+
+      expect(result.success).toBe(true);
+      expect(notifySavedSpy).toHaveBeenCalledWith(
+        'indexed-agent.md',
+        expect.stringContaining(path.join('agents', 'indexed-agent.md'))
+      );
+    });
+
     it('should reject invalid agent names', async () => {
       const result = await agentManager.create(
         'invalid name!',
