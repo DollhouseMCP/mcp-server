@@ -176,8 +176,16 @@
       if (hint) hint.textContent = CHANNEL_HINTS[currentChannel] || '';
       configs = buildConfigs(pinnedVersion, currentChannel);
       updateAllConfigs(currentMethod);
+      // Clear is-success/is-match state so buttons can be re-evaluated
+      document.querySelectorAll('.setup-install-btn').forEach((btn) => {
+        btn.classList.remove('is-success', 'is-match');
+        btn.disabled = false;
+      });
+      document.querySelectorAll('.setup-install-status').forEach((s) => {
+        s.textContent = '';
+        s.className = 'setup-install-status';
+      });
       updateInstallButtonLabels();
-      // Re-evaluate detection: current config may no longer match the new channel
       updateDetectionState();
     });
   };
@@ -756,7 +764,8 @@
       installBtn.classList.add('is-match');
     } else {
       const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
-      installBtn.textContent = isPinned ? `Configure v${pinnedVersion}` : 'Configure Now';
+      const channelLabel = currentChannel === DEFAULT_CHANNEL ? '' : ` (${currentChannel})`;
+      installBtn.textContent = isPinned ? `Configure v${pinnedVersion}` : `Configure Now${channelLabel}`;
       installBtn.disabled = false;
       installBtn.classList.remove('is-match');
     }
