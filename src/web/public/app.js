@@ -35,6 +35,16 @@ function safeParseYaml(content) {
 }
 
 globalThis.DollhouseConsoleUI = globalThis.DollhouseConsoleUI || {};
+
+/**
+ * Show or update a visible error banner within a tab panel.
+ *
+ * Creates the banner lazily on first use, then reuses it for later updates.
+ *
+ * @param {string} targetId - DOM id of the tab panel or container that owns the banner
+ * @param {string} bannerId - Stable DOM id for the banner element
+ * @param {string} message - User-visible message to render inside the banner
+ */
 globalThis.DollhouseConsoleUI.showBanner = function(targetId, bannerId, message) {
   const target = document.getElementById(targetId);
   if (!target) return;
@@ -49,6 +59,11 @@ globalThis.DollhouseConsoleUI.showBanner = function(targetId, bannerId, message)
   banner.hidden = false;
 };
 
+/**
+ * Hide an existing tab-level error banner without removing its DOM node.
+ *
+ * @param {string} bannerId - Stable DOM id for the banner element
+ */
 globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   const banner = document.getElementById(bannerId);
   if (banner) banner.hidden = true;

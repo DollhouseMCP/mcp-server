@@ -15,6 +15,8 @@
   'use strict';
 
   var SESSION_POLL_INTERVAL = 5000;
+  var SESSION_FILTER_INJECTION_RETRY_INTERVAL = 500;
+  var SESSION_FILTER_INJECTION_MAX_RETRIES = 20;
   var sessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
@@ -434,10 +436,10 @@
     var tryInject = setInterval(function() {
       injectSessionFilter();
       retries++;
-      if (document.getElementById('log-session-filter') || retries > 20) {
+      if (document.getElementById('log-session-filter') || retries > SESSION_FILTER_INJECTION_MAX_RETRIES) {
         clearInterval(tryInject);
       }
-    }, 500);
+    }, SESSION_FILTER_INJECTION_RETRY_INTERVAL);
   }
 
   if (document.readyState === 'loading') {

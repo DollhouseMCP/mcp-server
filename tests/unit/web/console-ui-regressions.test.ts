@@ -18,6 +18,9 @@ let metricsSource = '';
 
 type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
 
+const DEFAULT_WAIT_MS = 25;
+const SESSION_FILTER_INJECTION_WAIT_MS = 650;
+
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
   [appSource, sessionsSource, logsSource, metricsSource] = await Promise.all([
@@ -151,7 +154,7 @@ describe('Web console cleanup regressions', () => {
 
     win.eval(appSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
-    await wait(25);
+    await wait(DEFAULT_WAIT_MS);
 
     const banner = win.document.getElementById('collection-error-banner');
     expect(banner).not.toBeNull();
@@ -172,7 +175,7 @@ describe('Web console cleanup regressions', () => {
 
     win.eval(sessionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
-    await wait(25);
+    await wait(DEFAULT_WAIT_MS);
 
     const banner = win.document.getElementById('sessions-error-banner');
     expect(banner).not.toBeNull();
@@ -212,7 +215,7 @@ describe('Web console cleanup regressions', () => {
 
     win.eval(sessionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
-    await wait(650);
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
 
     const select = win.document.getElementById('log-session-filter') as HTMLSelectElement | null;
     expect(select).not.toBeNull();
@@ -262,7 +265,7 @@ describe('Web console cleanup regressions', () => {
 
     win.eval(metricsSource);
     win.DollhouseConsole.metrics.init();
-    await wait(25);
+    await wait(DEFAULT_WAIT_MS);
 
     const banner = win.document.getElementById('metrics-error-banner');
     expect(banner).not.toBeNull();
