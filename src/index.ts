@@ -1026,7 +1026,11 @@ export async function startStreamableHttpServer(
     }
   });
 
-  app.get(mcpPath, async (req, res) => {
+  const handleSessionLifecycleRequest = async (
+    req: Request,
+    res: Response,
+    methodName: 'GET' | 'DELETE',
+  ): Promise<void> => {
     const sessionId = getMcpSessionId(req);
     const session = sessionId ? sessions.get(sessionId) : undefined;
 
@@ -1038,7 +1042,7 @@ export async function startStreamableHttpServer(
     try {
       await session.transport.handleRequest(req, res);
     } catch (error) {
-      logger.error('[StreamableHTTP] Failed to handle MCP GET request', {
+      logger.error(`[StreamableHTTP] Failed to handle MCP ${methodName} request`, {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -1046,29 +1050,11 @@ export async function startStreamableHttpServer(
         res.status(500).json({ error: 'Internal server error' });
       }
     }
-  });
+  };
 
-  app.delete(mcpPath, async (req, res) => {
-    const sessionId = getMcpSessionId(req);
-    const session = sessionId ? sessions.get(sessionId) : undefined;
+  app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
 
-    if (!session) {
-      res.status(400).json({ error: 'A valid mcp-session-id header is required.' });
-      return;
-    }
-
-    try {
-      await session.transport.handleRequest(req, res);
-    } catch (error) {
-      logger.error('[StreamableHTTP] Failed to handle MCP DELETE request', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Internal server error' });
-      }
-    }
-  });
+  app.delete(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'DELETE'));
 
   const httpServer = await new Promise<HttpServer>((resolve, reject) => {
     const server = app.listen(port, host, () => resolve(server));
