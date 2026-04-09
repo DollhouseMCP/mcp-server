@@ -133,15 +133,25 @@ export async function recoverStalePort(port: number): Promise<boolean> {
   const stalePid = await findPidOnPort(port);
   if (!stalePid) return false;
 
-  try {
-    const { readLeaderLock } = await import('./LeaderElection.js');
-    const lock = await readLeaderLock();
-    if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
-      logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
-      return false;
+  // Check the lock file to see if this PID is a legitimate leader.
+  // TOCTOU mitigation: a new process may have JUST bound the port but not yet
+  // written its lock file. We read the lock, pause 500ms, then re-read. If the
+  // second read now matches the port holder, it's a fresh leader — don't kill.
+  const { readLeaderLock } = await import('./LeaderElection.js');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const lock = await readLeaderLock();
+      if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
+        await logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
+        return false;
+      }
+    } catch {
+      // Can't read lock file — continue to next attempt or kill
     }
-  } catch {
-    // Can't read lock file — treat port holder as squatter
+    if (attempt === 0) {
+      // Brief pause to let a freshly-started process write its lock file
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   const killed = await killStaleProcess(stalePid, port);

@@ -855,7 +855,16 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         const container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
-        await container.completeDeferredSetup();
+        // Do NOT call completeDeferredSetup() in --web mode (#1850).
+        // It runs UnifiedConsole leader election which starts a competing
+        // web server, sets serverRunning=true, and causes the actual
+        // startWebServer call below to early-return without binding.
+        // Standalone --web mode IS the server — no leader/follower needed.
+        // Run the port file sweep directly instead.
+        try {
+          const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
+          await sweepStalePortFiles();
+        } catch { /* non-fatal */ }
         mcpAqlHandler = bundle.mcpAqlHandler;
         // Extract sinks from container — deferred setup may have already wired them
         try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
