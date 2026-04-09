@@ -232,7 +232,7 @@ describe('Permission Server Integration', () => {
       );
 
       // It should still call endPhase (cleanup) even on error
-      expect(containerSource).toContain("timer.endPhase('permission_server')");
+      expect(containerSource).toContain("timer?.endPhase('permission_server')");
     });
 
     it('should handle unreachable server in HTTP request gracefully', async () => {

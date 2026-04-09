@@ -874,18 +874,18 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         const container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
-        // Do NOT call completeDeferredSetup() in --web mode (#1850).
-        // It runs UnifiedConsole leader election which starts a competing
-        // web server, sets serverRunning=true, and causes the actual
-        // startWebServer call below to early-return without binding.
-        // Standalone --web mode IS the server — no leader/follower needed.
-        // Run the port file sweep directly instead.
+
+        // Wire sinks, hooks, collectors, and security — skip only leader election
+        // and permission server. Standalone --web mode IS the server (#1866).
+        await container.completeSinkSetup();
+
+        // Sweep stale port files (normally done in completeConsoleSetup)
         try {
           const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
           await sweepStalePortFiles();
         } catch { /* non-fatal */ }
+
         mcpAqlHandler = bundle.mcpAqlHandler;
-        // Extract sinks from container — deferred setup may have already wired them
         try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
         try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
       } catch (err) {
@@ -894,7 +894,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         console.error("[DollhouseMCP] This may indicate a corrupt portfolio or missing dependencies.");
       }
 
-      // Ensure sinks exist even if container bootstrap failed —
+      // Fallback sinks if container bootstrap failed entirely —
       // standalone --web mode still needs working logs and metrics tabs
       if (!memorySink) {
         const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
@@ -915,6 +915,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
       const ingestResult = createIngestRoutes({
         logBroadcast: (entry) => { /* wired after server starts */ },
+        metricsOnSnapshot: (snapshot) => { metricsSink?.onSnapshot(snapshot); },
       });
       ingestResult.registerConsoleSession();
 

@@ -85,6 +85,7 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
   // 1. Process must be owned by the current OS user (prevents cross-user kills)
   // 2. Command line must match a DollhouseMCP binary path (prevents killing other services)
   // 3. If both fail or ps can't run, we refuse — safe default is to not kill
+  let cmdLine = '';
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: COMMAND_TIMEOUT_MS });
 
@@ -99,11 +100,11 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
     // /bin/dollhousemcp (global install), or dist/index.js (direct node execution).
     // NOT just 'mcp-server' anywhere in the path — that would match Jest workers
     // running from within the mcp-server project directory.
-    const cmdLine = stdout.trim();
+    cmdLine = stdout.trim();
     const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
       cmdLine.includes('.bin/dollhousemcp');
     const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
-      cmdLine.includes('dist/index.js');
+      /(?:dollhousemcp|mcp-server)[/\\]dist[/\\]index\.js/.test(cmdLine);
     if (!isDollhouseBin && !isMcpServerBin) {
       await logger.warn(`[WebUI] Port ${port} held by non-DollhouseMCP process (pid ${pid}) — not killing`, { cmdLine });
       return false;
@@ -119,7 +120,7 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
 
   try {
     process.kill(pid, 'SIGTERM');
-    logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`);
+    logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`, { cmdLine });
     for (let i = 0; i < KILL_POLL_COUNT; i++) {
       await new Promise(r => setTimeout(r, SIGTERM_POLL_MS));
       try { process.kill(pid, 0); } catch { return true; }

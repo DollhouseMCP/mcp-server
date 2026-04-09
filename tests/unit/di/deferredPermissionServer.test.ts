@@ -81,18 +81,18 @@ describe('Permission Server Wiring', () => {
       expect(containerSource).not.toContain("import('../auto-dollhouse/webAutoStart.js')");
     });
 
-    it('should run permission server after web console in deferred setup', async () => {
+    it('should run permission server after web console in completeConsoleSetup', async () => {
       const containerSource = await fs.readFile(
         path.join(process.cwd(), 'src/di/Container.ts'),
         'utf-8'
       );
 
+      // After #1866 split: webConsole and permServer are in completeConsoleSetup,
+      // dangerZone is in completeSinkSetup. Verify console-group ordering.
       const webConsoleIdx = containerSource.indexOf('deferredWebConsole(timer)');
       const permServerIdx = containerSource.indexOf('deferredPermissionServer(timer)');
-      const dangerZoneIdx = containerSource.indexOf('deferredDangerZoneInit(timer)');
 
       expect(permServerIdx).toBeGreaterThan(webConsoleIdx);
-      expect(permServerIdx).toBeLessThan(dangerZoneIdx);
     });
 
     it('should skip when web console is disabled', async () => {

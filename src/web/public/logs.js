@@ -38,6 +38,7 @@
   let filterSource = '';
   let filterMessage = '';
   let filterCorrelationId = '';
+  let filterSessionId = '';
 
   // ── DOM references ─────────────────────────────────────────────────────
   let viewport, scrollSpacer, jumpBtn, statusDot, statusText, entryCountEl;
@@ -51,6 +52,14 @@
     init: initLogViewer,
     destroy: destroyLogViewer,
     refresh: () => {
+      requestAnimationFrame(() => {
+        renderViewport();
+        if (autoScroll) scrollToBottom();
+      });
+    },
+    refilter: (sessionId) => {
+      filterSessionId = sessionId || '';
+      applyFilters();
       requestAnimationFrame(() => {
         renderViewport();
         if (autoScroll) scrollToBottom();
@@ -362,6 +371,7 @@
   const LEVEL_PRIORITY = { debug: 0, info: 1, warn: 2, error: 3 };
 
   function matchesFilters(entry) {
+    if (filterSessionId && entry.data?._sessionId !== filterSessionId) return false;
     if (filterCorrelationId && entry.correlationId !== filterCorrelationId) return false;
     if (filterCategory && entry.category !== filterCategory) return false;
     if (filterLevel && (LEVEL_PRIORITY[entry.level] || 0) < (LEVEL_PRIORITY[filterLevel] || 0)) return false;
@@ -371,7 +381,7 @@
   }
 
   function applyFilters() {
-    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId;
+    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId || filterSessionId;
     if (hasFilter) {
       filteredIndices = [];
       for (let i = 0; i < buffer.length; i++) {
