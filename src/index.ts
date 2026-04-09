@@ -867,11 +867,12 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
       }
 
+      let container: DollhouseContainer | undefined;
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
       let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
       try {
-        const container = new DollhouseContainer();
+        container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
 
@@ -908,13 +909,19 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       if (!metricsSink) {
         const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
         metricsSink = new MemoryMetricsSink(240);
+        try {
+          const metricsManager = container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager');
+          metricsManager?.registerSink(metricsSink);
+        } catch {
+          // MetricsManager may be unavailable in the degraded startup path.
+        }
       }
 
       // Set up ingest routes so --web mode has a session registry (#1805).
       // Without this, the session indicator is always empty in standalone mode.
       const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
       const ingestResult = createIngestRoutes({
-        logBroadcast: (entry) => { /* wired after server starts */ },
+        logBroadcast: (_entry) => { /* wired after server starts */ },
         metricsOnSnapshot: (snapshot) => { metricsSink?.onSnapshot(snapshot); },
       });
       ingestResult.registerConsoleSession();

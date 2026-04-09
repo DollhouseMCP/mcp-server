@@ -67,6 +67,25 @@
     refreshSelectionState();
   }
 
+  function showSessionsError(message) {
+    var target = document.getElementById('session-indicator');
+    if (!target || !target.parentElement) return;
+    var banner = document.getElementById('sessions-error-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'sessions-error-banner';
+      banner.className = 'tab-error-banner';
+      target.parentElement.insertBefore(banner, target);
+    }
+    banner.textContent = message;
+    banner.hidden = false;
+  }
+
+  function clearSessionsError() {
+    var banner = document.getElementById('sessions-error-banner');
+    if (banner) banner.hidden = true;
+  }
+
   // Update checkmarks and selected styling without rebuilding DOM
   function refreshSelectionState() {
     // Update items
@@ -338,7 +357,7 @@
     if (!logPanel) return;
     if (document.getElementById('log-session-filter')) return;
 
-    var filterBar = logPanel.querySelector('.log-filters');
+    var filterBar = logPanel.querySelector('.log-controls');
     if (!filterBar) return;
 
     var group = document.createElement('div');
@@ -352,6 +371,10 @@
     group.querySelector('select').addEventListener('change', function() {
       applyFilter(this.value);
     });
+
+    // If sessions loaded before the log controls mounted, populate the
+    // newly injected filter immediately instead of waiting for the next poll.
+    updateSessionFilterOptions();
   }
 
   // Update session filter dropdown options
@@ -378,16 +401,21 @@
    */
   function fetchSessions() {
     DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
-      if (!res.ok) return;
+      if (!res.ok) {
+        showSessionsError('Failed to load sessions.');
+        return;
+      }
       return res.json();
     }).then(function(data) {
       if (data && data.sessions) {
         sessions = data.sessions;
         updateSessionIndicator();
         updateSessionFilterOptions();
+        clearSessionsError();
       }
     }).catch(function(err) {
       console.warn('[Sessions] Fetch failed:', err);
+      showSessionsError('Failed to load sessions.');
     });
   }
 
