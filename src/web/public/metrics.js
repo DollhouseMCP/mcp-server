@@ -144,6 +144,25 @@
     });
   }
 
+  // ── Error banners (#1866) ────────────────────────────────────────────────
+  function showMetricsError(message) {
+    let banner = document.getElementById('metrics-error-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'metrics-error-banner';
+      banner.className = 'tab-error-banner';
+      const container = document.getElementById('metrics-content');
+      if (container) container.prepend(banner);
+    }
+    banner.textContent = message;
+    banner.hidden = false;
+  }
+
+  function clearMetricsError() {
+    const banner = document.getElementById('metrics-error-banner');
+    if (banner) banner.hidden = true;
+  }
+
   // ── Data fetching ────────────────────────────────────────────────────────
   async function fetchLatest() {
     try {
@@ -160,8 +179,12 @@
         const cutoff = Date.now() - TIME_RANGES['1h'];
         historySnapshots = historySnapshots.filter(s => new Date(s.timestamp).getTime() > cutoff);
         renderAll(lastSnapshot.metrics);
+        clearMetricsError();
       }
-    } catch { /* network error, will retry */ }
+    } catch (err) {
+      console.warn('[Metrics] Fetch failed:', err);
+      showMetricsError('Failed to load metrics — retrying...');
+    }
   }
 
   async function fetchHistory() {
@@ -174,7 +197,11 @@
         historySnapshots = data.snapshots.reverse(); // oldest first
         if (lastSnapshot) renderAll(lastSnapshot.metrics);
       }
-    } catch { /* network error */ }
+      clearMetricsError();
+    } catch (err) {
+      console.warn('[Metrics] History fetch failed:', err);
+      showMetricsError('Failed to load metrics history — retrying...');
+    }
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -412,9 +439,10 @@
             renderSecurityEvents(data.entries);
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          console.warn('[Metrics] Security events fetch failed:', err);
           const el = document.getElementById('security-recent-events');
-          if (el) el.innerHTML = '';
+          if (el) el.textContent = 'Failed to load security events';
         });
     }
   }

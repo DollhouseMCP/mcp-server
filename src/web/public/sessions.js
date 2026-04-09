@@ -59,9 +59,9 @@
     var logSelect = document.getElementById('log-session-filter');
     if (logSelect) logSelect.value = sessionId;
 
-    // Trigger log re-filter
+    // Trigger log re-filter with the selected session
     if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
-      window.DollhouseConsole.logs.refilter();
+      window.DollhouseConsole.logs.refilter(sessionId);
     }
 
     refreshSelectionState();
@@ -377,7 +377,9 @@
         updateSessionIndicator();
         updateSessionFilterOptions();
       }
-    }).catch(function() {});
+    }).catch(function(err) {
+      console.warn('[Sessions] Fetch failed:', err);
+    });
   }
 
   // Expose for logs.js integration

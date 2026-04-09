@@ -1727,3 +1727,15 @@ fieldset.topic-filters {
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Tab error banners (#1866) ─────────────────────────────────────────── */
+.tab-error-banner {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  margin-bottom: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  font-family: var(--font-mono);
+}

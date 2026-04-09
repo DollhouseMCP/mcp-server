@@ -119,7 +119,7 @@ function safeParseYaml(content) {
       DollhouseAuth.apiFetch('/api/collection')
         .then(r => r.ok ? r.json() : Promise.reject('not available'))
         .then(mergeCollectionData)
-        .catch(() => { /* collection not available — portfolio-only mode */ });
+        .catch((err) => { console.warn('[App] Collection fetch unavailable:', err); });
 
       const updated = document.getElementById('footer-updated');
       if (updated) {
