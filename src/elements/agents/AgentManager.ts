@@ -226,9 +226,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         ...normalizedMetadata
       };
       const primaryText = this.getPrimaryValidationText(content, referenceContent);
-      if (primaryText !== undefined) {
-        validationInput.content = primaryText;
-      }
+      validationInput.content = primaryText ?? '';
       const validationResult = await this.validator.validateCreate(validationInput);
 
       if (!validationResult.isValid) {
@@ -279,11 +277,17 @@ export class AgentManager extends BaseElementManager<Agent> {
       agent.extensions.instructions = sanitizedInstructions;
 
       // Set reference content if provided (v2.0 dual-field architecture)
-      if (referenceContent) {
+      if (typeof referenceContent === 'string' && referenceContent.trim().length > 0) {
         const contentValidationResult = ContentValidator.validateAndSanitize(
-          String(referenceContent),
+          referenceContent,
           { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
         );
+        if (!contentValidationResult.isValid) {
+          return {
+            success: false,
+            message: `Validation failed: ${(contentValidationResult.detectedPatterns || ['Content validation failed']).join(', ')}`
+          };
+        }
         agent.content = contentValidationResult.sanitizedContent || '';
       }
 

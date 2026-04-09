@@ -27,6 +27,7 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -207,7 +208,7 @@ describe('AgentManager', () => {
     });
 
     it('should reject content-only agent creation when reference content exceeds the maximum length', async () => {
-      const oversizedReferenceContent = 'a'.repeat(100001);
+      const oversizedReferenceContent = 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
 
       const result = await agentManager.create(
         'oversized-content-agent',
