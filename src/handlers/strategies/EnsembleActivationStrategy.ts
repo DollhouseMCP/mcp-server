@@ -14,6 +14,8 @@ import { PersonaManager } from '../../persona/PersonaManager.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { BaseActivationStrategy } from './BaseActivationStrategy.js';
 import { ElementActivationStrategy, MCPResponse } from './ElementActivationStrategy.js';
+import type { Ensemble } from '../../elements/ensembles/Ensemble.js';
+import type { ElementManagers, EnsembleElement } from '../../elements/ensembles/types.js';
 
 export class EnsembleActivationStrategy extends BaseActivationStrategy implements ElementActivationStrategy {
   constructor(
@@ -44,14 +46,7 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
 
     // Activate the ensemble with all managers (orchestration)
     try {
-      const result = await ensemble.activateEnsemble(this.portfolioManager, {
-        skillManager: this.skillManager,
-        templateManager: this.templateManager,
-        agentManager: this.agentManager,
-        memoryManager: this.memoryManager,
-        personaManager: this.personaManager,
-        ensembleManager: this.ensembleManager
-      });
+      const result = await ensemble.activateEnsemble(this.portfolioManager, this.getManagers());
 
       const statusEmoji = result.success ? '✅' : '⚠️';
       const details = [
@@ -116,7 +111,60 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
       this.throwNotFoundError(name, 'Ensemble');
     }
 
+    if (deactivationResult.ensemble) {
+      await this.deactivateMembers(deactivationResult.ensemble);
+    }
+
     return this.createSuccessResponse(`✅ Ensemble '${name}' deactivated`);
+  }
+
+  private getManagers(): ElementManagers {
+    return {
+      skillManager: this.skillManager,
+      templateManager: this.templateManager,
+      agentManager: this.agentManager,
+      memoryManager: this.memoryManager,
+      personaManager: this.personaManager,
+      ensembleManager: this.ensembleManager
+    };
+  }
+
+  private async deactivateMembers(ensemble: Ensemble): Promise<void> {
+    const deactivationPromises = (ensemble.metadata.elements || []).map((element) =>
+      this.deactivateMember(element)
+    );
+    await Promise.all(deactivationPromises);
+  }
+
+  private async deactivateMember(element: EnsembleElement): Promise<void> {
+    const normalizedType = element.element_type.toLowerCase();
+
+    switch (normalizedType) {
+      case 'skill':
+      case 'skills':
+        await this.skillManager.deactivateSkill(element.element_name);
+        return;
+      case 'persona':
+      case 'personas':
+        await Promise.resolve(this.personaManager.deactivatePersona(element.element_name));
+        return;
+      case 'agent':
+      case 'agents':
+        await this.agentManager.deactivateAgent(element.element_name);
+        return;
+      case 'memory':
+      case 'memories':
+        await this.memoryManager.deactivateMemory(element.element_name);
+        return;
+      case 'ensemble':
+      case 'ensembles':
+        await this.ensembleManager.deactivateEnsemble(element.element_name);
+        return;
+      case 'template':
+      case 'templates':
+      default:
+        return;
+    }
   }
 
   /**
