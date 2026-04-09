@@ -27,6 +27,7 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -151,6 +152,75 @@ describe('AgentManager', () => {
         'indexed-agent.md',
         expect.stringContaining(path.join('agents', 'indexed-agent.md'))
       );
+    });
+
+    it('should create a content-only agent when reference content is provided via metadata', async () => {
+      const result = await agentManager.create(
+        'content-only-agent',
+        'A content-only agent',
+        '',
+        {
+          content: '# Reference Material\n\nAgent reference content without explicit instructions.'
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.element).toBeInstanceOf(Agent);
+      expect(result.element?.instructions).toBe('');
+      expect(result.element?.content).toContain('Agent reference content');
+    });
+
+    it('should prefer behavioral instructions over reference content for validation when both are provided', async () => {
+      const validateCreateSpy = jest.spyOn((agentManager as any).validator, 'validateCreate');
+
+      const result = await agentManager.create(
+        'dual-field-agent',
+        'A dual-field agent',
+        'Behavioral instructions content',
+        {
+          content: '# Reference Content\n\nSupplemental context.'
+        }
+      );
+
+      expect(result.success).toBe(true);
+      expect(validateCreateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'dual-field-agent',
+        description: 'A dual-field agent',
+        content: 'Behavioral instructions content'
+      }));
+      expect(result.element?.instructions).toContain('Behavioral instructions content');
+      expect(result.element?.content).toContain('Supplemental context.');
+    });
+
+    it('should reject agent creation when both instructions and reference content are empty', async () => {
+      const result = await agentManager.create(
+        'empty-content-agent',
+        'An invalid empty-content agent',
+        '   ',
+        {
+          content: '   '
+        }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('Validation failed');
+      expect(result.message).toMatch(/Content is required|Content is too short/);
+    });
+
+    it('should reject content-only agent creation when reference content exceeds the maximum length', async () => {
+      const oversizedReferenceContent = 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
+
+      const result = await agentManager.create(
+        'oversized-content-agent',
+        'An invalid oversized content-only agent',
+        '',
+        {
+          content: oversizedReferenceContent
+        }
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.message).toMatch(/maximum length|Content validation failed/);
     });
 
     it('should reject invalid agent names', async () => {
