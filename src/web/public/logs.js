@@ -651,15 +651,11 @@
   }
 
   function showLogsError(message) {
-    if (globalThis.DollhouseConsoleUI && globalThis.DollhouseConsoleUI.showBanner) {
-      globalThis.DollhouseConsoleUI.showBanner('tab-logs', 'logs-error-banner', message);
-    }
+    globalThis.DollhouseConsoleUI?.showBanner?.('tab-logs', 'logs-error-banner', message);
   }
 
   function clearLogsError() {
-    if (globalThis.DollhouseConsoleUI && globalThis.DollhouseConsoleUI.clearBanner) {
-      globalThis.DollhouseConsoleUI.clearBanner('logs-error-banner');
-    }
+    globalThis.DollhouseConsoleUI?.clearBanner?.('logs-error-banner');
   }
 
   function updateEntryCount() {

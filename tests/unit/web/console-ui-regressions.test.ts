@@ -16,6 +16,8 @@ let sessionsSource = '';
 let logsSource = '';
 let metricsSource = '';
 
+type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
+
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
   [appSource, sessionsSource, logsSource, metricsSource] = await Promise.all([
@@ -41,7 +43,7 @@ function createDom(html: string): { window: JSDOM['window']; cleanup: () => void
     pretendToBeVisual: true,
   });
 
-  const win = dom.window as JSDOM['window'] & Record<string, any>;
+  const win = dom.window as unknown as TestWindow;
   const intervalIds: number[] = [];
   const timeoutIds: number[] = [];
   const nativeSetInterval = win.setInterval.bind(win);
