@@ -10,8 +10,10 @@ const describeSocketSmoke = process.env.DOLLHOUSE_RUN_SOCKET_SMOKE === 'true'
 const describeRuntimeControls = process.env.CI === 'true' || process.env.DOLLHOUSE_RUN_SOCKET_SMOKE === 'true'
   ? describe
   : describe.skip;
+type RequestInput = URL | RequestInfo;
+type RequestMethod = 'GET' | 'POST' | 'DELETE';
 
-function resolveRequestUrl(input: URL | RequestInfo): URL {
+function resolveRequestUrl(input: RequestInput): URL {
   if (input instanceof Request) {
     return new URL(input.url);
   }
@@ -23,7 +25,7 @@ function resolveRequestUrl(input: URL | RequestInfo): URL {
   return new URL(String(input));
 }
 
-function resolveRequestMethod(input: URL | RequestInfo, init?: RequestInit): 'GET' | 'POST' | 'DELETE' {
+function resolveRequestMethod(input: RequestInput, init?: RequestInit): RequestMethod {
   const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
 
   if (method === 'DELETE') {
@@ -37,7 +39,7 @@ function resolveRequestMethod(input: URL | RequestInfo, init?: RequestInit): 'GE
   return 'POST';
 }
 
-function createRequestHeaders(input: URL | RequestInfo, init?: RequestInit): Headers {
+function createRequestHeaders(input: RequestInput, init?: RequestInit): Headers {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
 
   if (init?.headers) {
@@ -60,7 +62,7 @@ function headerValueToStrings(value: unknown): string[] {
     return value
       .filter((item): item is string | number | boolean =>
         typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean')
-      .map(item => String(item));
+      .map(String);
   }
 
   return [];
@@ -138,7 +140,7 @@ function createBufferedFetch(
   server: Parameters<typeof request>[0],
   mcpPath: string,
 ): typeof fetch {
-  return async (input: URL | RequestInfo, init?: RequestInit): Promise<Response> => {
+  return async (input: RequestInput, init?: RequestInit): Promise<Response> => {
     const requestUrl = resolveRequestUrl(input);
     const method = resolveRequestMethod(input, init);
     const headers = createRequestHeaders(input, init);
@@ -308,18 +310,56 @@ describeRuntimeControls('Streamable HTTP runtime controls', () => {
       expect(readyResponse.body.memory.rss).toEqual(expect.any(Number));
       expect(readyResponse.body.activeSessions).toBe(1);
       expect(readyResponse.body.pooledSessions).toBe(1);
+      expect(readyResponse.body.sessionTelemetry.created).toBeGreaterThanOrEqual(1);
+      expect(readyResponse.body.sessionTelemetry.poolHits).toBeGreaterThanOrEqual(1);
 
       await new Promise(resolve => setTimeout(resolve, 125));
 
+      const sessionId = transport.sessionId;
+      expect(sessionId).toBeTruthy();
+
       const expiredSessionResponse = await request(serverHandle.app)
         .get(serverHandle.mcpPath)
-        .set('mcp-session-id', transport.sessionId!);
+        .set('mcp-session-id', sessionId);
 
       expect(expiredSessionResponse.status).toBe(404);
       expect(serverHandle.activeSessionCount()).toBe(0);
       expect(serverHandle.pooledSessionCount()).toBe(1);
     } finally {
       await client?.close();
+      await serverHandle.close();
+    }
+  }, 30000);
+
+  it('tracks multiple concurrent hosted sessions in readiness telemetry', async () => {
+    const { startStreamableHttpServer } = await import('../../../src/index.js');
+    const serverHandle = await startStreamableHttpServer({
+      host: '127.0.0.1',
+      port: 0,
+      registerSignalHandlers: false,
+      sessionPoolSize: 0,
+    });
+
+    let clientA: Client | undefined;
+    let clientB: Client | undefined;
+
+    try {
+      const [hostedClientA, hostedClientB] = await Promise.all([
+        createHostedClient(serverHandle),
+        createHostedClient(serverHandle),
+      ]);
+      clientA = hostedClientA.client;
+      clientB = hostedClientB.client;
+
+      const readyResponse = await request(serverHandle.app).get('/readyz');
+
+      expect(readyResponse.status).toBe(200);
+      expect(readyResponse.body.activeSessions).toBe(2);
+      expect(readyResponse.body.sessionTelemetry.created).toBeGreaterThanOrEqual(2);
+      expect(readyResponse.body.sessionTelemetry.poolMisses).toBeGreaterThanOrEqual(2);
+    } finally {
+      await clientA?.close();
+      await clientB?.close();
       await serverHandle.close();
     }
   }, 30000);

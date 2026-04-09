@@ -6,6 +6,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { Express, Request, Response } from 'express';
 import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
@@ -64,10 +65,27 @@ interface RateLimitRecord {
   windowEndsAt: number;
 }
 
+interface SessionTelemetry {
+  created: number;
+  disposed: number;
+  expired: number;
+  poolHits: number;
+  poolMisses: number;
+  rateLimitedRequests: number;
+}
+
+function normalizeUserInput(rawValue: string | undefined): string | undefined {
+  if (rawValue === undefined) {
+    return undefined;
+  }
+
+  return UnicodeValidator.normalize(rawValue).normalizedContent;
+}
+
 function getCliFlagValue(flagName: string): string | undefined {
   const prefix = `--${flagName}=`;
   const arg = process.argv.find(value => value.startsWith(prefix));
-  return arg ? arg.slice(prefix.length) : undefined;
+  return arg ? normalizeUserInput(arg.slice(prefix.length)) : undefined;
 }
 
 function parseCommaSeparatedValues(rawValue: string | undefined): string[] | undefined {
@@ -77,18 +95,19 @@ function parseCommaSeparatedValues(rawValue: string | undefined): string[] | und
 
   const values = rawValue
     .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
+    .map(value => normalizeUserInput(value.trim())?.trim())
+    .filter((value): value is string => Boolean(value));
 
   return values.length > 0 ? values : undefined;
 }
 
 function normalizeMcpPath(rawPath: string | undefined): string {
-  if (!rawPath || rawPath === '/') {
+  const normalizedPath = normalizeUserInput(rawPath);
+  if (!normalizedPath || normalizedPath === '/') {
     return '/mcp';
   }
 
-  return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+  return normalizedPath.startsWith('/') ? normalizedPath : `/${normalizedPath}`;
 }
 
 function getRequestId(req: Request): unknown {
@@ -98,16 +117,17 @@ function getRequestId(req: Request): unknown {
 
 function getMcpSessionId(req: Request): string | undefined {
   const headerValue = req.headers['mcp-session-id'];
-  return Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  const sessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
+  return normalizeUserInput(sessionId);
 }
 
 function getClientKey(req: Request): string {
   const forwardedFor = req.headers['x-forwarded-for'];
   if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return forwardedFor.split(',')[0].trim();
+    return normalizeUserInput(forwardedFor.split(',')[0].trim()) ?? 'unknown';
   }
 
-  return req.ip || req.socket.remoteAddress || 'unknown';
+  return normalizeUserInput(req.ip || req.socket.remoteAddress || 'unknown') ?? 'unknown';
 }
 
 function getProcessMemorySnapshot(): Record<string, number> {
@@ -177,10 +197,13 @@ export async function createStreamableHttpRuntime(
   createSessionAttachment: (transport: StreamableHTTPServerTransport) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
-  const host = options.host ?? env.DOLLHOUSE_HTTP_HOST;
+  const host = normalizeUserInput(options.host ?? env.DOLLHOUSE_HTTP_HOST) ?? env.DOLLHOUSE_HTTP_HOST;
   const port = options.port ?? env.DOLLHOUSE_HTTP_PORT;
   const mcpPath = normalizeMcpPath(options.mcpPath ?? env.DOLLHOUSE_HTTP_MCP_PATH);
-  const allowedHosts = options.allowedHosts ?? env.DOLLHOUSE_HTTP_ALLOWED_HOSTS;
+  const allowedHosts = options.allowedHosts
+    ?.map(value => normalizeUserInput(value))
+    .filter((value): value is string => Boolean(value))
+    ?? env.DOLLHOUSE_HTTP_ALLOWED_HOSTS;
   const rateLimitWindowMs = Math.max(0, options.rateLimitWindowMs ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS);
   const rateLimitMaxRequests = Math.max(0, options.rateLimitMaxRequests ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS);
   const sessionIdleTimeoutMs = Math.max(0, options.sessionIdleTimeoutMs ?? env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS);
@@ -189,6 +212,14 @@ export async function createStreamableHttpRuntime(
   const sessions = new Map<string, ActiveSessionRecord>();
   const rateLimits = new Map<string, RateLimitRecord>();
   const pooledSessions: PreparedSessionRecord[] = [];
+  const sessionTelemetry: SessionTelemetry = {
+    created: 0,
+    disposed: 0,
+    expired: 0,
+    poolHits: 0,
+    poolMisses: 0,
+    rateLimitedRequests: 0,
+  };
   let closingPromise: Promise<void> | null = null;
   let replenishPoolPromise: Promise<void> | null = null;
 
@@ -221,6 +252,7 @@ export async function createStreamableHttpRuntime(
     }
 
     sessions.delete(sessionId);
+    sessionTelemetry.disposed += 1;
     clearSessionTimer(session);
 
     if (!skipTransportClose) {
@@ -256,6 +288,7 @@ export async function createStreamableHttpRuntime(
         sessionId,
         idleTimeoutMs: sessionIdleTimeoutMs,
       });
+      sessionTelemetry.expired += 1;
       void disposeSession(sessionId);
     }, sessionIdleTimeoutMs);
     session.expirationTimer.unref?.();
@@ -279,6 +312,7 @@ export async function createStreamableHttpRuntime(
     }
 
     if (current.requestCount >= rateLimitMaxRequests) {
+      sessionTelemetry.rateLimitedRequests += 1;
       const retryAfterSeconds = Math.max(1, Math.ceil((current.windowEndsAt - now) / 1000));
       res.setHeader('Retry-After', String(retryAfterSeconds));
       respondWithJsonRpcError(res, 429, 'Rate limit exceeded', getRequestId(req));
@@ -345,6 +379,7 @@ export async function createStreamableHttpRuntime(
           expirationTimer: null,
           lastTouchedAt: Date.now(),
         });
+        sessionTelemetry.created += 1;
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
         void maintainSessionPool();
@@ -381,10 +416,12 @@ export async function createStreamableHttpRuntime(
   const getOrCreatePreparedSession = async (): Promise<PreparedSessionRecord> => {
     const pooledSession = pooledSessions.pop();
     if (pooledSession) {
+      sessionTelemetry.poolHits += 1;
       void maintainSessionPool();
       return pooledSession;
     }
 
+    sessionTelemetry.poolMisses += 1;
     return prepareSession();
   };
 
@@ -397,6 +434,7 @@ export async function createStreamableHttpRuntime(
       health: '/healthz',
       readiness: '/readyz',
       sessionPoolSize,
+      sessionTelemetry,
     });
   });
 
@@ -405,6 +443,11 @@ export async function createStreamableHttpRuntime(
       ok: true,
       transport: 'streamable-http',
       version: PACKAGE_VERSION,
+      sessions: {
+        active: sessions.size,
+        pooled: pooledSessions.length,
+        ...sessionTelemetry,
+      },
       memory: getProcessMemorySnapshot(),
     });
   });
@@ -415,6 +458,7 @@ export async function createStreamableHttpRuntime(
       transport: 'streamable-http',
       activeSessions: sessions.size,
       pooledSessions: pooledSessions.length,
+      sessionTelemetry,
       memory: getProcessMemorySnapshot(),
     });
   });

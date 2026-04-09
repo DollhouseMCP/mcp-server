@@ -69,6 +69,7 @@ Notes:
 - `DOLLHOUSE_HTTP_RATE_LIMIT_*` controls the per-client request budget for hosted deployments
 - `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` expires abandoned sessions before they become long-lived leaks
 - `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` keeps a small warm pool of pre-attached HTTP sessions for faster startup under light concurrency
+- `/healthz` and `/readyz` expose session telemetry counters so hosted deployments can watch expirations, pool behavior, and rate-limit activity
 
 ## CLI Overrides
 
