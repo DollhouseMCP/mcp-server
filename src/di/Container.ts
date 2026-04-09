@@ -864,6 +864,14 @@ export class DollhouseContainer {
     await this.deferredPolicyExport();
     await this.deferredLogHooks(timer);
     await this.deferredMetricsCollectors(timer);
+
+    // Sweep stale port files from prior sessions before any port operations (#1856).
+    // Runs unconditionally — stale files accumulate regardless of DOLLHOUSE_WEB_CONSOLE.
+    try {
+      const { sweepStalePortFiles } = await import('../web/portDiscovery.js');
+      await sweepStalePortFiles();
+    } catch { /* sweep failure is non-fatal */ }
+
     await this.deferredWebConsole(timer);
     await this.deferredPermissionServer(timer);
     await this.deferredDangerZoneInit(timer);
@@ -1647,6 +1655,12 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    // Close the HTTP server first so the port is freed immediately (#1856)
+    try {
+      const { shutdownWebServer } = await import('../web/server.js');
+      shutdownWebServer();
+    } catch { /* web server not started */ }
+
     // Close MetricsManager before general disposal (flush final snapshot)
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');
