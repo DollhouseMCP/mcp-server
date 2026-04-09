@@ -92,6 +92,20 @@ export function _resetServerState(): void {
 }
 
 /**
+ * Gracefully shut down the HTTP server (#1856).
+ * Closes the active server and resets module state so the port is freed
+ * immediately rather than lingering until process exit.
+ */
+export function shutdownWebServer(): void {
+  if (activeHttpServer) {
+    activeHttpServer.close();
+    activeHttpServer = null;
+    serverRunning = false;
+    logger.info(`[WebUI] HTTP server closed on port ${serverPort}`);
+  }
+}
+
+/**
  * Options for starting the web server.
  */
 export interface WebServerOptions {

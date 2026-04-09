@@ -93,8 +93,9 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err: any) {
+    // EPERM = process exists but owned by another user — still alive
+    return err?.code === 'EPERM';
   }
 }
 
@@ -358,4 +359,5 @@ export function registerLeaderCleanup(): void {
   process.once('exit', cleanup);
   process.once('SIGTERM', cleanup);
   process.once('SIGINT', cleanup);
+  process.once('SIGHUP', cleanup);
 }
