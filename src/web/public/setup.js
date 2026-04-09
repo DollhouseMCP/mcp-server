@@ -414,7 +414,9 @@
       btn.textContent = 'Verifying...';
 
       // Verify the install by re-detecting — confirms config was written
+      // and re-renders the current config display with the new values.
       await fetchDetection();
+      updateDetectionState();
       const verified = detectedConfigs[clientToPlatformReverse[client]]?.installed;
 
       btn.textContent = 'Installed';
