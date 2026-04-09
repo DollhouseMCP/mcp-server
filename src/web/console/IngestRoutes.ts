@@ -461,38 +461,41 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
   });
 
-  // Reaper: periodically check for stale sessions, clean ended entries, and expire suppressions.
-  function reapStaleSessions(): void {
-    const now = Date.now();
+  /** Mark stale active sessions as ended. */
+  function reapStaleSessions(now: number): void {
     for (const [id, session] of sessions) {
       if (session.status !== 'active') continue;
-      if (session.isLeader) continue; // leader manages itself
-      if (session.kind === 'console') continue; // console session has no heartbeat (#1805)
+      if (session.isLeader || session.kind === 'console') continue;
       const age = now - new Date(session.lastHeartbeat).getTime();
-      if (age > SESSION_STALE_MS) {
-        session.status = 'ended';
-        namePool.release(id);
-        logger.info('[IngestRoutes] Reaped stale session', {
-          displayName: session.displayName, sessionId: id, pid: session.pid,
-          lastHeartbeatAgo: `${Math.round(age / 1000)}s`,
-          activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
-        });
-        broadcasts.sessionBroadcast?.(session);
+      if (age <= SESSION_STALE_MS) continue;
+      session.status = 'ended';
+      namePool.release(id);
+      logger.info('[IngestRoutes] Reaped stale session', {
+        displayName: session.displayName, sessionId: id, pid: session.pid,
+        lastHeartbeatAgo: `${Math.round(age / 1000)}s`,
+        activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+      });
+      broadcasts.sessionBroadcast?.(session);
+    }
+  }
+
+  /** Delete ended sessions and expired suppressions to bound memory (#1870). */
+  function purgeStaleEntries(now: number): void {
+    for (const [id, session] of sessions) {
+      if (session.status === 'ended' && now - new Date(session.lastHeartbeat).getTime() > SUPPRESS_TTL_MS) {
+        sessions.delete(id);
       }
     }
-    // Clean up ended sessions older than 5 minutes to prevent memory accumulation (#1870)
-    for (const [id, session] of sessions) {
-      if (session.status !== 'ended') continue;
-      const endedAge = now - new Date(session.lastHeartbeat).getTime();
-      if (endedAge > SUPPRESS_TTL_MS) sessions.delete(id);
-    }
-    // Clean up expired suppressions (#1870)
     for (const [id, expiry] of suppressedSessions) {
       if (now > expiry) suppressedSessions.delete(id);
     }
   }
 
-  const reaperInterval = setInterval(reapStaleSessions, REAPER_INTERVAL_MS);
+  const reaperInterval = setInterval(() => {
+    const now = Date.now();
+    reapStaleSessions(now);
+    purgeStaleEntries(now);
+  }, REAPER_INTERVAL_MS);
   reaperInterval.unref();
 
   function getSessions(): SessionInfo[] {
