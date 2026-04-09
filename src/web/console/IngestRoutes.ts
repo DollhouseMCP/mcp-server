@@ -41,6 +41,9 @@ const SESSION_STALE_MS = 15_000;
 /** Timeout for legacy port federation/proxy requests (ms) */
 const LEGACY_FETCH_TIMEOUT_MS = 2_000;
 
+/** How long a dismissed session stays suppressed from auto-registration (ms) */
+const SUPPRESS_TTL_MS = 5 * 60_000; // 5 minutes
+
 /**
  * Tracked session information.
  */
@@ -133,6 +136,79 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 
+  // Suppression list: dismissed sessions are blocked from auto-registration
+  // for SUPPRESS_TTL_MS to prevent the dismiss-then-revive loop (#1870).
+  const suppressedSessions = new Map<string, number>(); // sessionId → expiry timestamp
+
+  /**
+   * Auto-register or update an orphaned session from ingestion data.
+   * Returns the session (existing or newly created), or null if suppressed.
+   */
+  function ensureSession(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+    const existing = sessions.get(sessionId);
+    if (existing) {
+      existing.lastHeartbeat = new Date().toISOString();
+      // Capture PID if we didn't have one (e.g., auto-registered from logs, now heartbeat has PID)
+      if (pid && !existing.pid) {
+        existing.pid = pid;
+        logger.info('[IngestRoutes] Recovered PID for orphaned session', {
+          displayName: existing.displayName, sessionId, pid,
+        });
+      }
+      // Revive reaped sessions that are still sending data
+      if (existing.status === 'ended') {
+        // Check suppression list
+        const expiry = suppressedSessions.get(sessionId);
+        if (expiry && Date.now() < expiry) {
+          return null; // suppressed — user dismissed this session
+        }
+        suppressedSessions.delete(sessionId);
+        existing.status = 'active';
+        logger.info('[IngestRoutes] Revived ended session still sending data', {
+          displayName: existing.displayName, sessionId,
+        });
+      }
+      return existing;
+    }
+
+    // Check suppression list before auto-registering
+    const expiry = suppressedSessions.get(sessionId);
+    if (expiry && Date.now() < expiry) {
+      return null; // suppressed
+    }
+    suppressedSessions.delete(sessionId);
+
+    // Session not in Map — auto-register so it's visible and killable.
+    try {
+      const displayName = namePool.assign(sessionId);
+      const color = namePool.getColor(sessionId) ?? '#3b82f6';
+      const now = new Date().toISOString();
+      const info: SessionInfo = {
+        sessionId,
+        displayName,
+        color,
+        pid: pid || 0,
+        startedAt: now,
+        lastHeartbeat: now,
+        status: 'active',
+        isLeader: false,
+        authenticated,
+        kind: 'mcp',
+      };
+      sessions.set(sessionId, info);
+      logger.info('[IngestRoutes] Auto-registered orphaned session', {
+        displayName, sessionId, source: pid ? 'heartbeat' : 'ingestion',
+      });
+      broadcasts.sessionBroadcast?.(info);
+      return info;
+    } catch (err) {
+      logger.debug('[IngestRoutes] Failed to auto-register orphaned session', {
+        sessionId, error: (err as Error).message,
+      });
+      return null;
+    }
+  }
+
   // JSON body parsing with size limit
   router.use(express.json({ limit: MAX_PAYLOAD_SIZE }));
 
@@ -166,49 +242,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       count++;
     }
 
-    // Update session heartbeat — or re-register if the session was lost
-    // (e.g., server restarted but MCP client kept running) (#1870)
-    const session = sessions.get(payload.sessionId);
-    if (session) {
-      session.lastHeartbeat = new Date().toISOString();
-      // Revive reaped sessions that are still sending data
-      if (session.status === 'ended') {
-        session.status = 'active';
-        logger.info('[IngestRoutes] Revived ended session still sending logs', {
-          displayName: session.displayName, sessionId: payload.sessionId,
-        });
-      }
-    } else {
-      // Session not in Map — auto-register so it's visible and killable.
-      // Wrap in try-catch: name pool exhaustion or broadcast failure must
-      // not break log ingestion (#1870 review feedback).
-      try {
-        const displayName = namePool.assign(payload.sessionId);
-        const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
-        const now = new Date().toISOString();
-        const info: SessionInfo = {
-          sessionId: payload.sessionId,
-          displayName,
-          color,
-          pid: 0, // unknown — no PID from log ingestion; kill uses reaper instead
-          startedAt: now,
-          lastHeartbeat: now,
-          status: 'active',
-          isLeader: false,
-          authenticated: false, // safe default — we can't verify auth from log payload
-          kind: 'mcp',
-        };
-        sessions.set(payload.sessionId, info);
-        logger.info('[IngestRoutes] Auto-registered orphaned session from log ingestion', {
-          displayName, sessionId: payload.sessionId,
-        });
-        broadcasts.sessionBroadcast?.(info);
-      } catch (err) {
-        logger.debug('[IngestRoutes] Failed to auto-register orphaned session', {
-          sessionId: payload.sessionId, error: (err as Error).message,
-        });
-      }
-    }
+    // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
+    const session = ensureSession(payload.sessionId);
 
     if (skipped > 0) {
       logger.debug(`[IngestRoutes] Log ingest from ${session?.displayName ?? payload.sessionId}: accepted=${count}, skipped=${skipped}`);
@@ -239,7 +274,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       broadcasts.metricsOnSnapshot(payload.snapshot);
     }
 
-    const session = sessions.get(payload.sessionId);
+    // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
+    const session = ensureSession(payload.sessionId);
     logger.debug(`[IngestRoutes] Metrics ingested from ${session?.displayName ?? payload.sessionId}`);
     res.status(200).json({ accepted: true });
   });
@@ -301,10 +337,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         break;
       }
       case 'heartbeat': {
-        const existing = sessions.get(payload.sessionId);
-        if (existing) {
-          existing.lastHeartbeat = now;
-        }
+        // Auto-register or update — heartbeat includes PID for recovery (#1870)
+        ensureSession(payload.sessionId, payload.pid);
         break;
       }
     }
@@ -387,11 +421,12 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     if (!session.pid) {
-      // Auto-registered orphan with unknown PID — just mark as ended (#1870).
-      // The reaper will clean it up if it stops sending data.
+      // Auto-registered orphan with unknown PID — mark as ended and suppress
+      // to prevent the dismiss-then-revive loop (#1870).
       session.status = 'ended';
       namePool.release(sessionId);
-      logger.info('[IngestRoutes] Dismissed orphaned session (no PID)', {
+      suppressedSessions.set(sessionId, Date.now() + SUPPRESS_TTL_MS);
+      logger.info('[IngestRoutes] Dismissed orphaned session (no PID), suppressed for 5m', {
         displayName: session.displayName, sessionId,
       });
       res.json({ ok: true, dismissed: session.displayName, reason: 'no-pid' });
@@ -434,6 +469,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         });
         broadcasts.sessionBroadcast?.(session);
       }
+    }
+    // Clean up expired suppressions to prevent memory leaks (#1870)
+    for (const [id, expiry] of suppressedSessions) {
+      if (now > expiry) suppressedSessions.delete(id);
     }
   }, REAPER_INTERVAL_MS);
   reaperInterval.unref();

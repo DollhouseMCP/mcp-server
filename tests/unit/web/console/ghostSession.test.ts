@@ -185,7 +185,7 @@ describe('Ghost session cleanup (#1870)', () => {
       expect(res.body.error).toBe('Session not found');
     });
 
-    it('dismissed orphan can be re-registered by new logs', async () => {
+    it('dismissed orphan is suppressed from auto-registration', async () => {
       const app = buildApp(ir);
       await request(app)
         .post('/api/ingest/logs')
@@ -193,12 +193,12 @@ describe('Ghost session cleanup (#1870)', () => {
       await request(app).post('/api/sessions/k3/kill');
       expect(ir.getSessions()).toHaveLength(0);
 
+      // New logs should NOT re-register — session is suppressed
       await request(app)
         .post('/api/ingest/logs')
         .send({ sessionId: 'k3', entries: [makeEntry('back')] });
 
-      expect(ir.getSessions()).toHaveLength(1);
-      expect(ir.getSessions()[0].status).toBe('active');
+      expect(ir.getSessions()).toHaveLength(0);
     });
   });
 
@@ -285,6 +285,115 @@ describe('Ghost session cleanup (#1870)', () => {
 
       const after = ir.getSessions()[0].lastHeartbeat;
       expect(new Date(after).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+    });
+  });
+
+  // ── Suppression ────────────────────────────────────────────────────────
+
+  describe('suppression after dismiss', () => {
+    it('suppressed session stays gone even with continued log ingestion', async () => {
+      const app = buildApp(ir);
+      // Auto-register, dismiss, then send 3 more log batches
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'sup-1', entries: [makeEntry()] });
+      await request(app).post('/api/sessions/sup-1/kill');
+
+      for (let i = 0; i < 3; i++) {
+        await request(app)
+          .post('/api/ingest/logs')
+          .send({ sessionId: 'sup-1', entries: [makeEntry(`attempt-${i}`)] });
+      }
+
+      expect(ir.getSessions()).toHaveLength(0);
+    });
+
+    it('suppressed session stays gone from metrics ingestion too', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'sup-2', entries: [makeEntry()] });
+      await request(app).post('/api/sessions/sup-2/kill');
+
+      await request(app)
+        .post('/api/ingest/metrics')
+        .send({ sessionId: 'sup-2', snapshot: { id: 'snap1', timestamp: new Date().toISOString(), metrics: {} } });
+
+      expect(ir.getSessions()).toHaveLength(0);
+    });
+
+    it('suppressed session stays gone from heartbeat events', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'sup-3', entries: [makeEntry()] });
+      await request(app).post('/api/sessions/sup-3/kill');
+
+      await request(app)
+        .post('/api/ingest/session')
+        .send({ sessionId: 'sup-3', event: 'heartbeat', pid: 999 });
+
+      expect(ir.getSessions()).toHaveLength(0);
+    });
+  });
+
+  // ── Metrics auto-registration ──────────────────────────────────────────
+
+  describe('metrics auto-registration', () => {
+    it('auto-registers orphan from metrics ingestion', async () => {
+      const app = buildApp(ir);
+      const res = await request(app)
+        .post('/api/ingest/metrics')
+        .send({ sessionId: 'met-1', snapshot: { id: 'snap1', timestamp: new Date().toISOString(), metrics: {} } });
+
+      expect(res.status).toBe(200);
+      expect(ir.getSessions()).toHaveLength(1);
+      expect(ir.getSessions()[0].sessionId).toBe('met-1');
+    });
+  });
+
+  // ── Heartbeat PID recovery ─────────────────────────────────────────────
+
+  describe('heartbeat PID recovery', () => {
+    it('recovers PID from heartbeat for auto-registered session', async () => {
+      const app = buildApp(ir);
+      // Auto-register via logs (pid=0)
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'pid-1', entries: [makeEntry()] });
+
+      expect(ir.getSessions()[0].pid).toBe(0);
+
+      // Heartbeat arrives with real PID
+      await request(app)
+        .post('/api/ingest/session')
+        .send({ sessionId: 'pid-1', event: 'heartbeat', pid: 54321 });
+
+      expect(ir.getSessions()[0].pid).toBe(54321);
+    });
+
+    it('auto-registers unknown session from heartbeat with PID', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/session')
+        .send({ sessionId: 'pid-2', event: 'heartbeat', pid: 12345 });
+
+      expect(ir.getSessions()).toHaveLength(1);
+      expect(ir.getSessions()[0].pid).toBe(12345);
+    });
+
+    it('does not overwrite existing PID with zero', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/session')
+        .send({ sessionId: 'pid-3', event: 'started', pid: 77777, startedAt: new Date().toISOString() });
+
+      // Log ingestion has no PID — should not overwrite
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'pid-3', entries: [makeEntry()] });
+
+      expect(ir.getSessions()[0].pid).toBe(77777);
     });
   });
 });

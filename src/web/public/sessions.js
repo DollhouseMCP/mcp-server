@@ -274,6 +274,15 @@
             .then(function(res) {
               if (!res.ok) {
                 alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+                fetchSessions();
+                return;
+              }
+              return res.json();
+            })
+            .then(function(data) {
+              if (!data) return;
+              if (data.reason === 'no-pid') {
+                alert('Session ' + displayName(s) + ' dismissed.\nThe MCP client process may still be running \u2014 close it in your AI client to fully stop it.');
               }
               fetchSessions();
             })
