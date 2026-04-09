@@ -6,7 +6,7 @@
  * concurrent ingestion, and session lifecycle after dismiss.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import {
@@ -214,6 +214,18 @@ describe('Ghost session cleanup (#1870)', () => {
   // ── GET /api/sessions filtering ────────────────────────────────────────
 
   describe('GET /api/sessions filtering', () => {
+    let fetchSpy: ReturnType<typeof jest.spyOn>;
+
+    beforeEach(() => {
+      fetchSpy = jest
+        .spyOn(globalThis, 'fetch')
+        .mockRejectedValue(new Error('legacy console unavailable in test'));
+    });
+
+    afterEach(() => {
+      fetchSpy.mockRestore();
+    });
+
     it('excludes ended sessions from response', async () => {
       const app = buildApp(ir);
       await request(app)

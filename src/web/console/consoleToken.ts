@@ -368,14 +368,14 @@ function maskToken(token: string): string {
 
 /**
  * Build a human-readable default name from a puppet name and the machine hostname.
- * Example: "Kermit on mick-MacBook-Pro".
+ * Example: "Console: Kermit on mick-MacBook-Pro".
  *
  * The puppet name is passed in rather than imported to avoid a circular dependency
  * with SessionNames (which only generates per-process names).
  */
 function defaultTokenName(puppetName: string): string {
   const host = hostname() || 'localhost';
-  return `${puppetName} on ${host}`;
+  return `Console: ${puppetName} on ${host}`;
 }
 
 /**

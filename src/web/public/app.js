@@ -34,6 +34,41 @@ function safeParseYaml(content) {
   }
 }
 
+globalThis.DollhouseConsoleUI = globalThis.DollhouseConsoleUI || {};
+
+/**
+ * Show or update a visible error banner within a tab panel.
+ *
+ * Creates the banner lazily on first use, then reuses it for later updates.
+ *
+ * @param {string} targetId - DOM id of the tab panel or container that owns the banner
+ * @param {string} bannerId - Stable DOM id for the banner element
+ * @param {string} message - User-visible message to render inside the banner
+ */
+globalThis.DollhouseConsoleUI.showBanner = function(targetId, bannerId, message) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  let banner = document.getElementById(bannerId);
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = bannerId;
+    banner.className = 'tab-error-banner';
+    target.prepend(banner);
+  }
+  banner.textContent = message;
+  banner.hidden = false;
+};
+
+/**
+ * Hide an existing tab-level error banner without removing its DOM node.
+ *
+ * @param {string} bannerId - Stable DOM id for the banner element
+ */
+globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
+  const banner = document.getElementById(bannerId);
+  if (banner) banner.hidden = true;
+};
+
 (() => {
   const REPO    = 'DollhouseMCP/collection';
   const BRANCH  = 'main';
@@ -74,6 +109,7 @@ function safeParseYaml(content) {
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   function mergeCollectionData(data) {
+    globalThis.DollhouseConsoleUI?.clearBanner?.('collection-error-banner');
     const CANONICAL_TYPES = new Set(['agents','personas','skills','templates','memories','ensembles']);
     collectionElements = Object.entries(data.index)
       .filter(([type]) => CANONICAL_TYPES.has(type))
@@ -117,9 +153,16 @@ function safeParseYaml(content) {
 
       // Load community collection (non-blocking — portfolio shows immediately)
       DollhouseAuth.apiFetch('/api/collection')
-        .then(r => r.ok ? r.json() : Promise.reject('not available'))
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('collection request failed')))
         .then(mergeCollectionData)
-        .catch((err) => { console.warn('[App] Collection fetch unavailable:', err); });
+        .catch((err) => {
+          console.warn('[App] Collection fetch unavailable:', err);
+          globalThis.DollhouseConsoleUI?.showBanner?.(
+            'tab-portfolio',
+            'collection-error-banner',
+            'Community collection unavailable — showing local portfolio only.'
+          );
+        });
 
       const updated = document.getElementById('footer-updated');
       if (updated) {

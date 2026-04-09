@@ -146,21 +146,11 @@
 
   // ── Error banners (#1866) ────────────────────────────────────────────────
   function showMetricsError(message) {
-    let banner = document.getElementById('metrics-error-banner');
-    if (!banner) {
-      banner = document.createElement('div');
-      banner.id = 'metrics-error-banner';
-      banner.className = 'tab-error-banner';
-      const container = document.getElementById('metrics-content');
-      if (container) container.prepend(banner);
-    }
-    banner.textContent = message;
-    banner.hidden = false;
+    globalThis.DollhouseConsoleUI?.showBanner?.('tab-metrics', 'metrics-error-banner', message);
   }
 
   function clearMetricsError() {
-    const banner = document.getElementById('metrics-error-banner');
-    if (banner) banner.hidden = true;
+    globalThis.DollhouseConsoleUI?.clearBanner?.('metrics-error-banner');
   }
 
   // ── Data fetching ────────────────────────────────────────────────────────

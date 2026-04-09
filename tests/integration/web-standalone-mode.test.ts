@@ -11,7 +11,6 @@
 import { describe, it, expect } from '@jest/globals';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import * as net from 'node:net';
 
 const PROJECT_ROOT = path.resolve(__dirname, '../../');
 
@@ -20,17 +19,6 @@ function getWebModeBlock(source: string): string {
   const start = source.indexOf('if (isWebMode)');
   const end = source.indexOf('[DollhouseMCP] Web UI failed to start:', start);
   return source.slice(start, end);
-}
-
-/** Get a dynamically assigned free port from the OS. */
-function getFreePort(): Promise<number> {
-  return new Promise((resolve) => {
-    const srv = net.createServer();
-    srv.listen(0, '127.0.0.1', () => {
-      const p = (srv.address() as net.AddressInfo).port;
-      srv.close(() => resolve(p));
-    });
-  });
 }
 
 describe('Standalone --web mode (#1850)', () => {
@@ -65,11 +53,11 @@ describe('Standalone --web mode (#1850)', () => {
     });
   });
 
-  describe('completeDeferredSetup skipped', () => {
+  describe('completeSinkSetup path', () => {
     it('does NOT call completeDeferredSetup in the --web path', () => {
       const block = getWebModeBlock(webModeSource);
       expect(block).not.toContain('container.completeDeferredSetup()');
-      expect(block).toContain('Do NOT call completeDeferredSetup');
+      expect(block).toContain('container.completeSinkSetup()');
     });
 
     it('runs sweepStalePortFiles directly instead', () => {
@@ -97,6 +85,18 @@ describe('Standalone --web mode (#1850)', () => {
       expect(block).toContain('MemoryLogSink');
       expect(block).toContain('MemoryMetricsSink');
     });
+
+    it('wires metrics snapshots into the fallback metrics sink', () => {
+      const block = getWebModeBlock(webModeSource);
+      expect(block).toContain('metricsOnSnapshot');
+      expect(block).toContain("metricsSink?.onSnapshot(snapshot)");
+    });
+
+    it('attempts to register a fallback metrics sink with MetricsManager', () => {
+      const block = getWebModeBlock(webModeSource);
+      expect(block).toContain("container?.resolve");
+      expect(block).toContain('registerSink(metricsSink)');
+    });
   });
 
   describe('Race condition documentation', () => {
@@ -114,9 +114,8 @@ describe('Standalone --web mode (#1850)', () => {
       const { recoverStalePort } = await import('../../src/web/console/StaleProcessRecovery.js');
       expect(typeof recoverStalePort).toBe('function');
 
-      // Use a dynamically assigned free port — no hardcoded port numbers
-      const freePort = await getFreePort();
-      const result = await recoverStalePort(freePort);
+      // Use a high-numbered port to avoid sandbox bind restrictions.
+      const result = await recoverStalePort(65535);
       expect(result).toBe(false);
     });
 
