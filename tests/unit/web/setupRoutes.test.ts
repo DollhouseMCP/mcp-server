@@ -624,7 +624,7 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
   describe('Channel selector logic', () => {
     it('tracks currentChannel state', () => {
-      expect(js).toContain("let currentChannel = 'latest'");
+      expect(js).toContain("let currentChannel = DEFAULT_CHANNEL");
     });
 
     it('has channel hints for all three channels', () => {
@@ -983,7 +983,7 @@ describe('Setup Tab — Regressions', () => {
     });
 
     it('channel defaults to latest on page load', () => {
-      expect(js).toContain("let currentChannel = 'latest'");
+      expect(js).toContain("let currentChannel = DEFAULT_CHANNEL");
     });
 
     it('no hardcoded @beta or @rc package references in source', () => {
