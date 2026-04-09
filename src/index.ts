@@ -848,6 +848,18 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
       const noBrowser = process.argv.includes('--no-open');
 
+      // Pre-flight: kill any stale DollhouseMCP process squatting on our port
+      // BEFORE any container/server setup. This is the definitive fix for #1850 —
+      // clear the port first, then start cleanly.
+      try {
+        const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
+        const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
+        const recovered = await recoverStalePort(targetPort);
+        if (recovered) {
+          console.error(`  Cleared stale process from port ${targetPort}\n`);
+        }
+      } catch { /* recovery failure is non-fatal — bindAndListen will handle EADDRINUSE */ }
+
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
       let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
@@ -855,7 +867,16 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         const container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
-        await container.completeDeferredSetup();
+        // Do NOT call completeDeferredSetup() in --web mode (#1850).
+        // It runs UnifiedConsole leader election which starts a competing
+        // web server, sets serverRunning=true, and causes the actual
+        // startWebServer call below to early-return without binding.
+        // Standalone --web mode IS the server — no leader/follower needed.
+        // Run the port file sweep directly instead.
+        try {
+          const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
+          await sweepStalePortFiles();
+        } catch { /* non-fatal */ }
         mcpAqlHandler = bundle.mcpAqlHandler;
         // Extract sinks from container — deferred setup may have already wired them
         try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
