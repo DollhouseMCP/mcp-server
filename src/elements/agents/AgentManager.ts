@@ -193,7 +193,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     description: string,
     content: string,
-    metadata?: Partial<AgentMetadata> & { content?: string }
+    metadata?: (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & { content?: string }
   ): Promise<ElementCreationResult> {
     try {
       await this.initialize();
@@ -213,7 +213,9 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Use specialized validator for input validation.
       // Agents support dual-field creation: behavioral instructions and optional
-      // reference content. Either field may carry the primary text on create.
+      // reference content. Validation prefers behavioral instructions when both
+      // fields are present so existing instruction-first agents keep their
+      // current semantics while content-only agents still validate correctly.
       const validationInput: Record<string, unknown> = {
         name,
         description,

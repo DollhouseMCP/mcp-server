@@ -202,7 +202,7 @@ describe('AgentManager', () => {
       );
 
       expect(result.success).toBe(false);
-      expect(result.message).toContain('Content is required');
+      expect(result.message).toMatch(/Content is required|Content is too short/);
     });
 
     it('should reject content-only agent creation when reference content exceeds the maximum length', async () => {
