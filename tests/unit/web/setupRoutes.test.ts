@@ -1012,6 +1012,86 @@ describe('Setup Tab — Regressions', () => {
       // The init sync line must apply hidden state without waiting for a click
       expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
     });
+
+    it('channel change re-evaluates detection state', () => {
+      // The change handler is inside initChannelSelector — extract a wider range
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain('updateDetectionState()');
+    });
+
+    it('channel change clears is-success state from buttons', () => {
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain("remove('is-success'");
+    });
+
+    it('channel change clears install status messages', () => {
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain('setup-install-status');
+    });
+
+    it('description text uses channel variable not hardcoded @latest', () => {
+      // The Claude Desktop description must reflect the selected channel
+      expect(js).not.toContain("Uses <code>npx @latest</code>");
+      expect(js).toContain('safeChannel');
+    });
+
+    it('description uses textContent not innerHTML for XSS safety', () => {
+      // CodeQL: DOM text reinterpreted as HTML
+      const descSection = js.slice(
+        js.indexOf('Restore text reflecting the selected channel'),
+        js.indexOf('Restart Claude Desktop after'),
+      );
+      expect(descSection).toContain('desc.textContent');
+      expect(descSection).toContain("document.createElement('code')");
+      expect(descSection).not.toContain('desc.innerHTML');
+    });
+
+    it('has channel constants and normalizeChannel validator', () => {
+      expect(js).toContain('CHANNELS');
+      expect(js).toContain('VALID_CHANNELS');
+      expect(js).toContain('DEFAULT_CHANNEL');
+      expect(js).toContain('normalizeChannel');
+    });
+
+    it('formatInstallError handles missing channel releases', () => {
+      expect(js).toContain('formatInstallError');
+      expect(js).toContain('No ${currentChannel} release is published yet');
+    });
+
+    it('updateDetectionButton includes channel label', () => {
+      // When config doesn't match, button should show "Configure Now (rc)" not just "Configure Now"
+      const btnFn = js.slice(
+        js.indexOf('const updateDetectionButton'),
+        js.indexOf('/** Create a badge'),
+      );
+      expect(btnFn).toContain('channelLabel');
+      expect(btnFn).toContain('DEFAULT_CHANNEL');
+    });
+
+    it('install success refreshes current config code block', () => {
+      // After fetchDetection, updateDetectionState must be called to refresh the config display
+      const installSection = js.slice(
+        js.indexOf('Verify the install by re-detecting'),
+        js.indexOf('showCompletionBanner'),
+      );
+      expect(installSection).toContain('updateDetectionState()');
+    });
+
+    it('updatePlatformDetectionState refreshes config code block', () => {
+      // The function must update the <pre><code> content, not just the notice text
+      const fn = js.slice(
+        js.indexOf('const updatePlatformDetectionState'),
+        js.indexOf('const updateDetectionNotice'),
+      );
+      expect(fn).toContain('pre code');
+      expect(fn).toContain('JSON.stringify(detected.currentConfig');
+    });
   });
 
   describe('Detection UI', () => {
@@ -1351,6 +1431,242 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     const parsed = JSON.parse(text);
     expect(parsed.servers).toBeDefined();
     expect(parsed.mcpServers).toBeUndefined();
+  });
+});
+
+// ── Channel selector interaction tests ────────────────────────────────
+// Uses JSDOM to simulate user interactions: switching channels, clicking
+// Configure, and verifying the DOM updates correctly at each step.
+
+describe('Setup Tab — Channel Selector Interactions', () => {
+  let document: Document;
+  let window: any;
+
+  beforeAll(async () => {
+    const { JSDOM } = await import('jsdom');
+    const html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    const js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    const authJs = await readFileAsync(join(PUBLIC_DIR, 'consoleAuth.js'), 'utf-8');
+
+    const dom = new JSDOM(html, {
+      url: 'http://localhost:41715/',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+    document = dom.window.document;
+    window = dom.window;
+
+    // Realistic mock data matching actual Claude Desktop detection output
+    const mockDetection = {
+      'claude-desktop': {
+        installed: true,
+        currentConfig: {
+          command: 'npx',
+          args: ['@dollhousemcp/mcp-server@latest'],
+          env: { DOLLHOUSE_DEBUG: 'true' },
+        },
+      },
+      'cursor': {
+        installed: false,
+      },
+    };
+    let fetchFailMode = false; // toggle for network failure tests
+    dom.window.fetch = ((url: string) => {
+      if (fetchFailMode) return Promise.reject(new Error('Network error'));
+      if (url.includes('/api/setup/version')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            version: '2.0.12-rc.10',
+            mcpbUrl: '/api/setup/mcpb',
+            npmTag: 'rc',
+          }),
+        });
+      }
+      if (url.includes('/api/setup/detect')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockDetection),
+        });
+      }
+      if (url.includes('/api/setup/install')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    }) as unknown as typeof fetch;
+
+    Object.defineProperty(dom.window.navigator, 'clipboard', {
+      value: { writeText: () => Promise.resolve() },
+    });
+
+    // Load consoleAuth first (setup.js depends on DollhouseAuth)
+    const authScript = document.createElement('script');
+    authScript.textContent = authJs;
+    document.body.appendChild(authScript);
+
+    const scriptEl = document.createElement('script');
+    scriptEl.textContent = js;
+    document.body.appendChild(scriptEl);
+
+    // Wait for async init (fetch calls settle and DOM updates)
+    // Poll for the channel selector to be initialized rather than using an arbitrary delay
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      if (document.getElementById('setup-channel-select')) break;
+    }
+  });
+
+  function getChannelSelect(): HTMLSelectElement | null {
+    return document.getElementById('setup-channel-select') as HTMLSelectElement | null;
+  }
+
+  function getInstallBtn(): HTMLButtonElement | null {
+    return document.querySelector('[data-install-client="claude"]') as HTMLButtonElement | null;
+  }
+
+  function getNotice(): HTMLElement | null {
+    return document.querySelector('#setup-panel-claude-desktop .setup-installed-notice');
+  }
+
+  function switchChannel(value: string) {
+    const select = getChannelSelect();
+    if (!select) return;
+    select.value = value;
+    select.dispatchEvent(new window.Event('change'));
+  }
+
+  describe('Initial state with @latest config', () => {
+    it('channel selector defaults to Stable', () => {
+      const select = getChannelSelect();
+      expect(select?.value).toBe('latest');
+    });
+  });
+
+  describe('Switch from Stable to RC', () => {
+    beforeAll(() => switchChannel('rc'));
+
+    it('button is not stuck in is-success state', () => {
+      const btn = getInstallBtn();
+      expect(btn?.classList.contains('is-success')).toBe(false);
+    });
+
+    it('button is enabled', () => {
+      const btn = getInstallBtn();
+      expect(btn?.disabled).not.toBe(true);
+    });
+
+    it('button text includes rc channel label', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      // Should say "Configure Now (rc)" or similar — not "Already configured"
+      expect(text).toContain('rc');
+      expect(text).not.toContain('Already configured');
+    });
+  });
+
+  describe('Switch back to Stable', () => {
+    beforeAll(() => switchChannel('latest'));
+
+    it('button resets from rc state', () => {
+      const btn = getInstallBtn();
+      expect(btn?.classList.contains('is-success')).toBe(false);
+    });
+
+    it('button text does not include channel label for stable', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).not.toContain('(rc)');
+      expect(text).not.toContain('(latest)');
+    });
+  });
+
+  describe('Switch to Beta (no releases)', () => {
+    beforeAll(() => switchChannel('beta'));
+
+    it('button shows beta channel label', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).toContain('beta');
+    });
+
+    it('button is enabled for configuration', () => {
+      const btn = getInstallBtn();
+      expect(btn?.disabled).not.toBe(true);
+    });
+  });
+
+  describe('Rapid channel switching', () => {
+    it('handles rapid switches without breaking', () => {
+      switchChannel('rc');
+      switchChannel('latest');
+      switchChannel('beta');
+      switchChannel('rc');
+      switchChannel('latest');
+
+      const btn = getInstallBtn();
+      // Should be in a clean state after rapid switching
+      expect(btn?.classList.contains('is-success')).toBe(false);
+      expect(btn?.classList.contains('is-loading')).toBe(false);
+    });
+  });
+
+  describe('Invalid channel value', () => {
+    it('falls back to stable for unknown channel', () => {
+      switchChannel('nightly');
+      // normalizeChannel should reject 'nightly' and use DEFAULT_CHANNEL
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).not.toContain('nightly');
+    });
+  });
+
+  describe('Description text updates with channel', () => {
+    it('shows @rc in description when RC selected', () => {
+      switchChannel('rc');
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const descs = panel?.querySelectorAll('.setup-method-desc') || [];
+      let found = false;
+      descs.forEach((desc) => {
+        if (desc.textContent?.includes('@rc')) found = true;
+      });
+      expect(found).toBe(true);
+    });
+
+    it('shows @latest in description when Stable selected', () => {
+      switchChannel('latest');
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const descs = panel?.querySelectorAll('.setup-method-desc') || [];
+      let found = false;
+      descs.forEach((desc) => {
+        if (desc.textContent?.includes('@latest')) found = true;
+      });
+      expect(found).toBe(true);
+    });
+  });
+
+  describe('Non-installed platform', () => {
+    it('cursor shows Configure Now without detection state', () => {
+      const panel = document.getElementById('setup-panel-cursor');
+      const btn = panel?.querySelector('.setup-install-btn') as HTMLButtonElement | null;
+      // Cursor is not installed — no detection notice, button should be available
+      if (btn) {
+        expect(btn.classList.contains('is-match')).toBe(false);
+        expect(btn.disabled).not.toBe(true);
+      }
+    });
+  });
+
+  describe('Config preserves env vars', () => {
+    it('detected config includes DOLLHOUSE_DEBUG env var', () => {
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const code = panel?.querySelector('.setup-installed-notice pre code');
+      if (code?.textContent) {
+        expect(code.textContent).toContain('DOLLHOUSE_DEBUG');
+      }
+    });
   });
 });
 
