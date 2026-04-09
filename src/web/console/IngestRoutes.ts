@@ -147,25 +147,24 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   function ensureSession(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
     const existing = sessions.get(sessionId);
     if (existing) {
+      // Revive reaped sessions that are still sending data — but not suppressed ones
+      if (existing.status === 'ended') {
+        const expiry = suppressedSessions.get(sessionId);
+        if (expiry && Date.now() < expiry) {
+          return null; // suppressed — don't update heartbeat, let purge clean it up
+        }
+        suppressedSessions.delete(sessionId);
+        existing.status = 'active';
+        logger.info('[IngestRoutes] Revived ended session still sending data', {
+          displayName: existing.displayName, sessionId,
+        });
+      }
       existing.lastHeartbeat = new Date().toISOString();
       // Capture PID if we didn't have one (e.g., auto-registered from logs, now heartbeat has PID)
       if (pid && !existing.pid) {
         existing.pid = pid;
         logger.info('[IngestRoutes] Recovered PID for orphaned session', {
           displayName: existing.displayName, sessionId, pid,
-        });
-      }
-      // Revive reaped sessions that are still sending data
-      if (existing.status === 'ended') {
-        // Check suppression list
-        const expiry = suppressedSessions.get(sessionId);
-        if (expiry && Date.now() < expiry) {
-          return null; // suppressed — user dismissed this session
-        }
-        suppressedSessions.delete(sessionId);
-        existing.status = 'active';
-        logger.info('[IngestRoutes] Revived ended session still sending data', {
-          displayName: existing.displayName, sessionId,
         });
       }
       return existing;
