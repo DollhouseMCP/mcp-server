@@ -461,8 +461,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
   });
 
-  // Reaper: periodically check for stale sessions whose heartbeat has expired
-  const reaperInterval = setInterval(() => {
+  // Reaper: periodically check for stale sessions, clean ended entries, and expire suppressions.
+  function reapStaleSessions(): void {
     const now = Date.now();
     for (const [id, session] of sessions) {
       if (session.status !== 'active') continue;
@@ -482,18 +482,17 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
     // Clean up ended sessions older than 5 minutes to prevent memory accumulation (#1870)
     for (const [id, session] of sessions) {
-      if (session.status === 'ended') {
-        const endedAge = now - new Date(session.lastHeartbeat).getTime();
-        if (endedAge > SUPPRESS_TTL_MS) {
-          sessions.delete(id);
-        }
-      }
+      if (session.status !== 'ended') continue;
+      const endedAge = now - new Date(session.lastHeartbeat).getTime();
+      if (endedAge > SUPPRESS_TTL_MS) sessions.delete(id);
     }
-    // Clean up expired suppressions to prevent memory leaks (#1870)
+    // Clean up expired suppressions (#1870)
     for (const [id, expiry] of suppressedSessions) {
       if (now > expiry) suppressedSessions.delete(id);
     }
-  }, REAPER_INTERVAL_MS);
+  }
+
+  const reaperInterval = setInterval(reapStaleSessions, REAPER_INTERVAL_MS);
   reaperInterval.unref();
 
   function getSessions(): SessionInfo[] {
