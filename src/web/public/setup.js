@@ -65,9 +65,21 @@
     return result;
   }
 
+  // ── Channel constants ────────────────────────────────────────────────
+  const CHANNELS = {
+    STABLE: 'latest',
+    RC: 'rc',
+    BETA: 'beta',
+  };
+  const VALID_CHANNELS = new Set(Object.values(CHANNELS));
+  const DEFAULT_CHANNEL = CHANNELS.STABLE;
+
+  /** Validate and normalize a channel value. Falls back to stable if invalid. */
+  const normalizeChannel = (ch) => VALID_CHANNELS.has(ch) ? ch : DEFAULT_CHANNEL;
+
   // Start with a placeholder version, update once we fetch from server
   let pinnedVersion = 'latest';
-  let currentChannel = 'latest';
+  let currentChannel = DEFAULT_CHANNEL;
   let configs = buildConfigs(pinnedVersion, currentChannel);
 
   // ── Current method state ──────────────────────────────────────────────
@@ -160,11 +172,13 @@
     if (!select) return;
 
     select.addEventListener('change', () => {
-      currentChannel = select.value;
+      currentChannel = normalizeChannel(select.value);
       if (hint) hint.textContent = CHANNEL_HINTS[currentChannel] || '';
       configs = buildConfigs(pinnedVersion, currentChannel);
       updateAllConfigs(currentMethod);
       updateInstallButtonLabels();
+      // Re-evaluate detection: current config may no longer match the new channel
+      updateDetectionState();
     });
   };
 
@@ -331,18 +345,37 @@
       if (isPinned) {
         desc.textContent = `Installs DollhouseMCP v${pinnedVersion}. This version will not auto-update.`;
       } else {
-        // Restore original text based on which panel it's in
+        // Restore text reflecting the selected channel.
+        // Use textContent for dynamic values to prevent DOM XSS (CodeQL: DOM text reinterpreted as HTML).
         const panel = desc.closest('.setup-panel');
+        const safeChannel = normalizeChannel(currentChannel);
         if (panel?.id === 'setup-panel-claude-desktop') {
-          desc.innerHTML = 'Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.';
+          desc.textContent = '';
+          desc.append(
+            `Pulls the ${safeChannel} version of DollhouseMCP on every startup. Uses `,
+          );
+          const code = document.createElement('code');
+          code.textContent = `npx @${safeChannel}`;
+          desc.append(code);
+          desc.append(' under the hood. Restart Claude Desktop after.');
         } else if (panel?.id === 'setup-panel-claude-code') {
-          desc.textContent = 'Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.';
+          desc.textContent = `Adds DollhouseMCP to Claude Code, pulling the ${safeChannel} version on every startup.`;
         }
       }
     });
   };
 
   // ── Install buttons ────────────────────────────────────────────────────
+
+  /** Format an install error for display. Detects channel-specific 404s. */
+  const formatInstallError = (err) => {
+    const msg = err.message || 'Installation failed';
+    const isChannelError = currentChannel !== DEFAULT_CHANNEL &&
+      (msg.includes('404') || msg.includes('Not Found') || msg.includes('not found'));
+    return isChannelError
+      ? `No ${currentChannel} release is published yet. Switch to Stable or try again later.`
+      : `${msg}. Try the manual config below.`;
+  };
 
   /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
@@ -401,7 +434,7 @@
       btn.disabled = false;
       btn.classList.remove('is-loading');
       if (status) {
-        status.textContent = err.message || 'Installation failed. Try the manual config below.';
+        status.textContent = formatInstallError(err);
         status.classList.add('is-error');
       }
     }
