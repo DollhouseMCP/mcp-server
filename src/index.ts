@@ -848,6 +848,18 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
       const noBrowser = process.argv.includes('--no-open');
 
+      // Pre-flight: kill any stale DollhouseMCP process squatting on our port
+      // BEFORE any container/server setup. This is the definitive fix for #1850 —
+      // clear the port first, then start cleanly.
+      try {
+        const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
+        const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
+        const recovered = await recoverStalePort(targetPort);
+        if (recovered) {
+          console.error(`  Cleared stale process from port ${targetPort}\n`);
+        }
+      } catch { /* recovery failure is non-fatal — bindAndListen will handle EADDRINUSE */ }
+
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
       let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
