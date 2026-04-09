@@ -148,7 +148,7 @@ export function registerPortCleanup(): void {
  *
  * Safe to call on every startup — only removes files for dead processes.
  */
-export async function sweepStalePortFiles(customDir?: string): Promise<number> {
+export async function sweepStalePortFiles(/** Absolute path to scan. Defaults to ~/.dollhouse/run/ */ customDir?: string): Promise<number> {
   try {
     const dir = customDir || RUN_DIR;
     await mkdir(dir, { recursive: true });

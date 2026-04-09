@@ -98,11 +98,14 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
       return false;
     }
     await logger.debug(`[WebUI] Verified stale process ${pid} is DollhouseMCP`, { cmdLine });
-  } catch (err) {
-    // Check 3: If we can't verify, don't kill — safe default
-    await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill`, {
-      error: err instanceof Error ? err.message : String(err),
-    });
+  } catch (err: any) {
+    // Check 3: If we can't verify, don't kill — safe default.
+    // Differentiate: ENOENT = ps not found, ESRCH = process died between find and verify.
+    const code = err?.code || err?.status;
+    const reason = code === 'ENOENT' ? 'ps command not found'
+      : code === 'ESRCH' ? 'process died during verification'
+      : err instanceof Error ? err.message : String(err);
+    await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill (${reason})`);
     return false;
   }
 
