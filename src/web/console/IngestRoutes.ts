@@ -41,8 +41,8 @@ const SESSION_STALE_MS = 15_000;
 /** Timeout for legacy port federation/proxy requests (ms) */
 const LEGACY_FETCH_TIMEOUT_MS = 2_000;
 
-/** How long a dismissed session stays suppressed from auto-registration (ms) */
-const SUPPRESS_TTL_MS = 5 * 60_000; // 5 minutes
+/** How long before ended sessions are purged from the Map (ms) */
+const ENDED_PURGE_MS = 5 * 60_000; // 5 minutes
 
 /**
  * Tracked session information.
@@ -136,31 +136,52 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 
-  // Suppression list: dismissed sessions are blocked from auto-registration
-  // for SUPPRESS_TTL_MS to prevent the dismiss-then-revive loop (#1870).
-  const suppressedSessions = new Map<string, number>(); // sessionId → expiry timestamp
+  // Sessions the user explicitly killed — never come back (#1870).
+  // Cleared only on server restart, which is appropriate since that's a new context.
+  const killedSessions = new Set<string>();
+
+  // Sessions waiting for a PID so we can SIGTERM them (#1870).
+  // When the user dismisses a pid=0 orphan, we add it here. The next heartbeat
+  // (every 10s) carries the PID — we SIGTERM immediately and move to killedSessions.
+  const pendingKills = new Set<string>();
 
   /**
    * Auto-register or update an orphaned session from ingestion data.
-   * Returns the session (existing or newly created), or null if suppressed.
+   * Returns the session (existing or newly created), or null if killed/pending.
    */
   function ensureSession(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+    // Permanently killed — gone for the lifetime of this server process
+    if (killedSessions.has(sessionId)) {
+      return null;
+    }
+
+    // Pending kill — waiting for PID to arrive so we can SIGTERM
+    if (pendingKills.has(sessionId)) {
+      const killPid = pid || sessions.get(sessionId)?.pid;
+      if (killPid) {
+        try { process.kill(killPid, 'SIGTERM'); } catch { /* already dead */ }
+        pendingKills.delete(sessionId);
+        killedSessions.add(sessionId);
+        const existing = sessions.get(sessionId);
+        if (existing) existing.status = 'ended';
+        logger.info('[IngestRoutes] Deferred kill executed — PID arrived', {
+          displayName: existing?.displayName, sessionId, pid: killPid,
+        });
+      }
+      return null; // don't revive, don't show — either killed or still waiting
+    }
+
     const existing = sessions.get(sessionId);
     if (existing) {
-      // Revive reaped sessions that are still sending data — but not suppressed ones
+      // Revive reaped sessions that are still sending data
       if (existing.status === 'ended') {
-        const expiry = suppressedSessions.get(sessionId);
-        if (expiry && Date.now() < expiry) {
-          return null; // suppressed — don't update heartbeat, let purge clean it up
-        }
-        suppressedSessions.delete(sessionId);
         existing.status = 'active';
         logger.info('[IngestRoutes] Revived ended session still sending data', {
           displayName: existing.displayName, sessionId,
         });
       }
       existing.lastHeartbeat = new Date().toISOString();
-      // Capture PID if we didn't have one (e.g., auto-registered from logs, now heartbeat has PID)
+      // Capture PID if we didn't have one
       if (pid && !existing.pid) {
         existing.pid = pid;
         logger.info('[IngestRoutes] Recovered PID for orphaned session', {
@@ -169,13 +190,6 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       }
       return existing;
     }
-
-    // Check suppression list before auto-registering
-    const expiry = suppressedSessions.get(sessionId);
-    if (expiry && Date.now() < expiry) {
-      return null; // suppressed
-    }
-    suppressedSessions.delete(sessionId);
 
     // Session not in Map — auto-register so it's visible and killable.
     try {
@@ -296,15 +310,20 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     switch (payload.event) {
       case 'started': {
-        // Respect suppression — a dismissed session's client may restart (#1870)
-        const suppressExpiry = suppressedSessions.get(payload.sessionId);
-        if (suppressExpiry && Date.now() < suppressExpiry) {
-          logger.debug('[IngestRoutes] Suppressed session tried to re-register via started event', {
-            sessionId: payload.sessionId,
-          });
+        // Killed sessions stay dead — and pending kills get executed immediately
+        // if the started event includes a PID (#1870)
+        if (killedSessions.has(payload.sessionId)) break;
+        if (pendingKills.has(payload.sessionId)) {
+          if (payload.pid) {
+            try { process.kill(payload.pid, 'SIGTERM'); } catch { /* already dead */ }
+            logger.info('[IngestRoutes] Deferred kill executed on started event', {
+              sessionId: payload.sessionId, pid: payload.pid,
+            });
+          }
+          pendingKills.delete(payload.sessionId);
+          killedSessions.add(payload.sessionId);
           break;
         }
-        suppressedSessions.delete(payload.sessionId);
 
         const displayName = namePool.assign(payload.sessionId);
         const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
@@ -430,34 +449,45 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     if (!session.pid) {
-      // Auto-registered orphan with unknown PID — mark as ended and suppress
-      // to prevent the dismiss-then-revive loop (#1870).
+      // Auto-registered orphan with unknown PID — queue for deferred kill (#1870).
+      // The next heartbeat (every ~10s) carries the PID. ensureSession() will
+      // SIGTERM the process as soon as the PID arrives. Session is gone for good.
       session.status = 'ended';
       namePool.release(sessionId);
-      suppressedSessions.set(sessionId, Date.now() + SUPPRESS_TTL_MS);
-      logger.info('[IngestRoutes] Dismissed orphaned session (no PID), suppressed for 5m', {
+      pendingKills.add(sessionId);
+      logger.info('[IngestRoutes] Queued deferred kill — waiting for PID via heartbeat', {
         displayName: session.displayName, sessionId,
       });
-      res.json({ ok: true, dismissed: session.displayName, reason: 'no-pid' });
+      res.json({ ok: true, dismissed: session.displayName, reason: 'pending-kill' });
       return;
     }
 
+    // SIGTERM the process. Even if it fails (ESRCH = already dead, EPERM = not ours),
+    // mark the session as permanently killed so it never reappears (#1870).
+    let killed = false;
     try {
       process.kill(session.pid, 'SIGTERM');
-      session.status = 'ended';
-      namePool.release(sessionId);
-      logger.info('[IngestRoutes] Session killed', {
-        displayName: session.displayName, sessionId, pid: session.pid,
-        activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
-      });
-      res.json({ ok: true, killed: session.displayName, pid: session.pid });
+      killed = true;
     } catch (err) {
-      const message = (err as Error).message;
-      logger.error('[IngestRoutes] Failed to kill session', {
-        displayName: session.displayName, sessionId, pid: session.pid, error: message,
-      });
-      res.status(500).json({ error: 'Failed to kill session', sessionId, displayName: session.displayName, pid: session.pid, detail: message });
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') {
+        killed = true; // process already dead — treat as successful kill
+      } else {
+        logger.error('[IngestRoutes] Failed to kill session', {
+          displayName: session.displayName, sessionId, pid: session.pid, error: (err as Error).message,
+        });
+        res.status(500).json({ error: 'Failed to kill session', sessionId, displayName: session.displayName, pid: session.pid, detail: (err as Error).message });
+        return;
+      }
     }
+    session.status = 'ended';
+    namePool.release(sessionId);
+    killedSessions.add(sessionId);
+    logger.info('[IngestRoutes] Session killed', {
+      displayName: session.displayName, sessionId, pid: session.pid,
+      activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+    });
+    res.json({ ok: true, killed: session.displayName, pid: session.pid });
   });
 
   /** Mark stale active sessions as ended. */
@@ -478,15 +508,12 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
   }
 
-  /** Delete ended sessions and expired suppressions to bound memory (#1870). */
+  /** Delete ended sessions to bound memory (#1870). */
   function purgeStaleEntries(now: number): void {
     for (const [id, session] of sessions) {
-      if (session.status === 'ended' && now - new Date(session.lastHeartbeat).getTime() > SUPPRESS_TTL_MS) {
+      if (session.status === 'ended' && now - new Date(session.lastHeartbeat).getTime() > ENDED_PURGE_MS) {
         sessions.delete(id);
       }
-    }
-    for (const [id, expiry] of suppressedSessions) {
-      if (now > expiry) suppressedSessions.delete(id);
     }
   }
 

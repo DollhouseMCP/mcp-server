@@ -281,8 +281,8 @@
             })
             .then(function(data) {
               if (!data) return;
-              if (data.reason === 'no-pid') {
-                alert('Session ' + displayName(s) + ' dismissed.\nThe MCP client process may still be running \u2014 close it in your AI client to fully stop it.');
+              if (data.reason === 'pending-kill') {
+                alert('Session ' + displayName(s) + ' will be terminated shortly.\nWaiting for the process to identify itself, then it will be killed.');
               }
               fetchSessions();
             })
