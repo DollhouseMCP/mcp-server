@@ -58,22 +58,14 @@ export async function findPidOnPort(port: number): Promise<number | null> {
 }
 
 /**
- * Kill a stale process holding a port. Sends SIGTERM, waits briefly,
- * then SIGKILL if still alive. Only kills DollhouseMCP processes
- * (verified by checking the command line and user ownership).
- *
- * Timeout: 1s for ps verification. Kill wait: 300ms × 10 polls = 3s
- * before escalating to SIGKILL. Total worst case: ~4s.
+ * Verify that a process is a DollhouseMCP binary owned by the current user.
+ * Returns true if safe to kill, false if we should leave it alone.
  */
-export async function killStaleProcess(pid: number, port: number): Promise<boolean> {
+async function verifyDollhouseProcess(pid: number, port: number): Promise<boolean> {
   const { execFile: execFileCb } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFileCb);
 
-  // Security verification flow — three checks must pass before we kill:
-  // 1. Process must be owned by the current OS user (prevents cross-user kills)
-  // 2. Command line must match a DollhouseMCP binary path (prevents killing other services)
-  // 3. If both fail or ps can't run, we refuse — safe default is to not kill
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: 1000 });
 
@@ -84,10 +76,8 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
       return false;
     }
 
-    // Check 2: Binary identity — must be .bin/mcp-server, .bin/dollhousemcp,
-    // /bin/dollhousemcp (global install), or dist/index.js (direct node execution).
-    // NOT just 'mcp-server' anywhere in the path — that would match Jest workers
-    // running from within the mcp-server project directory.
+    // Check 2: Binary identity — .bin/mcp-server, .bin/dollhousemcp,
+    // /bin/dollhousemcp (global), or dist/index.js (direct node).
     const cmdLine = stdout.trim();
     const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
       cmdLine.includes('.bin/dollhousemcp');
@@ -98,23 +88,38 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
       return false;
     }
     await logger.debug(`[WebUI] Verified stale process ${pid} is DollhouseMCP`, { cmdLine });
-  } catch (err) {
-    // Check 3: If we can't verify, don't kill — safe default
-    await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill`, {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    return true;
+  } catch (err: any) {
+    const code = err?.code || err?.status;
+    let reason: string;
+    if (code === 'ENOENT') reason = 'ps command not found';
+    else if (code === 'ESRCH') reason = 'process died during verification';
+    else reason = err instanceof Error ? err.message : String(err);
+    await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill (${reason})`);
     return false;
   }
+}
+
+/**
+ * Kill a stale process holding a port. Sends SIGTERM, waits briefly,
+ * then SIGKILL if still alive. Only kills DollhouseMCP processes
+ * (verified via verifyDollhouseProcess).
+ *
+ * Timeout: 1s for ps verification. Kill wait: 300ms × 10 polls = 3s
+ * before escalating to SIGKILL. Total worst case: ~4s.
+ */
+export async function killStaleProcess(pid: number, port: number): Promise<boolean> {
+  if (!await verifyDollhouseProcess(pid, port)) return false;
 
   try {
     process.kill(pid, 'SIGTERM');
-    logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`);
+    await logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`);
     for (let i = 0; i < 10; i++) {
       await new Promise(r => setTimeout(r, 300));
       try { process.kill(pid, 0); } catch { return true; }
     }
     process.kill(pid, 'SIGKILL');
-    logger.warn(`[WebUI] Sent SIGKILL to stale process ${pid} on port ${port}`);
+    await logger.warn(`[WebUI] Sent SIGKILL to stale process ${pid} on port ${port}`);
     await new Promise(r => setTimeout(r, 500));
     return true;
   } catch {
@@ -133,15 +138,25 @@ export async function recoverStalePort(port: number): Promise<boolean> {
   const stalePid = await findPidOnPort(port);
   if (!stalePid) return false;
 
-  try {
-    const { readLeaderLock } = await import('./LeaderElection.js');
-    const lock = await readLeaderLock();
-    if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
-      logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
-      return false;
+  // Check the lock file to see if this PID is a legitimate leader.
+  // TOCTOU mitigation: a new process may have JUST bound the port but not yet
+  // written its lock file. We read the lock, pause 500ms, then re-read. If the
+  // second read now matches the port holder, it's a fresh leader — don't kill.
+  const { readLeaderLock } = await import('./LeaderElection.js');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const lock = await readLeaderLock();
+      if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
+        await logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
+        return false;
+      }
+    } catch {
+      // Can't read lock file — continue to next attempt or kill
     }
-  } catch {
-    // Can't read lock file — treat port holder as squatter
+    if (attempt === 0) {
+      // Brief pause to let a freshly-started process write its lock file
+      await new Promise(r => setTimeout(r, 500));
+    }
   }
 
   const killed = await killStaleProcess(stalePid, port);

@@ -239,10 +239,29 @@ describe('Console Lifecycle Integration (#1850)', () => {
       await writeFile(join(runDir, 'permission-server.port'), '41715');
 
       // All 6 files exist — this is the accumulation problem
-      const { readdir } = await import('node:fs/promises');
-      const files = await readdir(runDir);
+      const { readdir: readDir } = await import('node:fs/promises');
+      const files = await readDir(runDir);
       const portFiles = files.filter(f => f.includes('permission-server'));
       expect(portFiles.length).toBe(6);
+    });
+
+    it('sweepStalePortFiles removes dead PID files and preserves alive', async () => {
+      // Write files for dead PIDs and one for our own (alive) PID
+      for (let i = 0; i < 5; i++) {
+        await writeFile(join(runDir, `permission-server-${99999990 + i}.port`), '41715');
+      }
+      await writeFile(join(runDir, `permission-server-${process.pid}.port`), '41715');
+      await writeFile(join(runDir, 'permission-server.port'), '41715'); // latest file — not PID-keyed
+
+      const { sweepStalePortFiles } = await import('../../src/web/portDiscovery.js');
+      const removed = await sweepStalePortFiles(runDir);
+
+      expect(removed).toBe(5); // 5 dead PIDs swept
+      const { readdir: readDir } = await import('node:fs/promises');
+      const remaining = await readDir(runDir);
+      const remainingPid = remaining.filter(f => /^permission-server-\d+\.port$/.test(f));
+      expect(remainingPid.length).toBe(1); // Only our PID survives
+      expect(remaining).toContain('permission-server.port'); // Non-PID file preserved
     });
   });
 
