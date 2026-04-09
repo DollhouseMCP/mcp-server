@@ -87,6 +87,10 @@ interface ParsedAgentFile {
   content: string;
 }
 
+type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
+  content?: string;
+};
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
@@ -193,7 +197,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     description: string,
     content: string,
-    metadata?: (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & { content?: string }
+    metadata?: AgentCreateMetadata
   ): Promise<ElementCreationResult> {
     try {
       await this.initialize();
@@ -2197,6 +2201,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     return lines.join('\n');
   }
 
+  /**
+   * Select the text that should satisfy create-time content validation.
+   * Behavioral instructions remain the primary source, while reference content
+   * acts as the fallback for content-only agent creation.
+   */
   private getPrimaryValidationText(content: string, referenceContent: unknown): string | undefined {
     if (typeof content === 'string' && content.trim().length > 0) {
       return content;

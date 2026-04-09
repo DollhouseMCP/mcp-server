@@ -202,6 +202,7 @@ describe('AgentManager', () => {
       );
 
       expect(result.success).toBe(false);
+      expect(result.message).toContain('Validation failed');
       expect(result.message).toMatch(/Content is required|Content is too short/);
     });
 
