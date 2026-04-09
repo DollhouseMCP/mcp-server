@@ -39,6 +39,26 @@ const MODULE_NAME_MAPPER = {
   '^(\\.{1,2}/(?:[^/]+/)*integration/.*)\\.js$': '$1.ts'
 };
 
+const packagesDir = path.join(ROOT_DIR, 'packages');
+if (fs.existsSync(packagesDir)) {
+  for (const pkg of fs.readdirSync(packagesDir)) {
+    const pkgJsonPath = path.join(packagesDir, pkg, 'package.json');
+    if (!fs.existsSync(pkgJsonPath)) {
+      continue;
+    }
+
+    try {
+      const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
+      if (pkgJson.name && pkgJson.type === 'module') {
+        MODULE_NAME_MAPPER[`^${pkgJson.name}$`] =
+          `<rootDir>/packages/${pkg}/src/index.ts`;
+      }
+    } catch (err) {
+      console.warn(`[jestShared] skipping malformed package.json: ${pkgJsonPath}`);
+    }
+  }
+}
+
 /** Default ESM-mode transformIgnorePatterns (both configs).
  * @type {string[]}
  */
@@ -114,7 +134,6 @@ function applyCjsFallback(config) {
 
   // Auto-map ESM-only workspace packages to their dist entry points for CJS resolution.
   // These packages use "type": "module" with import-only exports, which CJS can't resolve.
-  const packagesDir = path.join(ROOT_DIR, 'packages');
   if (fs.existsSync(packagesDir)) {
     for (const pkg of fs.readdirSync(packagesDir)) {
       const pkgJsonPath = path.join(packagesDir, pkg, 'package.json');

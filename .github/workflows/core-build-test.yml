@@ -3,9 +3,9 @@ name: Core Build & Test
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:

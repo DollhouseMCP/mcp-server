@@ -67,6 +67,13 @@ const envSchema = z.object({
   // ============================================================================
   PORT: z.coerce.number().default(3000),
   LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+  DOLLHOUSE_TRANSPORT: z.enum(['stdio', 'streamable-http']).default('stdio'),
+  DOLLHOUSE_HTTP_HOST: z.string().default('127.0.0.1'),
+  DOLLHOUSE_HTTP_PORT: z.coerce.number().int().min(0).max(65535).default(3000),
+  DOLLHOUSE_HTTP_MCP_PATH: z.string().default('/mcp'),
+  DOLLHOUSE_HTTP_ALLOWED_HOSTS: z.string()
+    .optional()
+    .transform(v => v ? v.split(',').map(host => host.trim()).filter(Boolean) : undefined),
 
   // ============================================================================
   // Test Configuration
@@ -328,6 +335,7 @@ if (isDevelopment || isTest) {
   logger.debug('Environment configuration loaded:', {
     NODE_ENV: env.NODE_ENV,
     PORT: env.PORT,
+    DOLLHOUSE_TRANSPORT: env.DOLLHOUSE_TRANSPORT,
     LOG_LEVEL: env.LOG_LEVEL,
     HAS_GITHUB_TOKEN: !!env.GITHUB_TOKEN,
     HAS_GITHUB_TEST_TOKEN: !!env.GITHUB_TEST_TOKEN,

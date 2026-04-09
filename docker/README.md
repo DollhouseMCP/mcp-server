@@ -140,6 +140,32 @@ docker run --env-file docker/test-environment.env dollhousemcp
 docker run -it dollhousemcp /bin/bash
 ```
 
+### Streamable HTTP Hosted Mode
+
+For the Phase 1 hosted shape, run DollhouseMCP over Streamable HTTP instead of `stdio`:
+
+```bash
+docker build -f docker/Dockerfile -t dollhousemcp-hosted .
+
+docker run --rm -p 3000:3000 \
+  -e DOLLHOUSE_TRANSPORT=streamable-http \
+  -e DOLLHOUSE_HTTP_HOST=0.0.0.0 \
+  -e DOLLHOUSE_HTTP_PORT=3000 \
+  dollhousemcp-hosted
+```
+
+Then point a Streamable HTTP MCP client at:
+
+```text
+http://localhost:3000/mcp
+```
+
+Health endpoints for container orchestration:
+
+- `GET /healthz`
+- `GET /readyz`
+- `GET /version`
+
 ### Testing
 
 ```bash
