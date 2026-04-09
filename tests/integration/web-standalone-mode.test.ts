@@ -11,8 +11,27 @@
 import { describe, it, expect } from '@jest/globals';
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
+import * as net from 'node:net';
 
 const PROJECT_ROOT = path.resolve(__dirname, '../../');
+
+/** Extract the --web IIFE from index.ts source. */
+function getWebModeBlock(source: string): string {
+  const start = source.indexOf('if (isWebMode)');
+  const end = source.indexOf('[DollhouseMCP] Web UI failed to start:', start);
+  return source.slice(start, end);
+}
+
+/** Get a dynamically assigned free port from the OS. */
+function getFreePort(): Promise<number> {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    srv.listen(0, '127.0.0.1', () => {
+      const p = (srv.address() as net.AddressInfo).port;
+      srv.close(() => resolve(p));
+    });
+  });
+}
 
 describe('Standalone --web mode (#1850)', () => {
   let webModeSource: string;
@@ -23,19 +42,15 @@ describe('Standalone --web mode (#1850)', () => {
 
   describe('Pre-flight zombie kill', () => {
     it('calls recoverStalePort before container bootstrap', () => {
-      // Search within the --web block only
-      const webStart = webModeSource.indexOf('if (isWebMode)');
-      const webBlock = webModeSource.slice(webStart);
+      const webBlock = getWebModeBlock(webModeSource);
       const recoverIdx = webBlock.indexOf('recoverStalePort(targetPort)');
       const containerIdx = webBlock.indexOf('new DollhouseContainer()');
       expect(recoverIdx).toBeGreaterThan(-1);
       expect(containerIdx).toBeGreaterThan(-1);
-      // Pre-flight must come BEFORE container creation
       expect(recoverIdx).toBeLessThan(containerIdx);
     });
 
     it('logs recovery failures instead of swallowing them', () => {
-      // The catch block must log, not be empty
       const preflightSection = webModeSource.slice(
         webModeSource.indexOf('Pre-flight: kill any stale'),
         webModeSource.indexOf('let mcpAqlHandler'),
@@ -51,41 +66,26 @@ describe('Standalone --web mode (#1850)', () => {
   });
 
   describe('completeDeferredSetup skipped', () => {
-    // Extract the --web IIFE: from "if (isWebMode)" to the ".catch(err =>" that ends it
-    function getWebModeBlock(): string {
-      const start = webModeSource.indexOf('if (isWebMode)');
-      const end = webModeSource.indexOf('[DollhouseMCP] Web UI failed to start:', start);
-      return webModeSource.slice(start, end);
-    }
-
     it('does NOT call completeDeferredSetup in the --web path', () => {
-      const block = getWebModeBlock();
-      // Check for the actual method call, not comments about it
+      const block = getWebModeBlock(webModeSource);
       expect(block).not.toContain('container.completeDeferredSetup()');
-      // The comment explaining WHY it's skipped should be present
       expect(block).toContain('Do NOT call completeDeferredSetup');
     });
 
     it('runs sweepStalePortFiles directly instead', () => {
-      expect(getWebModeBlock()).toContain('sweepStalePortFiles');
+      expect(getWebModeBlock(webModeSource)).toContain('sweepStalePortFiles');
     });
 
     it('still bootstraps handlers for MCP-AQL gateway', () => {
-      const block = getWebModeBlock();
+      const block = getWebModeBlock(webModeSource);
       expect(block).toContain('bootstrapHandlers');
       expect(block).toContain('mcpAqlHandler');
     });
   });
 
   describe('Server startup with full sinks', () => {
-    function getWebModeBlock(): string {
-      const start = webModeSource.indexOf('if (isWebMode)');
-      const end = webModeSource.indexOf('[DollhouseMCP] Web UI failed to start:', start);
-      return webModeSource.slice(start, end);
-    }
-
     it('passes all required options to startWebServer', () => {
-      const block = getWebModeBlock();
+      const block = getWebModeBlock(webModeSource);
       expect(block).toContain('memorySink');
       expect(block).toContain('metricsSink');
       expect(block).toContain('tokenStore');
@@ -93,7 +93,7 @@ describe('Standalone --web mode (#1850)', () => {
     });
 
     it('creates fallback sinks when container does not provide them', () => {
-      const block = getWebModeBlock();
+      const block = getWebModeBlock(webModeSource);
       expect(block).toContain('MemoryLogSink');
       expect(block).toContain('MemoryMetricsSink');
     });
@@ -114,8 +114,9 @@ describe('Standalone --web mode (#1850)', () => {
       const { recoverStalePort } = await import('../../src/web/console/StaleProcessRecovery.js');
       expect(typeof recoverStalePort).toBe('function');
 
-      // Should return false for a port with nothing on it
-      const result = await recoverStalePort(59997);
+      // Use a dynamically assigned free port — no hardcoded port numbers
+      const freePort = await getFreePort();
+      const result = await recoverStalePort(freePort);
       expect(result).toBe(false);
     });
 
