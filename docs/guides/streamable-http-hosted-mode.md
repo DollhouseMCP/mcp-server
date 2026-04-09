@@ -42,6 +42,8 @@ Supporting endpoints:
 - `GET /readyz`
 - `GET /version`
 
+`/healthz` and `/readyz` also include process memory snapshots so hosted deployments can watch for session growth and GC pressure more easily.
+
 ## Environment Variables
 
 The new hosted transport surface is:
@@ -52,6 +54,10 @@ DOLLHOUSE_HTTP_HOST=127.0.0.1
 DOLLHOUSE_HTTP_PORT=3000
 DOLLHOUSE_HTTP_MCP_PATH=/mcp
 DOLLHOUSE_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1
+DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS=60000
+DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS=300
+DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS=900000
+DOLLHOUSE_HTTP_SESSION_POOL_SIZE=0
 ```
 
 Notes:
@@ -59,6 +65,10 @@ Notes:
 - `DOLLHOUSE_TRANSPORT=stdio` is still the default
 - `PORT` is still available, but `DOLLHOUSE_HTTP_PORT` is the clearer hosted-mode setting
 - if `DOLLHOUSE_HTTP_ALLOWED_HOSTS` is unset and the host is localhost, the MCP SDK's localhost protection remains in effect via `createMcpExpressApp()`
+- `DOLLHOUSE_HTTP_ALLOWED_HOSTS` is validated at startup so bad allow-list entries fail fast
+- `DOLLHOUSE_HTTP_RATE_LIMIT_*` controls the per-client request budget for hosted deployments
+- `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` expires abandoned sessions before they become long-lived leaks
+- `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` keeps a small warm pool of pre-attached HTTP sessions for faster startup under light concurrency
 
 ## CLI Overrides
 

@@ -123,21 +123,28 @@ describe('MCP SDK Security', () => {
 
     it('should support Streamable HTTP transport without SSE transport fallback', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
-      const indexPath = path.join(projectRoot, 'src/index.ts');
-      const indexContent = fs.readFileSync(indexPath, 'utf8');
+      const indexContent = fs.readFileSync(path.join(projectRoot, 'src/index.ts'), 'utf8');
+      const runtimeContent = fs.readFileSync(
+        path.join(projectRoot, 'src/server/StreamableHttpServer.ts'),
+        'utf8',
+      );
 
-      expect(indexContent).toContain('StreamableHTTPServerTransport');
-      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/streamableHttp.js"');
+      expect(indexContent).toContain("from './server/StreamableHttpServer.js'");
+      expect(runtimeContent).toContain('StreamableHTTPServerTransport');
+      expect(runtimeContent).toContain("from '@modelcontextprotocol/sdk/server/streamableHttp.js'");
+      expect(runtimeContent).not.toContain('SSEServerTransport');
       expect(indexContent).not.toContain('SSEServerTransport');
     });
 
     it('should use createMcpExpressApp for host validation in HTTP mode', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
-      const indexPath = path.join(projectRoot, 'src/index.ts');
-      const indexContent = fs.readFileSync(indexPath, 'utf8');
+      const runtimeContent = fs.readFileSync(
+        path.join(projectRoot, 'src/server/StreamableHttpServer.ts'),
+        'utf8',
+      );
 
-      expect(indexContent).toContain('createMcpExpressApp');
-      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/express.js"');
+      expect(runtimeContent).toContain('createMcpExpressApp');
+      expect(runtimeContent).toContain("from '@modelcontextprotocol/sdk/server/express.js'");
     });
   });
 
@@ -172,23 +179,33 @@ describe('MCP SDK Security', () => {
   describe('Defense in Depth', () => {
     it('should keep stdio transport and add guarded Streamable HTTP support in the main entry point', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
-      const indexPath = path.join(projectRoot, 'src/index.ts');
-      const indexContent = fs.readFileSync(indexPath, 'utf8');
+      const indexContent = fs.readFileSync(path.join(projectRoot, 'src/index.ts'), 'utf8');
+      const runtimeContent = fs.readFileSync(
+        path.join(projectRoot, 'src/server/StreamableHttpServer.ts'),
+        'utf8',
+      );
 
       expect(indexContent).toContain('StdioServerTransport');
-      expect(indexContent).toContain('StreamableHTTPServerTransport');
+      expect(indexContent).toContain('createStreamableHttpRuntime');
+      expect(runtimeContent).toContain('StreamableHTTPServerTransport');
       expect(indexContent).not.toContain('SSEServerTransport');
+      expect(runtimeContent).not.toContain('SSEServerTransport');
     });
 
     it('should not import legacy SSE transport modules in main server', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
-      const indexPath = path.join(projectRoot, 'src/index.ts');
-      const indexContent = fs.readFileSync(indexPath, 'utf8');
+      const indexContent = fs.readFileSync(path.join(projectRoot, 'src/index.ts'), 'utf8');
+      const runtimeContent = fs.readFileSync(
+        path.join(projectRoot, 'src/server/StreamableHttpServer.ts'),
+        'utf8',
+      );
 
       expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/stdio.js"');
-      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/streamableHttp.js"');
-      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/express.js"');
+      expect(indexContent).toContain("from './server/StreamableHttpServer.js'");
+      expect(runtimeContent).toContain("from '@modelcontextprotocol/sdk/server/streamableHttp.js'");
+      expect(runtimeContent).toContain("from '@modelcontextprotocol/sdk/server/express.js'");
       expect(indexContent).not.toContain('from "@modelcontextprotocol/sdk/server/sse.js"');
+      expect(runtimeContent).not.toContain("from '@modelcontextprotocol/sdk/server/sse.js'");
     });
   });
 });

@@ -16,6 +16,27 @@ import { z } from 'zod';
 import dotenv from 'dotenv';
 import { logger } from '../utils/logger.js';
 
+const HTTP_ALLOWED_HOST_PATTERN = /^[A-Za-z0-9.\-:[\]]+$/;
+
+function parseAllowedHosts(rawValue: string | undefined): string[] | undefined {
+  if (!rawValue) {
+    return undefined;
+  }
+
+  const hosts = rawValue
+    .split(',')
+    .map(host => host.trim())
+    .filter(Boolean);
+
+  for (const host of hosts) {
+    if (!HTTP_ALLOWED_HOST_PATTERN.test(host)) {
+      throw new Error(`Invalid host allow-list entry: ${host}`);
+    }
+  }
+
+  return hosts.length > 0 ? hosts : undefined;
+}
+
 // Load .env files with priority: .env.local (personal) > .env (shared defaults)
 // Both files are optional - no error if either doesn't exist
 //
@@ -73,7 +94,11 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_MCP_PATH: z.string().default('/mcp'),
   DOLLHOUSE_HTTP_ALLOWED_HOSTS: z.string()
     .optional()
-    .transform(v => v ? v.split(',').map(host => host.trim()).filter(Boolean) : undefined),
+    .transform(parseAllowedHosts),
+  DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(0).default(60000),
+  DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(0).default(300),
+  DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
+  DOLLHOUSE_HTTP_SESSION_POOL_SIZE: z.coerce.number().int().min(0).max(32).default(0),
 
   // ============================================================================
   // Test Configuration

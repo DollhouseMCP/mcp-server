@@ -54,7 +54,8 @@ if (fs.existsSync(packagesDir)) {
           `<rootDir>/packages/${pkg}/src/index.ts`;
       }
     } catch (err) {
-      console.warn(`[jestShared] skipping malformed package.json: ${pkgJsonPath}`);
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`[jestShared] skipping malformed package.json: ${pkgJsonPath} (${reason})`);
     }
   }
 }
@@ -146,7 +147,8 @@ function applyCjsFallback(config) {
           }
         } catch (err) {
           // Skip malformed package.json files — don't break Jest startup
-          console.warn(`[jestShared] skipping malformed package.json: ${pkgJsonPath}`);
+          const reason = err instanceof Error ? err.message : String(err);
+          console.warn(`[jestShared] skipping malformed package.json: ${pkgJsonPath} (${reason})`);
         }
       }
     }

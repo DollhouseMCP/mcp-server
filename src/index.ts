@@ -5,17 +5,10 @@
 import { env } from './config/env.js';
 
 import * as path from 'path';
-import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
-import type { Server as HttpServer } from 'node:http';
-import type { AddressInfo } from 'node:net';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
-import type { Express, Request, Response } from "express";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
 import { DollhouseContainer } from "./di/Container.js";
@@ -40,6 +33,16 @@ import { FileOperationsService } from "./services/FileOperationsService.js";
 import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
+import {
+  createStreamableHttpRuntime,
+  getRequestedTransportName,
+  getStreamableHttpRuntimeOptions,
+  type AttachTransportOptions,
+  type DeferredSetupMode,
+  type RuntimeTransportName,
+  type StreamableHttpRuntimeHandle,
+  type StreamableHttpRuntimeOptions,
+} from './server/StreamableHttpServer.js';
 
 // Defensive error handling for npx/CLI execution
 process.on('uncaughtException', (error) => {
@@ -64,40 +67,6 @@ process.on('unhandledRejection', (reason, promise) => {
 // Only log execution environment in debug mode
 if (process.env.DOLLHOUSE_DEBUG) {
   console.error('[DollhouseMCP] Debug mode enabled');
-}
-
-type RuntimeTransportName = 'stdio' | 'streamable-http';
-type DeferredSetupMode = 'full' | 'sink-only' | 'none';
-
-interface AttachTransportOptions {
-  transportName: RuntimeTransportName;
-  deferredSetupMode: DeferredSetupMode;
-  emitReadySentinel?: boolean;
-  suppressConsoleLoggingAfterConnect?: boolean;
-}
-
-interface StreamableHttpRuntimeOptions {
-  host?: string;
-  port?: number;
-  mcpPath?: string;
-  allowedHosts?: string[];
-  registerSignalHandlers?: boolean;
-}
-
-export interface StreamableHttpRuntimeHandle {
-  app: Express;
-  host: string;
-  port: number;
-  mcpPath: string;
-  url: string;
-  httpServer: HttpServer;
-  close(): Promise<void>;
-  activeSessionCount(): number;
-}
-
-interface StreamableHttpSession {
-  server: DollhouseMCPServer;
-  transport: StreamableHTTPServerTransport;
 }
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -818,333 +787,27 @@ export class DollhouseMCPServer implements IToolHandler {
   }
 }
 
-function parseCommaSeparatedValues(rawValue: string | undefined): string[] | undefined {
-  if (!rawValue) {
-    return undefined;
-  }
-
-  const values = rawValue
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
-
-  return values.length > 0 ? values : undefined;
-}
-
-function normalizeMcpPath(rawPath: string | undefined): string {
-  if (!rawPath || rawPath === '/') {
-    return '/mcp';
-  }
-
-  return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
-}
-
-function getCliFlagValue(flagName: string): string | undefined {
-  const prefix = `--${flagName}=`;
-  const arg = process.argv.find(value => value.startsWith(prefix));
-  return arg ? arg.slice(prefix.length) : undefined;
-}
-
-function getRequestedTransportName(): RuntimeTransportName {
-  if (process.argv.includes('--streamable-http') || process.argv.includes('--http')) {
-    return 'streamable-http';
-  }
-
-  return env.DOLLHOUSE_TRANSPORT;
-}
-
-function getMcpSessionId(req: Request): string | undefined {
-  const headerValue = req.headers['mcp-session-id'];
-  return Array.isArray(headerValue) ? headerValue[0] : headerValue;
-}
-
-function respondWithJsonRpcError(
-  res: Response,
-  statusCode: number,
-  message: string,
-  requestId: unknown = null,
-): void {
-  res.status(statusCode).json({
-    jsonrpc: '2.0',
-    error: {
-      code: -32000,
-      message,
-    },
-    id: requestId,
-  });
-}
-
-function getStreamableHttpRuntimeOptions(): StreamableHttpRuntimeOptions {
-  const portFlag = getCliFlagValue('port');
-  const hostFlag = getCliFlagValue('host');
-  const pathFlag = getCliFlagValue('mcp-path');
-  const allowedHostsFlag = getCliFlagValue('allowed-hosts');
-  const parsedPort = portFlag !== undefined ? Number.parseInt(portFlag, 10) : undefined;
-
-  return {
-    host: hostFlag ?? env.DOLLHOUSE_HTTP_HOST,
-    port: Number.isFinite(parsedPort) ? parsedPort : env.DOLLHOUSE_HTTP_PORT,
-    mcpPath: normalizeMcpPath(pathFlag ?? env.DOLLHOUSE_HTTP_MCP_PATH),
-    allowedHosts: parseCommaSeparatedValues(allowedHostsFlag) ?? env.DOLLHOUSE_HTTP_ALLOWED_HOSTS,
-  };
-}
-
 export async function startStreamableHttpServer(
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
-  const host = options.host ?? env.DOLLHOUSE_HTTP_HOST;
-  const port = options.port ?? env.DOLLHOUSE_HTTP_PORT;
-  const mcpPath = normalizeMcpPath(options.mcpPath ?? env.DOLLHOUSE_HTTP_MCP_PATH);
-  const allowedHosts = options.allowedHosts ?? env.DOLLHOUSE_HTTP_ALLOWED_HOSTS;
-  const app = createMcpExpressApp({ host, allowedHosts });
-  const sessions = new Map<string, StreamableHttpSession>();
-  let closingPromise: Promise<void> | null = null;
-
-  const disposeSession = async (sessionId: string | undefined): Promise<void> => {
-    if (!sessionId) {
-      return;
-    }
-
-    const session = sessions.get(sessionId);
-    if (!session) {
-      return;
-    }
-
-    sessions.delete(sessionId);
-    try {
-      await session.server.dispose();
-    } catch (error) {
-      logger.warn('[StreamableHTTP] Failed to dispose session server', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
-  const createSession = async (): Promise<StreamableHttpSession> => {
+  return createStreamableHttpRuntime(async (transport) => {
     const sessionServer = new DollhouseMCPServer(new DollhouseContainer());
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-      onsessioninitialized: (sessionId) => {
-        sessions.set(sessionId, { server: sessionServer, transport });
-        logger.info('[StreamableHTTP] Session initialized', { sessionId });
-      },
-    });
-
-    transport.onerror = (error) => {
-      logger.warn('[StreamableHTTP] Transport error', {
-        sessionId: transport.sessionId,
-        error: error.message,
-      });
-    };
-
-    transport.onclose = () => {
-      void disposeSession(transport.sessionId);
-    };
 
     try {
       await sessionServer.attachTransport(transport, {
         transportName: 'streamable-http',
         deferredSetupMode: 'sink-only',
       });
-      return { server: sessionServer, transport };
+      return {
+        dispose: async () => {
+          await sessionServer.dispose();
+        },
+      };
     } catch (error) {
       await sessionServer.dispose().catch(() => {});
       throw error;
     }
-  };
-
-  app.get('/', (_req, res) => {
-    res.json({
-      name: 'dollhousemcp',
-      version: PACKAGE_VERSION,
-      transport: 'streamable-http',
-      mcpPath,
-      health: '/healthz',
-      readiness: '/readyz',
-    });
-  });
-
-  app.get('/healthz', (_req, res) => {
-    res.status(200).json({
-      ok: true,
-      transport: 'streamable-http',
-      version: PACKAGE_VERSION,
-    });
-  });
-
-  app.get('/readyz', (_req, res) => {
-    res.status(200).json({
-      ready: true,
-      transport: 'streamable-http',
-      activeSessions: sessions.size,
-    });
-  });
-
-  app.get('/version', (_req, res) => {
-    res.status(200).json({
-      name: 'dollhousemcp',
-      version: PACKAGE_VERSION,
-    });
-  });
-
-  app.post(mcpPath, async (req, res) => {
-    if (closingPromise) {
-      respondWithJsonRpcError(res, 503, 'Server shutting down');
-      return;
-    }
-
-    const sessionId = getMcpSessionId(req);
-
-    try {
-      if (sessionId) {
-        const existingSession = sessions.get(sessionId);
-        if (!existingSession) {
-          respondWithJsonRpcError(res, 404, 'Unknown MCP session', (req.body as { id?: unknown })?.id ?? null);
-          return;
-        }
-
-        await existingSession.transport.handleRequest(req, res, req.body);
-        return;
-      }
-
-      if (!isInitializeRequest(req.body)) {
-        respondWithJsonRpcError(res, 400, 'Initialization request required before session use');
-        return;
-      }
-
-      const session = await createSession();
-      await session.transport.handleRequest(req, res, req.body);
-    } catch (error) {
-      logger.error('[StreamableHTTP] Failed to handle MCP POST request', {
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      if (!res.headersSent) {
-        respondWithJsonRpcError(res, 500, 'Internal server error', (req.body as { id?: unknown })?.id ?? null);
-      }
-    }
-  });
-
-  const handleSessionLifecycleRequest = async (
-    req: Request,
-    res: Response,
-    methodName: 'GET' | 'DELETE',
-  ): Promise<void> => {
-    const sessionId = getMcpSessionId(req);
-    const session = sessionId ? sessions.get(sessionId) : undefined;
-
-    if (!session) {
-      res.status(400).json({ error: 'A valid mcp-session-id header is required.' });
-      return;
-    }
-
-    try {
-      await session.transport.handleRequest(req, res);
-    } catch (error) {
-      logger.error(`[StreamableHTTP] Failed to handle MCP ${methodName} request`, {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      if (!res.headersSent) {
-        res.status(500).json({ error: 'Internal server error' });
-      }
-    }
-  };
-
-  app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
-
-  app.delete(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'DELETE'));
-
-  const httpServer = await new Promise<HttpServer>((resolve, reject) => {
-    const server = app.listen(port, host, () => resolve(server));
-    server.on('error', reject);
-  });
-
-  const address = httpServer.address() as AddressInfo | null;
-  const resolvedPort = address?.port ?? port;
-  const url = `http://${host}:${resolvedPort}${mcpPath}`;
-
-  logger.info('[StreamableHTTP] Hosted MCP server listening', {
-    host,
-    port: resolvedPort,
-    mcpPath,
-    allowedHosts,
-  });
-
-  const shutdown = async (): Promise<void> => {
-    if (closingPromise) {
-      return closingPromise;
-    }
-
-    closingPromise = (async () => {
-      const allSessions = Array.from(sessions.values());
-      sessions.clear();
-
-      for (const session of allSessions) {
-        try {
-          await session.transport.close();
-        } catch {
-          /* transport shutdown is best-effort */
-        }
-
-        try {
-          await session.server.dispose();
-        } catch {
-          /* server shutdown is best-effort */
-        }
-      }
-
-      await new Promise<void>((resolve, reject) => {
-        httpServer.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    })();
-
-    return closingPromise;
-  };
-
-  let removeSignalHandlers = () => {};
-  if (options.registerSignalHandlers) {
-    const handleSignal = (signal: NodeJS.Signals) => {
-      logger.info(`[StreamableHTTP] Received ${signal}, shutting down...`);
-      shutdown()
-        .then(() => process.exit(0))
-        .catch((error) => {
-          console.error('[DollhouseMCP] Streamable HTTP shutdown failed:', error);
-          process.exit(1);
-        });
-    };
-
-    process.on('SIGINT', handleSignal);
-    process.on('SIGTERM', handleSignal);
-    process.on('SIGHUP', handleSignal);
-
-    removeSignalHandlers = () => {
-      process.off('SIGINT', handleSignal);
-      process.off('SIGTERM', handleSignal);
-      process.off('SIGHUP', handleSignal);
-    };
-  }
-
-  return {
-    app,
-    host,
-    port: resolvedPort,
-    mcpPath,
-    url,
-    httpServer,
-    activeSessionCount: () => sessions.size,
-    close: async () => {
-      removeSignalHandlers();
-      await shutdown();
-    },
-  };
+  }, options);
 }
 
 // Export is already at class declaration
@@ -1367,16 +1030,16 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       process.exit(1);
     });
   } else if (getRequestedTransportName() === 'streamable-http') {
-    (async () => {
+    try {
       const runtime = await startStreamableHttpServer({
         ...getStreamableHttpRuntimeOptions(),
         registerSignalHandlers: true,
       });
       console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
-    })().catch(err => {
+    } catch (err) {
       console.error("[DollhouseMCP] Streamable HTTP server failed to start:", err);
       process.exit(1);
-    });
+    }
   } else {
     if (isDebugStartupLogging) {
       console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
