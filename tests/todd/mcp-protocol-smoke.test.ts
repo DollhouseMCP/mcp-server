@@ -19,9 +19,9 @@
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 
 // ---------------------------------------------------------------------------
@@ -178,7 +178,6 @@ describe('MCP Protocol Smoke Tests', () => {
   let client: Client;
   let transport: StdioClientTransport;
   let testDir: string;
-  let stderrChunks: string[] = [];
 
   beforeAll(async () => {
     testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-smoke-'));
@@ -204,12 +203,6 @@ describe('MCP Protocol Smoke Tests', () => {
         GITHUB_TEST_TOKEN: '',
       },
     });
-
-    if (transport.stderr) {
-      transport.stderr.on('data', (data: Buffer) => {
-        stderrChunks.push(data.toString());
-      });
-    }
 
     client = new Client(
       { name: 'smoke-test-client', version: '1.0.0' },
@@ -558,9 +551,9 @@ describe('MCP Protocol Smoke Tests', () => {
         )
       );
 
-      for (let i = 0; i < results.length; i++) {
-        expect(results[i]).toMatch(/added|success|entry/i);
-        expect(results[i]).not.toMatch(/invalid input|validation failed/i);
+      for (const result of results) {
+        expect(result).toMatch(/added|success|entry/i);
+        expect(result).not.toMatch(/invalid input|validation failed/i);
       }
     }, CONCURRENT_TIMEOUT);
   });
