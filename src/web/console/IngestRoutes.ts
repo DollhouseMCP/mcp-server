@@ -38,6 +38,12 @@ const REAPER_INTERVAL_MS = 5_000;
 /** How long since last heartbeat before a session is considered dead (ms) */
 const SESSION_STALE_MS = 15_000;
 
+/** Timeout for legacy port federation/proxy requests (ms) */
+const LEGACY_FETCH_TIMEOUT_MS = 2_000;
+
+/** How long before ended sessions are purged from the Map (ms) */
+const ENDED_PURGE_MS = 5 * 60_000; // 5 minutes
+
 /**
  * Tracked session information.
  */
@@ -130,6 +136,90 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   const namePool = new SessionNamePool();
   const rateLimiter = new SlidingWindowRateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS);
 
+  // Sessions the user explicitly killed — never come back (#1870).
+  // Cleared only on server restart, which is appropriate since that's a new context.
+  const killedSessions = new Set<string>();
+
+  // Sessions waiting for a PID so we can SIGTERM them (#1870).
+  // When the user dismisses a pid=0 orphan, we add it here. The next heartbeat
+  // (every 10s) carries the PID — we SIGTERM immediately and move to killedSessions.
+  const pendingKills = new Set<string>();
+
+  /** Execute a deferred kill if we now have a PID. */
+  function tryExecutePendingKill(sessionId: string, pid?: number): void {
+    const killPid = pid || sessions.get(sessionId)?.pid;
+    if (!killPid) return;
+    try { process.kill(killPid, 'SIGTERM'); } catch { /* already dead */ }
+    const existing = sessions.get(sessionId);
+    if (existing) existing.status = 'ended';
+    logger.info('[IngestRoutes] Deferred kill executed — PID arrived', {
+      displayName: existing?.displayName, sessionId, pid: killPid,
+    });
+  }
+
+  /** Promote a pending kill to permanent. */
+  function finalizePendingKill(sessionId: string, pid?: number): void {
+    tryExecutePendingKill(sessionId, pid);
+    pendingKills.delete(sessionId);
+    killedSessions.add(sessionId);
+  }
+
+  /** Create a new session entry for an orphan. Returns null on failure. */
+  function autoRegister(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+    try {
+      const displayName = namePool.assign(sessionId);
+      const color = namePool.getColor(sessionId) ?? '#3b82f6';
+      const now = new Date().toISOString();
+      const info: SessionInfo = {
+        sessionId, displayName, color,
+        pid: pid || 0,
+        startedAt: now, lastHeartbeat: now,
+        status: 'active', isLeader: false, authenticated, kind: 'mcp',
+      };
+      sessions.set(sessionId, info);
+      logger.info('[IngestRoutes] Auto-registered orphaned session', {
+        displayName, sessionId, source: pid ? 'heartbeat' : 'ingestion',
+      });
+      broadcasts.sessionBroadcast?.(info);
+      return info;
+    } catch (err) {
+      logger.debug('[IngestRoutes] Failed to auto-register orphaned session', {
+        sessionId, error: (err as Error).message,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Auto-register or update an orphaned session from ingestion data.
+   * Returns the session (existing or newly created), or null if killed/pending.
+   */
+  function ensureSession(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+    if (killedSessions.has(sessionId)) return null;
+    if (pendingKills.has(sessionId)) {
+      finalizePendingKill(sessionId, pid);
+      return null;
+    }
+
+    const existing = sessions.get(sessionId);
+    if (!existing) return autoRegister(sessionId, pid, authenticated);
+
+    if (existing.status === 'ended') {
+      existing.status = 'active';
+      logger.info('[IngestRoutes] Revived ended session still sending data', {
+        displayName: existing.displayName, sessionId,
+      });
+    }
+    existing.lastHeartbeat = new Date().toISOString();
+    if (pid && !existing.pid) {
+      existing.pid = pid;
+      logger.info('[IngestRoutes] Recovered PID for orphaned session', {
+        displayName: existing.displayName, sessionId, pid,
+      });
+    }
+    return existing;
+  }
+
   // JSON body parsing with size limit
   router.use(express.json({ limit: MAX_PAYLOAD_SIZE }));
 
@@ -163,11 +253,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       count++;
     }
 
-    // Update session heartbeat
-    const session = sessions.get(payload.sessionId);
-    if (session) {
-      session.lastHeartbeat = new Date().toISOString();
-    }
+    // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
+    const session = ensureSession(payload.sessionId);
 
     if (skipped > 0) {
       logger.debug(`[IngestRoutes] Log ingest from ${session?.displayName ?? payload.sessionId}: accepted=${count}, skipped=${skipped}`);
@@ -198,7 +285,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       broadcasts.metricsOnSnapshot(payload.snapshot);
     }
 
-    const session = sessions.get(payload.sessionId);
+    // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
+    const session = ensureSession(payload.sessionId);
     logger.debug(`[IngestRoutes] Metrics ingested from ${session?.displayName ?? payload.sessionId}`);
     res.status(200).json({ accepted: true });
   });
@@ -220,29 +308,23 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     switch (payload.event) {
       case 'started': {
+        // Killed sessions stay dead; pending kills get finalized (#1870)
+        if (killedSessions.has(payload.sessionId)) break;
+        if (pendingKills.has(payload.sessionId)) { finalizePendingKill(payload.sessionId, payload.pid); break; }
+
         const displayName = namePool.assign(payload.sessionId);
         const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
-        // Follower sessions that reach the ingest endpoint are authenticated
-        // if the auth middleware passed them through (token was valid).
         const isAuthenticated = Boolean((res as any).locals?.tokenEntry);
-        const info: SessionInfo = {
-          sessionId: payload.sessionId,
-          displayName,
-          color,
-          pid: payload.pid,
-          startedAt: payload.startedAt || now,
-          lastHeartbeat: now,
-          status: 'active',
-          isLeader: false,
-          authenticated: isAuthenticated,
-          kind: 'mcp',
-        };
-        sessions.set(payload.sessionId, info);
+        sessions.set(payload.sessionId, {
+          sessionId: payload.sessionId, displayName, color,
+          pid: payload.pid, startedAt: payload.startedAt || now, lastHeartbeat: now,
+          status: 'active', isLeader: false, authenticated: isAuthenticated, kind: 'mcp',
+        });
         logger.info('[IngestRoutes] Session registered', {
           displayName, sessionId: payload.sessionId, pid: payload.pid, color,
           activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length,
         });
-        broadcasts.sessionBroadcast?.(info);
+        broadcasts.sessionBroadcast?.(sessions.get(payload.sessionId)!);
         break;
       }
       case 'stopped': {
@@ -260,10 +342,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         break;
       }
       case 'heartbeat': {
-        const existing = sessions.get(payload.sessionId);
-        if (existing) {
-          existing.lastHeartbeat = now;
-        }
+        // Auto-register or update — heartbeat includes PID for recovery (#1870)
+        ensureSession(payload.sessionId, payload.pid);
         break;
       }
     }
@@ -275,7 +355,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
    * GET /api/sessions — List all tracked sessions.
    */
   router.get('/api/sessions', async (_req: Request, res: Response) => {
-    const localSessions = Array.from(sessions.values());
+    // Server-side active filter — the frontend also filters, but ended sessions
+    // should never leave the API to prevent stale UI (#1870).
+    const localSessions = Array.from(sessions.values()).filter(s => s.status === 'active');
     const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
 
     // Federate with the legacy port (3939) to show all sessions on the
@@ -284,7 +366,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     if (currentPort !== 3939) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 2000);
+        const timeout = setTimeout(() => controller.abort(), LEGACY_FETCH_TIMEOUT_MS);
         const legacyRes = await fetch('http://127.0.0.1:3939/api/sessions', {
           signal: controller.signal,
         });
@@ -313,58 +395,109 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   /**
    * POST /api/sessions/:sessionId/kill — Terminate a session's server process.
    */
-  router.post('/api/sessions/:sessionId/kill', (req: Request, res: Response) => {
+  router.post('/api/sessions/:sessionId/kill', async (req: Request, res: Response) => {
     const sessionId = req.params['sessionId'] as string;
     const session = sessions.get(sessionId);
 
     if (!session) {
+      // Session not in local Map — try proxying kill to legacy port (#1870)
+      const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
+      if (currentPort !== 3939) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), LEGACY_FETCH_TIMEOUT_MS);
+          const proxyRes = await fetch(`http://127.0.0.1:3939/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
+            method: 'POST',
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (proxyRes.ok) {
+            const data = await proxyRes.json();
+            res.json(data);
+            return;
+          }
+        } catch {
+          // Legacy instance not running — fall through to 404
+        }
+      }
       logger.warn('[IngestRoutes] Kill requested for unknown session', { sessionId });
       res.status(404).json({ error: 'Session not found', sessionId });
       return;
     }
 
     if (!session.pid) {
-      res.status(400).json({ error: 'No PID for session', sessionId, displayName: session.displayName });
+      // Auto-registered orphan with unknown PID — queue for deferred kill (#1870).
+      // The next heartbeat (every ~10s) carries the PID. ensureSession() will
+      // SIGTERM the process as soon as the PID arrives. Session is gone for good.
+      session.status = 'ended';
+      namePool.release(sessionId);
+      pendingKills.add(sessionId);
+      logger.info('[IngestRoutes] Queued deferred kill — waiting for PID via heartbeat', {
+        displayName: session.displayName, sessionId,
+      });
+      res.json({ ok: true, dismissed: session.displayName, reason: 'pending-kill' });
       return;
     }
 
+    // SIGTERM the process. Even if it fails (ESRCH = already dead, EPERM = not ours),
+    // mark the session as permanently killed so it never reappears (#1870).
+    let killed = false;
     try {
       process.kill(session.pid, 'SIGTERM');
-      session.status = 'ended';
-      namePool.release(sessionId);
-      logger.info('[IngestRoutes] Session killed', {
-        displayName: session.displayName, sessionId, pid: session.pid,
-        activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
-      });
-      res.json({ ok: true, killed: session.displayName, pid: session.pid });
+      killed = true;
     } catch (err) {
-      const message = (err as Error).message;
-      logger.error('[IngestRoutes] Failed to kill session', {
-        displayName: session.displayName, sessionId, pid: session.pid, error: message,
-      });
-      res.status(500).json({ error: 'Failed to kill session', sessionId, displayName: session.displayName, pid: session.pid, detail: message });
-    }
-  });
-
-  // Reaper: periodically check for stale sessions whose heartbeat has expired
-  const reaperInterval = setInterval(() => {
-    const now = Date.now();
-    for (const [id, session] of sessions) {
-      if (session.status !== 'active') continue;
-      if (session.isLeader) continue; // leader manages itself
-      if (session.kind === 'console') continue; // console session has no heartbeat (#1805)
-      const age = now - new Date(session.lastHeartbeat).getTime();
-      if (age > SESSION_STALE_MS) {
-        session.status = 'ended';
-        namePool.release(id);
-        logger.info('[IngestRoutes] Reaped stale session', {
-          displayName: session.displayName, sessionId: id, pid: session.pid,
-          lastHeartbeatAgo: `${Math.round(age / 1000)}s`,
-          activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ESRCH') {
+        killed = true; // process already dead — treat as successful kill
+      } else {
+        logger.error('[IngestRoutes] Failed to kill session', {
+          displayName: session.displayName, sessionId, pid: session.pid, error: (err as Error).message,
         });
-        broadcasts.sessionBroadcast?.(session);
+        res.status(500).json({ error: 'Failed to kill session', sessionId, displayName: session.displayName, pid: session.pid, detail: (err as Error).message });
+        return;
       }
     }
+    session.status = 'ended';
+    namePool.release(sessionId);
+    killedSessions.add(sessionId);
+    logger.info('[IngestRoutes] Session killed', {
+      displayName: session.displayName, sessionId, pid: session.pid,
+      activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+    });
+    res.json({ ok: true, killed: session.displayName, pid: session.pid });
+  });
+
+  /** Mark stale active sessions as ended. */
+  function reapStaleSessions(now: number): void {
+    for (const [id, session] of sessions) {
+      if (session.status !== 'active') continue;
+      if (session.isLeader || session.kind === 'console') continue;
+      const age = now - new Date(session.lastHeartbeat).getTime();
+      if (age <= SESSION_STALE_MS) continue;
+      session.status = 'ended';
+      namePool.release(id);
+      logger.info('[IngestRoutes] Reaped stale session', {
+        displayName: session.displayName, sessionId: id, pid: session.pid,
+        lastHeartbeatAgo: `${Math.round(age / 1000)}s`,
+        activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
+      });
+      broadcasts.sessionBroadcast?.(session);
+    }
+  }
+
+  /** Delete ended sessions to bound memory (#1870). */
+  function purgeStaleEntries(now: number): void {
+    for (const [id, session] of sessions) {
+      if (session.status === 'ended' && now - new Date(session.lastHeartbeat).getTime() > ENDED_PURGE_MS) {
+        sessions.delete(id);
+      }
+    }
+  }
+
+  const reaperInterval = setInterval(() => {
+    const now = Date.now();
+    reapStaleSessions(now);
+    purgeStaleEntries(now);
   }, REAPER_INTERVAL_MS);
   reaperInterval.unref();
 

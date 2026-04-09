@@ -274,6 +274,15 @@
             .then(function(res) {
               if (!res.ok) {
                 alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+                fetchSessions();
+                return;
+              }
+              return res.json();
+            })
+            .then(function(data) {
+              if (!data) return;
+              if (data.reason === 'pending-kill') {
+                alert('Session ' + displayName(s) + ' will be terminated shortly.\nWaiting for the process to identify itself, then it will be killed.');
               }
               fetchSessions();
             })
