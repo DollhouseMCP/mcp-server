@@ -163,10 +163,40 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       count++;
     }
 
-    // Update session heartbeat
+    // Update session heartbeat — or re-register if the session was lost
+    // (e.g., server restarted but MCP client kept running) (#1870)
     const session = sessions.get(payload.sessionId);
     if (session) {
       session.lastHeartbeat = new Date().toISOString();
+      // Revive reaped sessions that are still sending data
+      if (session.status === 'ended') {
+        session.status = 'active';
+        logger.info('[IngestRoutes] Revived ended session still sending logs', {
+          displayName: session.displayName, sessionId: payload.sessionId,
+        });
+      }
+    } else {
+      // Session not in Map — auto-register so it's visible and killable
+      const displayName = namePool.assign(payload.sessionId);
+      const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
+      const now = new Date().toISOString();
+      const info: SessionInfo = {
+        sessionId: payload.sessionId,
+        displayName,
+        color,
+        pid: 0, // unknown — no PID from log ingestion
+        startedAt: now,
+        lastHeartbeat: now,
+        status: 'active',
+        isLeader: false,
+        authenticated: Boolean((res as any).locals?.tokenEntry),
+        kind: 'mcp',
+      };
+      sessions.set(payload.sessionId, info);
+      logger.info('[IngestRoutes] Auto-registered orphaned session from log ingestion', {
+        displayName, sessionId: payload.sessionId,
+      });
+      broadcasts.sessionBroadcast?.(info);
     }
 
     if (skipped > 0) {
@@ -275,7 +305,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
    * GET /api/sessions — List all tracked sessions.
    */
   router.get('/api/sessions', async (_req: Request, res: Response) => {
-    const localSessions = Array.from(sessions.values());
+    const localSessions = Array.from(sessions.values()).filter(s => s.status === 'active');
     const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
 
     // Federate with the legacy port (3939) to show all sessions on the
@@ -313,11 +343,31 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   /**
    * POST /api/sessions/:sessionId/kill — Terminate a session's server process.
    */
-  router.post('/api/sessions/:sessionId/kill', (req: Request, res: Response) => {
+  router.post('/api/sessions/:sessionId/kill', async (req: Request, res: Response) => {
     const sessionId = req.params['sessionId'] as string;
     const session = sessions.get(sessionId);
 
     if (!session) {
+      // Session not in local Map — try proxying kill to legacy port (#1870)
+      const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
+      if (currentPort !== 3939) {
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 3000);
+          const proxyRes = await fetch(`http://127.0.0.1:3939/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
+            method: 'POST',
+            signal: controller.signal,
+          });
+          clearTimeout(timeout);
+          if (proxyRes.ok) {
+            const data = await proxyRes.json();
+            res.json(data);
+            return;
+          }
+        } catch {
+          // Legacy instance not running — fall through to 404
+        }
+      }
       logger.warn('[IngestRoutes] Kill requested for unknown session', { sessionId });
       res.status(404).json({ error: 'Session not found', sessionId });
       return;
