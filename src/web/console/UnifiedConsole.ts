@@ -220,28 +220,12 @@ async function startAsLeader(
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   };
-  const BIND_RETRY_DELAYS = env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS?.length
-    ? env.DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS
-    : [1000, 2000, 4000];
+  // bindAndListen now handles EADDRINUSE by finding and killing the stale
+  // process on the port, then retrying. No external retry loop needed.
   const webResult = await startWebServer(serverOpts);
 
-  // If the port is occupied, retry the bind only — don't recreate the Express
-  // app and routes (startWebServer early-returns when serverRunning is false
-  // but the app is already configured). We call retryBind on the existing app.
-  if (webResult.bindResult && !webResult.bindResult.success && webResult.bindResult.error === 'EADDRINUSE' && webResult.app) {
-    const { retryBind } = await import('../server.js');
-    for (let i = 0; i < BIND_RETRY_DELAYS.length; i++) {
-      logger.warn(`[UnifiedConsole] Port ${consolePort} occupied — retry ${i + 1}/${BIND_RETRY_DELAYS.length} in ${BIND_RETRY_DELAYS[i]}ms`);
-      await new Promise(r => setTimeout(r, BIND_RETRY_DELAYS[i]));
-      const retryResult = await retryBind(webResult.app, consolePort, serverOpts);
-      if (retryResult.success) {
-        webResult.bindResult = retryResult;
-        break;
-      }
-    }
-    if (webResult.bindResult && !webResult.bindResult.success) {
-      logger.error(`[UnifiedConsole] Leader failed to bind port ${consolePort} after ${BIND_RETRY_DELAYS.length} retries — console unavailable`);
-    }
+  if (webResult.bindResult && !webResult.bindResult.success) {
+    logger.error(`[UnifiedConsole] Leader failed to bind port ${consolePort} — console unavailable`);
   }
 
   // Wire SSE broadcasts for this leader's own events
