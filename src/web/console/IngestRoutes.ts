@@ -38,6 +38,9 @@ const REAPER_INTERVAL_MS = 5_000;
 /** How long since last heartbeat before a session is considered dead (ms) */
 const SESSION_STALE_MS = 15_000;
 
+/** Timeout for legacy port federation/proxy requests (ms) */
+const LEGACY_FETCH_TIMEOUT_MS = 2_000;
+
 /**
  * Tracked session information.
  */
@@ -176,27 +179,35 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         });
       }
     } else {
-      // Session not in Map — auto-register so it's visible and killable
-      const displayName = namePool.assign(payload.sessionId);
-      const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
-      const now = new Date().toISOString();
-      const info: SessionInfo = {
-        sessionId: payload.sessionId,
-        displayName,
-        color,
-        pid: 0, // unknown — no PID from log ingestion
-        startedAt: now,
-        lastHeartbeat: now,
-        status: 'active',
-        isLeader: false,
-        authenticated: Boolean((res as any).locals?.tokenEntry),
-        kind: 'mcp',
-      };
-      sessions.set(payload.sessionId, info);
-      logger.info('[IngestRoutes] Auto-registered orphaned session from log ingestion', {
-        displayName, sessionId: payload.sessionId,
-      });
-      broadcasts.sessionBroadcast?.(info);
+      // Session not in Map — auto-register so it's visible and killable.
+      // Wrap in try-catch: name pool exhaustion or broadcast failure must
+      // not break log ingestion (#1870 review feedback).
+      try {
+        const displayName = namePool.assign(payload.sessionId);
+        const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
+        const now = new Date().toISOString();
+        const info: SessionInfo = {
+          sessionId: payload.sessionId,
+          displayName,
+          color,
+          pid: 0, // unknown — no PID from log ingestion; kill uses reaper instead
+          startedAt: now,
+          lastHeartbeat: now,
+          status: 'active',
+          isLeader: false,
+          authenticated: false, // safe default — we can't verify auth from log payload
+          kind: 'mcp',
+        };
+        sessions.set(payload.sessionId, info);
+        logger.info('[IngestRoutes] Auto-registered orphaned session from log ingestion', {
+          displayName, sessionId: payload.sessionId,
+        });
+        broadcasts.sessionBroadcast?.(info);
+      } catch (err) {
+        logger.debug('[IngestRoutes] Failed to auto-register orphaned session', {
+          sessionId: payload.sessionId, error: (err as Error).message,
+        });
+      }
     }
 
     if (skipped > 0) {
@@ -305,6 +316,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
    * GET /api/sessions — List all tracked sessions.
    */
   router.get('/api/sessions', async (_req: Request, res: Response) => {
+    // Server-side active filter — the frontend also filters, but ended sessions
+    // should never leave the API to prevent stale UI (#1870).
     const localSessions = Array.from(sessions.values()).filter(s => s.status === 'active');
     const currentPort = env.DOLLHOUSE_WEB_CONSOLE_PORT ?? 41715;
 
@@ -314,7 +327,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     if (currentPort !== 3939) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 2000);
+        const timeout = setTimeout(() => controller.abort(), LEGACY_FETCH_TIMEOUT_MS);
         const legacyRes = await fetch('http://127.0.0.1:3939/api/sessions', {
           signal: controller.signal,
         });
@@ -353,7 +366,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       if (currentPort !== 3939) {
         try {
           const controller = new AbortController();
-          const timeout = setTimeout(() => controller.abort(), 3000);
+          const timeout = setTimeout(() => controller.abort(), LEGACY_FETCH_TIMEOUT_MS);
           const proxyRes = await fetch(`http://127.0.0.1:3939/api/sessions/${encodeURIComponent(sessionId)}/kill`, {
             method: 'POST',
             signal: controller.signal,
@@ -374,7 +387,14 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     if (!session.pid) {
-      res.status(400).json({ error: 'No PID for session', sessionId, displayName: session.displayName });
+      // Auto-registered orphan with unknown PID — just mark as ended (#1870).
+      // The reaper will clean it up if it stops sending data.
+      session.status = 'ended';
+      namePool.release(sessionId);
+      logger.info('[IngestRoutes] Dismissed orphaned session (no PID)', {
+        displayName: session.displayName, sessionId,
+      });
+      res.json({ ok: true, dismissed: session.displayName, reason: 'no-pid' });
       return;
     }
 
