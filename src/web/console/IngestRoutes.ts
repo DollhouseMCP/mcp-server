@@ -297,6 +297,16 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     switch (payload.event) {
       case 'started': {
+        // Respect suppression — a dismissed session's client may restart (#1870)
+        const suppressExpiry = suppressedSessions.get(payload.sessionId);
+        if (suppressExpiry && Date.now() < suppressExpiry) {
+          logger.debug('[IngestRoutes] Suppressed session tried to re-register via started event', {
+            sessionId: payload.sessionId,
+          });
+          break;
+        }
+        suppressedSessions.delete(payload.sessionId);
+
         const displayName = namePool.assign(payload.sessionId);
         const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
         // Follower sessions that reach the ingest endpoint are authenticated
@@ -468,6 +478,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length - 1,
         });
         broadcasts.sessionBroadcast?.(session);
+      }
+    }
+    // Clean up ended sessions older than 5 minutes to prevent memory accumulation (#1870)
+    for (const [id, session] of sessions) {
+      if (session.status === 'ended') {
+        const endedAge = now - new Date(session.lastHeartbeat).getTime();
+        if (endedAge > SUPPRESS_TTL_MS) {
+          sessions.delete(id);
+        }
       }
     }
     // Clean up expired suppressions to prevent memory leaks (#1870)

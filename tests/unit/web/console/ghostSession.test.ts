@@ -335,6 +335,21 @@ describe('Ghost session cleanup (#1870)', () => {
 
       expect(ir.getSessions()).toHaveLength(0);
     });
+
+    it('suppressed session stays gone from started event', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({ sessionId: 'sup-4', entries: [makeEntry()] });
+      await request(app).post('/api/sessions/sup-4/kill');
+
+      // Client crashes and restarts — sends 'started' event
+      await request(app)
+        .post('/api/ingest/session')
+        .send({ sessionId: 'sup-4', event: 'started', pid: 88888, startedAt: new Date().toISOString() });
+
+      expect(ir.getSessions()).toHaveLength(0);
+    });
   });
 
   // ── Metrics auto-registration ──────────────────────────────────────────
