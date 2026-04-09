@@ -709,7 +709,7 @@
     }
   };
 
-  /** Update notice, badge, and button for a single platform based on detection match */
+  /** Update notice, badge, button, AND current config display for a single platform */
   const updatePlatformDetectionState = (platformId) => {
     const detected = detectedConfigs[platformId];
     if (!detected?.installed) return;
@@ -721,6 +721,12 @@
     updateDetectionNotice(panel?.querySelector('.setup-installed-notice'), matches);
     updateDetectionBadge(tabBtn?.querySelector('.setup-tab-badge'), matches);
     updateDetectionButton(panel?.querySelector('.setup-install-btn'), matches);
+
+    // Refresh the "Current config" code block with the latest detected config
+    if (detected.currentConfig && panel) {
+      const codeEl = panel.querySelector('.setup-installed-notice pre code');
+      if (codeEl) codeEl.textContent = JSON.stringify(detected.currentConfig, null, 2);
+    }
   };
 
   const updateDetectionNotice = (notice, matches) => {
