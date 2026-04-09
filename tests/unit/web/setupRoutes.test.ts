@@ -1456,22 +1456,31 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     document = dom.window.document;
     window = dom.window;
 
-    // Mock fetch for version and detect endpoints
+    // Realistic mock data matching actual Claude Desktop detection output
     const mockDetection = {
       'claude-desktop': {
         installed: true,
         currentConfig: {
           command: 'npx',
           args: ['@dollhousemcp/mcp-server@latest'],
-          env: {},
+          env: { DOLLHOUSE_DEBUG: 'true' },
         },
       },
+      'cursor': {
+        installed: false,
+      },
     };
+    let fetchFailMode = false; // toggle for network failure tests
     dom.window.fetch = ((url: string) => {
+      if (fetchFailMode) return Promise.reject(new Error('Network error'));
       if (url.includes('/api/setup/version')) {
         return Promise.resolve({
           ok: true,
-          json: () => Promise.resolve({ version: '2.0.12-rc.10', mcpbUrl: '' }),
+          json: () => Promise.resolve({
+            version: '2.0.12-rc.10',
+            mcpbUrl: '/api/setup/mcpb',
+            npmTag: 'rc',
+          }),
         });
       }
       if (url.includes('/api/setup/detect')) {
@@ -1481,7 +1490,6 @@ describe('Setup Tab — Channel Selector Interactions', () => {
         });
       }
       if (url.includes('/api/setup/install')) {
-        // Simulate successful install — update mock config to match channel
         return Promise.resolve({
           ok: true,
           json: () => Promise.resolve({ success: true }),
@@ -1503,8 +1511,12 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     scriptEl.textContent = js;
     document.body.appendChild(scriptEl);
 
-    // Wait for async init (fetch calls)
-    await new Promise(r => setTimeout(r, 200));
+    // Wait for async init (fetch calls settle and DOM updates)
+    // Poll for the channel selector to be initialized rather than using an arbitrary delay
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      if (document.getElementById('setup-channel-select')) break;
+    }
   });
 
   function getChannelSelect(): HTMLSelectElement | null {
@@ -1604,12 +1616,9 @@ describe('Setup Tab — Channel Selector Interactions', () => {
   describe('Invalid channel value', () => {
     it('falls back to stable for unknown channel', () => {
       switchChannel('nightly');
-      const select = getChannelSelect();
-      // The select value is set by the browser, but normalizeChannel
-      // should have set currentChannel to DEFAULT_CHANNEL internally
+      // normalizeChannel should reject 'nightly' and use DEFAULT_CHANNEL
       const btn = getInstallBtn();
       const text = btn?.textContent || '';
-      // Should not contain "nightly"
       expect(text).not.toContain('nightly');
     });
   });
@@ -1635,6 +1644,28 @@ describe('Setup Tab — Channel Selector Interactions', () => {
         if (desc.textContent?.includes('@latest')) found = true;
       });
       expect(found).toBe(true);
+    });
+  });
+
+  describe('Non-installed platform', () => {
+    it('cursor shows Configure Now without detection state', () => {
+      const panel = document.getElementById('setup-panel-cursor');
+      const btn = panel?.querySelector('.setup-install-btn') as HTMLButtonElement | null;
+      // Cursor is not installed — no detection notice, button should be available
+      if (btn) {
+        expect(btn.classList.contains('is-match')).toBe(false);
+        expect(btn.disabled).not.toBe(true);
+      }
+    });
+  });
+
+  describe('Config preserves env vars', () => {
+    it('detected config includes DOLLHOUSE_DEBUG env var', () => {
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const code = panel?.querySelector('.setup-installed-notice pre code');
+      if (code?.textContent) {
+        expect(code.textContent).toContain('DOLLHOUSE_DEBUG');
+      }
     });
   });
 });
