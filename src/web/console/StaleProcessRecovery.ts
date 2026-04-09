@@ -11,6 +11,17 @@
 
 // Use lazy import for logger to avoid pulling in the full env.ts/config chain
 // at module load time. This keeps the module independently testable.
+/** Timeout for lsof/fuser/ps system calls (ms) */
+const COMMAND_TIMEOUT_MS = 1000;
+/** Polling interval when waiting for SIGTERM to take effect (ms) */
+const SIGTERM_POLL_MS = 300;
+/** Number of polls before escalating to SIGKILL */
+const KILL_POLL_COUNT = 10;
+/** Wait after SIGKILL before returning (ms) */
+const SIGKILL_WAIT_MS = 500;
+/** Wait between lock file reads for TOCTOU mitigation (ms) */
+const LOCK_RECHECK_DELAY_MS = 500;
+
 let _logger: typeof import('../../utils/logger.js').logger | null = null;
 async function getLogger() {
   if (!_logger) {
@@ -44,7 +55,7 @@ export async function findPidOnPort(port: number): Promise<number | null> {
     { bin: 'fuser', args: [`${port}/tcp`] },
   ]) {
     try {
-      const { stdout, stderr } = await execFileAsync(cmd.bin, cmd.args, { timeout: 1000 });
+      const { stdout, stderr } = await execFileAsync(cmd.bin, cmd.args, { timeout: COMMAND_TIMEOUT_MS });
       // fuser outputs to stderr on some systems
       const output = (stdout || stderr || '').trim();
       const pids = output.split(/\s+/).map(Number).filter(n => !Number.isNaN(n) && n > 0);
@@ -75,7 +86,7 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
   // 2. Command line must match a DollhouseMCP binary path (prevents killing other services)
   // 3. If both fail or ps can't run, we refuse — safe default is to not kill
   try {
-    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: 1000 });
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'user=,command='], { timeout: COMMAND_TIMEOUT_MS });
 
     // Check 1: User ownership — only kill our own processes
     const currentUser = (await import('node:os')).userInfo().username;
@@ -109,13 +120,13 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
   try {
     process.kill(pid, 'SIGTERM');
     logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`);
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 300));
+    for (let i = 0; i < KILL_POLL_COUNT; i++) {
+      await new Promise(r => setTimeout(r, SIGTERM_POLL_MS));
       try { process.kill(pid, 0); } catch { return true; }
     }
     process.kill(pid, 'SIGKILL');
     logger.warn(`[WebUI] Sent SIGKILL to stale process ${pid} on port ${port}`);
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, SIGKILL_WAIT_MS));
     return true;
   } catch {
     return true; // process already dead
@@ -133,21 +144,29 @@ export async function recoverStalePort(port: number): Promise<boolean> {
   const stalePid = await findPidOnPort(port);
   if (!stalePid) return false;
 
-  try {
-    const { readLeaderLock } = await import('./LeaderElection.js');
-    const lock = await readLeaderLock();
-    if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
-      logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
-      return false;
+  // TOCTOU mitigation: a new process may have just bound the port but not yet
+  // written its lock file. Read the lock, pause, re-read. If the second read
+  // now matches the port holder, it's a fresh leader — don't kill.
+  const { readLeaderLock } = await import('./LeaderElection.js');
+  for (let check = 0; check < 2; check++) {
+    try {
+      const lock = await readLeaderLock();
+      if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
+        await logger.warn(`[WebUI] Port ${port} held by legitimate leader (pid ${stalePid}) — not killing`);
+        return false;
+      }
+    } catch {
+      // Can't read lock file — continue to next check or kill
     }
-  } catch {
-    // Can't read lock file — treat port holder as squatter
+    if (check === 0) {
+      await new Promise(r => setTimeout(r, LOCK_RECHECK_DELAY_MS));
+    }
   }
 
   const killed = await killStaleProcess(stalePid, port);
   if (killed) {
     logger.info(`[WebUI] Stale process ${stalePid} removed from port ${port}`);
-    await new Promise(r => setTimeout(r, 500));
+    await new Promise(r => setTimeout(r, SIGKILL_WAIT_MS)); // brief pause for port release
   }
   return killed;
 }
