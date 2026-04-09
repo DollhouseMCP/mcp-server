@@ -3,7 +3,7 @@ name: Build Artifacts
 
 on:
   push:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop]
   pull_request:
     branches: [main, develop, codex/hosted-http-integration]
   workflow_dispatch:

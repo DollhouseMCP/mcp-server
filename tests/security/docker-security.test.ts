@@ -186,8 +186,10 @@ suite('Docker Security Hardening', () => {
       composeContent = fs.readFileSync(dockerComposePath, 'utf-8');
     });
     
-    it('should not expose any ports', () => {
-      expect(dockerfileContent).not.toMatch(/EXPOSE\s+\d+/);
+    it('should only advertise the hosted compatibility port without publishing it by default', () => {
+      const exposedPorts = dockerfileContent.match(/EXPOSE\s+\d+/g) ?? [];
+
+      expect(exposedPorts).toEqual(['EXPOSE 3000']);
       expect(composeContent).not.toContain('ports:');
     });
     
