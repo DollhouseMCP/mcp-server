@@ -201,7 +201,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       // Normalize goal input before validation - LLMs may pass string or object
       // Strip 'content' from metadata to prevent it from overwriting the positional
       // content param (which is the agent's instructions text) in the validation call.
-      const { content: _referenceContent, ...metadataWithoutContent } = (metadata || {}) as Record<string, unknown>;
+      const { content: referenceContent, ...metadataWithoutContent } = (metadata || {}) as Record<string, unknown>;
       const normalizedMetadata: Partial<AgentMetadataV2> = { ...metadataWithoutContent } as Partial<AgentMetadataV2>;
       if ((metadata as Partial<AgentMetadataV2>)?.goal !== undefined) {
         normalizedMetadata.goal = this.normalizeGoalInput(
@@ -209,14 +209,23 @@ export class AgentManager extends BaseElementManager<Agent> {
         );
       }
 
-      // Use specialized validator for input validation
-      // Include metadata to validate V2 fields (goal, activates, tools, systemPrompt, autonomy)
-      const validationResult = await this.validator.validateCreate({
+      // Use specialized validator for input validation.
+      // Agents support dual-field creation: behavioral instructions and optional
+      // reference content. Either field may carry the primary text on create.
+      const validationInput: Record<string, unknown> = {
         name,
         description,
-        content,
         ...normalizedMetadata
-      });
+      };
+      const primaryText = typeof content === 'string' && content.trim().length > 0
+        ? content
+        : (typeof referenceContent === 'string' && referenceContent.trim().length > 0
+          ? referenceContent
+          : undefined);
+      if (primaryText !== undefined) {
+        validationInput.content = primaryText;
+      }
+      const validationResult = await this.validator.validateCreate(validationInput);
 
       if (!validationResult.isValid) {
         return {
@@ -266,7 +275,6 @@ export class AgentManager extends BaseElementManager<Agent> {
       agent.extensions.instructions = sanitizedInstructions;
 
       // Set reference content if provided (v2.0 dual-field architecture)
-      const referenceContent = (metadata as { content?: string } | undefined)?.content;
       if (referenceContent) {
         const contentValidationResult = ContentValidator.validateAndSanitize(
           String(referenceContent),
