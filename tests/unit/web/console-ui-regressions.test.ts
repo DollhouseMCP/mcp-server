@@ -19,7 +19,8 @@ let metricsSource = '';
 type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
 
 const DEFAULT_WAIT_MS = 25;
-const SESSION_FILTER_INJECTION_WAIT_MS = 650;
+const TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS = 10;
+const SESSION_FILTER_INJECTION_WAIT_MS = 40;
 
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
@@ -212,6 +213,10 @@ describe('Web console cleanup regressions', () => {
       }),
     });
     win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
 
     win.eval(sessionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));

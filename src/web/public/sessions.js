@@ -14,9 +14,15 @@
 (function() {
   'use strict';
 
-  var SESSION_POLL_INTERVAL = 5000;
-  var SESSION_FILTER_INJECTION_RETRY_INTERVAL = 500;
-  var SESSION_FILTER_INJECTION_MAX_RETRIES = 20;
+  function getConfiguredNumber(key, fallback) {
+    var config = globalThis.DollhouseConsoleConfig;
+    var value = config && Number(config[key]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  var SESSION_POLL_INTERVAL = getConfiguredNumber('sessionPollIntervalMs', 5000);
+  var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
+  var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
   var sessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
