@@ -596,9 +596,9 @@ function buildArgs(
       }
 
       const isTemplate = resolvedType === ElementType.TEMPLATE || resolvedType === 'template';
-      if (isTemplate && params.variables !== undefined) {
+      if (isTemplate && Array.isArray(params.variables)) {
         const currentMetadata = result.metadata as Record<string, unknown> | undefined;
-        if (!currentMetadata || currentMetadata.variables === undefined) {
+        if (currentMetadata?.variables === undefined) {
           result.metadata = { ...currentMetadata, variables: params.variables };
         }
       }

@@ -448,6 +448,34 @@ describe('SchemaDispatcher', () => {
       );
     });
 
+    it('should ignore non-array top-level template variables on create_element', async () => {
+      await SchemaDispatcher.dispatch(
+        'create_element',
+        {
+          element_name: 'RenderTemplate',
+          description: 'A renderable template',
+          content: 'Hello {{name}}',
+          variables: 'name',
+        },
+        registryWithElementCRUD,
+        { operation: 'create_element', elementType: 'template', params: {} }
+      );
+
+      expect(mockElementCRUD.createElement).toHaveBeenCalledWith(
+        expect.objectContaining({
+          elementName: 'RenderTemplate',
+          elementType: 'template',
+        })
+      );
+      expect(mockElementCRUD.createElement).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            variables: 'name',
+          }),
+        })
+      );
+    });
+
     it('should throw if type cannot be resolved from any source', async () => {
       await expect(
         SchemaDispatcher.dispatch(
