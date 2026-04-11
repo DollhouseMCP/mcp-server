@@ -9,15 +9,26 @@
  *   5. Hardcodes the resolved NVM_DIR so it works without shell profile
  *   6. Handles non-standard NVM_DIR locations (Homebrew NVM etc.)
  *
+ * Environment probing (beforeAll):
+ *   - bashAvailable  — bash is in PATH; skips all bash-execution tests if false
+ *   - binBashExists  — /bin/bash exists; skips the sh-compat test if false
+ *                      (sh honours #!/bin/bash shebang only when that path resolves)
+ *   - tmpExec        — scripts in tmpdir() can be exec'd (no noexec mount);
+ *                      skips execution tests if false
+ *
+ * Tests that only read or write files (CRLF check, whitespace, NVM_DIR
+ * detection, config patching) run unconditionally on non-Windows.
+ *
  * All tests are skipped on Windows (bash not available; NVM mitigation
  * is macOS/Linux only by design).
  *
  * See: https://github.com/DollhouseMCP/mcp-server/issues/1902
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from '@jest/globals';
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
+import { access, mkdtemp, rm, mkdir, writeFile, readFile, chmod } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -31,6 +42,53 @@ import {
 const execFileAsync = promisify(execFile);
 const isWindows = process.platform === 'win32';
 
+// ── Environment capability flags ─────────────────────────────────────────────
+// Probed once in beforeAll. Tests guard on these instead of crashing.
+
+let bashAvailable = false;   // bash is in PATH
+let binBashExists = false;   // /bin/bash exists at that exact path (shebang target)
+let tmpExec = false;         // scripts in os.tmpdir() can be execed (no noexec mount)
+
+beforeAll(async () => {
+  if (isWindows) return;
+
+  // 1. Is bash in PATH?
+  try {
+    await execFileAsync('bash', ['--version'], { timeout: 5_000 });
+    bashAvailable = true;
+  } catch {
+    return; // no bash — all bash-dependent tests will be skipped gracefully
+  }
+
+  // 2. Does /bin/bash exist and is executable?
+  //    The sh compat test relies on the shebang #!/bin/bash resolving to this path.
+  try {
+    await access('/bin/bash', fsConstants.X_OK);
+    binBashExists = true;
+  } catch {
+    // bash is in PATH but not at /bin/bash (e.g. /usr/local/bin/bash on some Linuxes)
+  }
+
+  // 3. Can scripts be exec'd from the OS temp directory?
+  //    Fails on Docker with --tmpfs /tmp:noexec. The wrapper uses `exec npx "$@"`
+  //    where npx lives in a temp subdirectory; if noexec is set that exec fails.
+  const probeDir = await mkdtemp(join(tmpdir(), 'dollhouse-exec-probe-'));
+  try {
+    const probe = join(probeDir, 'probe.sh');
+    await writeFile(probe, '#!/bin/bash\ntrue\n', 'utf-8');
+    await chmod(probe, 0o755);
+    // Call bash explicitly so we only test the exec of the probe, not the shebang
+    await execFileAsync('bash', [probe], { timeout: 5_000 });
+    tmpExec = true;
+  } catch {
+    // noexec or other execution restriction
+  } finally {
+    await rm(probeDir, { recursive: true, force: true });
+  }
+});
+
+// ── Shared temp directory setup ───────────────────────────────────────────────
+
 let tempDir: string;
 
 beforeEach(async () => {
@@ -43,12 +101,13 @@ afterEach(async () => {
 });
 
 // ── Bash syntax validation ───────────────────────────────────────────────────
+// bash -n only reads/parses the script; it does NOT exec it.
+// These tests need bash available but do NOT need tmpExec.
 
 describe('Generated script — bash syntax', () => {
   it('passes bash -n (no syntax errors)', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable) return;
     const wrapperPath = await ensureNvmLauncher(tempDir);
-    // bash -n parses the script without executing it
     await expect(execFileAsync('bash', ['-n', wrapperPath])).resolves.not.toThrow();
   });
 
@@ -71,14 +130,14 @@ describe('Generated script — bash syntax', () => {
 });
 
 // ── Script execution — argument pass-through ─────────────────────────────────
+// These tests exec scripts from the temp directory.
+// Require: bash available AND tmpExec (no noexec mount on /tmp).
 
 describe('Generated script — execution', () => {
   it('passes arguments through to npx unchanged', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
-
-    // Create a fake npx that writes its args to a log file
     const fakeBinDir = join(tempDir, 'fake-bin');
     const fakeNpx = join(fakeBinDir, 'npx');
     const logFile = join(tempDir, 'npx-call.log');
@@ -87,12 +146,10 @@ describe('Generated script — execution', () => {
     await writeFile(fakeNpx, `#!/bin/bash\nprintf '%s' "$*" > "${logFile}"\n`, 'utf-8');
     await chmod(fakeNpx, 0o755);
 
-    // Run wrapper with HOME pointing at tempDir (no .nvm there) so NVM block
-    // is cleanly skipped; PATH prepended with fakeBinDir so our fake npx wins.
     const env = {
       ...process.env,
       HOME: tempDir,
-      NVM_DIR: join(tempDir, '.nvm'),  // point at empty dir — no nvm.sh
+      NVM_DIR: join(tempDir, '.nvm'),
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
 
@@ -103,7 +160,7 @@ describe('Generated script — execution', () => {
   });
 
   it('passes multiple arguments through unchanged', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
     const fakeBinDir = join(tempDir, 'fake-bin2');
@@ -129,7 +186,7 @@ describe('Generated script — execution', () => {
   });
 
   it('skips NVM block when ~/.nvm/nvm.sh is absent (safe no-op)', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
     const fakeBinDir = join(tempDir, 'fake-bin3');
@@ -140,11 +197,10 @@ describe('Generated script — execution', () => {
     await writeFile(fakeNpx, `#!/bin/bash\necho "ok" > "${logFile}"\n`, 'utf-8');
     await chmod(fakeNpx, 0o755);
 
-    // HOME has no .nvm → the `if [ -s "$NVM_DIR/nvm.sh" ]` guard fires
     const env = {
       ...process.env,
-      HOME: tempDir,  // no .nvm here
-      NVM_DIR: join(tempDir, '.nvm'),  // explicitly point at empty dir
+      HOME: tempDir,
+      NVM_DIR: join(tempDir, '.nvm'),  // no nvm.sh here
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
 
@@ -155,9 +211,8 @@ describe('Generated script — execution', () => {
   });
 
   it('skips NVM block when a hardcoded non-existent NVM path is used', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
-    // Generate a wrapper with a hardcoded path that does not exist on disk
     const nonExistentNvmDir = join(tempDir, 'no-such-nvm');
     const wrapperPath = await ensureNvmLauncher(tempDir, nonExistentNvmDir);
     const content = await readFile(wrapperPath, 'utf-8');
@@ -177,7 +232,6 @@ describe('Generated script — execution', () => {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
 
-    // Should not fail — the [ -s ] guard catches the missing file
     await execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 });
     const logged = await readFile(logFile, 'utf-8');
     expect(logged.trim()).toBe('reached');
@@ -185,18 +239,18 @@ describe('Generated script — execution', () => {
 });
 
 // ── Non-standard NVM_DIR (Homebrew-style) ────────────────────────────────────
+// Detection and script-content tests: only file I/O + env vars, no exec needed.
+// The execution sub-test (wrapper skips sourcing) still needs tmpExec.
 
 describe('Non-standard NVM_DIR', () => {
   it('isNvmPresent detects NVM when NVM_DIR env var points at a custom location', async () => {
     if (isWindows) return;
 
-    // Simulate a Homebrew NVM install: nvm.sh is not at ~/.nvm
     const customNvmDir = join(tempDir, 'homebrew-nvm');
     await mkdir(customNvmDir, { recursive: true });
     await writeFile(join(customNvmDir, 'nvm.sh'), '# nvm');
 
     process.env.NVM_DIR = customNvmDir;
-    // tempDir itself has no .nvm — detection must come from env var
     const result = await isNvmPresent(tempDir);
     expect(result).toBe(true);
   });
@@ -209,15 +263,12 @@ describe('Non-standard NVM_DIR', () => {
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
     const content = await readFile(wrapperPath, 'utf-8');
-
-    // The hardcoded path must be the custom dir, not $HOME/.nvm
     expect(content).toContain(`NVM_DIR="${customNvmDir}"`);
   });
 
   it('wrapper with custom NVM_DIR skips sourcing when the custom dir has no nvm.sh', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
-    // Custom dir exists but has no nvm.sh
     const customNvmDir = join(tempDir, 'empty-nvm');
     await mkdir(customNvmDir, { recursive: true });
 
@@ -283,8 +334,10 @@ describe('End-to-end NVM mitigation sequence', () => {
     expect(patched.globalShortcut).toBe('Cmd+Shift+.');
     expect(patched.mcpServers.someothertool).toEqual({ command: 'node', args: ['other.js'] });
 
-    // 7. Verify wrapper script syntax
-    await expect(execFileAsync('bash', ['-n', wrapperPath])).resolves.not.toThrow();
+    // 7. Bash syntax check — requires bash but NOT tmpExec (bash -n only parses)
+    if (bashAvailable) {
+      await expect(execFileAsync('bash', ['-n', wrapperPath])).resolves.not.toThrow();
+    }
   });
 
   it('full sequence is idempotent', async () => {
@@ -298,13 +351,11 @@ describe('End-to-end NVM mitigation sequence', () => {
       mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
     }, null, 2));
 
-    // Run twice
     for (let i = 0; i < 2; i++) {
       const wrapperPath = await ensureNvmLauncher(tempDir);
       await patchConfigForNvmLauncher('claude', wrapperPath, configPath);
     }
 
-    // Final config should still be valid
     const final = JSON.parse(await readFile(configPath, 'utf-8'));
     expect(final.mcpServers.dollhousemcp.command).toContain('dollhousemcp-nvm.sh');
     expect(final.mcpServers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@latest']);
@@ -313,11 +364,8 @@ describe('End-to-end NVM mitigation sequence', () => {
   it('no-ops cleanly when NVM is absent', async () => {
     if (isWindows) return;
 
-    // tempDir has no .nvm
     expect(await isNvmPresent(tempDir)).toBe(false);
-    // Should not throw or create any files
     await expect(ensureNvmLauncher(tempDir)).resolves.toBeDefined();
-    // (wrapper is created regardless; the guard is in applyNvmLauncherIfNeeded)
   });
 });
 
@@ -325,7 +373,7 @@ describe('End-to-end NVM mitigation sequence', () => {
 
 describe('Generated script — shell compatibility', () => {
   it('executes cleanly under bash', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !tmpExec) return;
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
     const fakeBinDir = join(tempDir, 'fake-bin-compat');
@@ -346,15 +394,17 @@ describe('Generated script — shell compatibility', () => {
   });
 
   it('executes cleanly under sh (POSIX compatibility)', async () => {
-    if (isWindows) return;
+    if (isWindows || !bashAvailable || !binBashExists || !tmpExec) return;
+    // binBashExists guard: sh honours #!/bin/bash by exec-ing /bin/bash directly.
+    // If bash lives elsewhere (e.g. /usr/local/bin/bash), that exec fails.
 
-    // Verify sh is available
     let shPath: string;
     try {
-      const { stdout } = await execFileAsync('which', ['sh']);
+      const { stdout } = await execFileAsync('which', ['sh'], { timeout: 5_000 });
       shPath = stdout.trim();
+      if (!shPath) return;
     } catch {
-      return; // sh not available, skip
+      return; // sh not available or 'which' not present
     }
 
     const wrapperPath = await ensureNvmLauncher(tempDir);
@@ -370,8 +420,6 @@ describe('Generated script — shell compatibility', () => {
       NVM_DIR: join(tempDir, '.nvm'),
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
-    // The shebang is #!/bin/bash so sh would invoke bash; we test bash explicitly
-    // but confirm the script's shebang is respected even when called via sh
     await expect(
       execFileAsync(shPath, [wrapperPath, 'dummy'], { env, timeout: 10_000 })
     ).resolves.not.toThrow();
