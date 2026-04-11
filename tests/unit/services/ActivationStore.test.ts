@@ -118,6 +118,46 @@ describe('ActivationStore', () => {
       expect(s.getSessionId()).toBe('default');
     });
 
+    describe('with explicit sessionId parameter', () => {
+      it('should use provided sessionId when valid', () => {
+        const s = new ActivationStore(mockFileOps, '/tmp/test', 'explicit-session');
+        expect(s.getSessionId()).toBe('explicit-session');
+      });
+
+      it('should fall back to default when provided sessionId has path traversal', () => {
+        const s = new ActivationStore(mockFileOps, '/tmp/test', '../evil-path');
+        expect(s.getSessionId()).toBe('default');
+      });
+
+      it('should fall back to default when provided sessionId starts with number', () => {
+        const s = new ActivationStore(mockFileOps, '/tmp/test', '123-bad');
+        expect(s.getSessionId()).toBe('default');
+      });
+
+      it('should fall back to resolveSessionId when provided sessionId is empty string', () => {
+        const s = new ActivationStore(mockFileOps, '/tmp/test', '');
+        // Empty string triggers resolveSessionId() fallback which generates random ID
+        expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+      });
+
+      it('should trim whitespace from provided sessionId', () => {
+        const s = new ActivationStore(mockFileOps, '/tmp/test', '  valid-session  ');
+        expect(s.getSessionId()).toBe('valid-session');
+      });
+
+      it('should still use resolveSessionId when sessionId param is undefined', () => {
+        process.env.DOLLHOUSE_SESSION_ID = 'from-env';
+        const s = new ActivationStore(mockFileOps, '/tmp/test', undefined);
+        expect(s.getSessionId()).toBe('from-env');
+      });
+
+      it('should prefer explicit sessionId over env var', () => {
+        process.env.DOLLHOUSE_SESSION_ID = 'from-env';
+        const s = new ActivationStore(mockFileOps, '/tmp/test', 'from-param');
+        expect(s.getSessionId()).toBe('from-param');
+      });
+    });
+
     it('should be enabled by default', () => {
       expect(store.isEnabled()).toBe(true);
     });

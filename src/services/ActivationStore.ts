@@ -107,6 +107,25 @@ function resolveSessionId(): string {
 }
 
 /**
+ * Validates a sessionId provided externally (e.g., from SessionContext via DI).
+ * Uses the same SESSION_ID_PATTERN as resolveSessionId() to ensure path safety.
+ */
+function validateExternalSessionId(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    logger.warn('[ActivationStore] Empty sessionId provided — falling back to resolveSessionId()');
+    return resolveSessionId();
+  }
+  if (!SESSION_ID_PATTERN.test(trimmed)) {
+    logger.warn(
+      `[ActivationStore] Invalid external sessionId '${trimmed}' — falling back to 'default'`
+    );
+    return 'default';
+  }
+  return trimmed;
+}
+
+/**
  * Checks whether activation persistence is enabled.
  */
 function isPersistenceEnabled(): boolean {
@@ -155,9 +174,11 @@ export class ActivationStore {
 
   private state: PersistedActivationState;
 
-  constructor(fileOps: FileOperationsService, stateDir?: string) {
+  constructor(fileOps: FileOperationsService, stateDir?: string, sessionId?: string) {
     this.fileOps = fileOps;
-    this.sessionId = resolveSessionId();
+    this.sessionId = sessionId !== undefined
+      ? validateExternalSessionId(sessionId)
+      : resolveSessionId();
     this.enabled = isPersistenceEnabled();
     this.stateDir = stateDir ?? path.join(os.homedir(), '.dollhouse', 'state');
     this.persistPath = path.join(this.stateDir, `activations-${this.sessionId}.json`);

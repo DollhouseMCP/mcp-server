@@ -576,10 +576,17 @@ export class DollhouseContainer {
     this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService')
     ));
+    // Shared stdio session — single source of truth for session identity
+    this.register('StdioSession', () => createStdioSession());
     // Issue #598: ActivationStore for per-session activation persistence
-    this.register('ActivationStore', () => new ActivationStore(
-      this.resolve('FileOperationsService')
-    ));
+    this.register('ActivationStore', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new ActivationStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        session.sessionId
+      );
+    });
     // Issue #142: VerificationStore for danger zone challenge codes (server-side)
     this.register('VerificationStore', () => new VerificationStore());
     // Issue #522: Non-blocking OS dialog notifier for verification codes
@@ -716,7 +723,7 @@ export class DollhouseContainer {
 
     // SERVER
     this.register('ServerSetup', () => {
-      const stdioSession = createStdioSession();
+      const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       const sessionResolver: SessionResolver = () => stdioSession;
       return new ServerSetup(
         this.resolve<ContextTracker>('ContextTracker'),
