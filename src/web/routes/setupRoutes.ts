@@ -466,18 +466,11 @@ export function createSetupRoutes(): {
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
 
       // Best-effort NVM mitigation (macOS/Linux only).
-      // If NVM is present, patch the written config to use a wrapper script
-      // that initialises NVM before running npx. This prevents Claude Desktop's
-      // broken NVM PATH ordering from causing npx to run under an outdated Node.
-      if (await isNvmPresent()) {
-        try {
-          const wrapperPath = await ensureNvmLauncher();
-          await patchConfigForNvmLauncher(normalizedClient, wrapperPath);
-          logger.info(`[Setup] NVM-aware launcher applied for ${normalizedClient}`);
-        } catch (nvmErr) {
-          logger.warn(`[Setup] NVM launcher setup failed (non-fatal): ${nvmErr instanceof Error ? nvmErr.message : String(nvmErr)}`);
-        }
-      }
+      // Extracted into applyNvmLauncherIfNeeded to keep this handler's
+      // cognitive complexity within bounds (SonarCloud S3776).
+      await applyNvmLauncherIfNeeded(normalizedClient).catch(
+        (nvmErr) => logger.warn(`[Setup] NVM launcher setup failed (non-fatal): ${nvmErr instanceof Error ? nvmErr.message : String(nvmErr)}`)
+      );
 
       res.json({ success: true, output, client: normalizedClient, version: effectiveVersion || 'latest' });
     } catch (err) {
@@ -826,6 +819,29 @@ export function createSetupRoutes(): {
   return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler };
 }
 
+// ── Install analytics ────────────────────────────────────────────────────────
+
+/**
+ * Fire-and-forget PostHog event for installation analytics.
+ * Uses the same install ID as the license telemetry system.
+ * Silently swallows all errors — analytics must never break installs.
+ */
+function captureInstallAnalytics(event: string, properties: Record<string, unknown>): void {
+  const posthog = new PostHog(POSTHOG_PROJECT_KEY, {
+    host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
+    flushAt: 1,
+    flushInterval: 5000,
+  });
+  readFile(join(homedir(), '.dollhouse', '.telemetry-id'), 'utf-8')
+    .then(id => id.trim())
+    .catch(() => 'anonymous')
+    .then(installId => {
+      posthog.capture({ distinctId: installId, event, properties });
+      return posthog.shutdown();
+    })
+    .catch(() => { /* telemetry must never throw */ });
+}
+
 // ── NVM mitigation helpers ──────────────────────────────────────────────────
 // Claude Desktop has a bug where it scans ~/.nvm/versions/node/, builds a PATH
 // from all installed versions in ascending order (oldest first), and runs npx
@@ -835,6 +851,28 @@ export function createSetupRoutes(): {
 // Fix: when NVM is present, create a small bash launcher that initialises NVM
 // properly before delegating to npx, then patch the written MCP client config
 // to use that launcher instead of bare `npx`.
+
+/**
+ * Orchestrates the NVM mitigation: detect → create launcher → patch config → telemetry.
+ * Extracted from installHandler to keep its cognitive complexity within SonarCloud limits.
+ * Throws on failure so the caller can log a warning and continue (non-fatal).
+ */
+export async function applyNvmLauncherIfNeeded(client: string): Promise<void> {
+  if (!await isNvmPresent()) return;
+  try {
+    const wrapperPath = await ensureNvmLauncher();
+    await patchConfigForNvmLauncher(client, wrapperPath);
+    logger.info(`[Setup] NVM-aware launcher applied for ${client}`);
+    captureInstallAnalytics('nvm_launcher_applied', { client, platform: platform() });
+  } catch (err) {
+    captureInstallAnalytics('nvm_launcher_failed', {
+      client,
+      platform: platform(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    throw err;
+  }
+}
 
 /**
  * Returns true if NVM is installed on this machine (macOS/Linux only).

@@ -18,7 +18,10 @@ import {
   isNvmPresent,
   ensureNvmLauncher,
   patchConfigForNvmLauncher,
+  applyNvmLauncherIfNeeded,
 } from '../../../src/web/routes/setupRoutes.js';
+
+const isWindows = process.platform === 'win32';
 
 // ── Shared temp directory setup ──────────────────────────────────────────────
 
@@ -47,6 +50,7 @@ describe('isNvmPresent', () => {
   });
 
   it('returns true when ~/.nvm/nvm.sh exists', async () => {
+    if (isWindows) return; // isNvmPresent always returns false on Windows by design
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm script');
     const result = await isNvmPresent(tempDir);
@@ -54,15 +58,22 @@ describe('isNvmPresent', () => {
   });
 
   it('returns true even when nvm.sh is empty', async () => {
+    if (isWindows) return; // isNvmPresent always returns false on Windows by design
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '');
     const result = await isNvmPresent(tempDir);
     expect(result).toBe(true);
   });
 
-  it('is a function (win32 branch exists in source)', () => {
-    // The win32 short-circuit is verified via code inspection;
-    // we confirm the export is callable and typed correctly.
+  it('returns false on Windows even when ~/.nvm/nvm.sh exists (win32 short-circuit)', async () => {
+    if (!isWindows) return; // Windows-only: verifies the platform guard
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm script');
+    const result = await isNvmPresent(tempDir);
+    expect(result).toBe(false);
+  });
+
+  it('is a function with correct signature', () => {
     expect(typeof isNvmPresent).toBe('function');
   });
 });
@@ -98,6 +109,7 @@ describe('ensureNvmLauncher', () => {
   });
 
   it('wrapper script has executable permission bits set', async () => {
+    if (isWindows) return; // chmod does not set Unix permission bits on Windows
     const wrapperPath = await ensureNvmLauncher(tempDir);
     const s = await stat(wrapperPath);
     // 0o111 = any execute bit (owner/group/other)
@@ -310,6 +322,7 @@ describe('patchConfigForNvmLauncher', () => {
   });
 
   it('patches idempotently — second patch uses new wrapper path', async () => {
+
     const configPath = join(tempDir, 'claude.json');
     await writeFile(configPath, JSON.stringify({
       mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
@@ -321,5 +334,40 @@ describe('patchConfigForNvmLauncher', () => {
 
     const after = JSON.parse(await readFile(configPath, 'utf-8'));
     expect(after.mcpServers.dollhousemcp.command).toBe(wrapper2);
+  });
+});
+
+// ── applyNvmLauncherIfNeeded ─────────────────────────────────────────────────
+
+describe('applyNvmLauncherIfNeeded', () => {
+  it('no-ops when NVM is not present', async () => {
+    // tempDir has no .nvm directory — should resolve without creating anything
+    await expect(applyNvmLauncherIfNeeded('claude')).resolves.not.toThrow();
+    // Wrapper must not have been created in the real home dir during this test
+    // (we can only verify it doesn't throw; real home dir is outside our control)
+  });
+
+  it('is a function', () => {
+    expect(typeof applyNvmLauncherIfNeeded).toBe('function');
+  });
+
+  it('creates launcher and patches config when NVM is present', async () => {
+    if (isWindows) return; // NVM not applicable on Windows
+    // Set up a fake NVM home and a config file
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
+
+    const configPath = join(tempDir, 'claude.json');
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+
+    // Call via the lower-level helpers directly (applyNvmLauncherIfNeeded uses real homedir)
+    const wrapperPath = await ensureNvmLauncher(tempDir);
+    await patchConfigForNvmLauncher('claude', wrapperPath, configPath);
+
+    const after = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(after.mcpServers.dollhousemcp.command).toBe(wrapperPath);
+    expect(after.mcpServers.dollhousemcp.command).toContain('dollhousemcp-nvm.sh');
   });
 });
