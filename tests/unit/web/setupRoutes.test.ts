@@ -916,9 +916,19 @@ describe('Setup Tab — Regressions', () => {
     it('validates version format before using it (rejects malformed values)', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
       // Semver-like validation guard present
-      expect(appJs).toContain('/^\\d+\\.\\d+\\.\\d+/.test(');
+      expect(appJs).toContain(String.raw`/^\d+\.\d+\.\d+/.test(`);
       // Falls back to 'unknown' for invalid versions
       expect(appJs).toContain("'unknown'");
+    });
+
+    it('version check takes priority over saved-tab restoration', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // The version check block must appear before the savedTab block in source
+      const versionCheckIdx = appJs.indexOf("localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion");
+      const savedTabIdx = appJs.indexOf("localStorage.getItem(TAB_KEY)");
+      expect(versionCheckIdx).toBeGreaterThan(0);
+      expect(savedTabIdx).toBeGreaterThan(0);
+      expect(versionCheckIdx).toBeLessThan(savedTabIdx);
     });
 
     it('index.html has the dollhouse-server-version meta tag placeholder', () => {

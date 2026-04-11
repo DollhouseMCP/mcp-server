@@ -2116,13 +2116,17 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     }
 
     if (!applyHashTab()) {
-      const savedTab = localStorage.getItem(TAB_KEY);
-      if (savedTab) {
-        switchToTab(savedTab);
-        lazyInitTab(savedTab, tabInits);
-      } else if (localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion) {
+      // Version check takes priority over saved tab — upgraders must see Setup
+      // regardless of whether they have a saved tab from their previous session.
+      if (localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion) {
         localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
         switchToTab('setup');
+      } else {
+        const savedTab = localStorage.getItem(TAB_KEY);
+        if (savedTab) {
+          switchToTab(savedTab);
+          lazyInitTab(savedTab, tabInits);
+        }
       }
     }
 
