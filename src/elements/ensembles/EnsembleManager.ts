@@ -806,6 +806,11 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns Activation result with success status and message
    */
   async activateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+    // Evict stale cache before lookup so external file edits are picked up (#1895).
+    // findByName() hits the LRU cache first and never calls list(), so without this
+    // the scan cooldown prevents mtime-based eviction from running.
+    await this.scanAndEvict();
+
     // PERFORMANCE FIX: Use findByName() instead of list()
     const ensemble = await this.findByName(identifier);
 
@@ -850,6 +855,13 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns Deactivation result with success status and message
    */
   async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+    // No scanAndEvict() here — intentional. Deactivation only needs the ensemble's
+    // name (to remove from activeEnsembleNames) and calls deactivate() which sets
+    // a status flag. It does not consume the elements list, so stale cached element
+    // data has no effect on correctness. Compare with activateEnsemble(), which
+    // ingests the full element list to orchestrate sub-element loading and must
+    // therefore see the latest on-disk definition. (#1895)
+
     // PERFORMANCE FIX: Use findByName() instead of list()
     const ensemble = await this.findByName(identifier);
 

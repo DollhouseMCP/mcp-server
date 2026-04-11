@@ -777,6 +777,105 @@ elements: []
     });
   });
 
+  describe('Activation — stale cache regression (#1895)', () => {
+    it('should return fresh element count after external file edit', async () => {
+      const ensemblesDir = path.join(portfolioPath, 'ensembles');
+      const fileName = 'dqm-stack.md';
+      const filePath = path.join(ensemblesDir, fileName);
+
+      const originalContent = `---
+name: DQM Stack
+description: Test ensemble
+elements:
+  - element_name: skill1
+    element_type: skills
+    role: primary
+    priority: 80
+    activation: always
+  - element_name: skill2
+    element_type: skills
+    role: support
+    priority: 50
+    activation: always
+---
+`;
+      const updatedContent = `---
+name: DQM Stack
+description: Test ensemble
+elements:
+  - element_name: skill1
+    element_type: skills
+    role: primary
+    priority: 80
+    activation: always
+  - element_name: skill2
+    element_type: skills
+    role: support
+    priority: 50
+    activation: always
+  - element_name: new-skill
+    element_type: skills
+    role: support
+    priority: 30
+    activation: always
+---
+`;
+
+      // Write initial file and warm the cache
+      await fs.writeFile(filePath, originalContent, 'utf-8');
+      mockPortfolioManager.listElements.mockResolvedValue([fileName]);
+      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(originalContent);
+
+      // list() triggers a scan that stores the mtime and populates the LRU cache
+      const initial = await ensembleManager.list();
+      expect(initial[0].metadata.elements.length).toBe(2);
+
+      // Simulate external edit: overwrite file on disk (changing mtime) and update mock
+      await fs.writeFile(filePath, updatedContent, 'utf-8');
+      // Advance mtime explicitly to guarantee the scan sees a change
+      const futureTime = new Date(Date.now() + 5000);
+      await fs.utimes(filePath, futureTime, futureTime);
+      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(updatedContent);
+
+      // activateEnsemble must call scanAndEvict() so the LRU entry is flushed
+      const result = await ensembleManager.activateEnsemble('DQM Stack');
+
+      expect(result.success).toBe(true);
+      // Without the fix, this returns 2 (stale cache). With the fix, it returns 3.
+      expect(result.ensemble?.metadata.elements.length).toBe(3);
+    });
+
+    it('should not return stale data on repeated activate-deactivate-activate cycle', async () => {
+      const ensemblesDir = path.join(portfolioPath, 'ensembles');
+      const fileName = 'cycle-ensemble.md';
+      const filePath = path.join(ensemblesDir, fileName);
+
+      const v1 = `---\nname: Cycle Ensemble\nelements:\n  - element_name: a\n    element_type: skills\n    role: primary\n    priority: 80\n    activation: always\n---\n`;
+      const v2 = `---\nname: Cycle Ensemble\nelements:\n  - element_name: a\n    element_type: skills\n    role: primary\n    priority: 80\n    activation: always\n  - element_name: b\n    element_type: skills\n    role: support\n    priority: 50\n    activation: always\n---\n`;
+
+      await fs.writeFile(filePath, v1, 'utf-8');
+      mockPortfolioManager.listElements.mockResolvedValue([fileName]);
+      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(v1);
+      await ensembleManager.list();
+
+      // First activation: should get v1 (1 element)
+      const r1 = await ensembleManager.activateEnsemble('Cycle Ensemble');
+      expect(r1.ensemble?.metadata.elements.length).toBe(1);
+
+      await ensembleManager.deactivateEnsemble('Cycle Ensemble');
+
+      // External edit between cycles
+      await fs.writeFile(filePath, v2, 'utf-8');
+      const futureTime = new Date(Date.now() + 5000);
+      await fs.utimes(filePath, futureTime, futureTime);
+      (fileLockManager.atomicReadFile as jest.Mock).mockResolvedValue(v2);
+
+      // Second activation: must NOT serve stale 1-element cache
+      const r2 = await ensembleManager.activateEnsemble('Cycle Ensemble');
+      expect(r2.ensemble?.metadata.elements.length).toBe(2);
+    });
+  });
+
   describe('element quality — markdown body (#696)', () => {
     it('generated file contains a markdown body section', async () => {
       const ensemble = await ensembleManager.create({

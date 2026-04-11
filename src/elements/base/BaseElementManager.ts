@@ -1090,6 +1090,31 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Force a fresh disk scan and evict any modified/removed entries from the
+   * in-memory LRU cache. Call before findByName() when freshness is critical
+   * (e.g. on ensemble activation) to pick up external file changes that
+   * occurred since the last scan, even if the scan cooldown is still active.
+   *
+   * Unlike list(), this does not load all elements — it only evicts stale ones.
+   * Fixes #1895 (ensemble activation serving stale cached element list).
+   */
+  protected async scanAndEvict(): Promise<void> {
+    this.storageLayer.invalidate(); // bypass cooldown so the next scan hits disk
+    try {
+      const diff = await this.storageLayer.scan();
+      for (const relPath of [...diff.modified, ...diff.removed]) {
+        const absPath = path.join(this.elementDir, relPath);
+        const existingId = this.filePathToId.get(absPath);
+        if (existingId) {
+          this.elements.delete(existingId);
+          this.filePathToId.delete(absPath);
+          this.elementGenerations.delete(existingId);
+        }
+      }
+    } catch { /* non-fatal — cache may be slightly stale, but activation proceeds */ }
+  }
+
+  /**
    * Removes an element from both caches by file path
    * This is the preferred method for deletion to avoid stale cache entries
    * @param filePath - File path (relative or absolute)
