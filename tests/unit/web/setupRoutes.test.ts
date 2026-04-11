@@ -896,8 +896,8 @@ describe('Setup Tab — Regressions', () => {
 
     it('shows setup tab when stored version does not match current version', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
-      // Version comparison — not a simple truthy check
-      expect(appJs).toContain("localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion");
+      // Version comparison — positive branch restores tab, else branch shows setup
+      expect(appJs).toContain("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
       expect(appJs).toContain("switchToTab('setup')");
     });
 
@@ -924,7 +924,7 @@ describe('Setup Tab — Regressions', () => {
     it('version check takes priority over saved-tab restoration', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
       // The version check block must appear before the savedTab block in source
-      const versionCheckIdx = appJs.indexOf("localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion");
+      const versionCheckIdx = appJs.indexOf("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
       const savedTabIdx = appJs.indexOf("localStorage.getItem(TAB_KEY)");
       expect(versionCheckIdx).toBeGreaterThan(0);
       expect(savedTabIdx).toBeGreaterThan(0);

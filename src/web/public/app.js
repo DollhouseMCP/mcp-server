@@ -2118,15 +2118,15 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     if (!applyHashTab()) {
       // Version check takes priority over saved tab — upgraders must see Setup
       // regardless of whether they have a saved tab from their previous session.
-      if (localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion) {
-        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
-        switchToTab('setup');
-      } else {
+      if (localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion) {
         const savedTab = localStorage.getItem(TAB_KEY);
         if (savedTab) {
           switchToTab(savedTab);
           lazyInitTab(savedTab, tabInits);
         }
+      } else {
+        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
+        switchToTab('setup');
       }
     }
 
