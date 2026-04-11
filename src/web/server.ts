@@ -31,6 +31,7 @@ import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
 import type { ConsoleTokenStore } from './console/consoleToken.js';
 import { createAuthMiddleware } from './middleware/authMiddleware.js';
+import { PACKAGE_VERSION } from '../generated/version.js';
 
 /**
  * Public path prefixes that never require authentication (#1780).
@@ -48,6 +49,8 @@ const PUBLIC_PATH_PREFIXES = [
 
 /** Placeholder in index.html that is replaced with the current console token. */
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
+/** Placeholder in index.html that is replaced with the running server version. */
+const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -399,7 +402,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll("'", '&#39;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
-    cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escapedToken);
+    cachedIndexHtml = template
+      .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };

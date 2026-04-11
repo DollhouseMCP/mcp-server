@@ -12,6 +12,8 @@
        as an Authorization: Bearer header on fetch calls, or as a ?token= query
        param on EventSource connections. An empty value means auth is off. -->
   <meta name="dollhouse-console-token" content="{{CONSOLE_TOKEN}}">
+  <!-- Server version — injected at request time for version-aware UI behaviour (e.g. setup-seen per version). -->
+  <meta name="dollhouse-server-version" content="{{DOLLHOUSE_VERSION}}">
   <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="logs.css">
