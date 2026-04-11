@@ -176,9 +176,9 @@ export class ActivationStore {
 
   constructor(fileOps: FileOperationsService, stateDir?: string, sessionId?: string) {
     this.fileOps = fileOps;
-    this.sessionId = sessionId !== undefined
-      ? validateExternalSessionId(sessionId)
-      : resolveSessionId();
+    this.sessionId = sessionId === undefined
+      ? resolveSessionId()
+      : validateExternalSessionId(sessionId);
     this.enabled = isPersistenceEnabled();
     this.stateDir = stateDir ?? path.join(os.homedir(), '.dollhouse', 'state');
     this.persistPath = path.join(this.stateDir, `activations-${this.sessionId}.json`);

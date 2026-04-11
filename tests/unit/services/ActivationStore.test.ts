@@ -119,41 +119,43 @@ describe('ActivationStore', () => {
     });
 
     describe('with explicit sessionId parameter', () => {
+      const testStateDir = path.join('fake-home', '.dollhouse', 'test-state');
+
       it('should use provided sessionId when valid', () => {
-        const s = new ActivationStore(mockFileOps, '/tmp/test', 'explicit-session');
+        const s = new ActivationStore(mockFileOps, testStateDir, 'explicit-session');
         expect(s.getSessionId()).toBe('explicit-session');
       });
 
       it('should fall back to default when provided sessionId has path traversal', () => {
-        const s = new ActivationStore(mockFileOps, '/tmp/test', '../evil-path');
+        const s = new ActivationStore(mockFileOps, testStateDir, '../evil-path');
         expect(s.getSessionId()).toBe('default');
       });
 
       it('should fall back to default when provided sessionId starts with number', () => {
-        const s = new ActivationStore(mockFileOps, '/tmp/test', '123-bad');
+        const s = new ActivationStore(mockFileOps, testStateDir, '123-bad');
         expect(s.getSessionId()).toBe('default');
       });
 
       it('should fall back to resolveSessionId when provided sessionId is empty string', () => {
-        const s = new ActivationStore(mockFileOps, '/tmp/test', '');
+        const s = new ActivationStore(mockFileOps, testStateDir, '');
         // Empty string triggers resolveSessionId() fallback which generates random ID
         expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
       });
 
       it('should trim whitespace from provided sessionId', () => {
-        const s = new ActivationStore(mockFileOps, '/tmp/test', '  valid-session  ');
+        const s = new ActivationStore(mockFileOps, testStateDir, '  valid-session  ');
         expect(s.getSessionId()).toBe('valid-session');
       });
 
       it('should still use resolveSessionId when sessionId param is undefined', () => {
         process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, '/tmp/test', undefined);
+        const s = new ActivationStore(mockFileOps, testStateDir, undefined);
         expect(s.getSessionId()).toBe('from-env');
       });
 
       it('should prefer explicit sessionId over env var', () => {
         process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, '/tmp/test', 'from-param');
+        const s = new ActivationStore(mockFileOps, testStateDir, 'from-param');
         expect(s.getSessionId()).toBe('from-param');
       });
     });

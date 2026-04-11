@@ -25,7 +25,7 @@ export class ServerSetup {
   private static readonly DEFERRED_SETUP_TIMEOUT_MS = 10_000;
   private toolCache: LRUCache<Tool[]>;
   private contextTracker: ContextTracker;
-  private sessionResolver?: SessionResolver;
+  private readonly sessionResolver?: SessionResolver;
   private elementCrudHandler: ElementCRUDHandler | null = null;
   /** Issue #706 Phase 4: Promise that resolves when deferred setup completes. */
   private deferredSetupPromise: Promise<void> | null = null;

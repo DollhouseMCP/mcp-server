@@ -61,9 +61,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: Changed from single active persona to Set for multiple active
    */
   private activePersonas: Set<string> = new Set();
-  /** @deprecated Read identity from SessionContext via ContextTracker. Remove in Phase 3. */
+  // Phase 3: Replace with SessionContext as sole identity authority. Remove this field.
   private currentUser: string | null = null;
-  private contextTracker?: ContextTracker;
+  private readonly contextTracker?: ContextTracker;
   private indicatorConfig: IndicatorConfig;
   protected override portfolioManager: PortfolioManager;
   protected override fileLockManager: FileLockManager;

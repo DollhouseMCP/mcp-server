@@ -894,6 +894,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => 'REQ-12345'),
+        getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,
@@ -922,6 +923,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,
@@ -975,6 +977,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => 'REQ-LEVEL-ID'),
+        getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({
         ElementEventDispatcher: dispatcher,
@@ -1011,6 +1014,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({
         ElementEventDispatcher: dispatcher,
@@ -1040,7 +1044,7 @@ describe('LogHooks', () => {
 
   describe('getTriggerMetricsLogListener with contextTracker', () => {
     it('should include correlationId when contextTracker is provided', () => {
-      const mockContextTracker = { getCorrelationId: jest.fn(() => 'TRIGGER-REQ-1') };
+      const mockContextTracker = { getCorrelationId: jest.fn(() => 'TRIGGER-REQ-1'), getSessionContext: jest.fn(() => undefined) };
       const listener = getTriggerMetricsLogListener(mockLogManager, mockContextTracker);
 
       listener('info', 'Trigger fired', { triggerId: 'T-1' });
@@ -1064,7 +1068,7 @@ describe('LogHooks', () => {
 
   describe('getSecurityAuditorLogListener with contextTracker', () => {
     it('should include correlationId when contextTracker is provided', () => {
-      const mockContextTracker = { getCorrelationId: jest.fn(() => 'AUDIT-REQ-1') };
+      const mockContextTracker = { getCorrelationId: jest.fn(() => 'AUDIT-REQ-1'), getSessionContext: jest.fn(() => undefined) };
       const listener = getSecurityAuditorLogListener(mockLogManager, mockContextTracker);
 
       listener('warn', 'Violation', { rule: 'TEST' });
@@ -1202,6 +1206,7 @@ describe('LogHooks', () => {
       };
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => undefined),
         getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({

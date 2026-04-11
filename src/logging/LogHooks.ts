@@ -14,6 +14,7 @@
 
 import type { LogManager } from './LogManager.js';
 import type { LogLevel, UnifiedLogEntry } from './types.js';
+import type { SessionContext } from '../context/SessionContext.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { DefaultElementProvider } from '../portfolio/DefaultElementProvider.js';
 import { LRUCache } from '../cache/LRUCache.js';
@@ -35,12 +36,12 @@ const SEVERITY_TO_LEVEL: Record<string, LogLevel> = {
 };
 
 // ---------------------------------------------------------------------------
-// CorrelationId provider interface (subset of ContextTracker)
+// Request context provider interface (subset of ContextTracker)
 // ---------------------------------------------------------------------------
 
-type CorrelationIdProvider = {
+type RequestContextProvider = {
   getCorrelationId(): string | undefined;
-  getSessionContext?(): { userId: string; sessionId: string } | undefined;
+  getSessionContext(): SessionContext | undefined;
 };
 
 // ---------------------------------------------------------------------------
@@ -49,7 +50,7 @@ type CorrelationIdProvider = {
 
 export function getTriggerMetricsLogListener(
   logManager: LogManager,
-  contextTracker?: CorrelationIdProvider,
+  contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
   return (level, message, data) => {
     const entry: UnifiedLogEntry = {
@@ -61,8 +62,8 @@ export function getTriggerMetricsLogListener(
       message,
       data,
       correlationId: contextTracker?.getCorrelationId(),
-      userId: contextTracker?.getSessionContext?.()?.userId,
-      sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+      userId: contextTracker?.getSessionContext()?.userId,
+      sessionId: contextTracker?.getSessionContext()?.sessionId,
     };
     logManager.log(entry);
   };
@@ -74,7 +75,7 @@ export function getTriggerMetricsLogListener(
 
 export function getSecurityAuditorLogListener(
   logManager: LogManager,
-  contextTracker?: CorrelationIdProvider,
+  contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
   return (level, message, data) => {
     const entry: UnifiedLogEntry = {
@@ -86,8 +87,8 @@ export function getSecurityAuditorLogListener(
       message,
       data,
       correlationId: contextTracker?.getCorrelationId(),
-      userId: contextTracker?.getSessionContext?.()?.userId,
-      sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+      userId: contextTracker?.getSessionContext()?.userId,
+      sessionId: contextTracker?.getSessionContext()?.sessionId,
     };
     logManager.log(entry);
   };
@@ -111,9 +112,9 @@ export function wireLogHooks(
   const cleanups: (() => void)[] = [];
 
   // Resolve ContextTracker for correlationId injection
-  let contextTracker: CorrelationIdProvider | null = null;
+  let contextTracker: RequestContextProvider | null = null;
   try {
-    contextTracker = container.resolve<CorrelationIdProvider>('ContextTracker');
+    contextTracker = container.resolve<RequestContextProvider>('ContextTracker');
   } catch { /* ContextTracker not registered */ }
 
   // --- MCPLogger (application) -------------------------------------------
@@ -131,8 +132,8 @@ export function wireLogHooks(
         message: logEntry.message,
         data: logEntry.data != null ? logEntry.data : undefined,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -156,8 +157,8 @@ export function wireLogHooks(
           sourceComponent: logEntry.source,
         },
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -182,8 +183,8 @@ export function wireLogHooks(
         message: `Blocked ${telEntry.attackType}: ${telEntry.pattern}`,
         data: telEntry.metadata,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -205,8 +206,8 @@ export function wireLogHooks(
         message,
         data,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -256,8 +257,8 @@ export function wireLogHooks(
             ...(payload.filePath ? { filePath: payload.filePath } : {}),
           },
           correlationId: requestCorrelationId ?? payload.correlationId,
-          userId: contextTracker?.getSessionContext?.()?.userId,
-          sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+          userId: contextTracker?.getSessionContext()?.userId,
+          sessionId: contextTracker?.getSessionContext()?.sessionId,
         };
         logManager.log(entry);
       });
@@ -280,8 +281,8 @@ export function wireLogHooks(
         message,
         data,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -303,8 +304,8 @@ export function wireLogHooks(
         message,
         data,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -323,8 +324,8 @@ export function wireLogHooks(
         message,
         data,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -343,8 +344,8 @@ export function wireLogHooks(
         message,
         data,
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     });
@@ -367,8 +368,8 @@ export function wireLogHooks(
         message: `State change: ${event.type}`,
         data: { previousValue: event.previousValue, newValue: event.newValue },
         correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext?.()?.userId,
-        sessionId: contextTracker?.getSessionContext?.()?.sessionId,
+        userId: contextTracker?.getSessionContext()?.userId,
+        sessionId: contextTracker?.getSessionContext()?.sessionId,
       };
       logManager.log(entry);
     };
