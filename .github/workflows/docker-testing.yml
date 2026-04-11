@@ -8,7 +8,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions: {}
@@ -700,10 +700,14 @@ jobs:
 
       - name: Cleanup Docker Compose
         if: always()
+        shell: bash
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down --remove-orphans --timeout 1 || true
+          sleep 2
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f -s -v || true
+          docker container prune -f || true
+          docker network prune -f || true
 
       - name: Docker Compose testing complete
         shell: bash

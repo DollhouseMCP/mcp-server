@@ -140,6 +140,14 @@ docker run --env-file docker/test-environment.env dollhousemcp
 docker run -it dollhousemcp /bin/bash
 ```
 
+### Streamable HTTP Hosted Mode
+
+For the Phase 1 hosted shape, use the dedicated guide:
+
+- [`../docs/guides/streamable-http-hosted-mode.md`](../docs/guides/streamable-http-hosted-mode.md)
+
+That guide covers the `docker run` example, MCP endpoint, hosted transport env vars, and the health/readiness endpoints.
+
 ### Testing
 
 ```bash

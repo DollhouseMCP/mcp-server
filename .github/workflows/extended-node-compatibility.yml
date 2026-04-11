@@ -5,7 +5,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
   workflow_dispatch:

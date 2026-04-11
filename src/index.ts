@@ -8,6 +8,7 @@ import * as path from 'path';
 import { realpathSync } from 'node:fs';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
 import { DollhouseContainer } from "./di/Container.js";
@@ -32,6 +33,16 @@ import { FileOperationsService } from "./services/FileOperationsService.js";
 import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
+import {
+  createStreamableHttpRuntime,
+  getRequestedTransportName,
+  getStreamableHttpRuntimeOptions,
+  type AttachTransportOptions,
+  type DeferredSetupMode,
+  type RuntimeTransportName,
+  type StreamableHttpRuntimeHandle,
+  type StreamableHttpRuntimeOptions,
+} from './server/StreamableHttpServer.js';
 
 // Defensive error handling for npx/CLI execution
 process.on('uncaughtException', (error) => {
@@ -128,6 +139,10 @@ export class DollhouseMCPServer implements IToolHandler {
     this.personasDir = null;
     this.currentUser = process.env.DOLLHOUSE_USER || null;
     this.container = container;
+  }
+
+  private getTransportDisplayName(transportName: RuntimeTransportName): string {
+    return transportName === 'stdio' ? 'stdio' : 'Streamable HTTP';
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -646,9 +661,13 @@ export class DollhouseMCPServer implements IToolHandler {
     return this.enhancedIndexHandler!.getRelationshipStats();
   }
 
-  async run() {
-    logger.debug("DollhouseMCPServer.run() started");
-    logger.info("Starting DollhouseMCP server...");
+  private async initializeRuntime(transportName: RuntimeTransportName): Promise<void> {
+    logger.debug("DollhouseMCPServer.initializeRuntime() started");
+    logger.info(`Starting DollhouseMCP server for ${this.getTransportDisplayName(transportName)}...`);
+
+    if (this.isInitialized) {
+      return;
+    }
 
     const timer = this.container.resolve<StartupTimer>('StartupTimer');
 
@@ -676,12 +695,67 @@ export class DollhouseMCPServer implements IToolHandler {
         logger.warn("⚠️  Gatekeeper is DISABLED (DOLLHOUSE_GATEKEEPER_ENABLED=false). All permission checks are bypassed.");
       }
 
-      logger.info("DollhouseMCP server ready - waiting for MCP connection on stdio");
-      logger.debug("DollhouseMCPServer.run() completed initialization");
+      logger.info(`DollhouseMCP server ready - waiting for MCP connection on ${this.getTransportDisplayName(transportName)}`);
+      logger.debug("DollhouseMCPServer.initializeRuntime() completed initialization");
     } catch (error) {
-      ErrorHandler.logError('DollhouseMCPServer.run.initialization', error);
+      ErrorHandler.logError('DollhouseMCPServer.initializeRuntime', error);
       throw error; // Re-throw to prevent server from starting with incomplete initialization
     }
+  }
+
+  private startDeferredSetup(mode: DeferredSetupMode): void {
+    if (mode === 'none') {
+      return;
+    }
+
+    const timer = this.container.resolve<StartupTimer>('StartupTimer');
+    const deferredPromise = mode === 'full'
+      ? this.container.completeDeferredSetup()
+      : this.container.completeSinkSetup();
+
+    deferredPromise.catch(err => logger.warn('[Startup] Deferred setup error:', err));
+
+    const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
+    serverSetup.setDeferredSetupPromise(deferredPromise);
+
+    deferredPromise.then(async () => {
+      const report = timer.getReport();
+      logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
+        `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
+        `total ${report.totalMs}ms`);
+    }).catch(() => { /* already logged */ });
+  }
+
+  public async attachTransport(
+    transport: Transport,
+    options: AttachTransportOptions,
+  ): Promise<void> {
+    await this.initializeRuntime(options.transportName);
+
+    const timer = this.container.resolve<StartupTimer>('StartupTimer');
+
+    // Connect ASAP — tools are registered, server can accept requests
+    timer.startPhase('mcp_connect', true);
+    await this.server.connect(transport);
+    timer.endPhase('mcp_connect');
+    timer.markConnect();
+
+    if (options.suppressConsoleLoggingAfterConnect) {
+      // In stdio mode, stdout/stderr must stay clean after connect.
+      logger.setMCPConnected();
+    }
+
+    if (options.emitReadySentinel) {
+      // Issue #706 Phase 3: Emit READY sentinel for bridge clients
+      process.stderr.write('DOLLHOUSEMCP_READY\n');
+    }
+
+    logger.info(`DollhouseMCP server running on ${this.getTransportDisplayName(options.transportName)}`);
+    this.startDeferredSetup(options.deferredSetupMode);
+  }
+
+  async run() {
+    logger.debug("DollhouseMCPServer.run() started");
 
     const transport = new StdioServerTransport();
 
@@ -704,39 +778,36 @@ export class DollhouseMCPServer implements IToolHandler {
     process.on('SIGTERM', cleanup);
     process.on('SIGHUP', cleanup);
 
-    // Connect ASAP — tools are registered, server can accept requests
-    timer.startPhase('mcp_connect', true);
-    await this.server.connect(transport);
-    timer.endPhase('mcp_connect');
-    timer.markConnect();
-
-    // Mark that MCP is now connected - no more console output allowed
-    logger.setMCPConnected();
-
-    // Issue #706 Phase 3: Emit READY sentinel for bridge clients
-    process.stderr.write('DOLLHOUSEMCP_READY\n');
-
-    logger.info("DollhouseMCP server running on stdio");
-
-    // Issue #706 Phase 2: Deferred setup — runs post-connect, non-blocking
-    // Pattern encryption, background validator, memory auto-load, activation
-    // restore, log hooks, danger zone init all move here.
-    const deferredPromise = this.container.completeDeferredSetup();
-    deferredPromise.catch(err => logger.warn('[Startup] Deferred setup error:', err));
-
-    // Issue #706 Phase 4: Wire deferred promise into ServerSetup for request buffering
-    const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
-    serverSetup.setDeferredSetupPromise(deferredPromise);
-
-    // Log startup timing after deferred setup completes
-    deferredPromise.then(async () => {
-      const report = timer.getReport();
-      logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
-        `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
-        `total ${report.totalMs}ms`);
-    }).catch(() => { /* already logged */ });
-
+    await this.attachTransport(transport, {
+      transportName: 'stdio',
+      deferredSetupMode: 'full',
+      emitReadySentinel: true,
+      suppressConsoleLoggingAfterConnect: true,
+    });
   }
+}
+
+export async function startStreamableHttpServer(
+  options: StreamableHttpRuntimeOptions = {},
+): Promise<StreamableHttpRuntimeHandle> {
+  return createStreamableHttpRuntime(async (transport) => {
+    const sessionServer = new DollhouseMCPServer(new DollhouseContainer());
+
+    try {
+      await sessionServer.attachTransport(transport, {
+        transportName: 'streamable-http',
+        deferredSetupMode: 'sink-only',
+      });
+      return {
+        dispose: async () => {
+          await sessionServer.dispose();
+        },
+      };
+    } catch (error) {
+      await sessionServer.dispose().catch(() => {});
+      throw error;
+    }
+  }, options);
 }
 
 // Export is already at class declaration
@@ -958,6 +1029,17 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       console.error("[DollhouseMCP] Web UI failed to start:", err);
       process.exit(1);
     });
+  } else if (getRequestedTransportName() === 'streamable-http') {
+    try {
+      const runtime = await startStreamableHttpServer({
+        ...getStreamableHttpRuntimeOptions(),
+        registerSignalHandlers: true,
+      });
+      console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+    } catch (err) {
+      console.error("[DollhouseMCP] Streamable HTTP server failed to start:", err);
+      process.exit(1);
+    }
   } else {
     if (isDebugStartupLogging) {
       console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");

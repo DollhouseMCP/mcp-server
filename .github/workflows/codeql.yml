@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   schedule:
     # Run at 2:30 AM UTC every day
     - cron: '30 2 * * *'

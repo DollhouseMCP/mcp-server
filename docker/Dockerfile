@@ -83,7 +83,9 @@ RUN mkdir -p /app/tmp /app/logs && \
 # Switch to non-root user
 USER dollhouse
 
-# No ports exposed - stdio-based MCP servers don't need network access
+# Streamable HTTP mode uses port 3000 by default. stdio remains the default
+# runtime, so this is a compatibility hint for hosted/container deployments.
+EXPOSE 3000
 
 # Add security labels for container metadata
 LABEL security.non-root="true" \
@@ -96,6 +98,8 @@ ENV NODE_ENV=production \
     NODE_OPTIONS="--max-old-space-size=256" \
     DOLLHOUSE_DISABLE_UPDATES=true \
     DOLLHOUSE_SECURITY_MODE=strict \
+    DOLLHOUSE_HTTP_HOST=0.0.0.0 \
+    DOLLHOUSE_HTTP_PORT=3000 \
     DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
     DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
     PATH="/app/node_modules/.bin:$PATH"

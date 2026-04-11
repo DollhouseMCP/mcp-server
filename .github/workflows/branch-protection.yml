@@ -2,7 +2,7 @@ name: Branch Protection Check
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/hosted-http-integration]
     types: [opened, synchronize, reopened]
 
 permissions:
@@ -75,6 +75,40 @@ jobs:
 
                   This PR correctly targets \`main\` from \`${headRef}\` (${prType}).`
                 });
+              }
+            } else if (baseRef === 'codex/hosted-http-integration') {
+              const isFromDevelop = headRef === 'develop';
+              const isFeature = headRef.startsWith('feature/');
+              const isFix = headRef.startsWith('fix/');
+              const isBugfix = headRef.startsWith('bugfix/');
+              const isHotfix = headRef.startsWith('hotfix/');
+              const isCodexBranch = headRef.startsWith('codex/');
+              const isDependabot = headRef.startsWith('dependabot/');
+
+              if (!isFromDevelop && !isFeature && !isFix && !isBugfix && !isHotfix && !isCodexBranch && !isDependabot) {
+                core.setFailed(`PRs to codex/hosted-http-integration must come from develop, feature/*, fix/*, bugfix/*, hotfix/*, codex/*, or dependabot/* branches. Current branch: ${headRef}`);
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  body: `## ❌ Integration Branch Policy Violation
+
+                  PRs to \`codex/hosted-http-integration\` must originate from:
+                  - \`develop\` (to refresh integration from trunk)
+                  - \`feature/*\`
+                  - \`fix/*\`
+                  - \`bugfix/*\`
+                  - \`hotfix/*\`
+                  - \`codex/*\`
+                  - \`dependabot/*\`
+
+                  **Current branch**: \`${headRef}\`
+
+                  This branch is intended to be updated by PR only, not by direct commits.`
+                });
+              } else {
+                console.log(`✅ Valid integration source branch: ${headRef}`);
               }
             }
 

@@ -19,6 +19,7 @@ Task-oriented guides for DollhouseMCP. Each guide walks through common workflows
 |-------|-------------|
 | [LLM Quick Reference](llm-quick-reference.md) | Operation cheat sheet written for AI assistants — MCP-AQL operations, examples, tips |
 | [MCP Client Setup](mcp-client-setup.md) | Advanced configuration for MCP clients beyond the Quick Start |
+| [Streamable HTTP Hosted Mode](streamable-http-hosted-mode.md) | Phase 1 hosted deployment shape: container-ready, single-user, Streamable HTTP transport |
 | [Ensembles](ensembles.md) | Create and activate element collections (personas, skills, templates, agents, memories) |
 | [Memory System](memory-system.md) | Memory element types, auto-loading, retention, and project-level context |
 | [Skills Converter](skills-converter.md) | Bidirectional conversion between Dollhouse Skills and agent skills via MCP-AQL |
