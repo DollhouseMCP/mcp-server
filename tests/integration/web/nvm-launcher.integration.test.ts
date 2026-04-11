@@ -6,6 +6,8 @@
  *   2. Actually executes and passes arguments through to npx
  *   3. Skips NVM sourcing when NVM is absent (safe no-op)
  *   4. Creates wrapper + patches config in a real end-to-end sequence
+ *   5. Hardcodes the resolved NVM_DIR so it works without shell profile
+ *   6. Handles non-standard NVM_DIR locations (Homebrew NVM etc.)
  *
  * All tests are skipped on Windows (bash not available; NVM mitigation
  * is macOS/Linux only by design).
@@ -37,6 +39,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(tempDir, { recursive: true, force: true });
+  delete process.env.NVM_DIR;
 });
 
 // ── Bash syntax validation ───────────────────────────────────────────────────
@@ -89,6 +92,7 @@ describe('Generated script — execution', () => {
     const env = {
       ...process.env,
       HOME: tempDir,
+      NVM_DIR: join(tempDir, '.nvm'),  // point at empty dir — no nvm.sh
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
 
@@ -113,6 +117,7 @@ describe('Generated script — execution', () => {
     const env = {
       ...process.env,
       HOME: tempDir,
+      NVM_DIR: join(tempDir, '.nvm'),
       PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
     };
 
@@ -147,6 +152,93 @@ describe('Generated script — execution', () => {
 
     const logged = await readFile(logFile, 'utf-8');
     expect(logged.trim()).toBe('ok');
+  });
+
+  it('skips NVM block when a hardcoded non-existent NVM path is used', async () => {
+    if (isWindows) return;
+
+    // Generate a wrapper with a hardcoded path that does not exist on disk
+    const nonExistentNvmDir = join(tempDir, 'no-such-nvm');
+    const wrapperPath = await ensureNvmLauncher(tempDir, nonExistentNvmDir);
+    const content = await readFile(wrapperPath, 'utf-8');
+    expect(content).toContain(`NVM_DIR="${nonExistentNvmDir}"`);
+
+    const fakeBinDir = join(tempDir, 'fake-bin-nopath');
+    const fakeNpx = join(fakeBinDir, 'npx');
+    const logFile = join(tempDir, 'nopath.log');
+
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(fakeNpx, `#!/bin/bash\necho "reached" > "${logFile}"\n`, 'utf-8');
+    await chmod(fakeNpx, 0o755);
+
+    const env = {
+      ...process.env,
+      HOME: tempDir,
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    };
+
+    // Should not fail — the [ -s ] guard catches the missing file
+    await execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 });
+    const logged = await readFile(logFile, 'utf-8');
+    expect(logged.trim()).toBe('reached');
+  });
+});
+
+// ── Non-standard NVM_DIR (Homebrew-style) ────────────────────────────────────
+
+describe('Non-standard NVM_DIR', () => {
+  it('isNvmPresent detects NVM when NVM_DIR env var points at a custom location', async () => {
+    if (isWindows) return;
+
+    // Simulate a Homebrew NVM install: nvm.sh is not at ~/.nvm
+    const customNvmDir = join(tempDir, 'homebrew-nvm');
+    await mkdir(customNvmDir, { recursive: true });
+    await writeFile(join(customNvmDir, 'nvm.sh'), '# nvm');
+
+    process.env.NVM_DIR = customNvmDir;
+    // tempDir itself has no .nvm — detection must come from env var
+    const result = await isNvmPresent(tempDir);
+    expect(result).toBe(true);
+  });
+
+  it('ensureNvmLauncher hardcodes the env NVM_DIR path when no override given', async () => {
+    if (isWindows) return;
+
+    const customNvmDir = join(tempDir, 'homebrew-nvm');
+    process.env.NVM_DIR = customNvmDir;
+
+    const wrapperPath = await ensureNvmLauncher(tempDir);
+    const content = await readFile(wrapperPath, 'utf-8');
+
+    // The hardcoded path must be the custom dir, not $HOME/.nvm
+    expect(content).toContain(`NVM_DIR="${customNvmDir}"`);
+  });
+
+  it('wrapper with custom NVM_DIR skips sourcing when the custom dir has no nvm.sh', async () => {
+    if (isWindows) return;
+
+    // Custom dir exists but has no nvm.sh
+    const customNvmDir = join(tempDir, 'empty-nvm');
+    await mkdir(customNvmDir, { recursive: true });
+
+    const wrapperPath = await ensureNvmLauncher(tempDir, customNvmDir);
+
+    const fakeBinDir = join(tempDir, 'fake-bin-custom');
+    const fakeNpx = join(fakeBinDir, 'npx');
+    const logFile = join(tempDir, 'custom-nvm-skip.log');
+
+    await mkdir(fakeBinDir, { recursive: true });
+    await writeFile(fakeNpx, `#!/bin/bash\necho "ok" > "${logFile}"\n`, 'utf-8');
+    await chmod(fakeNpx, 0o755);
+
+    const env = {
+      ...process.env,
+      HOME: tempDir,
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    };
+
+    await execFileAsync('bash', [wrapperPath, 'test'], { env, timeout: 10_000 });
+    expect((await readFile(logFile, 'utf-8')).trim()).toBe('ok');
   });
 });
 
@@ -242,7 +334,12 @@ describe('Generated script — shell compatibility', () => {
     await writeFile(fakeNpx, '#!/bin/bash\ntrue\n', 'utf-8');
     await chmod(fakeNpx, 0o755);
 
-    const env = { ...process.env, HOME: tempDir, PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` };
+    const env = {
+      ...process.env,
+      HOME: tempDir,
+      NVM_DIR: join(tempDir, '.nvm'),
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    };
     await expect(
       execFileAsync('bash', [wrapperPath, 'dummy'], { env, timeout: 10_000 })
     ).resolves.not.toThrow();
@@ -267,7 +364,12 @@ describe('Generated script — shell compatibility', () => {
     await writeFile(fakeNpx, '#!/bin/sh\ntrue\n', 'utf-8');
     await chmod(fakeNpx, 0o755);
 
-    const env = { ...process.env, HOME: tempDir, PATH: `${fakeBinDir}:${process.env.PATH ?? ''}` };
+    const env = {
+      ...process.env,
+      HOME: tempDir,
+      NVM_DIR: join(tempDir, '.nvm'),
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+    };
     // The shebang is #!/bin/bash so sh would invoke bash; we test bash explicitly
     // but confirm the script's shebang is respected even when called via sh
     await expect(
