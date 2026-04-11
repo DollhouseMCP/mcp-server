@@ -730,6 +730,7 @@ export function createRealPersonaManager(
     metadataService,
     overrides?.personaImporter,
     overrides?.notifier,
+    undefined, // contextTracker — injected by DI container in production
     { fileWatchService } // baseOptions
   );
 }

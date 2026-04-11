@@ -17,12 +17,14 @@ import { PersonaManager } from '../persona/PersonaManager.js';
 import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 
 export class IdentityHandler {
   constructor(
     private readonly personaManager: PersonaManager,
     private readonly initService: InitializationService,
-    private readonly indicatorService: PersonaIndicatorService
+    private readonly indicatorService: PersonaIndicatorService,
+    private readonly contextTracker?: ContextTracker
   ) {}
 
   private async ensureInitialized(): Promise<void> {

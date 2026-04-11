@@ -32,6 +32,9 @@ import { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import { STDIO_DEFAULT_USER_ID } from '../context/StdioSession.js';
+import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
 
 /**
  * Validated and sanitized persona input data
@@ -58,7 +61,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: Changed from single active persona to Set for multiple active
    */
   private activePersonas: Set<string> = new Set();
+  /** @deprecated Read identity from SessionContext via ContextTracker. Remove in Phase 3. */
   private currentUser: string | null = null;
+  private contextTracker?: ContextTracker;
   private indicatorConfig: IndicatorConfig;
   protected override portfolioManager: PortfolioManager;
   protected override fileLockManager: FileLockManager;
@@ -80,6 +85,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     metadataService: MetadataService,
     personaImporter?: PersonaImporter,
     notifier?: StateChangeNotifier,
+    contextTracker?: ContextTracker,
     baseOptions: PersonaManagerOptions = {}
   ) {
     super(ElementType.PERSONA, portfolioManager, fileLockManager, baseOptions, fileOperationsService, validationRegistry);
@@ -92,6 +98,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();
+    this.contextTracker = contextTracker;
     this.metadataService = metadataService;
     this.serializationService = new SerializationService();
     this.initializePathValidator();
@@ -1248,9 +1255,28 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Get current user identity
    */
   getUserIdentity(): { username: string | null; email: string | null } {
+    // Explicitly-set identity takes precedence over frozen session
+    if (this.currentUser) {
+      return {
+        username: this.currentUser,
+        email: process.env.DOLLHOUSE_EMAIL || null,
+      };
+    }
+
+    // Session-level identity (HTTP auth, DOLLHOUSE_USER at startup).
+    // Temporary check — Phase 3 removes the STDIO_DEFAULT_USER_ID guard.
+    const session = this.contextTracker?.getSessionContext();
+    if (session && session.userId !== STDIO_DEFAULT_USER_ID && session.userId !== SYSTEM_CONTEXT.userId) {
+      return {
+        username: session.displayName || session.userId,
+        email: session.email || process.env.DOLLHOUSE_EMAIL || null,
+      };
+    }
+
+    // Fall back to process.env (existing behavior)
     return {
       username: process.env.DOLLHOUSE_USER || null,
-      email: process.env.DOLLHOUSE_EMAIL || null
+      email: process.env.DOLLHOUSE_EMAIL || null,
     };
   }
   
@@ -1280,11 +1306,22 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * REFACTORED: Now delegates to MetadataService for consistent user attribution
    */
   public getCurrentUserForAttribution(): string {
-    // Only sync if PersonaManager has an explicitly-set user;
-    // otherwise let MetadataService resolve via its own fallback chain.
+    // Explicitly-set identity (via set_user_identity tool) takes precedence
+    // over frozen session identity, because it's more recent.
     if (this.currentUser) {
       this.metadataService.setCurrentUser(this.currentUser);
+      return this.metadataService.getCurrentUser();
     }
+
+    // Session-level identity (HTTP auth, DOLLHOUSE_USER at startup).
+    // Temporary check — Phase 3 removes the STDIO_DEFAULT_USER_ID guard
+    // and makes SessionContext the sole identity authority.
+    const session = this.contextTracker?.getSessionContext();
+    if (session && session.userId !== STDIO_DEFAULT_USER_ID && session.userId !== SYSTEM_CONTEXT.userId) {
+      return session.displayName || session.userId;
+    }
+
+    // MetadataService fallback chain (OS username → anonymous ID)
     return this.metadataService.getCurrentUser();
   }
   

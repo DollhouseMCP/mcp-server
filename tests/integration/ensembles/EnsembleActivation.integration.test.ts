@@ -106,6 +106,7 @@ describe('Ensemble Activation Integration Tests', () => {
       metadataService,
       undefined, // personaImporter
       undefined, // notifier
+      undefined, // contextTracker
       { fileWatchService } // baseOptions
     );
 

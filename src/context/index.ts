@@ -18,5 +18,5 @@ export {
   getSessionOrSystem,
 } from './ContextPolicy.js';
 
-// Transport factories
-export { createStdioSession } from './StdioSession.js';
+// Transport factories and constants
+export { createStdioSession, STDIO_DEFAULT_USER_ID } from './StdioSession.js';

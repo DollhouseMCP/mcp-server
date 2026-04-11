@@ -339,6 +339,7 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('PersonaImporter'),
       this.resolve('StateChangeNotifier'),
+      this.resolve('ContextTracker'),
       {
         eventDispatcher: this.resolve('ElementEventDispatcher'),
         enableFileWatcher: true,
@@ -1358,7 +1359,8 @@ export class DollhouseContainer {
     const identityHandler = new IdentityHandler(
       personaManager,
       initService,
-      indicatorService
+      indicatorService,
+      this.resolve('ContextTracker')
     );
 
     const configHandler = new ConfigHandler(
