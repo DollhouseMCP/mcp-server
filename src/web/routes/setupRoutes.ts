@@ -362,7 +362,10 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
   await posthog.shutdown();
 }
 
-export function createSetupRoutes(): {
+export function createSetupRoutes(opts?: {
+  /** Override install-mcp runner. For testing only — prefix signals test-only use. */
+  _runInstallMcp?: (client: string, version?: string) => Promise<string>;
+}): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
   versionHandler: (req: Request, res: Response) => Promise<void>;
@@ -373,6 +376,7 @@ export function createSetupRoutes(): {
   verifyLicenseHandler: (req: Request, res: Response) => Promise<void>;
   resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
+  const installer = opts?._runInstallMcp ?? runInstallMcp;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
     const clients = [
@@ -462,7 +466,7 @@ export function createSetupRoutes(): {
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await runInstallMcp(normalizedClient, effectiveVersion);
+      const output = await installer(normalizedClient, effectiveVersion);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
 
       // Best-effort NVM mitigation (macOS/Linux only).
@@ -869,11 +873,13 @@ const JSON_FORMAT_CLIENTS = [
  * Orchestrates the NVM mitigation: detect → create launcher → patch config → telemetry.
  * Extracted from installHandler to keep its cognitive complexity within SonarCloud limits.
  * Returns a result enum rather than throwing so the caller always gets a clean signal.
+ *
+ * @param home - Override home directory (injectable for tests)
  */
-export async function applyNvmLauncherIfNeeded(client: string): Promise<NvmLauncherResult> {
-  if (!await isNvmPresent()) return 'not-applicable';
+export async function applyNvmLauncherIfNeeded(client: string, home = homedir()): Promise<NvmLauncherResult> {
+  if (!await isNvmPresent(home)) return 'not-applicable';
   try {
-    const wrapperPath = await ensureNvmLauncher();
+    const wrapperPath = await ensureNvmLauncher(home);
     await patchConfigForNvmLauncher(client, wrapperPath);
     logger.info(`[Setup] NVM-aware launcher applied for ${client}`);
     captureInstallAnalytics('nvm_launcher_applied', { client, platform: platform() });
@@ -898,9 +904,15 @@ export async function applyNvmLauncherIfNeeded(client: string): Promise<NvmLaunc
  *
  * Fire-and-forget from startWebServer. All errors are swallowed and logged.
  *
- * @param home - Override home directory (injectable for tests)
+ * @param home               - Override home directory (injectable for tests)
+ * @param configPathResolver - Override config path lookup (injectable for tests).
+ *                             Return null to skip a client entirely.
+ *                             Defaults to the production getConfigPath.
  */
-export async function repairNvmLauncherOnStartup(home = homedir()): Promise<void> {
+export async function repairNvmLauncherOnStartup(
+  home = homedir(),
+  configPathResolver: (client: string) => string | null = getConfigPath,
+): Promise<void> {
   if (platform() === 'win32') return;
   if (!await isNvmPresent(home)) return;
 
@@ -913,12 +925,14 @@ export async function repairNvmLauncherOnStartup(home = homedir()): Promise<void
   }
 
   await Promise.allSettled(
-    JSON_FORMAT_CLIENTS.map(client =>
-      patchConfigForNvmLauncher(client, wrapperPath)
+    JSON_FORMAT_CLIENTS.map(client => {
+      const configPath = configPathResolver(client);
+      if (!configPath) return Promise.resolve(); // resolver returned null — skip this client
+      return patchConfigForNvmLauncher(client, wrapperPath, configPath)
         .catch(err =>
           logger.warn(`[Setup] NVM startup repair: failed to patch ${client}: ${err instanceof Error ? err.message : String(err)}`)
-        )
-    )
+        );
+    })
   );
 
   logger.info('[Setup] NVM launcher startup repair complete');

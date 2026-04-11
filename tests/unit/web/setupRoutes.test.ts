@@ -158,6 +158,32 @@ describe('Setup Routes — API Endpoints', () => {
       // Should not reject as unsupported
       expect(res.status).not.toBe(400);
     });
+
+    it('success response includes nvmMitigationApplied field', async () => {
+      // Use _runInstallMcp injection so install always succeeds without the real binary
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude' })
+        .expect(200);
+
+      // Field must be present on every success response
+      expect(res.body).toHaveProperty('nvmMitigationApplied');
+      // Value is one of: true (applied), false (failed), null (not applicable)
+      expect([true, false, null]).toContain(res.body.nvmMitigationApplied);
+      // Other standard fields still present
+      expect(res.body.success).toBe(true);
+      expect(res.body.client).toBe('claude');
+      expect(res.body.version).toBeDefined();
+    });
   });
 
   describe('GET /api/setup/version', () => {

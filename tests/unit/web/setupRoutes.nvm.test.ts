@@ -457,38 +457,31 @@ describe('patchConfigForNvmLauncher', () => {
 
 describe('applyNvmLauncherIfNeeded', () => {
   it('returns not-applicable when NVM is not present', async () => {
-    // tempDir has no .nvm directory — should resolve without creating anything
-    const result = await applyNvmLauncherIfNeeded('claude');
-    // On this machine, NVM may or may not be present; we can only assert the shape
-    expect(['applied', 'not-applicable', 'failed']).toContain(result);
+    // tempDir has no .nvm — deterministically not-applicable on all machines
+    const result = await applyNvmLauncherIfNeeded('claude', tempDir);
+    expect(result).toBe('not-applicable');
   });
 
   it('is a function', () => {
     expect(typeof applyNvmLauncherIfNeeded).toBe('function');
   });
 
-  it('creates launcher and patches config when NVM is present', async () => {
-    if (isWindows) return; // NVM not applicable on Windows
-    // Set up a fake NVM home and a config file
+  it('returns applied and creates wrapper in home when NVM is present', async () => {
+    if (isWindows) return;
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
 
-    const configPath = join(tempDir, 'claude.json');
-    await writeFile(configPath, JSON.stringify({
-      mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
-    }, null, 2));
+    const result = await applyNvmLauncherIfNeeded('claude', tempDir);
+    expect(result).toBe('applied');
 
-    // Call via the lower-level helpers directly (applyNvmLauncherIfNeeded uses real homedir)
-    const wrapperPath = await ensureNvmLauncher(tempDir);
-    await patchConfigForNvmLauncher('claude', wrapperPath, configPath);
-
-    const after = JSON.parse(await readFile(configPath, 'utf-8'));
-    expect(after.mcpServers.dollhousemcp.command).toBe(wrapperPath);
-    expect(after.mcpServers.dollhousemcp.command).toContain('dollhousemcp-nvm.sh');
+    // Wrapper must have been created inside tempDir, not the real home
+    const wrapperPath = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+    const s = await stat(wrapperPath);
+    expect(s.isFile()).toBe(true);
   });
 
   it('result type is a valid NvmLauncherResult string literal', async () => {
-    const result = await applyNvmLauncherIfNeeded('claude');
+    const result = await applyNvmLauncherIfNeeded('claude', tempDir);
     expect(typeof result).toBe('string');
     const valid: string[] = ['applied', 'not-applicable', 'failed'];
     expect(valid).toContain(result);
@@ -503,7 +496,6 @@ describe('repairNvmLauncherOnStartup', () => {
   });
 
   it('no-ops when NVM is not present (tempDir has no .nvm)', async () => {
-    // Should resolve without creating any files
     await expect(repairNvmLauncherOnStartup(tempDir)).resolves.not.toThrow();
     // Wrapper must not exist
     const { access: fsAccess } = await import('node:fs/promises');
@@ -523,26 +515,67 @@ describe('repairNvmLauncherOnStartup', () => {
     expect(s.isFile()).toBe(true);
   });
 
-  it('patches a pre-existing claude config that still uses bare npx', async () => {
+  it('patches a pre-existing config that still uses bare npx (via configPathResolver)', async () => {
     if (isWindows) return;
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
 
-    // Simulate a config written by install-mcp before this PR shipped
-    const configDir = join(tempDir, 'Library', 'Application Support', 'Claude');
-    await mkdir(configDir, { recursive: true });
-    const configPath = join(configDir, 'claude_desktop_config.json');
+    // Seed a config that simulates a pre-PR install (command is bare npx)
+    const configPath = join(tempDir, 'claude_desktop_config.json');
     await writeFile(configPath, JSON.stringify({
       mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
     }, null, 2));
 
-    // repairNvmLauncherOnStartup patches all known clients — use lower-level helpers
-    // because the top-level function resolves config paths via homedir() not tempDir
-    const wrapperPath = await ensureNvmLauncher(tempDir);
-    await patchConfigForNvmLauncher('claude', wrapperPath, configPath);
+    // Inject a resolver that routes 'claude' to our temp config; skips all others
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
 
     const after = JSON.parse(await readFile(configPath, 'utf-8'));
     expect(after.mcpServers.dollhousemcp.command).toContain('dollhousemcp-nvm.sh');
+  });
+
+  it('patches all clients returned by the resolver', async () => {
+    if (isWindows) return;
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
+
+    // Create configs for two clients
+    const claudeConfig = join(tempDir, 'claude.json');
+    const cursorConfig = join(tempDir, 'cursor.json');
+    for (const p of [claudeConfig, cursorConfig]) {
+      await writeFile(p, JSON.stringify({
+        mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+      }, null, 2));
+    }
+
+    const resolver = (client: string) => {
+      if (client === 'claude') return claudeConfig;
+      if (client === 'cursor') return cursorConfig;
+      return null;
+    };
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    for (const p of [claudeConfig, cursorConfig]) {
+      const after = JSON.parse(await readFile(p, 'utf-8'));
+      expect(after.mcpServers.dollhousemcp.command).toContain('dollhousemcp-nvm.sh');
+    }
+  });
+
+  it('skips clients whose resolver returns null', async () => {
+    if (isWindows) return;
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
+
+    const untouched = join(tempDir, 'cursor.json');
+    const original = JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: [] } },
+    }, null, 2);
+    await writeFile(untouched, original);
+
+    // Resolver returns null for every client — no patching should occur
+    await repairNvmLauncherOnStartup(tempDir, () => null);
+
+    expect(await readFile(untouched, 'utf-8')).toBe(original);
   });
 
   it('recreates a deleted wrapper when NVM is present', async () => {
@@ -550,34 +583,41 @@ describe('repairNvmLauncherOnStartup', () => {
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
 
-    // First call creates the wrapper
     await repairNvmLauncherOnStartup(tempDir);
     const wrapperPath = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
 
-    // Delete the wrapper to simulate user cleanup
+    // Simulate user deleting the wrapper
     await rm(wrapperPath);
 
-    // Second call recreates it
     await repairNvmLauncherOnStartup(tempDir);
     const s = await stat(wrapperPath);
     expect(s.isFile()).toBe(true);
   });
 
-  it('is idempotent — two consecutive calls produce the same wrapper', async () => {
+  it('is idempotent — two consecutive calls produce the same wrapper and config', async () => {
     if (isWindows) return;
     await mkdir(join(tempDir, '.nvm'), { recursive: true });
     await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
 
-    await repairNvmLauncherOnStartup(tempDir);
-    const contentFirst = await readFile(
+    const configPath = join(tempDir, 'claude.json');
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+    const wrapperFirst = await readFile(
       join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'), 'utf-8'
     );
+    const configFirst = await readFile(configPath, 'utf-8');
 
-    await repairNvmLauncherOnStartup(tempDir);
-    const contentSecond = await readFile(
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+    const wrapperSecond = await readFile(
       join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'), 'utf-8'
     );
+    const configSecond = await readFile(configPath, 'utf-8');
 
-    expect(contentFirst).toBe(contentSecond);
+    expect(wrapperFirst).toBe(wrapperSecond);
+    expect(configFirst).toBe(configSecond);
   });
 });
