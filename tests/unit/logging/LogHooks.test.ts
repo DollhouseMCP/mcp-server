@@ -1154,4 +1154,97 @@ describe('LogHooks', () => {
       });
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Session attribution (userId/sessionId) via ContextTracker
+  // -------------------------------------------------------------------------
+
+  describe('session attribution injection', () => {
+    it('should include userId and sessionId when ContextTracker has active session', () => {
+      const mockListener = jest.fn();
+      const mcpLogger = {
+        addLogListener: jest.fn((fn) => {
+          mockListener.mockImplementation(fn);
+          return jest.fn();
+        }),
+      };
+      const mockContextTracker = {
+        getCorrelationId: jest.fn(() => 'REQ-1'),
+        getSessionContext: jest.fn(() => ({ userId: 'alice', sessionId: 'sess-1' })),
+      };
+      const container = makeMockContainer({
+        MCPLogger: mcpLogger,
+        ContextTracker: mockContextTracker,
+      });
+
+      wireLogHooks(mockLogManager, container);
+
+      mockListener({
+        timestamp: new Date(),
+        level: 'info',
+        message: 'Test with session',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      const entry = mockLogManager.logCalls[0];
+      expect(entry.userId).toBe('alice');
+      expect(entry.sessionId).toBe('sess-1');
+      expect(entry.correlationId).toBe('REQ-1');
+    });
+
+    it('should omit userId and sessionId when no session active', () => {
+      const mockListener = jest.fn();
+      const mcpLogger = {
+        addLogListener: jest.fn((fn) => {
+          mockListener.mockImplementation(fn);
+          return jest.fn();
+        }),
+      };
+      const mockContextTracker = {
+        getCorrelationId: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => undefined),
+      };
+      const container = makeMockContainer({
+        MCPLogger: mcpLogger,
+        ContextTracker: mockContextTracker,
+      });
+
+      wireLogHooks(mockLogManager, container);
+
+      mockListener({
+        timestamp: new Date(),
+        level: 'info',
+        message: 'Test without session',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      const entry = mockLogManager.logCalls[0];
+      expect(entry.userId).toBeUndefined();
+      expect(entry.sessionId).toBeUndefined();
+    });
+
+    it('should omit userId and sessionId when no ContextTracker registered', () => {
+      const mockListener = jest.fn();
+      const mcpLogger = {
+        addLogListener: jest.fn((fn) => {
+          mockListener.mockImplementation(fn);
+          return jest.fn();
+        }),
+      };
+      const container = makeMockContainer({ MCPLogger: mcpLogger });
+
+      wireLogHooks(mockLogManager, container);
+
+      mockListener({
+        timestamp: new Date(),
+        level: 'info',
+        message: 'Test no tracker',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      const entry = mockLogManager.logCalls[0];
+      expect(entry.userId).toBeUndefined();
+      expect(entry.sessionId).toBeUndefined();
+    });
+  });
 });

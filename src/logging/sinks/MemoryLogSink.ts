@@ -107,6 +107,14 @@ export class MemoryLogSink implements ILogSink {
       const corrId = options.correlationId;
       entries = entries.filter(e => e.correlationId === corrId);
     }
+    if (options?.userId) {
+      const uid = options.userId;
+      entries = entries.filter(e => e.userId === uid);
+    }
+    if (options?.sessionId) {
+      const sid = options.sessionId;
+      entries = entries.filter(e => e.sessionId === sid);
+    }
 
     // 4. Count total before pagination
     const total = entries.length;

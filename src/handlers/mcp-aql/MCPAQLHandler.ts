@@ -221,6 +221,12 @@ function validateLogQueryParams(params: Record<string, unknown>): LogQueryOption
   if (typeof params.correlationId === 'string') {
     options.correlationId = params.correlationId;
   }
+  if (typeof params.userId === 'string') {
+    options.userId = params.userId;
+  }
+  if (typeof params.sessionId === 'string') {
+    options.sessionId = params.sessionId;
+  }
 
   return options;
 }
