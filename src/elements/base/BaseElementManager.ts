@@ -260,7 +260,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       );
     }
 
-    this.eventDispatcher = options.eventDispatcher ?? ElementEventDispatcher.getSharedDispatcher();
+    this.eventDispatcher = options.eventDispatcher ?? new ElementEventDispatcher();
     this.autoReloadOnExternalChange =
       options.autoReloadOnExternalChange ?? process.env.AUTO_RELOAD_ON_EXTERNAL_CHANGE === 'true';
 

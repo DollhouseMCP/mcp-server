@@ -22,6 +22,12 @@ export class JsonlFormatter implements ILogFormatter {
     if (entry.correlationId !== undefined) {
       obj.correlationId = entry.correlationId;
     }
+    if (entry.userId !== undefined) {
+      obj.userId = entry.userId;
+    }
+    if (entry.sessionId !== undefined) {
+      obj.sessionId = entry.sessionId;
+    }
 
     return JSON.stringify(obj) + '\n';
   }

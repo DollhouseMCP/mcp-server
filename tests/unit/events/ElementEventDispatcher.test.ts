@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { ElementEventDispatcher, type ElementLifecycleEvent } from '../../../src/events/ElementEventDispatcher.js';
+import { ElementEventDispatcher, type ElementLifecycleEvent, type ElementEventPayload } from '../../../src/events/ElementEventDispatcher.js';
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
+import type { SessionContext } from '../../../src/context/SessionContext.js';
 
 function createPayload() {
   return {
@@ -49,5 +51,84 @@ describe('ElementEventDispatcher', () => {
     dispatcher.emit('element:cache:refresh', createPayload());
 
     expect(events).toEqual(['element:cache:refresh']);
+  });
+});
+
+const TEST_SESSION: SessionContext = Object.freeze({
+  userId: 'http-user-alice',
+  sessionId: 'session-456',
+  tenantId: null,
+  transport: 'http' as const,
+  createdAt: Date.now(),
+});
+
+describe('ElementEventDispatcher — session attribution', () => {
+  it('emit() adds userId and sessionId when session is active', async () => {
+    const tracker = new ContextTracker();
+    const dispatcher = new ElementEventDispatcher(tracker);
+    const ctx = tracker.createSessionContext('llm-request', TEST_SESSION);
+
+    let received: ElementEventPayload | undefined;
+    dispatcher.on('element:save:success', (payload) => {
+      received = payload;
+    });
+
+    await tracker.runAsync(ctx, async () => {
+      dispatcher.emit('element:save:success', createPayload());
+    });
+
+    expect(received?.userId).toBe('http-user-alice');
+    expect(received?.sessionId).toBe('session-456');
+  });
+
+  it('emitAsync() captures session before setImmediate boundary', async () => {
+    const tracker = new ContextTracker();
+    const dispatcher = new ElementEventDispatcher(tracker);
+    const ctx = tracker.createSessionContext('llm-request', TEST_SESSION);
+
+    let received: ElementEventPayload | undefined;
+    dispatcher.on('element:load:success', (payload) => {
+      received = payload;
+    });
+
+    await tracker.runAsync(ctx, async () => {
+      dispatcher.emitAsync('element:load:success', createPayload());
+    });
+
+    // Wait for setImmediate to fire
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(received?.userId).toBe('http-user-alice');
+    expect(received?.sessionId).toBe('session-456');
+  });
+
+  it('emit() does not add session fields when no ContextTracker', () => {
+    const dispatcher = new ElementEventDispatcher(); // no tracker
+
+    let received: ElementEventPayload | undefined;
+    dispatcher.on('element:delete:success', (payload) => {
+      received = payload;
+    });
+
+    dispatcher.emit('element:delete:success', createPayload());
+
+    expect(received?.userId).toBeUndefined();
+    expect(received?.sessionId).toBeUndefined();
+  });
+
+  it('emit() does not add session fields when no session active', () => {
+    const tracker = new ContextTracker();
+    const dispatcher = new ElementEventDispatcher(tracker);
+
+    let received: ElementEventPayload | undefined;
+    dispatcher.on('element:activate', (payload) => {
+      received = payload;
+    });
+
+    // No runAsync — no session in AsyncLocalStorage
+    dispatcher.emit('element:activate', createPayload());
+
+    expect(received?.userId).toBeUndefined();
+    expect(received?.sessionId).toBeUndefined();
   });
 });

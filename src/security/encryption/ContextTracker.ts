@@ -23,6 +23,8 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
+import type { SessionContext } from '../../context/SessionContext.js';
+import { SessionContextRequiredError } from '../../context/ContextPolicy.js';
 
 /**
  * Execution context information
@@ -39,6 +41,13 @@ export interface ExecutionContext {
 
   /** Additional context metadata */
   metadata?: Record<string, unknown>;
+
+  /**
+   * Session context associated with this execution.
+   * Optional for backward compatibility — callers not yet using sessions
+   * may omit this field without any behavioural change.
+   */
+  session?: SessionContext;
 }
 
 /**
@@ -147,6 +156,61 @@ export class ContextTracker {
   clearContext(): void {
     // AsyncLocalStorage doesn't have a direct clear method
     // Context is automatically cleared when execution exits
+  }
+
+  /**
+   * Get the SessionContext from the current execution context, if any.
+   *
+   * @returns The SessionContext if one is stored in the current context,
+   *          or undefined if no context is active or no session was set.
+   */
+  getSessionContext(): SessionContext | undefined {
+    return this.getContext()?.session;
+  }
+
+  /**
+   * Get the SessionContext from the current execution context, throwing if
+   * no session is present.
+   *
+   * Use this when a real user identity is required (e.g., audit logging,
+   * per-user rate limits). Use getSessionOrSystem() from ContextPolicy for
+   * paths that can safely fall back to a system identity.
+   *
+   * @param caller - Optional caller identifier for error messages
+   * @throws {SessionContextRequiredError} When no session context is active
+   * @returns The active SessionContext
+   */
+  requireSessionContext(caller?: string): SessionContext {
+    const session = this.getSessionContext();
+    if (session === undefined) {
+      throw new SessionContextRequiredError(caller);
+    }
+    return session;
+  }
+
+  /**
+   * Create an ExecutionContext with an associated SessionContext.
+   *
+   * The SessionContext is shallow-copied and Object.freeze()'d before storage
+   * to prevent downstream mutation of session identity.
+   *
+   * @param type - Context type (same values as createContext)
+   * @param session - The SessionContext to associate with this execution
+   * @param metadata - Optional additional metadata
+   * @returns New ExecutionContext with frozen session attached
+   */
+  createSessionContext(
+    type: ExecutionContext['type'],
+    session: SessionContext,
+    metadata?: Record<string, unknown>
+  ): ExecutionContext {
+    return {
+      type,
+      requestId: this.generateRequestId(),
+      timestamp: Date.now(),
+      metadata,
+      session: Object.freeze({ ...session }),
+    };
   }
 
   /**

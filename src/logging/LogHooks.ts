@@ -14,6 +14,7 @@
 
 import type { LogManager } from './LogManager.js';
 import type { LogLevel, UnifiedLogEntry } from './types.js';
+import type { SessionContext } from '../context/SessionContext.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { DefaultElementProvider } from '../portfolio/DefaultElementProvider.js';
 import { LRUCache } from '../cache/LRUCache.js';
@@ -35,10 +36,27 @@ const SEVERITY_TO_LEVEL: Record<string, LogLevel> = {
 };
 
 // ---------------------------------------------------------------------------
-// CorrelationId provider interface (subset of ContextTracker)
+// Request context provider interface (subset of ContextTracker)
 // ---------------------------------------------------------------------------
 
-type CorrelationIdProvider = { getCorrelationId(): string | undefined };
+type RequestContextProvider = {
+  getCorrelationId(): string | undefined;
+  getSessionContext(): SessionContext | undefined;
+};
+
+/** Capture correlationId, userId, and sessionId from the current request context. */
+function getRequestAttribution(tracker: RequestContextProvider | null): {
+  correlationId?: string;
+  userId?: string;
+  sessionId?: string;
+} {
+  const session = tracker?.getSessionContext();
+  return {
+    correlationId: tracker?.getCorrelationId(),
+    userId: session?.userId,
+    sessionId: session?.sessionId,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Exported factory for TriggerMetricsTracker (created outside DI container)
@@ -46,7 +64,7 @@ type CorrelationIdProvider = { getCorrelationId(): string | undefined };
 
 export function getTriggerMetricsLogListener(
   logManager: LogManager,
-  contextTracker?: CorrelationIdProvider,
+  contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
   return (level, message, data) => {
     const entry: UnifiedLogEntry = {
@@ -57,7 +75,7 @@ export function getTriggerMetricsLogListener(
       source: 'TriggerMetricsTracker',
       message,
       data,
-      correlationId: contextTracker?.getCorrelationId(),
+      ...getRequestAttribution(contextTracker ?? null),
     };
     logManager.log(entry);
   };
@@ -69,7 +87,7 @@ export function getTriggerMetricsLogListener(
 
 export function getSecurityAuditorLogListener(
   logManager: LogManager,
-  contextTracker?: CorrelationIdProvider,
+  contextTracker?: RequestContextProvider,
 ): (level: 'debug' | 'info' | 'warn' | 'error', message: string, data?: Record<string, unknown>) => void {
   return (level, message, data) => {
     const entry: UnifiedLogEntry = {
@@ -80,7 +98,7 @@ export function getSecurityAuditorLogListener(
       source: 'SecurityAuditor',
       message,
       data,
-      correlationId: contextTracker?.getCorrelationId(),
+      ...getRequestAttribution(contextTracker ?? null),
     };
     logManager.log(entry);
   };
@@ -104,9 +122,9 @@ export function wireLogHooks(
   const cleanups: (() => void)[] = [];
 
   // Resolve ContextTracker for correlationId injection
-  let contextTracker: CorrelationIdProvider | null = null;
+  let contextTracker: RequestContextProvider | null = null;
   try {
-    contextTracker = container.resolve<CorrelationIdProvider>('ContextTracker');
+    contextTracker = container.resolve<RequestContextProvider>('ContextTracker');
   } catch { /* ContextTracker not registered */ }
 
   // --- MCPLogger (application) -------------------------------------------
@@ -123,7 +141,7 @@ export function wireLogHooks(
         source: 'MCPLogger',
         message: logEntry.message,
         data: logEntry.data != null ? logEntry.data : undefined,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -146,7 +164,7 @@ export function wireLogHooks(
           severity: logEntry.severity,
           sourceComponent: logEntry.source,
         },
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -170,7 +188,7 @@ export function wireLogHooks(
         source: 'SecurityTelemetry',
         message: `Blocked ${telEntry.attackType}: ${telEntry.pattern}`,
         data: telEntry.metadata,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -191,7 +209,7 @@ export function wireLogHooks(
         source: 'PerformanceMonitor',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -224,7 +242,7 @@ export function wireLogHooks(
     for (const eventName of loggedEvents) {
       const unsub = dispatcher.on(eventName, (payload: any) => {
         const level = eventLevelMap[eventName] ?? 'debug';
-        const requestCorrelationId = contextTracker?.getCorrelationId();
+        const attribution = getRequestAttribution(contextTracker);
         // Use elementId if available, fall back to filename from filePath
         const elementName = payload.elementId
           || (payload.filePath ? payload.filePath.replace(/\.[^.]+$/, '') : '');
@@ -240,7 +258,8 @@ export function wireLogHooks(
             ...(payload.correlationId ? { operationId: payload.correlationId } : {}),
             ...(payload.filePath ? { filePath: payload.filePath } : {}),
           },
-          correlationId: requestCorrelationId ?? payload.correlationId,
+          ...attribution,
+          correlationId: attribution.correlationId ?? payload.correlationId,
         };
         logManager.log(entry);
       });
@@ -262,7 +281,7 @@ export function wireLogHooks(
         source: 'OperationalTelemetry',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -283,7 +302,7 @@ export function wireLogHooks(
         source: 'FileLockManager',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -301,7 +320,7 @@ export function wireLogHooks(
         source: 'DefaultElementProvider',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -319,7 +338,7 @@ export function wireLogHooks(
         source: 'LRUCache',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -341,7 +360,7 @@ export function wireLogHooks(
         source: 'StateChangeNotifier',
         message: `State change: ${event.type}`,
         data: { previousValue: event.previousValue, newValue: event.newValue },
-        correlationId: contextTracker?.getCorrelationId(),
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     };

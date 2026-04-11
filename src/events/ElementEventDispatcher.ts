@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { ElementType } from '../portfolio/types.js';
 import { IElement, IElementMetadata } from '../types/elements/IElement.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 
 export type ElementLifecycleEvent =
   | 'element:load:start'
@@ -28,6 +29,10 @@ export interface ElementEventPayload {
   generation?: number;
   error?: unknown;
   extra?: Record<string, unknown>;
+  /** Session user identity, auto-populated from SessionContext when available. */
+  userId?: string;
+  /** Session identifier, auto-populated from SessionContext when available. */
+  sessionId?: string;
 }
 
 export type ElementEventHandler = (payload: ElementEventPayload) => void | Promise<void>;
@@ -35,10 +40,16 @@ export type ElementEventHandler = (payload: ElementEventPayload) => void | Promi
 /**
  * Lightweight dispatcher for element lifecycle events.
  * Provides minimal EventEmitter wrapper with immutable payload semantics.
+ *
+ * DI-MANAGED: Instantiated by the DI container with ContextTracker injected.
+ * Session attribution (userId/sessionId) is auto-populated from SessionContext
+ * at emit time. For emitAsync, session is captured before the setImmediate
+ * boundary to prevent AsyncLocalStorage context loss.
  */
 export class ElementEventDispatcher {
   private readonly emitter = new EventEmitter();
-  private static shared: ElementEventDispatcher | null = null;
+
+  constructor(private readonly contextTracker?: ContextTracker) {}
 
   /**
    * Subscribe to an event. Returns an unsubscribe function.
@@ -62,16 +73,27 @@ export class ElementEventDispatcher {
 
   /**
    * Emit synchronously (used for start/veto events).
+   * Session attribution is read from AsyncLocalStorage via ContextTracker.
    */
   emit(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
-    this.emitter.emit(event, { ...payload });
+    const session = this.contextTracker?.getSessionContext();
+    this.emitter.emit(event, {
+      ...payload,
+      ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
+    });
   }
 
   /**
    * Emit asynchronously to decouple observers.
+   * Session is captured BEFORE setImmediate — AsyncLocalStorage context
+   * is lost across the boundary.
    */
   emitAsync(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
-    const cloned = { ...payload };
+    const session = this.contextTracker?.getSessionContext();
+    const cloned: ElementEventPayload = {
+      ...payload,
+      ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
+    };
     setImmediate(() => {
       this.emitter.emit(event, cloned);
     });
@@ -93,15 +115,5 @@ export class ElementEventDispatcher {
       snapshot.category = (element.metadata as any).category;
     }
     return snapshot;
-  }
-
-  /**
-   * Shared singleton dispatcher used when managers don't inject their own.
-   */
-  static getSharedDispatcher(): ElementEventDispatcher {
-    if (!this.shared) {
-      this.shared = new ElementEventDispatcher();
-    }
-    return this.shared;
   }
 }

@@ -13,6 +13,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { logger } from '../../utils/logger.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import { Template, TemplateMetadata } from './Template.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
@@ -39,9 +40,10 @@ export class TemplateManager extends BaseElementManager<Template> {
     private metadataService: MetadataService,
     fileWatchService?: FileWatchService,
     memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
+    backupService?: import('../../services/BackupService.js').BackupService,
+    eventDispatcher?: ElementEventDispatcher
   ) {
-    super(ElementType.TEMPLATE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+    super(ElementType.TEMPLATE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();
     this.serializationService = serializationService;

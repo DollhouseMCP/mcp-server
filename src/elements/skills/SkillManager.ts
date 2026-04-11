@@ -5,6 +5,7 @@
  */
 
 import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import { Skill, SkillMetadata } from './Skill.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -48,9 +49,10 @@ export class SkillManager extends BaseElementManager<Skill> {
     private metadataService: MetadataService,
     fileWatchService?: FileWatchService,
     memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
+    backupService?: import('../../services/BackupService.js').BackupService,
+    eventDispatcher?: ElementEventDispatcher
   ) {
-    super(ElementType.SKILL, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+    super(ElementType.SKILL, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();
     this.serializationService = serializationService;

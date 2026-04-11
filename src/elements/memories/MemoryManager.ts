@@ -15,6 +15,7 @@ import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import {
   getValidatedScanCooldown,
   getValidatedIndexDebounce,
@@ -133,9 +134,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     private metadataService: MetadataService,
     fileWatchService?: FileWatchService,
     memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
+    backupService?: import('../../services/BackupService.js').BackupService,
+    eventDispatcher?: ElementEventDispatcher
   ) {
-    super(ElementType.MEMORY, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+    super(ElementType.MEMORY, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
     this.memoriesDir = this.elementDir;
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();

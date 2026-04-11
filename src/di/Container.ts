@@ -86,6 +86,8 @@ import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
+import { createStdioSession } from "../context/StdioSession.js";
+import type { SessionResolver } from "../context/SessionContext.js";
 import { PatternExtractor } from "../security/validation/PatternExtractor.js";
 import { BackgroundValidator } from "../security/validation/BackgroundValidator.js";
 import { SecurityTelemetry } from "../security/telemetry/SecurityTelemetry.js";
@@ -285,7 +287,9 @@ export class DollhouseContainer {
     this.register('GitHubRateLimiter', () => new GitHubRateLimiter(
       this.resolve('TokenManager')
     ));
-    this.register('ElementEventDispatcher', () => ElementEventDispatcher.getSharedDispatcher());
+    this.register('ElementEventDispatcher', () => new ElementEventDispatcher(
+      this.resolve('ContextTracker')
+    ));
     this.register('MCPLogger', () => logger);
 
     this.register('PersonaImporter', () => {
@@ -337,6 +341,7 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('PersonaImporter'),
       this.resolve('StateChangeNotifier'),
+      this.resolve('ContextTracker'),
       {
         eventDispatcher: this.resolve('ElementEventDispatcher'),
         enableFileWatcher: true,
@@ -488,7 +493,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('TemplateManager', () => new TemplateManager(
       this.resolve('PortfolioManager'),
@@ -499,7 +505,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
     this.register('AgentManager', () => new AgentManager(
@@ -512,7 +519,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('MemoryManager', () => new MemoryManager(
       this.resolve('PortfolioManager'),
@@ -523,7 +531,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('EnsembleManager', () => new EnsembleManager(
       this.resolve('PortfolioManager'),
@@ -534,7 +543,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
     // Issue #51: Configure retention policy resolver for Memory class
@@ -566,10 +576,17 @@ export class DollhouseContainer {
     this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService')
     ));
+    // Shared stdio session — single source of truth for session identity
+    this.register('StdioSession', () => createStdioSession());
     // Issue #598: ActivationStore for per-session activation persistence
-    this.register('ActivationStore', () => new ActivationStore(
-      this.resolve('FileOperationsService')
-    ));
+    this.register('ActivationStore', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new ActivationStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        session.sessionId
+      );
+    });
     // Issue #142: VerificationStore for danger zone challenge codes (server-side)
     this.register('VerificationStore', () => new VerificationStore());
     // Issue #522: Non-blocking OS dialog notifier for verification codes
@@ -705,9 +722,14 @@ export class DollhouseContainer {
     }));
 
     // SERVER
-    this.register('ServerSetup', () => new ServerSetup(
-      this.resolve<ContextTracker>('ContextTracker')
-    ));
+    this.register('ServerSetup', () => {
+      const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const sessionResolver: SessionResolver = () => stdioSession;
+      return new ServerSetup(
+        this.resolve<ContextTracker>('ContextTracker'),
+        sessionResolver,
+      );
+    });
     this.register('ServerStartup', () => new ServerStartup(
       this.resolve('PortfolioManager'),
       this.resolve('FileLockManager'),
@@ -1351,7 +1373,8 @@ export class DollhouseContainer {
     const identityHandler = new IdentityHandler(
       personaManager,
       initService,
-      indicatorService
+      indicatorService,
+      this.resolve('ContextTracker')
     );
 
     const configHandler = new ConfigHandler(
