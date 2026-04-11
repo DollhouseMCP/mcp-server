@@ -8,7 +8,7 @@
  */
 
 // Types
-export type { SessionContext } from './SessionContext.js';
+export type { SessionContext, SessionResolver } from './SessionContext.js';
 
 // Policy: sentinel, error class, helpers
 export {

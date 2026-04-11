@@ -86,6 +86,8 @@ import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
+import { createStdioSession } from "../context/StdioSession.js";
+import type { SessionResolver } from "../context/SessionContext.js";
 import { PatternExtractor } from "../security/validation/PatternExtractor.js";
 import { BackgroundValidator } from "../security/validation/BackgroundValidator.js";
 import { SecurityTelemetry } from "../security/telemetry/SecurityTelemetry.js";
@@ -705,9 +707,14 @@ export class DollhouseContainer {
     }));
 
     // SERVER
-    this.register('ServerSetup', () => new ServerSetup(
-      this.resolve<ContextTracker>('ContextTracker')
-    ));
+    this.register('ServerSetup', () => {
+      const stdioSession = createStdioSession();
+      const sessionResolver: SessionResolver = () => stdioSession;
+      return new ServerSetup(
+        this.resolve<ContextTracker>('ContextTracker'),
+        sessionResolver,
+      );
+    });
     this.register('ServerStartup', () => new ServerStartup(
       this.resolve('PortfolioManager'),
       this.resolve('FileLockManager'),

@@ -42,3 +42,14 @@ export interface SessionContext {
   /** Email address, if available from auth provider. */
   readonly email?: string;
 }
+
+/**
+ * Resolves a SessionContext for an incoming MCP request.
+ *
+ * For stdio transport: a constant function returning the single stdio session.
+ * For HTTP transport (future): extracts session from authenticated connection metadata.
+ *
+ * The parameter type uses `unknown` rather than a concrete MCP SDK type to keep
+ * the context module free of MCP SDK dependencies.
+ */
+export type SessionResolver = (request: unknown) => SessionContext;

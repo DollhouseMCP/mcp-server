@@ -16,6 +16,7 @@ import { generatePrescriptiveDigest } from './PrescriptiveDigest.js';
 import type { Tool } from "@modelcontextprotocol/sdk/types.js";
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 import type { ElementCRUDHandler } from '../handlers/ElementCRUDHandler.js';
+import type { SessionResolver } from '../context/SessionContext.js';
 // ConfigWizardCheck import removed - auto-trigger disabled for v1.8.0
 
 export class ServerSetup {
@@ -24,12 +25,14 @@ export class ServerSetup {
   private static readonly DEFERRED_SETUP_TIMEOUT_MS = 10_000;
   private toolCache: LRUCache<Tool[]>;
   private contextTracker: ContextTracker;
+  private sessionResolver?: SessionResolver;
   private elementCrudHandler: ElementCRUDHandler | null = null;
   /** Issue #706 Phase 4: Promise that resolves when deferred setup completes. */
   private deferredSetupPromise: Promise<void> | null = null;
 
-  constructor(contextTracker: ContextTracker) {
+  constructor(contextTracker: ContextTracker, sessionResolver?: SessionResolver) {
     this.contextTracker = contextTracker;
+    this.sessionResolver = sessionResolver;
     this.toolCache = new LRUCache<Tool[]>({
       name: 'tool-discovery',
       maxSize: 1,
@@ -78,35 +81,42 @@ export class ServerSetup {
    * Setup the ListToolsRequest handler with caching
    */
   private setupListToolsHandler(server: Server, toolRegistry: ToolRegistry): void {
-    server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const startTime = Date.now();
-      
-      // Try to get cached tools first
-      let tools = this.toolCache.get(ServerSetup.TOOL_CACHE_KEY);
+    server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+      const session = this.sessionResolver?.(request);
+      const context = session
+        ? this.contextTracker.createSessionContext('llm-request', session, { toolName: 'list_tools' })
+        : this.contextTracker.createContext('llm-request', { toolName: 'list_tools' });
 
-      if (!tools) {
-        // Cache miss - fetch tools from registry
-        tools = toolRegistry.getAllTools();
+      return this.contextTracker.runAsync(context, async () => {
+        const startTime = Date.now();
 
-        // Cache the results for future requests
-        this.toolCache.set(ServerSetup.TOOL_CACHE_KEY, tools);
+        // Try to get cached tools first
+        let tools = this.toolCache.get(ServerSetup.TOOL_CACHE_KEY);
 
-        const duration = Date.now() - startTime;
-        logger.info('ToolDiscoveryCache: Cache miss - fetched and cached tools', {
-          toolCount: tools.length,
-          duration: `${duration}ms`,
-          source: 'registry'
-        });
-      } else {
-        const duration = Date.now() - startTime;
-        logger.debug('ToolDiscoveryCache: Cache hit - returned cached tools', {
-          toolCount: tools.length,
-          duration: `${duration}ms`,
-          source: 'cache'
-        });
-      }
-      
-      return { tools };
+        if (!tools) {
+          // Cache miss - fetch tools from registry
+          tools = toolRegistry.getAllTools();
+
+          // Cache the results for future requests
+          this.toolCache.set(ServerSetup.TOOL_CACHE_KEY, tools);
+
+          const duration = Date.now() - startTime;
+          logger.info('ToolDiscoveryCache: Cache miss - fetched and cached tools', {
+            toolCount: tools.length,
+            duration: `${duration}ms`,
+            source: 'registry'
+          });
+        } else {
+          const duration = Date.now() - startTime;
+          logger.debug('ToolDiscoveryCache: Cache hit - returned cached tools', {
+            toolCount: tools.length,
+            duration: `${duration}ms`,
+            source: 'cache'
+          });
+        }
+
+        return { tools };
+      });
     });
   }
   
@@ -118,9 +128,10 @@ export class ServerSetup {
       // Issue #706 Phase 4: Hold first request(s) until deferred setup completes
       await this.awaitDeferredSetup();
 
-      const context = this.contextTracker.createContext('llm-request', {
-        toolName: request.params.name,
-      });
+      const session = this.sessionResolver?.(request);
+      const context = session
+        ? this.contextTracker.createSessionContext('llm-request', session, { toolName: request.params.name })
+        : this.contextTracker.createContext('llm-request', { toolName: request.params.name });
       return this.contextTracker.runAsync(context, async () => {
         const { name, arguments: args } = request.params;
 
