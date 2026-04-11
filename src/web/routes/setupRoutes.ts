@@ -478,8 +478,12 @@ export function createSetupRoutes(opts?: {
       const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
 
       // true = mitigation applied; false = present but failed; null = not applicable
-      const nvmMitigationApplied =
-        nvmResult === 'applied' ? true : nvmResult === 'failed' ? false : null;
+      let nvmMitigationApplied: boolean | null = null;
+      if (nvmResult === 'applied') {
+        nvmMitigationApplied = true;
+      } else if (nvmResult === 'failed') {
+        nvmMitigationApplied = false;
+      }
 
       res.json({
         success: true,
@@ -883,7 +887,12 @@ const JSON_FORMAT_CLIENTS = [
  * @param home - Override home directory (injectable for tests)
  */
 export async function applyNvmLauncherIfNeeded(client: string, home = homedir()): Promise<NvmLauncherResult> {
-  if (!await isNvmPresent(home)) return 'not-applicable';
+  logger.debug(`[Setup] NVM mitigation check for client: ${client}`);
+  if (!await isNvmPresent(home)) {
+    logger.debug(`[Setup] NVM not present — skipping launcher mitigation for ${client}`);
+    captureInstallAnalytics('nvm_launcher_not_applicable', { client, platform: platform() });
+    return 'not-applicable';
+  }
   try {
     const wrapperPath = await ensureNvmLauncher(home);
     await patchConfigForNvmLauncher(client, wrapperPath);
@@ -920,7 +929,11 @@ export async function repairNvmLauncherOnStartup(
   configPathResolver: (client: string) => string | null = getConfigPath,
 ): Promise<void> {
   if (platform() === 'win32') return;
-  if (!await isNvmPresent(home)) return;
+  logger.debug('[Setup] NVM launcher startup repair: checking for NVM...');
+  if (!await isNvmPresent(home)) {
+    logger.debug('[Setup] NVM launcher startup repair: NVM not present — nothing to repair');
+    return;
+  }
 
   let wrapperPath: string;
   try {
@@ -961,9 +974,11 @@ export async function isNvmPresent(home = homedir()): Promise<boolean> {
   for (const dir of candidates) {
     try {
       await access(join(dir, 'nvm.sh'));
+      logger.debug(`[Setup] NVM detected at: ${dir}`);
       return true;
     } catch { /* try next candidate */ }
   }
+  logger.debug(`[Setup] NVM not found (checked: ${candidates.join(', ')})`);
   return false;
 }
 
@@ -979,9 +994,15 @@ export async function isNvmPresent(home = homedir()): Promise<boolean> {
 function resolveNvmDir(home = homedir()): string {
   const envDir = process.env.NVM_DIR;
   if (envDir && /^\/[\w./~-]+$/.test(envDir)) {
+    logger.debug(`[Setup] NVM dir resolved from NVM_DIR env var: ${envDir}`);
     return envDir;
   }
-  return join(home, '.nvm');
+  if (envDir) {
+    logger.debug(`[Setup] NVM_DIR env var rejected (unsafe path): ${envDir} — falling back to ~/.nvm`);
+  }
+  const fallback = join(home, '.nvm');
+  logger.debug(`[Setup] NVM dir resolved to default: ${fallback}`);
+  return fallback;
 }
 
 /**
@@ -1040,8 +1061,10 @@ export async function ensureNvmLauncher(home = homedir(), nvmDirOverride?: strin
     'exec npx "$@"',
   ].join('\n') + '\n';
 
+  logger.debug(`[Setup] Writing NVM launcher wrapper to: ${wrapperPath} (NVM_DIR=${nvmDir})`);
   await writeFile(wrapperPath, script, 'utf-8');
   await chmod(wrapperPath, 0o755);
+  logger.debug(`[Setup] NVM launcher wrapper written and made executable`);
   return wrapperPath;
 }
 
@@ -1053,9 +1076,9 @@ export async function ensureNvmLauncher(home = homedir(), nvmDirOverride?: strin
  */
 function detectIndent(raw: string): number | string {
   for (const line of raw.split('\n')) {
-    if (line.length === 0 || line[0] === '{' || line[0] === '}') continue;
-    if (line[0] === '\t') return '\t';
-    if (line[0] === ' ') {
+    if (line.length === 0 || line.startsWith('{') || line.startsWith('}')) continue;
+    if (line.startsWith('\t')) return '\t';
+    if (line.startsWith(' ')) {
       const spaces = line.length - line.trimStart().length;
       if (spaces >= 2) return spaces;
     }
@@ -1074,7 +1097,14 @@ function detectIndent(raw: string): number | string {
  */
 export async function patchConfigForNvmLauncher(client: string, wrapperPath: string, configPathOverride?: string): Promise<void> {
   const configPath = configPathOverride ?? getConfigPath(client);
-  if (!configPath || configPath.endsWith('.toml')) return;
+  if (!configPath) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: no config path for ${client} — skipping`);
+    return;
+  }
+  if (configPath.endsWith('.toml')) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: TOML config for ${client} — skipping (not JSON-format)`);
+    return;
+  }
 
   let raw: string;
   try {
@@ -1100,9 +1130,13 @@ export async function patchConfigForNvmLauncher(client: string, wrapperPath: str
     }
   }
 
-  if (!patched) return;
+  if (!patched) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: no dollhousemcp entry in ${client} config — nothing to patch`);
+    return;
+  }
 
   const indent = detectIndent(raw);
+  logger.debug(`[Setup] patchConfigForNvmLauncher: writing ${client} config (indent=${JSON.stringify(indent)})`);
   await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
   logger.info(`[Setup] Patched ${client} config to use NVM-aware launcher: ${wrapperPath}`);
 }
