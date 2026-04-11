@@ -1052,11 +1052,15 @@ export async function ensureNvmLauncher(home = homedir(), nvmDirOverride?: strin
  * (minimum 2) for space-indented files. Defaults to 2 when undetectable.
  */
 function detectIndent(raw: string): number | string {
-  const match = /\n(\s+)\S/.exec(raw);
-  if (!match) return 2;
-  const indent = match[1];
-  if (indent.includes('\t')) return '\t';
-  return Math.max(indent.length, 2);
+  for (const line of raw.split('\n')) {
+    if (line.length === 0 || line[0] === '{' || line[0] === '}') continue;
+    if (line[0] === '\t') return '\t';
+    if (line[0] === ' ') {
+      const spaces = line.length - line.trimStart().length;
+      if (spaces >= 2) return spaces;
+    }
+  }
+  return 2;
 }
 
 /**
