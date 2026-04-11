@@ -58,7 +58,7 @@ function getPerformanceThreshold(baseMs: number): number {
     case 'win32':
       return Math.floor(baseMs * 10.0 * nodeMultiplier); // Windows CI gets 10x multiplier — GitHub Actions Windows runners are extremely variable
     case 'darwin':
-      return Math.floor(baseMs * 2.5 * nodeMultiplier); // macOS CI gets 2.5x multiplier (breathing room until calibration)
+      return Math.floor(baseMs * 3 * nodeMultiplier); // macOS CI gets 3x multiplier — Node 22 runs ~25ms on 10ms base (#1799)
     case 'linux':
       return Math.floor(baseMs * 2.5 * nodeMultiplier); // Linux CI gets 2.5x multiplier (breathing room until calibration)
     default:
