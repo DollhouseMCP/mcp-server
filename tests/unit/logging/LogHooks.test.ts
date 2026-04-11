@@ -1207,7 +1207,6 @@ describe('LogHooks', () => {
       const mockContextTracker = {
         getCorrelationId: jest.fn(() => undefined),
         getSessionContext: jest.fn(() => undefined),
-        getSessionContext: jest.fn(() => undefined),
       };
       const container = makeMockContainer({
         MCPLogger: mcpLogger,
