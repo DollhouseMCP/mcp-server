@@ -855,6 +855,13 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns Deactivation result with success status and message
    */
   async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+    // No scanAndEvict() here — intentional. Deactivation only needs the ensemble's
+    // name (to remove from activeEnsembleNames) and calls deactivate() which sets
+    // a status flag. It does not consume the elements list, so stale cached element
+    // data has no effect on correctness. Compare with activateEnsemble(), which
+    // ingests the full element list to orchestrate sub-element loading and must
+    // therefore see the latest on-disk definition. (#1895)
+
     // PERFORMANCE FIX: Use findByName() instead of list()
     const ensemble = await this.findByName(identifier);
 
