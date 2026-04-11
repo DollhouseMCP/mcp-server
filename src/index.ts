@@ -33,23 +33,46 @@ import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 
-// Defensive error handling for npx/CLI execution
+// Transport-aware error handlers.
+// In stdio mode (default): exit on unhandled errors — the process is the session.
+// In HTTP mode: log and continue — one session's error must not kill the server
+// for all connected clients. Set to true when HTTP transport starts (Step 2.1).
+export let httpModeActive = false;
+
+/** Activate HTTP mode error handling. Called by the HTTP transport on startup. */
+export function setHttpModeActive(active: boolean): void {
+  httpModeActive = active;
+}
+
 process.on('uncaughtException', (error) => {
-  logger.error('Unhandled exception detected', {
+  logger.error('Uncaught exception', {
     error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined
+    stack: error instanceof Error ? error.stack : undefined,
+    transport: httpModeActive ? 'http' : 'stdio',
   });
-  console.error('[DollhouseMCP] Server startup failed');
+
+  if (httpModeActive) {
+    logger.error('[Lifecycle] Uncaught exception in HTTP mode — server continues serving');
+    return;
+  }
+
+  console.error('[DollhouseMCP] Fatal error');
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled promise rejection detected', {
+process.on('unhandledRejection', (reason, _promise) => {
+  logger.error('Unhandled promise rejection', {
     reason: reason instanceof Error ? reason.message : String(reason),
     stack: reason instanceof Error ? reason.stack : undefined,
-    promise
+    transport: httpModeActive ? 'http' : 'stdio',
   });
-  console.error('[DollhouseMCP] Server startup failed');
+
+  if (httpModeActive) {
+    logger.error('[Lifecycle] Unhandled rejection in HTTP mode — server continues serving');
+    return;
+  }
+
+  console.error('[DollhouseMCP] Fatal error');
   process.exit(1);
 });
 
