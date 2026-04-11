@@ -11,7 +11,7 @@
 import type { Request, Response } from 'express';
 import { execFile } from 'node:child_process';
 import { accessSync, constants as fsConstants } from 'node:fs';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
@@ -362,7 +362,12 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
   await posthog.shutdown();
 }
 
-export function createSetupRoutes(): {
+export function createSetupRoutes(opts?: {
+  /** Override install-mcp runner. For testing only — prefix signals test-only use. */
+  _runInstallMcp?: (client: string, version?: string) => Promise<string>;
+  /** Skip the sliding-window rate limiter. For testing only. */
+  _skipRateLimit?: boolean;
+}): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
   versionHandler: (req: Request, res: Response) => Promise<void>;
@@ -373,6 +378,8 @@ export function createSetupRoutes(): {
   verifyLicenseHandler: (req: Request, res: Response) => Promise<void>;
   resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
+  const installer = opts?._runInstallMcp ?? runInstallMcp;
+  const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
     const clients = [
@@ -436,7 +443,7 @@ export function createSetupRoutes(): {
 
   // ── Auto-install via install-mcp ────────────────────────────────────
   const installHandler = async (req: Request, res: Response): Promise<void> => {
-    if (!installLimiter.tryAcquire()) {
+    if (!skipRateLimit && !installLimiter.tryAcquire()) {
       res.status(429).json({ error: 'Too many install requests. Try again in a minute.' });
       return;
     }
@@ -462,9 +469,29 @@ export function createSetupRoutes(): {
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await runInstallMcp(normalizedClient, effectiveVersion);
+      const output = await installer(normalizedClient, effectiveVersion);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
-      res.json({ success: true, output, client: normalizedClient, version: effectiveVersion || 'latest' });
+
+      // Best-effort NVM mitigation (macOS/Linux only).
+      // Extracted into applyNvmLauncherIfNeeded to keep this handler's
+      // cognitive complexity within bounds (SonarCloud S3776).
+      const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
+
+      // true = mitigation applied; false = present but failed; null = not applicable
+      let nvmMitigationApplied: boolean | null = null;
+      if (nvmResult === 'applied') {
+        nvmMitigationApplied = true;
+      } else if (nvmResult === 'failed') {
+        nvmMitigationApplied = false;
+      }
+
+      res.json({
+        success: true,
+        output,
+        client: normalizedClient,
+        version: effectiveVersion || 'latest',
+        nvmMitigationApplied,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.warn(`[Setup] Install failed for ${normalizedClient}: ${message}`);
@@ -809,6 +836,309 @@ export function createSetupRoutes(): {
   };
 
   return { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler };
+}
+
+// ── Install analytics ────────────────────────────────────────────────────────
+
+/**
+ * Fire-and-forget PostHog event for installation analytics.
+ * Uses the same install ID as the license telemetry system.
+ * Silently swallows all errors — analytics must never break installs.
+ */
+function captureInstallAnalytics(event: string, properties: Record<string, unknown>): void {
+  const posthog = new PostHog(POSTHOG_PROJECT_KEY, {
+    host: process.env.POSTHOG_HOST || 'https://app.posthog.com',
+    flushAt: 1,
+    flushInterval: 5000,
+  });
+  readFile(join(homedir(), '.dollhouse', '.telemetry-id'), 'utf-8')
+    .then(id => id.trim())
+    .catch(() => 'anonymous')
+    .then(installId => {
+      posthog.capture({ distinctId: installId, event, properties });
+      return posthog.shutdown();
+    })
+    .catch(() => { /* telemetry must never throw */ });
+}
+
+// ── NVM mitigation helpers ──────────────────────────────────────────────────
+// Claude Desktop has a bug where it scans ~/.nvm/versions/node/, builds a PATH
+// from all installed versions in ascending order (oldest first), and runs npx
+// under an outdated Node even when a newer version is installed and selected.
+// See: https://github.com/DollhouseMCP/mcp-server/issues/1902
+//
+// Fix: when NVM is present, create a small bash launcher that initialises NVM
+// properly before delegating to npx, then patch the written MCP client config
+// to use that launcher instead of bare `npx`.
+
+/** Result of attempting to apply the NVM launcher mitigation. */
+export type NvmLauncherResult = 'applied' | 'not-applicable' | 'failed';
+
+/** JSON-format clients eligible for NVM launcher repair on startup. */
+const JSON_FORMAT_CLIENTS = [
+  'claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli',
+] as const;
+
+/**
+ * Orchestrates the NVM mitigation: detect → create launcher → patch config → telemetry.
+ * Extracted from installHandler to keep its cognitive complexity within SonarCloud limits.
+ * Returns a result enum rather than throwing so the caller always gets a clean signal.
+ *
+ * @param home - Override home directory (injectable for tests)
+ */
+export async function applyNvmLauncherIfNeeded(client: string, home = homedir()): Promise<NvmLauncherResult> {
+  logger.debug(`[Setup] NVM mitigation check for client: ${client}`);
+  if (!await isNvmPresent(home)) {
+    logger.debug(`[Setup] NVM not present — skipping launcher mitigation for ${client}`);
+    captureInstallAnalytics('nvm_launcher_not_applicable', { client, platform: platform() });
+    return 'not-applicable';
+  }
+  try {
+    const wrapperPath = await ensureNvmLauncher(home);
+    await patchConfigForNvmLauncher(client, wrapperPath);
+    logger.info(`[Setup] NVM-aware launcher applied for ${client}`);
+    captureInstallAnalytics('nvm_launcher_applied', { client, platform: platform() });
+    return 'applied';
+  } catch (err) {
+    logger.warn(`[Setup] NVM launcher setup failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+    captureInstallAnalytics('nvm_launcher_failed', {
+      client,
+      platform: platform(),
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return 'failed';
+  }
+}
+
+/**
+ * Startup repair: re-creates the wrapper and re-patches all known JSON-format
+ * client configs on every server start. Handles two cases:
+ *   1. Wrapper was deleted — recreates it so configs pointing to it keep working.
+ *   2. Pre-existing install (user installed before this fix shipped) — patches
+ *      configs that still use bare `npx`.
+ *
+ * Fire-and-forget from startWebServer. All errors are swallowed and logged.
+ *
+ * @param home               - Override home directory (injectable for tests)
+ * @param configPathResolver - Override config path lookup (injectable for tests).
+ *                             Return null to skip a client entirely.
+ *                             Defaults to the production getConfigPath.
+ */
+export async function repairNvmLauncherOnStartup(
+  home = homedir(),
+  configPathResolver: (client: string) => string | null = getConfigPath,
+): Promise<void> {
+  if (platform() === 'win32') return;
+  logger.debug('[Setup] NVM launcher startup repair: checking for NVM...');
+  if (!await isNvmPresent(home)) {
+    logger.debug('[Setup] NVM launcher startup repair: NVM not present — nothing to repair');
+    return;
+  }
+
+  let wrapperPath: string;
+  try {
+    wrapperPath = await ensureNvmLauncher(home);
+  } catch (err) {
+    logger.warn(`[Setup] NVM startup repair: could not create launcher: ${err instanceof Error ? err.message : String(err)}`);
+    return;
+  }
+
+  await Promise.allSettled(
+    JSON_FORMAT_CLIENTS.map(client => {
+      const configPath = configPathResolver(client);
+      if (!configPath) return Promise.resolve(); // resolver returned null — skip this client
+      return patchConfigForNvmLauncher(client, wrapperPath, configPath)
+        .catch(err =>
+          logger.warn(`[Setup] NVM startup repair: failed to patch ${client}: ${err instanceof Error ? err.message : String(err)}`)
+        );
+    })
+  );
+
+  logger.info('[Setup] NVM launcher startup repair complete');
+}
+
+/**
+ * Returns true if NVM is installed on this machine (macOS/Linux only).
+ * Checks process.env.NVM_DIR first (handles non-standard install locations),
+ * then falls back to ~/.nvm.
+ *
+ * @param home - Override home directory (defaults to os.homedir(); injectable for tests)
+ */
+export async function isNvmPresent(home = homedir()): Promise<boolean> {
+  if (platform() === 'win32') return false;
+  // Check candidates in order: env var override → default location
+  const candidates = [
+    process.env.NVM_DIR,
+    join(home, '.nvm'),
+  ].filter(Boolean) as string[];
+  for (const dir of candidates) {
+    try {
+      await access(join(dir, 'nvm.sh'));
+      logger.debug(`[Setup] NVM detected at: ${dir}`);
+      return true;
+    } catch { /* try next candidate */ }
+  }
+  logger.debug(`[Setup] NVM not found (checked: ${candidates.join(', ')})`);
+  return false;
+}
+
+/**
+ * Resolves the NVM directory: process.env.NVM_DIR if set, otherwise ~/.nvm.
+ * Used to hardcode the path in the generated wrapper so it works even when
+ * Claude Desktop does not source the user's shell profile.
+ *
+ * process.env.NVM_DIR is validated before use to prevent shell injection in
+ * the generated wrapper script (only absolute paths with safe characters are
+ * accepted; unsafe values fall back to ~/.nvm).
+ */
+function resolveNvmDir(home = homedir()): string {
+  const envDir = process.env.NVM_DIR;
+  if (envDir && /^\/[\w./~-]+$/.test(envDir)) {
+    logger.debug(`[Setup] NVM dir resolved from NVM_DIR env var: ${envDir}`);
+    return envDir;
+  }
+  if (envDir) {
+    logger.debug(`[Setup] NVM_DIR env var rejected (unsafe path): ${envDir} — falling back to ~/.nvm`);
+  }
+  const fallback = join(home, '.nvm');
+  logger.debug(`[Setup] NVM dir resolved to default: ${fallback}`);
+  return fallback;
+}
+
+/**
+ * Creates ~/.dollhouse/bin/dollhousemcp-nvm.sh and returns its path.
+ *
+ * The NVM directory is resolved at generation time and hardcoded into the
+ * script. This is intentional: Claude Desktop does not source the user's
+ * shell profile, so $NVM_DIR would be unset when the wrapper runs. By
+ * embedding the absolute path we guarantee the correct NVM is found.
+ *
+ * The script sources NVM, then checks the active Node major version. If it
+ * is below 18 (the DollhouseMCP minimum), it tries `nvm use node` (highest
+ * installed) then `nvm use --lts` as a fallback. A final version check
+ * writes a warning to stderr if the node is still too old — that warning
+ * will appear in Claude Desktop's error log.
+ *
+ * @param home       - Override home directory (injectable for tests)
+ * @param nvmDirOverride - Override the resolved NVM path (injectable for tests)
+ */
+export async function ensureNvmLauncher(home = homedir(), nvmDirOverride?: string): Promise<string> {
+  const binDir = join(home, '.dollhouse', 'bin');
+  const wrapperPath = join(binDir, 'dollhousemcp-nvm.sh');
+  const nvmDir = nvmDirOverride ?? resolveNvmDir(home);
+
+  await mkdir(binDir, { recursive: true });
+
+  // Single-expression helper reused twice to get the Node major version.
+  const getMajor = 'node -e "process.stdout.write(String(process.versions.node.split(\'.\')[0]))" 2>/dev/null || echo "0"';
+
+  const script = [
+    '#!/bin/bash',
+    '# DollhouseMCP NVM-aware launcher',
+    '# Auto-generated by the DollhouseMCP installer.',
+    '# Ensures the correct Node.js version is active before running npx,',
+    '# working around a Claude Desktop bug where NVM PATH ordering causes',
+    '# npx to execute under an older Node version (e.g. v12) even when a',
+    '# newer version is installed.',
+    '# See: https://github.com/DollhouseMCP/mcp-server/issues/1902',
+    '',
+    `NVM_DIR="${nvmDir}"`,
+    'if [ -s "$NVM_DIR/nvm.sh" ]; then',
+    '    # shellcheck source=/dev/null',
+    '    . "$NVM_DIR/nvm.sh" 2>/dev/null',
+    '    # If the active Node is below v18 (minimum for DollhouseMCP),',
+    `    # try 'node' alias (highest installed) then LTS as a fallback.`,
+    `    MAJOR=$(${getMajor})`,
+    '    if [ "$MAJOR" -lt 18 ]; then',
+    '        nvm use node 2>/dev/null || nvm use --lts 2>/dev/null || true',
+    `        MAJOR=$(${getMajor})`,
+    '        if [ "$MAJOR" -lt 18 ]; then',
+    '            echo "[DollhouseMCP] WARNING: Node.js $MAJOR is below the minimum (18). DollhouseMCP may not start correctly." >&2',
+    '        fi',
+    '    fi',
+    'fi',
+    '',
+    'exec npx "$@"',
+  ].join('\n') + '\n';
+
+  logger.debug(`[Setup] Writing NVM launcher wrapper to: ${wrapperPath} (NVM_DIR=${nvmDir})`);
+  await writeFile(wrapperPath, script, 'utf-8');
+  await chmod(wrapperPath, 0o755);
+  logger.debug(`[Setup] NVM launcher wrapper written and made executable`);
+  return wrapperPath;
+}
+
+/**
+ * Detects the indentation used in a JSON string so the reserialised output
+ * preserves the original style (avoids noisy diffs in user-maintained configs).
+ * Returns the tab character for tab-indented files, or the leading-space count
+ * (minimum 2) for space-indented files. Defaults to 2 when undetectable.
+ */
+function detectIndent(raw: string): number | string {
+  for (const line of raw.split('\n')) {
+    if (line.length === 0 || line.startsWith('{') || line.startsWith('}')) continue;
+    if (line.startsWith('\t')) return '\t';
+    if (line.startsWith(' ')) {
+      const spaces = line.length - line.trimStart().length;
+      if (spaces >= 2) return spaces;
+    }
+  }
+  return 2;
+}
+
+/**
+ * Patches the dollhousemcp entry in an MCP client's JSON config to use
+ * the NVM-aware launcher instead of bare `npx`.
+ *
+ * Only acts on JSON-format configs. TOML configs (codex) are skipped.
+ * Silently no-ops if the config file is missing or unreadable.
+ *
+ * @param configPathOverride - Use this path instead of the platform default (injectable for tests)
+ */
+export async function patchConfigForNvmLauncher(client: string, wrapperPath: string, configPathOverride?: string): Promise<void> {
+  const configPath = configPathOverride ?? getConfigPath(client);
+  if (!configPath) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: no config path for ${client} — skipping`);
+    return;
+  }
+  if (configPath.endsWith('.toml')) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: TOML config for ${client} — skipping (not JSON-format)`);
+    return;
+  }
+
+  let raw: string;
+  try {
+    raw = await readFile(configPath, 'utf-8');
+  } catch {
+    return; // Config not readable — install-mcp may not have written it yet
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return; // Malformed JSON — don't touch it
+  }
+
+  let patched = false;
+  for (const key of ['mcpServers', 'servers']) {
+    const section = parsed[key] as Record<string, Record<string, unknown>> | undefined;
+    if (section?.dollhousemcp) {
+      section.dollhousemcp.command = wrapperPath;
+      patched = true;
+      break;
+    }
+  }
+
+  if (!patched) {
+    logger.debug(`[Setup] patchConfigForNvmLauncher: no dollhousemcp entry in ${client} config — nothing to patch`);
+    return;
+  }
+
+  const indent = detectIndent(raw);
+  logger.debug(`[Setup] patchConfigForNvmLauncher: writing ${client} config (indent=${JSON.stringify(indent)})`);
+  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  logger.info(`[Setup] Patched ${client} config to use NVM-aware launcher: ${wrapperPath}`);
 }
 
 /**

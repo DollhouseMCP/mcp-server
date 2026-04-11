@@ -21,7 +21,7 @@ import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
-import { createSetupRoutes } from './routes/setupRoutes.js';
+import { createSetupRoutes, repairNvmLauncherOnStartup } from './routes/setupRoutes.js';
 import { createTotpRoutes } from './routes/totpRoutes.js';
 import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
@@ -304,6 +304,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   app.post('/api/setup/license/verify', setupJsonParser, verifyLicenseHandler);
   app.post('/api/setup/license/resend', setupJsonParser, resendVerificationHandler);
   logger.info('[WebUI] Setup routes mounted at /api/setup');
+
+  // Fire-and-forget NVM launcher repair: recreates the wrapper if deleted and
+  // patches any pre-existing configs that still use bare `npx`. No-ops when
+  // NVM is absent or on Windows. Never delays server startup.
+  repairNvmLauncherOnStartup().catch(err =>
+    logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+  );
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
