@@ -1980,7 +1980,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
     // Server version injected at request time — used to show Setup tab once per version
     // so upgraders automatically see it on each new release (not just first-ever visit).
-    const currentServerVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || 'unknown';
+    // Validate format (semver-like) before trusting the value; malformed falls back to
+    // 'unknown' which safely triggers setup on every load rather than silently skipping.
+    const _rawVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
+    const currentServerVersion = /^\d+\.\d+\.\d+/.test(_rawVersion) ? _rawVersion : 'unknown';
 
     // Determine which tab to show on load:
     // 1. URL hash (deep link)

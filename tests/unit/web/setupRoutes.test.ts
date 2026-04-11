@@ -894,10 +894,36 @@ describe('Setup Tab — Regressions', () => {
       expect(appJs).toContain("localStorage.getItem(TAB_KEY)");
     });
 
-    it('first visit defaults to setup tab', () => {
+    it('shows setup tab when stored version does not match current version', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Version comparison — not a simple truthy check
+      expect(appJs).toContain("localStorage.getItem(SETUP_SEEN_KEY) !== currentServerVersion");
       expect(appJs).toContain("switchToTab('setup')");
-      expect(appJs).toContain('dollhousemcp-setup-seen');
+    });
+
+    it('stores the version string (not "1") in the setup-seen flag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion)');
+      // Must NOT store the old hard-coded sentinel value
+      expect(appJs).not.toContain("localStorage.setItem(SETUP_SEEN_KEY, '1')");
+    });
+
+    it('reads server version from the dollhouse-server-version meta tag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('meta[name="dollhouse-server-version"]');
+    });
+
+    it('validates version format before using it (rejects malformed values)', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Semver-like validation guard present
+      expect(appJs).toContain('/^\\d+\\.\\d+\\.\\d+/.test(');
+      // Falls back to 'unknown' for invalid versions
+      expect(appJs).toContain("'unknown'");
+    });
+
+    it('index.html has the dollhouse-server-version meta tag placeholder', () => {
+      expect(html).toContain('name="dollhouse-server-version"');
+      expect(html).toContain('{{DOLLHOUSE_VERSION}}');
     });
   });
 
