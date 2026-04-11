@@ -44,6 +44,20 @@ type RequestContextProvider = {
   getSessionContext(): SessionContext | undefined;
 };
 
+/** Capture correlationId, userId, and sessionId from the current request context. */
+function getRequestAttribution(tracker: RequestContextProvider | null): {
+  correlationId?: string;
+  userId?: string;
+  sessionId?: string;
+} {
+  const session = tracker?.getSessionContext();
+  return {
+    correlationId: tracker?.getCorrelationId(),
+    userId: session?.userId,
+    sessionId: session?.sessionId,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Exported factory for TriggerMetricsTracker (created outside DI container)
 // ---------------------------------------------------------------------------
@@ -61,9 +75,7 @@ export function getTriggerMetricsLogListener(
       source: 'TriggerMetricsTracker',
       message,
       data,
-      correlationId: contextTracker?.getCorrelationId(),
-      userId: contextTracker?.getSessionContext()?.userId,
-      sessionId: contextTracker?.getSessionContext()?.sessionId,
+      ...getRequestAttribution(contextTracker ?? null),
     };
     logManager.log(entry);
   };
@@ -86,9 +98,7 @@ export function getSecurityAuditorLogListener(
       source: 'SecurityAuditor',
       message,
       data,
-      correlationId: contextTracker?.getCorrelationId(),
-      userId: contextTracker?.getSessionContext()?.userId,
-      sessionId: contextTracker?.getSessionContext()?.sessionId,
+      ...getRequestAttribution(contextTracker ?? null),
     };
     logManager.log(entry);
   };
@@ -131,9 +141,7 @@ export function wireLogHooks(
         source: 'MCPLogger',
         message: logEntry.message,
         data: logEntry.data != null ? logEntry.data : undefined,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -156,9 +164,7 @@ export function wireLogHooks(
           severity: logEntry.severity,
           sourceComponent: logEntry.source,
         },
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -182,9 +188,7 @@ export function wireLogHooks(
         source: 'SecurityTelemetry',
         message: `Blocked ${telEntry.attackType}: ${telEntry.pattern}`,
         data: telEntry.metadata,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -205,9 +209,7 @@ export function wireLogHooks(
         source: 'PerformanceMonitor',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -240,7 +242,7 @@ export function wireLogHooks(
     for (const eventName of loggedEvents) {
       const unsub = dispatcher.on(eventName, (payload: any) => {
         const level = eventLevelMap[eventName] ?? 'debug';
-        const requestCorrelationId = contextTracker?.getCorrelationId();
+        const attribution = getRequestAttribution(contextTracker);
         // Use elementId if available, fall back to filename from filePath
         const elementName = payload.elementId
           || (payload.filePath ? payload.filePath.replace(/\.[^.]+$/, '') : '');
@@ -256,9 +258,8 @@ export function wireLogHooks(
             ...(payload.correlationId ? { operationId: payload.correlationId } : {}),
             ...(payload.filePath ? { filePath: payload.filePath } : {}),
           },
-          correlationId: requestCorrelationId ?? payload.correlationId,
-          userId: contextTracker?.getSessionContext()?.userId,
-          sessionId: contextTracker?.getSessionContext()?.sessionId,
+          ...attribution,
+          correlationId: attribution.correlationId ?? payload.correlationId,
         };
         logManager.log(entry);
       });
@@ -280,9 +281,7 @@ export function wireLogHooks(
         source: 'OperationalTelemetry',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -303,9 +302,7 @@ export function wireLogHooks(
         source: 'FileLockManager',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -323,9 +320,7 @@ export function wireLogHooks(
         source: 'DefaultElementProvider',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -343,9 +338,7 @@ export function wireLogHooks(
         source: 'LRUCache',
         message,
         data,
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     });
@@ -367,9 +360,7 @@ export function wireLogHooks(
         source: 'StateChangeNotifier',
         message: `State change: ${event.type}`,
         data: { previousValue: event.previousValue, newValue: event.newValue },
-        correlationId: contextTracker?.getCorrelationId(),
-        userId: contextTracker?.getSessionContext()?.userId,
-        sessionId: contextTracker?.getSessionContext()?.sessionId,
+        ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
     };
