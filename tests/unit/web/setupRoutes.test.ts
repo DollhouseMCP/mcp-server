@@ -164,6 +164,7 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _skipRateLimit: true,
       });
 
       const testApp = express();

@@ -31,6 +31,9 @@ let tempDir: string;
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), 'dollhouse-nvm-test-'));
+  // Clear NVM_DIR before each test so the CI runner's real NVM installation
+  // doesn't bleed into tests that pass a custom home directory.
+  delete process.env.NVM_DIR;
 });
 
 afterEach(async () => {
@@ -437,8 +440,8 @@ describe('patchConfigForNvmLauncher', () => {
     // The mcpServers line must be indented with exactly 4 spaces (not 2)
     const lines = result.split('\n');
     const mcpLine = lines.find(l => l.includes('"mcpServers"')) ?? '';
-    expect(mcpLine).toMatch(/^    "[^"]/);   // exactly 4 leading spaces
-    expect(mcpLine).not.toMatch(/^  "[^"]/); // not 2-space indent on that line
+    expect(mcpLine).toMatch(/^ {4}"[^"]/);   // exactly 4 leading spaces
+    expect(mcpLine).not.toMatch(/^ {2}"[^"]/); // not 2-space indent on that line
   });
 
   it('uses tab indentation when input uses tabs', async () => {

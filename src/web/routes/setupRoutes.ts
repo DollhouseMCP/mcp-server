@@ -365,6 +365,8 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
 export function createSetupRoutes(opts?: {
   /** Override install-mcp runner. For testing only — prefix signals test-only use. */
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
+  /** Skip the sliding-window rate limiter. For testing only. */
+  _skipRateLimit?: boolean;
 }): {
   installHandler: (req: Request, res: Response) => Promise<void>;
   openConfigHandler: (req: Request, res: Response) => Promise<void>;
@@ -377,6 +379,7 @@ export function createSetupRoutes(opts?: {
   resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
+  const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
     const clients = [
@@ -440,7 +443,7 @@ export function createSetupRoutes(opts?: {
 
   // ── Auto-install via install-mcp ────────────────────────────────────
   const installHandler = async (req: Request, res: Response): Promise<void> => {
-    if (!installLimiter.tryAcquire()) {
+    if (!skipRateLimit && !installLimiter.tryAcquire()) {
       res.status(429).json({ error: 'Too many install requests. Try again in a minute.' });
       return;
     }
@@ -474,13 +477,16 @@ export function createSetupRoutes(opts?: {
       // cognitive complexity within bounds (SonarCloud S3776).
       const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
 
+      // true = mitigation applied; false = present but failed; null = not applicable
+      const nvmMitigationApplied =
+        nvmResult === 'applied' ? true : nvmResult === 'failed' ? false : null;
+
       res.json({
         success: true,
         output,
         client: normalizedClient,
         version: effectiveVersion || 'latest',
-        // true = mitigation applied; false = present but failed; null = not applicable
-        nvmMitigationApplied: nvmResult === 'applied' ? true : nvmResult === 'failed' ? false : null,
+        nvmMitigationApplied,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -965,9 +971,17 @@ export async function isNvmPresent(home = homedir()): Promise<boolean> {
  * Resolves the NVM directory: process.env.NVM_DIR if set, otherwise ~/.nvm.
  * Used to hardcode the path in the generated wrapper so it works even when
  * Claude Desktop does not source the user's shell profile.
+ *
+ * process.env.NVM_DIR is validated before use to prevent shell injection in
+ * the generated wrapper script (only absolute paths with safe characters are
+ * accepted; unsafe values fall back to ~/.nvm).
  */
 function resolveNvmDir(home = homedir()): string {
-  return process.env.NVM_DIR ?? join(home, '.nvm');
+  const envDir = process.env.NVM_DIR;
+  if (envDir && /^\/[\w./~-]+$/.test(envDir)) {
+    return envDir;
+  }
+  return join(home, '.nvm');
 }
 
 /**
