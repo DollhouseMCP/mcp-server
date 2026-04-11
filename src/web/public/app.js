@@ -1978,11 +1978,18 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
+    // Server version injected at request time — used to show Setup tab once per version
+    // so upgraders automatically see it on each new release (not just first-ever visit).
+    // Validate format (semver-like) before trusting the value; malformed falls back to
+    // 'unknown' which safely triggers setup on every load rather than silently skipping.
+    const _rawVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
+    const currentServerVersion = /^\d+\.\d+\.\d+/.test(_rawVersion) ? _rawVersion : 'unknown';
 
     // Determine which tab to show on load:
-    // 1. Saved tab from last visit (localStorage)
-    // 2. Setup tab on first-ever visit
-    // 3. Portfolio (HTML default)
+    // 1. URL hash (deep link)
+    // 2. Saved tab from last visit (localStorage)
+    // 3. Setup tab if not seen on this version yet
+    // 4. Portfolio (HTML default)
     const switchToTab = (tabName) => {
       if (!consoleTabs) return;
       const btn = consoleTabs.querySelector(`[data-tab="${tabName}"]`);
@@ -2109,12 +2116,16 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     }
 
     if (!applyHashTab()) {
-      const savedTab = localStorage.getItem(TAB_KEY);
-      if (savedTab) {
-        switchToTab(savedTab);
-        lazyInitTab(savedTab, tabInits);
-      } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
-        localStorage.setItem(SETUP_SEEN_KEY, '1');
+      // Version check takes priority over saved tab — upgraders must see Setup
+      // regardless of whether they have a saved tab from their previous session.
+      if (localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion) {
+        const savedTab = localStorage.getItem(TAB_KEY);
+        if (savedTab) {
+          switchToTab(savedTab);
+          lazyInitTab(savedTab, tabInits);
+        }
+      } else {
+        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
         switchToTab('setup');
       }
     }
