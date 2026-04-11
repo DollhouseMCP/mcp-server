@@ -806,6 +806,11 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @returns Activation result with success status and message
    */
   async activateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
+    // Evict stale cache before lookup so external file edits are picked up (#1895).
+    // findByName() hits the LRU cache first and never calls list(), so without this
+    // the scan cooldown prevents mtime-based eviction from running.
+    await this.scanAndEvict();
+
     // PERFORMANCE FIX: Use findByName() instead of list()
     const ensemble = await this.findByName(identifier);
 
