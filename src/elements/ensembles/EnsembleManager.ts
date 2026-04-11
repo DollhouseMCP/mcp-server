@@ -22,6 +22,7 @@ import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
@@ -81,9 +82,10 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     private metadataService: MetadataService,
     fileWatchService?: FileWatchService,
     memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
+    backupService?: import('../../services/BackupService.js').BackupService,
+    eventDispatcher?: ElementEventDispatcher
   ) {
-    super(ElementType.ENSEMBLE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+    super(ElementType.ENSEMBLE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
     this.ensemblesDir = this.elementDir;
     this.validationService = validationRegistry.getValidationService();
     this.serializationService = serializationService;

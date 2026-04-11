@@ -45,6 +45,7 @@ import {
   createExecutionContext,
 } from './safetyTierService.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
@@ -117,10 +118,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadataService: MetadataService,
     fileWatchService?: FileWatchService,
     memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
+    backupService?: import('../../services/BackupService.js').BackupService,
+    eventDispatcher?: ElementEventDispatcher
   ) {
     const elementDirOverride = path.join(baseDir, ElementType.AGENT);
-    super(ElementType.AGENT, portfolioManager, fileLockManager, { elementDirOverride, fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+    super(ElementType.AGENT, portfolioManager, fileLockManager, { elementDirOverride, fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
     this.stateDir = path.join(this.elementDir, STATE_DIRECTORY);
     this.triggerValidationService = validationRegistry.getTriggerValidationService();
     this.validationService = validationRegistry.getValidationService();

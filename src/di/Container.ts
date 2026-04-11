@@ -287,7 +287,9 @@ export class DollhouseContainer {
     this.register('GitHubRateLimiter', () => new GitHubRateLimiter(
       this.resolve('TokenManager')
     ));
-    this.register('ElementEventDispatcher', () => ElementEventDispatcher.getSharedDispatcher());
+    this.register('ElementEventDispatcher', () => new ElementEventDispatcher(
+      this.resolve('ContextTracker')
+    ));
     this.register('MCPLogger', () => logger);
 
     this.register('PersonaImporter', () => {
@@ -491,7 +493,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('TemplateManager', () => new TemplateManager(
       this.resolve('PortfolioManager'),
@@ -502,7 +505,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
     this.register('AgentManager', () => new AgentManager(
@@ -515,7 +519,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('MemoryManager', () => new MemoryManager(
       this.resolve('PortfolioManager'),
@@ -526,7 +531,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     this.register('EnsembleManager', () => new EnsembleManager(
       this.resolve('PortfolioManager'),
@@ -537,7 +543,8 @@ export class DollhouseContainer {
       this.resolve('MetadataService'),
       this.resolve('FileWatchService'),
       this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService')
+      this.resolve('BackupService'),
+      this.resolve('ElementEventDispatcher')
     ));
     Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
     // Issue #51: Configure retention policy resolver for Memory class

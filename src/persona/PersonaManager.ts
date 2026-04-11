@@ -1430,11 +1430,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return;
     }
 
+    const session = this.contextTracker?.getSessionContext();
     this.notifier.notifyPersonaChange({
       type,
       previousValue,
       newValue,
-      timestamp: new Date()
+      timestamp: new Date(),
+      ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
     });
   }
 
