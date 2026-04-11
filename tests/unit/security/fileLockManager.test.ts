@@ -207,10 +207,9 @@ describe('FileLockManager', () => {
       }
     });
 
-    test('should handle deadlock prevention with timeout', async () => {
+    test('should maintain lock until operation completes even after caller timeout', async () => {
       const results: string[] = [];
-      
-      // Create potential deadlock scenario with very short timeout
+
       const promise1 = fileLockManager.withLock(
         'deadlock-test',
         async () => {
@@ -221,8 +220,7 @@ describe('FileLockManager', () => {
         },
         { timeout: 100 }
       );
-      
-      // This should proceed after first times out
+
       const promise2 = fileLockManager.withLock(
         'deadlock-test',
         async () => {
@@ -230,17 +228,71 @@ describe('FileLockManager', () => {
           return 'op2';
         }
       );
-      
-      // First should timeout
+
+      // Caller gets timeout error
       await expect(promise1).rejects.toThrow('Lock operation timeout');
-      
-      // Second should succeed
+
+      // Second waits for real operation to finish, then succeeds
       await expect(promise2).resolves.toBe('op2');
-      
-      // Verify operations
+
+      // Under the fix: op1 runs to completion before op2 starts
       expect(results).toContain('op1-start');
-      expect(results).not.toContain('op1-end'); // Should not complete
+      expect(results).toContain('op1-end');
       expect(results).toContain('op2-start');
+      expect(results.indexOf('op1-end')).toBeLessThan(results.indexOf('op2-start'));
+    });
+
+    test('should prevent zombie operations from racing with new callers after timeout', async () => {
+      const concurrentOps: string[] = [];
+
+      const promise1 = fileLockManager.withLock(
+        'zombie-test',
+        async () => {
+          concurrentOps.push('op1-running');
+          await new Promise(resolve => setTimeout(resolve, 200));
+          concurrentOps.push('op1-done');
+        },
+        { timeout: 50 }
+      );
+
+      const promise2 = fileLockManager.withLock(
+        'zombie-test',
+        async () => {
+          concurrentOps.push('op2-running');
+        }
+      );
+
+      await expect(promise1).rejects.toThrow('Lock operation timeout');
+      await promise2;
+
+      // op2 must not start until op1 actually finishes
+      const op1DoneIdx = concurrentOps.indexOf('op1-done');
+      const op2RunningIdx = concurrentOps.indexOf('op2-running');
+      expect(op1DoneIdx).toBeGreaterThan(-1);
+      expect(op2RunningIdx).toBeGreaterThan(op1DoneIdx);
+    });
+
+    test('should report activeLocksCount 0 after timed-out operation completes', async () => {
+      let resolveOp!: () => void;
+      const opFinished = new Promise<void>(resolve => { resolveOp = resolve; });
+
+      const promise = fileLockManager.withLock(
+        'cleanup-test',
+        async () => { await opFinished; },
+        { timeout: 50 }
+      );
+
+      await expect(promise).rejects.toThrow('Lock operation timeout');
+
+      // Lock still held while operation runs
+      expect(fileLockManager.getMetrics().activeLocksCount).toBe(1);
+
+      // Release the zombie operation
+      resolveOp();
+      await new Promise(resolve => setImmediate(resolve));
+
+      // Lock cleaned up
+      expect(fileLockManager.getMetrics().activeLocksCount).toBe(0);
     });
   });
 });

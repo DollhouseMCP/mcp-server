@@ -476,66 +476,69 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    */
   async save(element: T, filePath: string): Promise<void> {
     const { relativePath, absolutePath } = await this.normalizeAndValidatePath(filePath);
-    const correlationId = randomUUID();
-    const transaction = new ElementTransactionScope(this.getElementLabel(), correlationId);
 
-    SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_EDITED',
-      severity: 'LOW',
-      source: `${this.constructor.name}.save`,
-      details: `Saving ${this.getElementLabel()}: ${element.metadata.name} v${element.metadata.version || 'unknown'}`,
-      additionalData: {
-        elementId: element.id,
-        elementType: this.getElementLabel(),
-        author: element.metadata.author,
-        version: element.metadata.version,
-      }
-    });
+    await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      const correlationId = randomUUID();
+      const transaction = new ElementTransactionScope(this.getElementLabel(), correlationId);
 
-    this.eventDispatcher.emit(
-      'element:save:start',
-      this.createEventPayload({ correlationId, filePath: relativePath, element })
-    );
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_EDITED',
+        severity: 'LOW',
+        source: `${this.constructor.name}.save`,
+        details: `Saving ${this.getElementLabel()}: ${element.metadata.name} v${element.metadata.version || 'unknown'}`,
+        additionalData: {
+          elementId: element.id,
+          elementType: this.getElementLabel(),
+          author: element.metadata.author,
+          version: element.metadata.version,
+        }
+      });
 
-    transaction.addCommit(async () => {
-      this.cacheElement(element, relativePath);
-      await this.storageLayer.notifySaved(relativePath, absolutePath);
-      this.eventDispatcher.emitAsync(
-        'element:save:success',
+      this.eventDispatcher.emit(
+        'element:save:start',
         this.createEventPayload({ correlationId, filePath: relativePath, element })
       );
+
+      transaction.addCommit(async () => {
+        this.cacheElement(element, relativePath);
+        await this.storageLayer.notifySaved(relativePath, absolutePath);
+        this.eventDispatcher.emitAsync(
+          'element:save:success',
+          this.createEventPayload({ correlationId, filePath: relativePath, element })
+        );
+      });
+
+      transaction.addRollback(async (error) => {
+        this.eventDispatcher.emitAsync(
+          'element:save:error',
+          this.createEventPayload({ correlationId, filePath: relativePath, element, error })
+        );
+      });
+
+      await transaction.run(async () => {
+        if (this.beforeSave) {
+          await this.beforeSave(element, relativePath);
+        }
+
+        await this.fileOperations.createDirectory(path.dirname(absolutePath));
+        await this.createBackupBeforeSave(absolutePath);
+
+        const content = await this.serializeElement(element);
+
+        // Fix #908: Validate serialized content before writing (symmetric with read path).
+        // Read path validates via SecureYamlParser.parse() → ContentValidator; write path
+        // must apply the same checks to prevent saving content that would fail to load.
+        this.validateSerializedContent(content);
+
+        await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+
+        if (this.afterSave) {
+          await this.afterSave(element, relativePath);
+        }
+      });
+
+      logger.info(`${this.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
     });
-
-    transaction.addRollback(async (error) => {
-      this.eventDispatcher.emitAsync(
-        'element:save:error',
-        this.createEventPayload({ correlationId, filePath: relativePath, element, error })
-      );
-    });
-
-    await transaction.run(async () => {
-      if (this.beforeSave) {
-        await this.beforeSave(element, relativePath);
-      }
-
-      await this.fileOperations.createDirectory(path.dirname(absolutePath));
-      await this.createBackupBeforeSave(absolutePath);
-
-      const content = await this.serializeElement(element);
-
-      // Fix #908: Validate serialized content before writing (symmetric with read path).
-      // Read path validates via SecureYamlParser.parse() → ContentValidator; write path
-      // must apply the same checks to prevent saving content that would fail to load.
-      this.validateSerializedContent(content);
-
-      await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
-
-      if (this.afterSave) {
-        await this.afterSave(element, relativePath);
-      }
-    });
-
-    logger.info(`${this.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
   }
 
   /**
@@ -816,56 +819,59 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * CACHE FIX: Uses filepath-based cache removal to prevent stale entries
    */
   async delete(filePath: string): Promise<void> {
-    SecurityMonitor.logSecurityEvent({
-      type: 'ELEMENT_DELETED',
-      severity: 'MEDIUM',
-      source: `${this.constructor.name}.delete`,
-      details: `Attempting to delete ${this.getElementLabel()}: ${filePath}`
-    });
-
     const { relativePath, absolutePath } = await this.normalizeAndValidatePath(filePath);
-    const correlationId = randomUUID();
-    const transaction = new ElementTransactionScope(this.getElementLabel(), correlationId);
 
-    this.eventDispatcher.emit(
-      'element:delete:start',
-      this.createEventPayload({ correlationId, filePath: relativePath })
-    );
+    await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_DELETED',
+        severity: 'MEDIUM',
+        source: `${this.constructor.name}.delete`,
+        details: `Attempting to delete ${this.getElementLabel()}: ${filePath}`
+      });
 
-    transaction.addCommit(async () => {
-      this.uncacheByPath(relativePath);
-      this.storageLayer.notifyDeleted(relativePath);
-      this.eventDispatcher.emitAsync(
-        'element:delete:success',
+      const correlationId = randomUUID();
+      const transaction = new ElementTransactionScope(this.getElementLabel(), correlationId);
+
+      this.eventDispatcher.emit(
+        'element:delete:start',
         this.createEventPayload({ correlationId, filePath: relativePath })
       );
-    });
 
-    transaction.addRollback(async (error) => {
-      this.eventDispatcher.emitAsync(
-        'element:delete:error',
-        this.createEventPayload({ correlationId, filePath: relativePath, error })
-      );
-    });
+      transaction.addCommit(async () => {
+        this.uncacheByPath(relativePath);
+        this.storageLayer.notifyDeleted(relativePath);
+        this.eventDispatcher.emitAsync(
+          'element:delete:success',
+          this.createEventPayload({ correlationId, filePath: relativePath })
+        );
+      });
 
-    await transaction.run(async () => {
-      if (this.canDelete) {
-        const elementForValidation = await this.loadElementSnapshot(absolutePath, relativePath);
-        const decision = await this.canDelete(elementForValidation);
-        if (!decision.allowed) {
-          throw new Error(decision.reason ?? `Deletion not permitted for ${this.getElementLabel()}`);
+      transaction.addRollback(async (error) => {
+        this.eventDispatcher.emitAsync(
+          'element:delete:error',
+          this.createEventPayload({ correlationId, filePath: relativePath, error })
+        );
+      });
+
+      await transaction.run(async () => {
+        if (this.canDelete) {
+          const elementForValidation = await this.loadElementSnapshot(absolutePath, relativePath);
+          const decision = await this.canDelete(elementForValidation);
+          if (!decision.allowed) {
+            throw new Error(decision.reason ?? `Deletion not permitted for ${this.getElementLabel()}`);
+          }
         }
-      }
 
-      const movedToBackup = await this.createBackupBeforeDelete(absolutePath);
-      if (!movedToBackup) {
-        await this.fileOperations.deleteFile(absolutePath, this.elementType, {
-          source: `${this.constructor.name}.delete`
-        });
-      }
+        const movedToBackup = await this.createBackupBeforeDelete(absolutePath);
+        if (!movedToBackup) {
+          await this.fileOperations.deleteFile(absolutePath, this.elementType, {
+            source: `${this.constructor.name}.delete`
+          });
+        }
+      });
+
+      logger.info(`${this.getElementLabelCapitalized()} deleted: ${filePath}`);
     });
-
-    logger.info(`${this.getElementLabelCapitalized()} deleted: ${filePath}`);
   }
 
   /**

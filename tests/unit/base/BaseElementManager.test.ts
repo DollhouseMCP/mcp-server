@@ -175,6 +175,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
     fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
       return fs.readFile(filePath, 'utf-8');
     }) as any;
+    (fileLockManager as any).withLock = jest.fn(
+      async (_resource: string, fn: () => Promise<unknown>) => fn()
+    );
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
 
     jest.clearAllMocks();
