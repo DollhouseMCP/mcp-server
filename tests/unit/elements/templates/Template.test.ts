@@ -339,7 +339,7 @@ describe('Template', () => {
         ]
       }, 'Hello {{defined}} and {{undefined}}!', metadataService);
       const result = template.validate();
-      
+
       expect(result.valid).toBe(true);
       expect(result.warnings).toContainEqual(
         expect.objectContaining({
@@ -348,6 +348,24 @@ describe('Template', () => {
           severity: 'medium'
         })
       );
+    });
+
+    it('should not warn for dot-notation variables registered with their full path', () => {
+      // deriveVariablesFromContent stores 'user.name' as the variable name;
+      // validate() must match against the full path, not just the root 'user'.
+      const template = new Template({
+        name: 'Dot Notation Vars',
+        variables: [
+          { name: 'user.name', type: 'string' },
+          { name: 'user.email', type: 'string' }
+        ]
+      }, 'Hello {{user.name}}, your email is {{user.email}}.', metadataService);
+      const result = template.validate();
+
+      const undefinedVarWarnings = (result.warnings ?? []).filter(
+        w => w.field === 'variables' && w.message.includes('undefined variable')
+      );
+      expect(undefinedVarWarnings).toHaveLength(0);
     });
 
     it('should suggest best practices', () => {
@@ -656,6 +674,20 @@ describe('Template', () => {
       const result = Template.deriveVariablesFromContent(content);
       expect(result).toHaveLength(1);
       expect(result[0].name).toBe('title');
+    });
+
+    it('throws with ensemble guidance when derived count would exceed 100', () => {
+      // Build content with 101 distinct placeholders
+      const placeholders = Array.from({ length: 101 }, (_, i) => `{{var_${i}}}`).join(' ');
+      expect(() => Template.deriveVariablesFromContent(placeholders)).toThrow(
+        /Split this content across multiple templates and combine them in an ensemble/
+      );
+    });
+
+    it('succeeds when derived count is exactly 100', () => {
+      const placeholders = Array.from({ length: 100 }, (_, i) => `{{var_${i}}}`).join(' ');
+      const result = Template.deriveVariablesFromContent(placeholders);
+      expect(result).toHaveLength(100);
     });
   });
 });

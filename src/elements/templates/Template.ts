@@ -84,7 +84,7 @@ export class Template extends BaseElement implements IElement {
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
   private readonly MAX_TEMPLATE_SIZE = 100 * 1024; // 100KB max template size
-  private readonly MAX_VARIABLE_COUNT = 100;       // Max variables per template
+  private static readonly MAX_VARIABLE_COUNT = 100; // Max variables per template
   private readonly MAX_INCLUDE_DEPTH = 5;          // Prevent infinite include loops
   private readonly MAX_STRING_LENGTH = 10000;      // Max length for string variables
 
@@ -136,8 +136,8 @@ export class Template extends BaseElement implements IElement {
 
     // SECURITY FIX #3 & #4: Validate variables
     if (this.metadata.variables) {
-      if (this.metadata.variables.length > this.MAX_VARIABLE_COUNT) {
-        throw ErrorHandler.createError(`Variable count ${this.metadata.variables.length} exceeds maximum ${this.MAX_VARIABLE_COUNT}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TOO_MANY_VARIABLES);
+      if (this.metadata.variables.length > Template.MAX_VARIABLE_COUNT) {
+        throw ErrorHandler.createError(`Variable count ${this.metadata.variables.length} exceeds maximum ${Template.MAX_VARIABLE_COUNT}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TOO_MANY_VARIABLES);
       }
       
       this.metadata.variables = this.metadata.variables.map(variable => ({
@@ -301,6 +301,21 @@ export class Template extends BaseElement implements IElement {
       if (!existingNames.has(name)) {
         result.push({ name, type: 'string', required: false });
       }
+    }
+
+    // Enforce the same MAX_VARIABLE_COUNT limit as the constructor.
+    // When auto-derive would exceed the cap, truncate and surface a structured
+    // error so the calling LLM knows to split the content across templates.
+    if (result.length > Template.MAX_VARIABLE_COUNT) {
+      const overflow = result.splice(Template.MAX_VARIABLE_COUNT);
+      const overflowNames = overflow.map(v => v.name).join(', ');
+      throw ErrorHandler.createError(
+        `Auto-derive reached the ${Template.MAX_VARIABLE_COUNT}-variable limit. ` +
+        `${overflow.length} placeholder(s) were not registered: ${overflowNames}. ` +
+        `Split this content across multiple templates and combine them in an ensemble.`,
+        ErrorCategory.VALIDATION_ERROR,
+        ValidationErrorCodes.TOO_MANY_VARIABLES
+      );
     }
 
     return result;
@@ -852,7 +867,7 @@ export class Template extends BaseElement implements IElement {
     // Check if all tokens have corresponding variable definitions
     const compiled = this.compile();
     const definedVars = new Set(this.metadata.variables?.map(v => v.name) || []);
-    const usedVars = new Set(compiled.tokens.map(t => t.variable.split('.')[0]));
+    const usedVars = new Set(compiled.tokens.map(t => t.variable));
 
     usedVars.forEach(varName => {
       if (!definedVars.has(varName)) {
