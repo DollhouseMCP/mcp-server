@@ -177,7 +177,7 @@ async function startAsLeader(
   consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
-  const { pickRandomPuppetName } = await import('./SessionNames.js');
+  const { pickRandomTokenName } = await import('./SessionNames.js');
 
   // Initialize the console token store (#1780). Creates the token file on
   // first run, reads the existing tokens on subsequent runs. The token is
@@ -185,7 +185,7 @@ async function startAsLeader(
   // Feature flag DOLLHOUSE_WEB_AUTH_ENABLED controls enforcement; the file
   // is generated regardless so consumers can attach tokens preemptively.
   const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-  const primaryToken = await tokenStore.ensureInitialized(pickRandomPuppetName());
+  const primaryToken = await tokenStore.ensureInitialized(pickRandomTokenName());
   logger.info('[UnifiedConsole] Console token store initialized', {
     tokenId: primaryToken.id,
     tokenName: primaryToken.name,
