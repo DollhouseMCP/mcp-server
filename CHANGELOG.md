@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.12-rc.16] - 2026-04-12
+
+- Version bump
+
 ## [2.0.11-rc.1] - 2026-04-08
 
 Release candidate for v2.0.11 — console auth, permissions, licensing, port 41715, channel selector
