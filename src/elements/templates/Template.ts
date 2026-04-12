@@ -249,6 +249,41 @@ export class Template extends BaseElement implements IElement {
     return this.parsedSections;
   }
 
+  /**
+   * Scan `content` for {{placeholder}} patterns and return a merged variable
+   * list. Existing entries are preserved unchanged (user-set descriptions,
+   * types, required flags, etc.); new placeholders are added with defaults:
+   * type 'string', required: false.  (#1896)
+   *
+   * Respects section mode — only the <template> section is scanned, matching
+   * the substitution engine's scope.
+   */
+  static deriveVariablesFromContent(
+    content: string,
+    existingVariables: TemplateVariable[] = []
+  ): TemplateVariable[] {
+    const { isSectionMode, templateSection } = Template.parseSections(content);
+    const scanContent = isSectionMode ? templateSection : content;
+
+    const pattern = /\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g;
+    const seen = new Set<string>();
+    let match;
+    while ((match = pattern.exec(scanContent)) !== null) {
+      seen.add(match[1]);
+    }
+
+    const existingNames = new Set(existingVariables.map(v => v.name));
+    const result: TemplateVariable[] = [...existingVariables];
+
+    for (const name of seen) {
+      if (!existingNames.has(name)) {
+        result.push({ name, type: 'string', required: false });
+      }
+    }
+
+    return result;
+  }
+
   private compile(): CompiledTemplate {
     if (this.compiledTemplate) {
       return this.compiledTemplate;

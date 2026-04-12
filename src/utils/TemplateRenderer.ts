@@ -26,6 +26,8 @@ export interface RenderResult {
     script: string;
   };
   error?: string;
+  /** Unsubstituted {{placeholder}} names found in the rendered output (#1896) */
+  warnings?: string[];
   performance?: {
     lookupTime: number;
     renderTime: number;
@@ -159,12 +161,24 @@ export class TemplateRenderer {
         `output_length=${rendered.length}`
       );
 
+      // Detect unsubstituted placeholders (#1896) — render always completes;
+      // unfilled tokens are surfaced as advisory warnings, never hard errors.
+      const unsubstituted = [...rendered.matchAll(/\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g)]
+        .map(m => m[1]);
+      const warnings = unsubstituted.length > 0
+        ? [`${unsubstituted.length} placeholder(s) were not substituted: ${unsubstituted.join(', ')}`]
+        : undefined;
+      if (warnings) {
+        logger.warn(`[TemplateRenderer] ${warnings[0]}`);
+      }
+
       // Issue #705: all_sections — return rendered template + raw style/script together
       if (allSections) {
         const sections = template.getSections();
         return {
           success: true,
           content: rendered,
+          warnings,
           sections: {
             template: rendered,
             style: sections.styleSection,
@@ -177,6 +191,7 @@ export class TemplateRenderer {
       return {
         success: true,
         content: rendered,
+        warnings,
         performance: { lookupTime, renderTime, totalTime }
       };
       
