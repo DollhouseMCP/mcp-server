@@ -11,6 +11,14 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
 import { DollhouseContainer } from "./di/Container.js";
+import {
+  createStreamableHttpRuntime,
+  getStreamableHttpRuntimeOptions,
+  getRequestedTransportName,
+  type StreamableHttpRuntimeOptions,
+  type StreamableHttpRuntimeHandle,
+} from './server/StreamableHttpServer.js';
+import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
 import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
 import { PACKAGE_VERSION } from "./generated/version.js";
@@ -855,6 +863,57 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
   }
 }
 
+/**
+ * Start DollhouseMCP in Streamable HTTP transport mode.
+ *
+ * Bootstraps a single shared DollhouseContainer once, then creates lightweight
+ * per-session MCP Servers via createServerForHttpSession(). This is the
+ * shared-container architecture from the unified path forward plan.
+ *
+ * Phase 2: single-user identity (all sessions get userId='http-user').
+ * Phase 3 will wire JWT authentication for multi-user identity.
+ */
+async function startStreamableHttpServer(
+  options: StreamableHttpRuntimeOptions = {},
+): Promise<StreamableHttpRuntimeHandle> {
+  // One container for all HTTP sessions — bootstrapped once at startup
+  const container = new DollhouseContainer();
+
+  await container.preparePortfolio();
+  await container.bootstrapHttpHandlers();
+
+  // Sink setup only — wires log hooks, metrics collectors, pattern encryption,
+  // background validator, memory auto-load. No web console / leader election
+  // in HTTP mode (that's Phase 2 Step 2.4).
+  await container.completeSinkSetup();
+
+  // Activate HTTP mode error handling (no process.exit on uncaught exceptions)
+  setHttpModeActive(true);
+
+  return createStreamableHttpRuntime(async (transport) => {
+    // Create per-session identity
+    const sessionContext = createHttpSession();
+
+    // Create per-session MCP Server wired to shared handlers
+    const { server, dispose: disposeServer } = container.createServerForHttpSession(sessionContext);
+
+    // Connect this session's server to its transport
+    await server.connect(transport);
+
+    logger.info('[HTTP] Session connected', {
+      sessionId: sessionContext.sessionId,
+      userId: sessionContext.userId,
+    });
+
+    return {
+      dispose: async () => {
+        logger.info('[HTTP] Session disposing', { sessionId: sessionContext.sessionId });
+        await disposeServer();
+      },
+    };
+  }, { ...options, registerSignalHandlers: true });
+}
+
 if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
   // Issue #704: --web flag starts the portfolio web UI instead of MCP server
   const isWebMode = process.argv.includes('--web');
@@ -899,6 +958,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
       let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
+      let logManager: import('./logging/LogManager.js').LogManager | undefined;
       try {
         container = new DollhouseContainer();
         await container.preparePortfolio();
@@ -917,6 +977,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         mcpAqlHandler = bundle.mcpAqlHandler;
         try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
         try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
+        try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch { /* not registered */ }
       } catch (err) {
         console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
         console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
@@ -970,7 +1031,15 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const resolvedPort = cliPort || await resolvePortFromConfig();
 
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+      const webResult = await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+
+      // Wire SSE log broadcast into LogManager so new log entries reach the
+      // browser SSE stream. Without this, only the backfill from MemoryLogSink
+      // appears — live entries from MCPLogger never reach WebSSELogSink.
+      if (webResult.logBroadcast && logManager) {
+        const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
+        logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+      }
 
       // Listen for quit commands on stdin (standalone --web mode only).
       // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.
@@ -993,6 +1062,17 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       console.error("[DollhouseMCP] Web UI failed to start:", err);
       process.exit(1);
     });
+  } else if (getRequestedTransportName() === 'streamable-http') {
+    // Mutual exclusion check (--web already handled above)
+    const options = getStreamableHttpRuntimeOptions();
+    startStreamableHttpServer(options)
+      .then(runtime => {
+        console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+      })
+      .catch(err => {
+        console.error('[DollhouseMCP] Streamable HTTP server failed to start:', err);
+        process.exit(1);
+      });
   } else {
     if (isDebugStartupLogging) {
       console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");

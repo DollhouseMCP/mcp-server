@@ -1539,6 +1539,109 @@ export class DollhouseContainer {
     };
   }
 
+  // ── Shared-container HTTP session support (Phase 2) ────────────────────────
+
+  /** Cached handler bundle bootstrapped once for HTTP mode. */
+  private httpHandlerBundle: HandlerBundle | null = null;
+
+  /**
+   * Bootstrap handlers once for HTTP mode and cache the bundle.
+   * Called at server startup before any HTTP session is created.
+   *
+   * This is the HTTP equivalent of createHandlers(), but without creating
+   * a ToolRegistry or Server — those are per-session (see createServerForHttpSession).
+   */
+  public async bootstrapHttpHandlers(): Promise<HandlerBundle> {
+    if (!this.httpHandlerBundle) {
+      this.httpHandlerBundle = await this.bootstrapHandlers();
+    }
+    return this.httpHandlerBundle;
+  }
+
+  /**
+   * Create a per-session MCP Server wired to the shared handler bundle.
+   *
+   * Each HTTP session gets its own Server (SDK requirement), ToolRegistry,
+   * and ServerSetup with a session-specific SessionResolver. Handlers are
+   * shared across sessions — they are stateless or session-aware (Phase 2 prereqs).
+   *
+   * Phase 3 TODO: Per-session ActivationStore. Currently all HTTP sessions
+   * share the container's global activation state.
+   *
+   * @param sessionContext - Frozen SessionContext created by createHttpSession()
+   * @returns Per-session Server instance plus a dispose callback
+   */
+  public createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): {
+    server: Server;
+    dispose: () => Promise<void>;
+  } {
+    if (!this.httpHandlerBundle) {
+      throw new Error(
+        'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
+      );
+    }
+
+    const bundle = this.httpHandlerBundle;
+    const contextTracker = this.resolve<ContextTracker>('ContextTracker');
+
+    // Per-session Server instance (SDK requires one Server per transport)
+    const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
+    try {
+      const configManager = this.resolve<ConfigManager>('ConfigManager');
+      const resourcesConfig = configManager.getSetting<Record<string, unknown>>('elements.enhanced_index.resources');
+      if (resourcesConfig?.advertise_resources === true) {
+        capabilities.resources = {};
+      }
+    } catch { /* config not available — use safe default */ }
+
+    const server = new Server(
+      { name: 'dollhousemcp', version: PACKAGE_VERSION },
+      { capabilities }
+    );
+
+    // Per-session SessionResolver — always returns this session's context
+    const sessionResolver: SessionResolver = () => sessionContext;
+
+    // Per-session ServerSetup (owns the tool call handler and list-tools cache)
+    const serverSetup = new ServerSetup(contextTracker, sessionResolver);
+
+    // Register tools on this session's ToolRegistry
+    const toolRegistry = new ToolRegistry(server);
+    const interfaceMode = env.MCP_INTERFACE_MODE;
+
+    if (interfaceMode === 'discrete') {
+      toolRegistry.registerPersonaTools(bundle.personaHandler);
+      toolRegistry.registerElementTools(bundle.elementCrudHandler);
+      toolRegistry.registerCollectionTools(bundle.collectionHandler);
+      toolRegistry.registerPortfolioTools(bundle.portfolioHandler);
+      toolRegistry.registerAuthTools(bundle.githubAuthHandler);
+      toolRegistry.registerConfigTools({
+        handleConfigOperation: (options) =>
+          bundle.configHandler.handleConfigOperation(options),
+        handleSyncOperation: (options) =>
+          bundle.syncHandler.handleSyncOperation(options),
+      });
+      toolRegistry.registerEnhancedIndexTools(
+        bundle.enhancedIndexHandler,
+        this.resolve<IndexConfigManager>('IndexConfigManager').getConfig()
+      );
+      toolRegistry.registerBuildInfoTools(this.resolve('BuildInfoService'));
+    } else {
+      toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
+    }
+
+    serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
+
+    return {
+      server,
+      dispose: async () => {
+        // Server cleanup is handled by the SDK transport layer.
+        // Handler bundle is shared — nothing to dispose per-session.
+        // Phase 3 TODO: dispose per-session ActivationStore here.
+      },
+    };
+  }
+
   /**
    * Log tool token statistics for monitoring and documentation.
    * Shows current mode token count, alternative mode comparison, and savings.
