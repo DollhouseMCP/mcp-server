@@ -130,7 +130,7 @@ export class SecurityMonitor {
       });
 
       if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
-        // TODO: Implement actual alert mechanisms (Slack, PagerDuty, SIEM)
+        // Alert mechanism integration point (Slack, PagerDuty, SIEM)
       }
     }
   }

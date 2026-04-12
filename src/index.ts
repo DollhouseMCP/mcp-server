@@ -36,22 +36,27 @@ import type { EnsembleElement } from "./elements/ensembles/types.js";
 // Transport-aware error handlers.
 // In stdio mode (default): exit on unhandled errors — the process is the session.
 // In HTTP mode: log and continue — one session's error must not kill the server
-// for all connected clients. Set to true when HTTP transport starts (Step 2.1).
-export let httpModeActive = false;
+// for all connected clients. Set to true when HTTP transport starts.
+let _httpModeActive = false;
+
+/** Check if HTTP mode error handling is active. */
+export function isHttpModeActive(): boolean {
+  return _httpModeActive;
+}
 
 /** Activate HTTP mode error handling. Called by the HTTP transport on startup. */
 export function setHttpModeActive(active: boolean): void {
-  httpModeActive = active;
+  _httpModeActive = active;
 }
 
 process.on('uncaughtException', (error) => {
   logger.error('Uncaught exception', {
     error: error instanceof Error ? error.message : String(error),
     stack: error instanceof Error ? error.stack : undefined,
-    transport: httpModeActive ? 'http' : 'stdio',
+    transport: _httpModeActive ? 'http' : 'stdio',
   });
 
-  if (httpModeActive) {
+  if (_httpModeActive) {
     logger.error('[Lifecycle] Uncaught exception in HTTP mode — server continues serving');
     return;
   }
@@ -64,10 +69,10 @@ process.on('unhandledRejection', (reason, _promise) => {
   logger.error('Unhandled promise rejection', {
     reason: reason instanceof Error ? reason.message : String(reason),
     stack: reason instanceof Error ? reason.stack : undefined,
-    transport: httpModeActive ? 'http' : 'stdio',
+    transport: _httpModeActive ? 'http' : 'stdio',
   });
 
-  if (httpModeActive) {
+  if (_httpModeActive) {
     logger.error('[Lifecycle] Unhandled rejection in HTTP mode — server continues serving');
     return;
   }
@@ -937,7 +942,7 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       // Without this, the session indicator is always empty in standalone mode.
       const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
       const ingestResult = createIngestRoutes({
-        logBroadcast: (entry) => { /* wired after server starts */ },
+        logBroadcast: (_entry) => { /* wired after server starts */ },
         metricsOnSnapshot: (snapshot) => { metricsSink?.onSnapshot(snapshot); },
       });
       ingestResult.registerConsoleSession();

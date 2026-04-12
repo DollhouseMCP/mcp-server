@@ -1,6 +1,6 @@
 import os from "os";
 import * as path from "path";
-import { PACKAGE_VERSION, PACKAGE_VERSION as VERSION } from "../generated/version.js";
+import { PACKAGE_VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
 import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
@@ -438,9 +438,9 @@ export class DollhouseContainer {
         category: 'application',
         level: 'info',
         source: 'DollhouseMCP',
-        message: `DollhouseMCP v${VERSION} starting`,
+        message: `DollhouseMCP v${PACKAGE_VERSION} starting`,
         data: {
-          version: VERSION,
+          version: PACKAGE_VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
           console: env.DOLLHOUSE_WEB_CONSOLE
@@ -1293,8 +1293,8 @@ export class DollhouseContainer {
       set: (value: string | null) => {
         if (value) {
           // Issue #843: activatePersona is now async but this setter is synchronous.
-          // Phase 3: Under concurrent sessions, this fire-and-forget races on shared
-          // PersonaManager state. Scoped DI (Phase 3) gives each session its own PersonaManager.
+          // Known limitation: under concurrent sessions, this fire-and-forget races on
+          // shared PersonaManager state. Scoped DI gives each session its own PersonaManager.
           // Fire-and-forget — PersonaHandler does its own lookup before calling set().
           // Log at error level since activation failures here indicate stale state.
           personaManager.activatePersona(value).catch(err =>

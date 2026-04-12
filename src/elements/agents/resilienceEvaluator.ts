@@ -44,6 +44,9 @@ export const EXPONENTIAL_BASE = 2;
 /** Cooldown window for the circuit breaker (milliseconds) — 5 minutes */
 export const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000;
 
+/** Reason string when circuit breaker forces a pause */
+const CIRCUIT_BREAKER_PAUSE_REASON = 'Circuit breaker: agent recently exhausted resilience limits \u2014 forcing immediate pause to prevent re-execution loop';
+
 // =============================================================================
 // Circuit Breaker
 // =============================================================================
@@ -221,7 +224,7 @@ function evaluateStepLimitResilience(
   if (context.agentName && breaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
     return {
       action: 'pause',
-      reason: 'Circuit breaker: agent recently exhausted resilience limits — forcing immediate pause to prevent re-execution loop',
+      reason: CIRCUIT_BREAKER_PAUSE_REASON,
       continuationCount: context.continuationCount,
       maxContinuations: policy.maxContinuations,
     };
@@ -281,7 +284,7 @@ function evaluateFailureResilience(
   if (context.agentName && breaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
     return {
       action: 'pause',
-      reason: 'Circuit breaker: agent recently exhausted resilience limits — forcing immediate pause to prevent re-execution loop',
+      reason: CIRCUIT_BREAKER_PAUSE_REASON,
       retryCount: context.retryCount,
     };
   }

@@ -429,7 +429,7 @@ export class PortfolioHandler {
             }],
             data: {
               config: {
-                autoSubmit: this.collectionHandler?.isAutoSubmitEnabled() ?? false,
+                autoSubmit: autoSubmitEnabled,
                 repositoryName: getPortfolioRepositoryName(),
                 defaultVisibility: 'public'
               }

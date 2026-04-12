@@ -18,7 +18,6 @@ jest.mock('../../../src/utils/logger.js', () => ({
 }));
 
 describe('Transport-aware process error handlers', () => {
-  let httpModeActive: boolean;
   let setHttpModeActive: (active: boolean) => void;
   let mockExit: jest.SpiedFunction<typeof process.exit>;
 
