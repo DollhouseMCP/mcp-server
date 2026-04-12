@@ -116,7 +116,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly metadataService: MetadataService;
 
   // Track active memories by name (stable identifier) - Issue #18 Phase 4
   private activeMemoryNames: Set<string> = new Set();

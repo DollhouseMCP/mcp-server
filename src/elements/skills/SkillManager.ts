@@ -31,7 +31,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly metadataService: MetadataService;
   // Track active skills by name (stable identifier)
   private activeSkillNames: Set<string> = new Set();
 

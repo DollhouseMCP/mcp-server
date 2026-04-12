@@ -65,7 +65,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly metadataService: MetadataService;
   private activeEnsembleNames: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {

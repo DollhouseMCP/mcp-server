@@ -24,7 +24,7 @@ export class TemplateManager extends BaseElementManager<Template> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly metadataService: MetadataService;
 
   constructor(deps: ElementManagerDeps) {
     super(
