@@ -16,7 +16,7 @@ import { logger } from '../../utils/logger.js';
  * Famous puppets, marionettes, and puppet characters from around the world.
  * Order doesn't matter — the pool is shuffled on startup.
  */
-const ALL_PUPPET_NAMES: readonly string[] = [
+export const ALL_PUPPET_NAMES: readonly string[] = [
   // Classic & traditional
   'Punch',
   'Judy',
@@ -124,7 +124,7 @@ const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
  * Names evoke costume pieces — a token is something you wear or carry,
  * not a person.
  */
-const ALL_TOKEN_NAMES: readonly string[] = [
+export const ALL_TOKEN_NAMES: readonly string[] = [
   // Victorian & theatrical
   'Top Hat',
   'Monocle',
