@@ -895,11 +895,12 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
         console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
       }
 
+      let container: DollhouseContainer | undefined;
       let mcpAqlHandler;
       let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
       let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
       try {
-        const container = new DollhouseContainer();
+        container = new DollhouseContainer();
         await container.preparePortfolio();
         const bundle = await container.bootstrapHandlers();
 
@@ -936,6 +937,12 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       if (!metricsSink) {
         const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
         metricsSink = new MemoryMetricsSink(240);
+        try {
+          const metricsManager = container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager');
+          metricsManager?.registerSink(metricsSink);
+        } catch {
+          // MetricsManager may be unavailable in the degraded startup path.
+        }
       }
 
       // Set up ingest routes so --web mode has a session registry (#1805).
@@ -951,10 +958,10 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       // Mirrors UnifiedConsole.ts:startAsLeader() — without this,
       // /api/console/totp and /api/console/token return 404.
       const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
-      const { pickRandomPuppetName } = await import('./web/console/SessionNames.js');
+      const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
       const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
       try {
-        await tokenStore.ensureInitialized(pickRandomPuppetName());
+        await tokenStore.ensureInitialized(pickRandomTokenName());
       } catch (err) {
         console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
       }

@@ -158,6 +158,33 @@ describe('Setup Routes — API Endpoints', () => {
       // Should not reject as unsupported
       expect(res.status).not.toBe(400);
     });
+
+    it('success response includes nvmMitigationApplied field', async () => {
+      // Use _runInstallMcp injection so install always succeeds without the real binary
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        _skipRateLimit: true,
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude' })
+        .expect(200);
+
+      // Field must be present on every success response
+      expect(res.body).toHaveProperty('nvmMitigationApplied');
+      // Value is one of: true (applied), false (failed), null (not applicable)
+      expect([true, false, null]).toContain(res.body.nvmMitigationApplied);
+      // Other standard fields still present
+      expect(res.body.success).toBe(true);
+      expect(res.body.client).toBe('claude');
+      expect(res.body.version).toBeDefined();
+    });
   });
 
   describe('GET /api/setup/version', () => {
@@ -867,10 +894,46 @@ describe('Setup Tab — Regressions', () => {
       expect(appJs).toContain("localStorage.getItem(TAB_KEY)");
     });
 
-    it('first visit defaults to setup tab', () => {
+    it('shows setup tab when stored version does not match current version', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Version comparison — positive branch restores tab, else branch shows setup
+      expect(appJs).toContain("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
       expect(appJs).toContain("switchToTab('setup')");
-      expect(appJs).toContain('dollhousemcp-setup-seen');
+    });
+
+    it('stores the version string (not "1") in the setup-seen flag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion)');
+      // Must NOT store the old hard-coded sentinel value
+      expect(appJs).not.toContain("localStorage.setItem(SETUP_SEEN_KEY, '1')");
+    });
+
+    it('reads server version from the dollhouse-server-version meta tag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('meta[name="dollhouse-server-version"]');
+    });
+
+    it('validates version format before using it (rejects malformed values)', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Semver-like validation guard present
+      expect(appJs).toContain(String.raw`/^\d+\.\d+\.\d+/.test(`);
+      // Falls back to 'unknown' for invalid versions
+      expect(appJs).toContain("'unknown'");
+    });
+
+    it('version check takes priority over saved-tab restoration', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // The version check block must appear before the savedTab block in source
+      const versionCheckIdx = appJs.indexOf("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
+      const savedTabIdx = appJs.indexOf("localStorage.getItem(TAB_KEY)");
+      expect(versionCheckIdx).toBeGreaterThan(0);
+      expect(savedTabIdx).toBeGreaterThan(0);
+      expect(versionCheckIdx).toBeLessThan(savedTabIdx);
+    });
+
+    it('index.html has the dollhouse-server-version meta tag placeholder', () => {
+      expect(html).toContain('name="dollhouse-server-version"');
+      expect(html).toContain('{{DOLLHOUSE_VERSION}}');
     });
   });
 

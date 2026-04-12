@@ -316,7 +316,10 @@
     const qs = params.toString();
     eventSource = DollhouseAuth.apiEventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
 
-    eventSource.onopen = () => setStatus('connected');
+    eventSource.onopen = () => {
+      clearLogsError();
+      setStatus('connected');
+    };
 
     eventSource.onmessage = (event) => {
       try {
@@ -331,6 +334,7 @@
 
     eventSource.onerror = () => {
       setStatus('disconnected');
+      showLogsError('Connection lost - reconnecting...');
       eventSource.close();
       eventSource = null;
       setTimeout(connectSSE, RECONNECT_DELAY_MS);
@@ -644,6 +648,14 @@
   function setStatus(status) {
     statusDot.className = 'log-status-dot ' + status;
     statusText.textContent = status;
+  }
+
+  function showLogsError(message) {
+    globalThis.DollhouseConsoleUI?.showBanner?.('tab-logs', 'logs-error-banner', message);
+  }
+
+  function clearLogsError() {
+    globalThis.DollhouseConsoleUI?.clearBanner?.('logs-error-banner');
   }
 
   function updateEntryCount() {

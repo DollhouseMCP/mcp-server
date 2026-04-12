@@ -21,7 +21,7 @@ import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
-import { createSetupRoutes } from './routes/setupRoutes.js';
+import { createSetupRoutes, repairNvmLauncherOnStartup } from './routes/setupRoutes.js';
 import { createTotpRoutes } from './routes/totpRoutes.js';
 import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
@@ -31,6 +31,7 @@ import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
 import type { ConsoleTokenStore } from './console/consoleToken.js';
 import { createAuthMiddleware } from './middleware/authMiddleware.js';
+import { PACKAGE_VERSION } from '../generated/version.js';
 
 /**
  * Public path prefixes that never require authentication (#1780).
@@ -48,6 +49,8 @@ const PUBLIC_PATH_PREFIXES = [
 
 /** Placeholder in index.html that is replaced with the current console token. */
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
+/** Placeholder in index.html that is replaced with the running server version. */
+const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -305,6 +308,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   app.post('/api/setup/license/resend', setupJsonParser, resendVerificationHandler);
   logger.info('[WebUI] Setup routes mounted at /api/setup');
 
+  // Fire-and-forget NVM launcher repair: recreates the wrapper if deleted and
+  // patches any pre-existing configs that still use bare `npx`. No-ops when
+  // NVM is absent or on Windows. Never delays server startup.
+  repairNvmLauncherOnStartup().catch(err =>
+    logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+  );
+
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
     app.use('/api', createGatewayApiRoutes(options.mcpAqlHandler, options.portfolioDir));
@@ -392,7 +402,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll("'", '&#39;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
-    cachedIndexHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escapedToken);
+    cachedIndexHtml = template
+      .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };
@@ -607,9 +619,9 @@ async function startFallbackServer(options: OpenBrowserOptions, port: number): P
   // Reuse cached token store — two instances on the same file can race on writes.
   if (!cachedTokenStore) {
     const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
-    const { pickRandomPuppetName } = await import('./console/SessionNames.js');
+    const { pickRandomTokenName } = await import('./console/SessionNames.js');
     cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-    try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
+    try { await cachedTokenStore.ensureInitialized(pickRandomTokenName()); }
     catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
   }
 

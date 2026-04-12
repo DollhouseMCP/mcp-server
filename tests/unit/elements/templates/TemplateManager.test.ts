@@ -281,4 +281,77 @@ Hello {{name}}!`;
       await expect(manager.importElement(noContent, 'json')).rejects.toThrow('Invalid template');
     });
   });
+
+  describe('auto-derive variables from content (#1896)', () => {
+    it('populates variables on create when variables is empty', async () => {
+      const template = await manager.create({
+        name: 'auto-derive-basic',
+        description: 'Test auto-derivation',
+        content: 'Hello {{name}}, your score is {{score}}.',
+      });
+      const names = template.metadata.variables?.map(v => v.name) ?? [];
+      expect(names).toContain('name');
+      expect(names).toContain('score');
+    });
+
+    it('derived variables default to type string and required false', async () => {
+      const template = await manager.create({
+        name: 'auto-derive-defaults',
+        description: 'Test defaults',
+        content: 'Value: {{foo}}',
+      });
+      const fooVar = template.metadata.variables?.find(v => v.name === 'foo');
+      expect(fooVar).toBeDefined();
+      expect(fooVar!.type).toBe('string');
+      expect(fooVar!.required).toBe(false);
+    });
+
+    it('preserves explicitly provided variable metadata', async () => {
+      const template = await manager.create({
+        name: 'auto-derive-preserve',
+        description: 'Test preservation',
+        content: 'Hello {{name}}!',
+        metadata: {
+          variables: [{ name: 'name', type: 'string', required: true, description: 'Full name' }]
+        },
+      });
+      const nameVar = template.metadata.variables?.find(v => v.name === 'name');
+      expect(nameVar!.required).toBe(true);
+      expect(nameVar!.description).toBe('Full name');
+    });
+
+    it('adds missing placeholders without removing declared ones', async () => {
+      const template = await manager.create({
+        name: 'auto-derive-additive',
+        description: 'Test additive merge',
+        content: '{{declared}} and {{new_one}}',
+        metadata: {
+          variables: [{ name: 'declared', type: 'number', required: true }]
+        },
+      });
+      const declared = template.metadata.variables?.find(v => v.name === 'declared');
+      const newOne = template.metadata.variables?.find(v => v.name === 'new_one');
+      expect(declared!.type).toBe('number');  // original preserved
+      expect(newOne).toBeDefined();           // new one added
+      expect(newOne!.required).toBe(false);
+    });
+
+    it('auto-derives on subsequent save (edit path)', async () => {
+      const template = await manager.create({
+        name: 'auto-derive-edit',
+        description: 'Test edit re-derive',
+        content: 'Static content with {{original}}.',
+      });
+      expect(template.metadata.variables?.map(v => v.name)).toContain('original');
+
+      // Simulate an edit: update content to add a new placeholder.
+      // save() expects a relative filename, same as what create() uses internally.
+      template.content = 'Static content with {{original}} and {{added}}.';
+      await manager.save(template, 'auto-derive-edit.md');
+
+      const names = template.metadata.variables?.map(v => v.name) ?? [];
+      expect(names).toContain('original');
+      expect(names).toContain('added');
+    });
+  });
 });

@@ -27,11 +27,19 @@ describe('EnsembleActivationStrategy', () => {
     } as unknown as jest.Mocked<EnsembleManager>;
 
     mockPortfolioManager = {} as jest.Mocked<PortfolioManager>;
-    mockSkillManager = {} as jest.Mocked<SkillManager>;
+    mockSkillManager = {
+      deactivateSkill: jest.fn(),
+    } as unknown as jest.Mocked<SkillManager>;
     mockTemplateManager = {} as jest.Mocked<TemplateManager>;
-    mockAgentManager = {} as jest.Mocked<AgentManager>;
-    mockMemoryManager = {} as jest.Mocked<MemoryManager>;
-    mockPersonaManager = {} as jest.Mocked<PersonaManager>;
+    mockAgentManager = {
+      deactivateAgent: jest.fn(),
+    } as unknown as jest.Mocked<AgentManager>;
+    mockMemoryManager = {
+      deactivateMemory: jest.fn(),
+    } as unknown as jest.Mocked<MemoryManager>;
+    mockPersonaManager = {
+      deactivatePersona: jest.fn(),
+    } as unknown as jest.Mocked<PersonaManager>;
 
     strategy = new EnsembleActivationStrategy(
       mockEnsembleManager,
@@ -249,13 +257,47 @@ describe('EnsembleActivationStrategy', () => {
     it('should deactivate ensemble with deactivate method', async () => {
       mockEnsembleManager.deactivateEnsemble.mockResolvedValue({
         success: true,
-        message: '✅ Ensemble active-ensemble deactivated'
+        message: '✅ Ensemble active-ensemble deactivated',
+        ensemble: {
+          metadata: {
+            name: 'active-ensemble',
+            elements: [],
+          },
+        } as any
       });
 
       const result = await strategy.deactivate('active-ensemble');
 
       expect(result.content[0].text).toContain('active-ensemble');
       expect(result.content[0].text).toContain('deactivated');
+    });
+
+    it('should deactivate ensemble members via their type managers', async () => {
+      mockEnsembleManager.deactivateEnsemble.mockResolvedValue({
+        success: true,
+        message: '✅ Ensemble active-ensemble deactivated',
+        ensemble: {
+          metadata: {
+            name: 'active-ensemble',
+            elements: [
+              { element_name: 'persona-member', element_type: 'persona' },
+              { element_name: 'skill-member', element_type: 'skill' },
+              { element_name: 'agent-member', element_type: 'agent' },
+              { element_name: 'memory-member', element_type: 'memory' },
+              { element_name: 'nested-ensemble', element_type: 'ensemble' },
+              { element_name: 'template-member', element_type: 'template' },
+            ],
+          },
+        } as any
+      });
+
+      await strategy.deactivate('active-ensemble');
+
+      expect(mockPersonaManager.deactivatePersona).toHaveBeenCalledWith('persona-member');
+      expect(mockSkillManager.deactivateSkill).toHaveBeenCalledWith('skill-member');
+      expect(mockAgentManager.deactivateAgent).toHaveBeenCalledWith('agent-member');
+      expect(mockMemoryManager.deactivateMemory).toHaveBeenCalledWith('memory-member');
+      expect(mockEnsembleManager.deactivateEnsemble).toHaveBeenCalledWith('nested-ensemble');
     });
 
     // Issue #275: Now throws error instead of returning error content

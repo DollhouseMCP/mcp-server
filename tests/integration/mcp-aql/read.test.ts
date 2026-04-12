@@ -853,6 +853,44 @@ describe('MCP-AQL READ Endpoint Integration', () => {
   });
 
   describe('render operation', () => {
+    it('should render a template created with top-level variable declarations', async () => {
+      const createResult = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        element_type: 'template',
+        params: {
+          element_name: 'top-level-variable-template',
+          description: 'Template with top-level variable declarations',
+          content: '# Rendered\n\n{{summary}}\n\n{{details}}',
+          variables: [
+            { name: 'summary', type: 'string', required: true },
+            { name: 'details', type: 'string', required: true },
+          ],
+        },
+      });
+
+      expect(createResult.success).toBe(true);
+      await waitForCacheSettle();
+
+      const renderResult = await mcpAqlHandler.handleRead({
+        operation: 'render',
+        params: {
+          element_name: 'top-level-variable-template',
+          variables: {
+            summary: 'Smoke test summary content',
+            details: 'Smoke test details content',
+          },
+        },
+      });
+
+      expect(renderResult.success).toBe(true);
+      if (renderResult.success) {
+        const data = renderResult.data as { success?: boolean; content?: string };
+        expect(data.success).toBe(true);
+        expect(data.content).toContain('Smoke test summary content');
+        expect(data.content).toContain('Smoke test details content');
+      }
+    });
+
     it('should render a template with variables', async () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'render',

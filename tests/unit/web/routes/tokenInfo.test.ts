@@ -81,6 +81,7 @@ describe('GET /api/console/token/info', () => {
       .set('Authorization', bearer);
     const t = res.body.tokens[0];
     expect(t.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(t.name).toContain('Console:');
     expect(t.name).toContain('Kermit');
     expect(t.kind).toBe('console');
     expect(t.scopes).toEqual(['admin']);

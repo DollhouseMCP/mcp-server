@@ -64,6 +64,17 @@ export class TemplateManager extends BaseElementManager<Template> {
   }
 
   override async save(template: Template, filePath: string): Promise<void> {
+    // Auto-derive variables from content (#1896): ensures every {{placeholder}}
+    // has a matching schema entry so render() never silently returns unfilled text.
+    // Existing entries are never overwritten — user-set descriptions, types, and
+    // required flags survive. New entries default to type: 'string', required: false.
+    if (template.content) {
+      template.metadata.variables = Template.deriveVariablesFromContent(
+        template.content,
+        template.metadata.variables ?? []
+      );
+    }
+
     await super.save(template, filePath);
 
     SecurityMonitor.logSecurityEvent({

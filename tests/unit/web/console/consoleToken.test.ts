@@ -67,6 +67,7 @@ describe('ConsoleTokenStore', () => {
 
       expect(entry).toBeDefined();
       expect(entry.id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(entry.name).toContain('Console:');
       expect(entry.name).toContain('Kermit');
       expect(entry.kind).toBe('console');
       expect(entry.token).toMatch(/^[0-9a-f]{64}$/);

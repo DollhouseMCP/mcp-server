@@ -292,6 +292,109 @@ describe('MCP-AQL CREATE Endpoint Integration', () => {
       const names = (data.items || []).map((i: any) => i.name || i.element_name);
       expect(names).toContain('listable-persona');
     });
+
+    it('should list and activate a newly created agent immediately after creation (Issue #1873)', async () => {
+      const createResult = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'cache-coherence-agent',
+          element_type: 'agents',
+          description: 'Tests that agent index-backed reads work immediately after creation',
+          instructions: 'Execute integration test tasks methodically and report completion.',
+          content: '# Cache Coherence Agent\n\nMust be listable and activatable right away.',
+        },
+      });
+
+      expect(createResult.success).toBe(true);
+
+      await waitForCacheSettle();
+
+      const listResult = await mcpAqlHandler.handleRead({
+        operation: 'list_elements',
+        elementType: 'agent',
+        params: {},
+      });
+
+      expect(listResult.success).toBe(true);
+      const listData = listResult.data as { items?: Array<{ name: string }> };
+      const names = (listData.items || []).map((i: any) => i.name || i.element_name);
+      expect(names).toContain('cache-coherence-agent');
+
+      const activateResult = await mcpAqlHandler.handleRead({
+        operation: 'activate_element',
+        params: {
+          element_name: 'cache-coherence-agent',
+          element_type: 'agents',
+        },
+      });
+
+      expect(activateResult.success).toBe(true);
+      const activateText = activateResult.data?.content?.[0]?.text ?? '';
+      expect(activateText.toLowerCase()).toContain('activated');
+
+      const activeResult = await mcpAqlHandler.handleRead({
+        operation: 'get_active_elements',
+        params: {
+          element_type: 'agents',
+        },
+      });
+
+      expect(activeResult.success).toBe(true);
+      const activeText = activeResult.data?.content?.[0]?.text ?? '';
+      expect(activeText).toContain('cache-coherence-agent');
+    });
+
+    it('should create, list, and activate a content-only agent immediately after creation', async () => {
+      const createResult = await mcpAqlHandler.handleCreate({
+        operation: 'create_element',
+        params: {
+          element_name: 'content-only-agent',
+          element_type: 'agents',
+          description: 'Tests content-only agent creation through MCP-AQL',
+          content: '# Content-Only Agent\n\nUses reference material without explicit behavioral instructions.',
+        },
+      });
+
+      expect(createResult.success).toBe(true);
+      expect((createResult.data as { isError?: boolean } | undefined)?.isError).not.toBe(true);
+
+      await waitForCacheSettle();
+
+      const listResult = await mcpAqlHandler.handleRead({
+        operation: 'list_elements',
+        elementType: 'agent',
+        params: {},
+      });
+
+      expect(listResult.success).toBe(true);
+      const listData = listResult.data as { items?: Array<{ name: string }> };
+      const names = (listData.items || []).map((i: any) => i.name || i.element_name);
+      expect(names).toContain('content-only-agent');
+
+      const detailsResult = await mcpAqlHandler.handleRead({
+        operation: 'get_element_details',
+        params: {
+          element_name: 'content-only-agent',
+          element_type: 'agents',
+        },
+      });
+
+      expect(detailsResult.success).toBe(true);
+      const detailsText = detailsResult.data?.content?.[0]?.text ?? '';
+      expect(detailsText).toContain('content-only-agent');
+
+      const activateResult = await mcpAqlHandler.handleRead({
+        operation: 'activate_element',
+        params: {
+          element_name: 'content-only-agent',
+          element_type: 'agents',
+        },
+      });
+
+      expect(activateResult.success).toBe(true);
+      const activateText = activateResult.data?.content?.[0]?.text ?? '';
+      expect(activateText.toLowerCase()).toContain('activated');
+    });
   });
 
   describe('import_element operation', () => {

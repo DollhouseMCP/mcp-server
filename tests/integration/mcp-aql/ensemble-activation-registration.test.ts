@@ -128,4 +128,65 @@ describe('Ensemble Activation Registration (Issue #1769)', () => {
     const activeText = JSON.stringify(activePersonas);
     expect(activeText).toContain('ensemble-test-persona');
   });
+
+  it('should remove ensemble-activated members from get_active_elements after deactivation', async () => {
+    await mcpAqlHandler.handleCreate({
+      operation: 'create_element',
+      element_type: 'persona',
+      params: {
+        element_name: 'ensemble-deactivate-persona',
+        description: 'Persona for ensemble deactivation test',
+        instructions: 'You are a test persona.',
+      },
+    });
+
+    await mcpAqlHandler.handleCreate({
+      operation: 'create_element',
+      element_type: 'skill',
+      params: {
+        element_name: 'ensemble-deactivate-skill',
+        description: 'Skill for ensemble deactivation test',
+        content: 'Test skill content.',
+      },
+    });
+
+    await mcpAqlHandler.handleCreate({
+      operation: 'create_element',
+      element_type: 'ensemble',
+      params: {
+        element_name: 'deactivation-ensemble',
+        description: 'Ensemble for deactivation registration',
+        metadata: {
+          elements: [
+            { element_name: 'ensemble-deactivate-persona', element_type: 'persona', role: 'primary' },
+            { element_name: 'ensemble-deactivate-skill', element_type: 'skill', role: 'support' },
+          ],
+        },
+      },
+    });
+
+    await mcpAqlHandler.handleRead({
+      operation: 'activate_element',
+      element_type: 'ensemble',
+      params: { element_name: 'deactivation-ensemble', element_type: 'ensemble' },
+    });
+
+    await mcpAqlHandler.handleRead({
+      operation: 'deactivate_element',
+      element_type: 'ensemble',
+      params: { element_name: 'deactivation-ensemble', element_type: 'ensemble' },
+    });
+
+    const activePersonas = await mcpAqlHandler.handleRead({
+      operation: 'get_active_elements',
+      params: { element_type: 'persona' },
+    });
+    expect(JSON.stringify(activePersonas)).not.toContain('ensemble-deactivate-persona');
+
+    const activeSkills = await mcpAqlHandler.handleRead({
+      operation: 'get_active_elements',
+      params: { element_type: 'skill' },
+    });
+    expect(JSON.stringify(activeSkills)).not.toContain('ensemble-deactivate-skill');
+  });
 });

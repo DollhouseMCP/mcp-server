@@ -14,7 +14,15 @@
 (function() {
   'use strict';
 
-  var SESSION_POLL_INTERVAL = 5000;
+  function getConfiguredNumber(key, fallback) {
+    var config = globalThis.DollhouseConsoleConfig;
+    var value = config && Number(config[key]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  var SESSION_POLL_INTERVAL = getConfiguredNumber('sessionPollIntervalMs', 5000);
+  var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
+  var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
   var sessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
@@ -65,6 +73,25 @@
     }
 
     refreshSelectionState();
+  }
+
+  function showSessionsError(message) {
+    var target = document.getElementById('session-indicator');
+    if (!target || !target.parentElement) return;
+    var banner = document.getElementById('sessions-error-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'sessions-error-banner';
+      banner.className = 'tab-error-banner';
+      target.parentElement.insertBefore(banner, target);
+    }
+    banner.textContent = message;
+    banner.hidden = false;
+  }
+
+  function clearSessionsError() {
+    var banner = document.getElementById('sessions-error-banner');
+    if (banner) banner.hidden = true;
   }
 
   // Update checkmarks and selected styling without rebuilding DOM
@@ -338,7 +365,7 @@
     if (!logPanel) return;
     if (document.getElementById('log-session-filter')) return;
 
-    var filterBar = logPanel.querySelector('.log-filters');
+    var filterBar = logPanel.querySelector('.log-controls');
     if (!filterBar) return;
 
     var group = document.createElement('div');
@@ -352,6 +379,10 @@
     group.querySelector('select').addEventListener('change', function() {
       applyFilter(this.value);
     });
+
+    // If sessions loaded before the log controls mounted, populate the
+    // newly injected filter immediately instead of waiting for the next poll.
+    updateSessionFilterOptions();
   }
 
   // Update session filter dropdown options
@@ -378,16 +409,21 @@
    */
   function fetchSessions() {
     DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
-      if (!res.ok) return;
+      if (!res.ok) {
+        showSessionsError('Failed to load sessions.');
+        return;
+      }
       return res.json();
     }).then(function(data) {
       if (data && data.sessions) {
         sessions = data.sessions;
         updateSessionIndicator();
         updateSessionFilterOptions();
+        clearSessionsError();
       }
     }).catch(function(err) {
       console.warn('[Sessions] Fetch failed:', err);
+      showSessionsError('Failed to load sessions.');
     });
   }
 
@@ -406,10 +442,10 @@
     var tryInject = setInterval(function() {
       injectSessionFilter();
       retries++;
-      if (document.getElementById('log-session-filter') || retries > 20) {
+      if (document.getElementById('log-session-filter') || retries > SESSION_FILTER_INJECTION_MAX_RETRIES) {
         clearInterval(tryInject);
       }
-    }, 500);
+    }, SESSION_FILTER_INJECTION_RETRY_INTERVAL);
   }
 
   if (document.readyState === 'loading') {
