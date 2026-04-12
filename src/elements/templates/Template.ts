@@ -826,20 +826,20 @@ export class Template extends BaseElement implements IElement {
       this.metadata.variables.forEach((variable, index) => {
         // Check for duplicate names
         if (variableNames.has(variable.name)) {
-          result.errors!.push({
+          (result.errors ??= []).push({
             field: `variables[${index}].name`,
             message: `Duplicate variable name '${variable.name}'`,
             code: 'DUPLICATE_VARIABLE'
           });
         }
         variableNames.add(variable.name);
-        
+
         // Validate regex patterns
         if (variable.validation) {
           try {
             new RegExp(variable.validation);
           } catch (e) {
-            result.errors!.push({
+            (result.errors ??= []).push({
               field: `variables[${index}].validation`,
               message: `Invalid regex pattern: ${e}`,
               code: 'INVALID_REGEX'
@@ -856,7 +856,7 @@ export class Template extends BaseElement implements IElement {
     
     usedVars.forEach(varName => {
       if (!definedVars.has(varName)) {
-        result.warnings!.push({
+        (result.warnings ??= []).push({
           field: 'variables',
           message: `Template uses undefined variable '${varName}'`,
           severity: 'medium'
