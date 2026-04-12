@@ -1293,6 +1293,8 @@ export class DollhouseContainer {
       set: (value: string | null) => {
         if (value) {
           // Issue #843: activatePersona is now async but this setter is synchronous.
+          // Phase 3: Under concurrent sessions, this fire-and-forget races on shared
+          // PersonaManager state. Scoped DI (Phase 3) gives each session its own PersonaManager.
           // Fire-and-forget — PersonaHandler does its own lookup before calling set().
           // Log at error level since activation failures here indicate stale state.
           personaManager.activatePersona(value).catch(err =>

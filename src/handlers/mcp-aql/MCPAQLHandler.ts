@@ -501,6 +501,7 @@ interface ExportPackage {
  */
 export interface CorrelationIdProvider {
   getCorrelationId(): string | undefined;
+  getSessionContext?(): { sessionId: string } | undefined;
 }
 
 export class MCPAQLHandler {
@@ -631,6 +632,16 @@ export class MCPAQLHandler {
       throw new Error('Gatekeeper instance is required in HandlerRegistry. Provide one via the DI container.');
     }
     this.gatekeeper = handlers.gatekeeper;
+  }
+
+  /**
+   * Produce a session-scoped key for mutable collections.
+   * Prevents cross-session state corruption under concurrent HTTP sessions.
+   * Falls back to 'default' when no session is active (stdio, tests).
+   */
+  private sessionKey(name: string): string {
+    const sessionId = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
+    return `${sessionId}:${name}`;
   }
 
   /**
@@ -1524,7 +1535,7 @@ export class MCPAQLHandler {
     memory: import('../../elements/memories/Memory.js').Memory,
     manager: MemoryManager,
   ): void {
-    const key = memoryName.toLowerCase();
+    const key = this.sessionKey(memoryName.toLowerCase());
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
@@ -1557,7 +1568,7 @@ export class MCPAQLHandler {
    * @param memoryName - Name of the memory being written to
    */
   private trackSaveFrequency(memoryName: string): void {
-    const key = memoryName.toLowerCase();
+    const key = this.sessionKey(memoryName.toLowerCase());
     const now = Date.now();
     const windowMs = STORAGE_LAYER_CONFIG.MEMORY_SAVE_MONITOR_WINDOW_MS;
     const warnThreshold = STORAGE_LAYER_CONFIG.MEMORY_SAVE_FREQUENCY_WARN_THRESHOLD;
@@ -3368,7 +3379,7 @@ export class MCPAQLHandler {
       // Check if the agent's active goal has been aborted
       const agentGoalIds = await this.getActiveGoalIds(manager, elementName);
       for (const goalId of agentGoalIds) {
-        if (this.abortedGoals.has(goalId)) {
+        if (this.abortedGoals.has(this.sessionKey(goalId))) {
           throw new Error(
             `Agent '${elementName}' execution was aborted (goalId: ${goalId}). ` +
             `Further execution operations are rejected. Use execute_agent to start a new execution.`
@@ -3412,7 +3423,7 @@ export class MCPAQLHandler {
 
             // Always track if there's a gatekeeper policy, runtime override, or resilience policy
             if (gatekeeperPolicy || runtimeMaxSteps !== undefined || resiliencePolicy) {
-              this.executingAgents.set(elementName, {
+              this.executingAgents.set(this.sessionKey(elementName), {
                 name: elementName,
                 metadata: {
                   ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
@@ -3428,7 +3439,7 @@ export class MCPAQLHandler {
             }
           } else if (runtimeMaxSteps !== undefined) {
             // No agent element to read, but we still need to store the override
-            this.executingAgents.set(elementName, {
+            this.executingAgents.set(this.sessionKey(elementName), {
               name: elementName,
               metadata: { maxAutonomousSteps: runtimeMaxSteps },
               startedAt: Date.now(),
@@ -3479,7 +3490,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #447: Apply runtime maxAutonomousSteps override if stored for this agent
-        const executingAgent = this.executingAgents.get(elementName);
+        const executingAgent = this.executingAgents.get(this.sessionKey(elementName));
         const maxStepsOverride = executingAgent?.metadata?.maxAutonomousSteps as number | undefined;
 
         const updateResult = await manager.recordAgentStep({
@@ -3524,7 +3535,7 @@ export class MCPAQLHandler {
         });
 
         // Issue #526: Track resilience outcome and reset circuit breaker on success
-        const completedAgent = this.executingAgents.get(elementName);
+        const completedAgent = this.executingAgents.get(this.sessionKey(elementName));
         if (completedAgent?.resiliencePolicy && (completedAgent.continuationCount > 0 || completedAgent.retryCount > 0)) {
           const isSuccess = params.outcome === 'success';
           this.handlers.resilienceMetrics?.recordCompletionAfterResilience(isSuccess);
@@ -3534,7 +3545,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #449: Remove agent from executing set so its policies stop applying
-        this.executingAgents.delete(elementName);
+        this.executingAgents.delete(this.sessionKey(elementName));
 
         // Issue #125: Return structured JSON with type discriminator
         return { _type: 'CompletionResult', ...completeResult };
@@ -3566,7 +3577,7 @@ export class MCPAQLHandler {
 
         // Mark all active goals as aborted
         for (const goalId of activeGoalIds) {
-          this.abortedGoals.add(goalId);
+          this.abortedGoals.add(this.sessionKey(goalId));
         }
 
         // Complete the agent goal with 'failure' outcome to persist the aborted state
@@ -3582,13 +3593,13 @@ export class MCPAQLHandler {
         }
 
         // Issue #526: Track resilience outcome (abort = failure after resilience)
-        const abortedAgent = this.executingAgents.get(elementName);
+        const abortedAgent = this.executingAgents.get(this.sessionKey(elementName));
         if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
           this.handlers.resilienceMetrics?.recordCompletionAfterResilience(false);
         }
 
         // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
-        this.executingAgents.delete(elementName);
+        this.executingAgents.delete(this.sessionKey(elementName));
 
         // Clean up DangerZoneEnforcer blocks for this agent
         if (this.handlers.dangerZoneEnforcer) {
@@ -3809,7 +3820,7 @@ export class MCPAQLHandler {
     autonomy: Record<string, unknown>
   ): AgentNotification[] {
     const notifications: AgentNotification[] = [];
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
 
     // Source 1: Unreported gatekeeper blocks
     if (executingAgent?.recentBlocks) {
@@ -3893,7 +3904,7 @@ export class MCPAQLHandler {
     if (!autonomy || autonomy.continue === true) return null;
 
     // Look up the executing agent's resilience tracking state
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
     if (!executingAgent?.resiliencePolicy) return null;
 
     // Determine what triggered the pause
