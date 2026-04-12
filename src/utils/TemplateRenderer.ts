@@ -163,14 +163,7 @@ export class TemplateRenderer {
 
       // Detect unsubstituted placeholders (#1896) — render always completes;
       // unfilled tokens are surfaced as advisory warnings, never hard errors.
-      const unsubstituted = [...rendered.matchAll(/\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g)]
-        .map(m => m[1]);
-      const warnings = unsubstituted.length > 0
-        ? [`${unsubstituted.length} placeholder(s) were not substituted: ${unsubstituted.join(', ')}`]
-        : undefined;
-      if (warnings) {
-        logger.warn(`[TemplateRenderer] ${warnings[0]}`);
-      }
+      const warnings = this.detectUnsubstituted(normalizedName, rendered);
 
       // Issue #705: all_sections — return rendered template + raw style/script together
       if (allSections) {
@@ -213,6 +206,21 @@ export class TemplateRenderer {
         performance: { lookupTime: 0, renderTime: 0, totalTime }
       };
     }
+  }
+
+  /**
+   * Scan rendered output for any remaining {{placeholder}} patterns and
+   * return an advisory warnings array (or undefined if everything was filled).
+   * Extracted from render() to keep its cognitive complexity within limits.
+   * (#1896)
+   */
+  private detectUnsubstituted(templateName: string, rendered: string): string[] | undefined {
+    const unsubstituted = [...rendered.matchAll(/\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g)]
+      .map(m => m[1]);
+    if (unsubstituted.length === 0) return undefined;
+    const msg = `${unsubstituted.length} placeholder(s) were not substituted: ${unsubstituted.join(', ')}`;
+    logger.warn(`[TemplateRenderer] '${templateName}': ${msg}`);
+    return [msg];
   }
 
   /**

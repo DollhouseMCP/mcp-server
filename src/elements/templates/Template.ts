@@ -250,13 +250,35 @@ export class Template extends BaseElement implements IElement {
   }
 
   /**
-   * Scan `content` for {{placeholder}} patterns and return a merged variable
+   * Scan `content` for `{{placeholder}}` patterns and return a merged variable
    * list. Existing entries are preserved unchanged (user-set descriptions,
    * types, required flags, etc.); new placeholders are added with defaults:
-   * type 'string', required: false.  (#1896)
+   * `type: 'string'`, `required: false`. (#1896)
    *
-   * Respects section mode — only the <template> section is scanned, matching
-   * the substitution engine's scope.
+   * Respects section mode — only the `<template>` section is scanned,
+   * matching the substitution engine's scope.
+   *
+   * **Performance:** Single-pass regex scan — O(n) in content length.
+   * Called by `TemplateManager.save()` on every create/edit, so content
+   * is already validated and size-bounded (≤ 100 KB) before reaching here.
+   *
+   * @param content - Raw template content (may include section tags)
+   * @param existingVariables - Already-declared variables; never overwritten
+   * @returns Merged variable list: existing entries first, new entries appended
+   *
+   * @example
+   * // New template — empty schema gets fully populated
+   * deriveVariablesFromContent('Hello {{name}}, score: {{score}}')
+   * // → [{ name: 'name', type: 'string', required: false },
+   * //    { name: 'score', type: 'string', required: false }]
+   *
+   * @example
+   * // Existing entry preserved; only the missing placeholder is added
+   * deriveVariablesFromContent('{{name}} earns {{points}}', [
+   *   { name: 'name', type: 'string', required: true, description: 'Display name' }
+   * ])
+   * // → [{ name: 'name', type: 'string', required: true, description: 'Display name' },
+   * //    { name: 'points', type: 'string', required: false }]
    */
   static deriveVariablesFromContent(
     content: string,

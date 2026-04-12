@@ -606,7 +606,7 @@ describe('Template', () => {
 
     it('derives multiple distinct placeholders', () => {
       const result = Template.deriveVariablesFromContent('{{first}} and {{second}} and {{third}}');
-      const names = result.map(v => v.name).sort();
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
       expect(names).toEqual(['first', 'second', 'third']);
     });
 
@@ -637,13 +637,13 @@ describe('Template', () => {
 
     it('handles dot-notation placeholder paths', () => {
       const result = Template.deriveVariablesFromContent('{{user.name}} at {{user.email}}');
-      const names = result.map(v => v.name).sort();
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
       expect(names).toEqual(['user.email', 'user.name']);
     });
 
     it('handles whitespace inside braces', () => {
       const result = Template.deriveVariablesFromContent('{{ spaced }} and {{  also_spaced  }}');
-      const names = result.map(v => v.name).sort();
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
       expect(names).toEqual(['also_spaced', 'spaced']);
     });
 
