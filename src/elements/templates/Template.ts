@@ -779,20 +779,20 @@ export class Template extends BaseElement implements IElement {
   public override validate(): ElementValidationResult {
     const result = super.validate();
 
-    // Initialize arrays if not present
-    // FIX: Use nullish coalescing assignment (SonarCloud S6606)
-    result.errors ??= [];
-    result.warnings ??= [];
-    
+    // Capture arrays as locals so TypeScript knows they're always defined
+    // and call sites never need ! or inline ??= expressions (S1121, S6606).
+    const errors = result.errors ??= [];
+    const warnings = result.warnings ??= [];
+
     // Content validation
     if (!this.content || this.content.trim().length === 0) {
-      result.errors.push({
+      errors.push({
         field: 'content',
         message: 'Template content cannot be empty',
         code: 'EMPTY_CONTENT'
       });
     }
-    
+
     // Check for unmatched tokens.
     // Issue #705: In section mode, only count tokens within the <template> section —
     // <style> and <script> sections are raw passthrough where }} is intentional.
@@ -802,31 +802,31 @@ export class Template extends BaseElement implements IElement {
     const openTokens = (tokenCheckContent.match(/\{\{/g) || []).length;
     const closeTokens = (tokenCheckContent.match(/\}\}/g) || []).length;
     if (openTokens !== closeTokens) {
-      result.errors.push({
+      errors.push({
         field: 'content',
         message: 'Template has unmatched variable tokens',
         code: 'UNMATCHED_TOKENS'
       });
     }
-    
+
     // Validate output format
     const validFormats = ['markdown', 'html', 'json', 'yaml', 'text', 'xml'];
     if (this.metadata.output_format && !validFormats.includes(this.metadata.output_format)) {
-      result.warnings.push({
+      warnings.push({
         field: 'output_format',
         message: `Unknown output format '${this.metadata.output_format}'. Common formats: ${validFormats.join(', ')}`,
         severity: 'low'
       });
     }
-    
+
     // Validate variables
     if (this.metadata.variables) {
       const variableNames = new Set<string>();
-      
+
       this.metadata.variables.forEach((variable, index) => {
         // Check for duplicate names
         if (variableNames.has(variable.name)) {
-          (result.errors ??= []).push({
+          errors.push({
             field: `variables[${index}].name`,
             message: `Duplicate variable name '${variable.name}'`,
             code: 'DUPLICATE_VARIABLE'
@@ -839,7 +839,7 @@ export class Template extends BaseElement implements IElement {
           try {
             new RegExp(variable.validation);
           } catch (e) {
-            (result.errors ??= []).push({
+            errors.push({
               field: `variables[${index}].validation`,
               message: `Invalid regex pattern: ${e}`,
               code: 'INVALID_REGEX'
@@ -848,15 +848,15 @@ export class Template extends BaseElement implements IElement {
         }
       });
     }
-    
+
     // Check if all tokens have corresponding variable definitions
     const compiled = this.compile();
     const definedVars = new Set(this.metadata.variables?.map(v => v.name) || []);
     const usedVars = new Set(compiled.tokens.map(t => t.variable.split('.')[0]));
-    
+
     usedVars.forEach(varName => {
       if (!definedVars.has(varName)) {
-        (result.warnings ??= []).push({
+        warnings.push({
           field: 'variables',
           message: `Template uses undefined variable '${varName}'`,
           severity: 'medium'
