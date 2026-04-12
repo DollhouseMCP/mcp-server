@@ -335,7 +335,9 @@ function registerPortfolioRoutes(
   });
 
   router.get('/elements/memories/:date/:file', async (req, res) => {
-    const { date, file } = req.params;
+    const { date } = req.params;
+    // NFC-normalize file before safety checks to prevent Unicode homograph bypasses (#1736)
+    const file = normalizeInput(req.params.file);
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       res.status(400).json({ error: 'Invalid date format' });
