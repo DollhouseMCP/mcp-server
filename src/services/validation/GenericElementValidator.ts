@@ -63,8 +63,8 @@ export class GenericElementValidator implements ElementValidator {
     // STEP 1: NORMALIZE at the boundary (before any validation)
     const normalized = InputNormalizer.normalize(data);
 
-    // Fail fast if critical Unicode issues detected
-    if (normalized.hasCriticalIssues) {
+    // Fail fast if high or critical Unicode issues detected
+    if (normalized.hasHighOrCriticalIssues) {
       return ValidatorHelpers.fail(normalized.errors);
     }
 
@@ -170,8 +170,8 @@ export class GenericElementValidator implements ElementValidator {
     // STEP 1: NORMALIZE changes at the boundary
     const normalized = InputNormalizer.normalize(changes);
 
-    // Fail fast if critical Unicode issues detected
-    if (normalized.hasCriticalIssues) {
+    // Fail fast if high or critical Unicode issues detected
+    if (normalized.hasHighOrCriticalIssues) {
       return ValidatorHelpers.fail(normalized.errors);
     }
 

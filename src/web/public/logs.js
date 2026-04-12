@@ -38,6 +38,7 @@
   let filterSource = '';
   let filterMessage = '';
   let filterCorrelationId = '';
+  let filterSessionId = '';
 
   // ── DOM references ─────────────────────────────────────────────────────
   let viewport, scrollSpacer, jumpBtn, statusDot, statusText, entryCountEl;
@@ -51,6 +52,14 @@
     init: initLogViewer,
     destroy: destroyLogViewer,
     refresh: () => {
+      requestAnimationFrame(() => {
+        renderViewport();
+        if (autoScroll) scrollToBottom();
+      });
+    },
+    refilter: (sessionId) => {
+      filterSessionId = sessionId || '';
+      applyFilters();
       requestAnimationFrame(() => {
         renderViewport();
         if (autoScroll) scrollToBottom();
@@ -305,9 +314,12 @@
     if (filterCategory) params.set('category', filterCategory);
     if (filterLevel) params.set('level', filterLevel);
     const qs = params.toString();
-    eventSource = new EventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
+    eventSource = DollhouseAuth.apiEventSource('/api/logs/stream' + (qs ? '?' + qs : ''));
 
-    eventSource.onopen = () => setStatus('connected');
+    eventSource.onopen = () => {
+      clearLogsError();
+      setStatus('connected');
+    };
 
     eventSource.onmessage = (event) => {
       try {
@@ -322,6 +334,7 @@
 
     eventSource.onerror = () => {
       setStatus('disconnected');
+      showLogsError('Connection lost - reconnecting...');
       eventSource.close();
       eventSource = null;
       setTimeout(connectSSE, RECONNECT_DELAY_MS);
@@ -362,6 +375,7 @@
   const LEVEL_PRIORITY = { debug: 0, info: 1, warn: 2, error: 3 };
 
   function matchesFilters(entry) {
+    if (filterSessionId && entry.data?._sessionId !== filterSessionId) return false;
     if (filterCorrelationId && entry.correlationId !== filterCorrelationId) return false;
     if (filterCategory && entry.category !== filterCategory) return false;
     if (filterLevel && (LEVEL_PRIORITY[entry.level] || 0) < (LEVEL_PRIORITY[filterLevel] || 0)) return false;
@@ -371,7 +385,7 @@
   }
 
   function applyFilters() {
-    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId;
+    const hasFilter = filterCategory || filterLevel || filterSource || filterMessage || filterCorrelationId || filterSessionId;
     if (hasFilter) {
       filteredIndices = [];
       for (let i = 0; i < buffer.length; i++) {
@@ -634,6 +648,14 @@
   function setStatus(status) {
     statusDot.className = 'log-status-dot ' + status;
     statusText.textContent = status;
+  }
+
+  function showLogsError(message) {
+    globalThis.DollhouseConsoleUI?.showBanner?.('tab-logs', 'logs-error-banner', message);
+  }
+
+  function clearLogsError() {
+    globalThis.DollhouseConsoleUI?.clearBanner?.('logs-error-banner');
   }
 
   function updateEntryCount() {

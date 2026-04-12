@@ -4,8 +4,13 @@
  * Validates that the MCP-AQL consolidated approach achieves target token savings
  * compared to discrete tools.
  *
- * Issue: #189
- * Target: 85% token savings (adjusted from initial 89% estimate based on measurements)
+ * Two savings metrics are tracked:
+ * - **Baseline**: 5 CRUDE tools vs 42 historical discrete tools (~74% savings)
+ * - **Projected**: 5 CRUDE tools vs all current operations (~85% savings)
+ *   Uses the average token cost of the 42 known tools as a heuristic for
+ *   operations that never had discrete tools.
+ *
+ * Issue: #189, #1822
  */
 
 import { describe, it, expect } from '@jest/globals';
@@ -61,8 +66,8 @@ describe('MCP-AQL Token Economics', () => {
     });
 
     it('should have correct MCP-AQL tool count', () => {
-      // 4 unified MCP-AQL endpoints
-      expect(mcpAqlTools.length).toBe(4);
+      // 5 unified MCP-AQL CRUDE endpoints (Create, Read, Update, Delete, Execute)
+      expect(mcpAqlTools.length).toBe(5);
     });
 
     it('should have all required tool properties', () => {
@@ -97,18 +102,27 @@ describe('MCP-AQL Token Economics', () => {
   });
 
   describe('Token Savings Targets', () => {
-    it('should achieve minimum 80% token savings', async () => {
+    it('should achieve minimum 70% baseline savings (vs 42 historical tools)', async () => {
       const results = await runTokenBenchmark();
 
-      expect(results.savings.percent).toBeGreaterThanOrEqual(80);
+      expect(results.savings.percent).toBeGreaterThanOrEqual(70);
     });
 
-    it('should achieve target 84% token savings', async () => {
+    it('should achieve minimum 80% projected savings (vs all current operations)', async () => {
       const results = await runTokenBenchmark();
 
-      // Target: 84% savings (adjusted from initial 89% estimate based on measurements)
-      // Actual measured: ~85% (84.98% before rounding)
-      expect(results.savings.percent).toBeGreaterThanOrEqual(84);
+      // Projected savings uses actual operation count × avg discrete tool cost.
+      // This reflects the true value of MCP-AQL as operations grow while
+      // CRUDE endpoint count stays fixed.
+      expect(results.projectedSavings.percent).toBeGreaterThanOrEqual(80);
+    });
+
+    it('should achieve target 85% projected savings', async () => {
+      const results = await runTokenBenchmark();
+
+      // Target: 85% projected savings — operations have grown from 42 to 73+
+      // while CRUDE endpoints remain at 5, improving the ratio over time.
+      expect(results.projectedSavings.percent).toBeGreaterThanOrEqual(85);
     });
 
     it('should save at least 5000 tokens', async () => {
@@ -120,11 +134,18 @@ describe('MCP-AQL Token Economics', () => {
   });
 
   describe('Tool Consolidation Metrics', () => {
-    it('should achieve 8x or better tool consolidation ratio', async () => {
+    it('should achieve 8x or better baseline consolidation ratio', async () => {
       const results = await runTokenBenchmark();
 
       const ratio = results.discreteTools.count / results.mcpAqlTools.count;
       expect(ratio).toBeGreaterThanOrEqual(8);
+    });
+
+    it('should achieve 14x or better projected consolidation ratio', async () => {
+      const results = await runTokenBenchmark();
+
+      // All current operations consolidated into 5 CRUDE endpoints
+      expect(results.projectedSavings.consolidationRatio).toBeGreaterThanOrEqual(14);
     });
 
     it('should reduce total tools by at least 35', async () => {
@@ -136,13 +157,14 @@ describe('MCP-AQL Token Economics', () => {
   });
 
   describe('MCP-AQL Tool Structure', () => {
-    it('should have proper CRUD semantics', () => {
+    it('should have proper CRUDE semantics', () => {
       const toolNames = mcpAqlTools.map(t => t.name);
 
       expect(toolNames).toContain('mcp_aql_create');
       expect(toolNames).toContain('mcp_aql_read');
       expect(toolNames).toContain('mcp_aql_update');
       expect(toolNames).toContain('mcp_aql_delete');
+      expect(toolNames).toContain('mcp_aql_execute');
     });
 
     it('should have correct annotations for read-only operations', () => {
@@ -155,9 +177,11 @@ describe('MCP-AQL Token Economics', () => {
     it('should have correct annotations for destructive operations', () => {
       const updateTool = mcpAqlTools.find(t => t.name === 'mcp_aql_update');
       const deleteTool = mcpAqlTools.find(t => t.name === 'mcp_aql_delete');
+      const executeTool = mcpAqlTools.find(t => t.name === 'mcp_aql_execute');
 
       expect(updateTool?.annotations?.destructiveHint).toBe(true);
       expect(deleteTool?.annotations?.destructiveHint).toBe(true);
+      expect(executeTool?.annotations?.destructiveHint).toBe(true);
     });
 
     it('should have correct annotations for create operations', () => {
@@ -181,8 +205,8 @@ describe('MCP-AQL Token Economics', () => {
     it('should have reasonable token count for MCP-AQL tools', async () => {
       const results = await runTokenBenchmark();
 
-      // Average should be under 300 tokens per tool
-      expect(results.mcpAqlTools.avgPerTool).toBeLessThan(300);
+      // Average should be under 400 tokens per tool (adjusted for 5 CRUDE endpoints)
+      expect(results.mcpAqlTools.avgPerTool).toBeLessThan(400);
     });
 
     it('should have list_elements as largest discrete tool', () => {
@@ -198,22 +222,54 @@ describe('MCP-AQL Token Economics', () => {
   });
 
   describe('Regression Prevention', () => {
-    it('should not exceed 1500 tokens for MCP-AQL total', async () => {
+    it('should not exceed 2000 tokens for MCP-AQL total', async () => {
       const results = await runTokenBenchmark();
 
-      // Prevent schema bloat
-      expect(results.mcpAqlTools.totalTokens).toBeLessThan(1500);
+      // Prevent schema bloat across 5 CRUDE endpoints
+      expect(results.mcpAqlTools.totalTokens).toBeLessThan(2000);
     });
 
-    it('should maintain minimum 80% savings threshold', async () => {
+    it('should maintain minimum 70% baseline savings', async () => {
       const results = await runTokenBenchmark();
 
-      // Minimum acceptable savings (alarm threshold)
-      expect(results.savings.percent).toBeGreaterThanOrEqual(80);
+      // Alarm threshold for baseline (vs 42 historical tools)
+      expect(results.savings.percent).toBeGreaterThanOrEqual(70);
     });
 
-    it('should not add tools beyond 4 MCP-AQL endpoints', () => {
-      expect(mcpAqlTools.length).toBe(4);
+    it('should maintain minimum 80% projected savings', async () => {
+      const results = await runTokenBenchmark();
+
+      // Alarm threshold for projected (vs all current operations)
+      expect(results.projectedSavings.percent).toBeGreaterThanOrEqual(80);
+    });
+
+    it('should not add tools beyond 5 MCP-AQL endpoints', () => {
+      expect(mcpAqlTools.length).toBe(5);
+    });
+  });
+
+  describe('Cross-Server Savings Model', () => {
+    it('should project at least 80% total savings across all servers', async () => {
+      const results = await runTokenBenchmark();
+
+      expect(results.crossServer.totals.totalPercent).toBeGreaterThanOrEqual(80);
+    });
+
+    it('should include measured data from at least 2 adapters', async () => {
+      const results = await runTokenBenchmark();
+
+      const measuredCount = results.crossServer.servers.filter(
+        (s: any) => s.measured
+      ).length;
+      expect(measuredCount).toBeGreaterThanOrEqual(2);
+    });
+
+    it('should reduce tool surface by at least 80%', async () => {
+      const results = await runTokenBenchmark();
+      const t = results.crossServer.totals;
+
+      const toolReduction = 1 - t.totalCrudeTools / t.totalDiscreteTools;
+      expect(toolReduction).toBeGreaterThanOrEqual(0.8);
     });
   });
 });

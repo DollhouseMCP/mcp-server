@@ -335,7 +335,9 @@ function registerPortfolioRoutes(
   });
 
   router.get('/elements/memories/:date/:file', async (req, res) => {
-    const { date, file } = req.params;
+    const { date } = req.params;
+    // NFC-normalize file before safety checks to prevent Unicode homograph bypasses (#1736)
+    const file = normalizeInput(req.params.file);
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
       res.status(400).json({ error: 'Invalid date format' });
@@ -507,12 +509,15 @@ export function createApiRoutes(portfolioDir: string): Router {
       return;
     }
 
-    const { path: elementPath, name, type } = req.body as { path?: string; name?: string; type?: string };
+    const { path: elementPath, name: rawName, type } = req.body as { path?: string; name?: string; type?: string };
 
-    if (!elementPath || !type || !name) {
+    if (!elementPath || !type || !rawName) {
       res.status(400).json({ error: 'Missing required fields: path, name, type' });
       return;
     }
+
+    // NFC-normalize name before safety checks to prevent Unicode homograph bypasses (#1736)
+    const name = normalizeInput(rawName);
 
     // Validate type
     const pluralType = type.endsWith('s') ? type : `${type}s`;
@@ -739,12 +744,15 @@ export function createGatewayApiRoutes(handler: MCPAQLHandler, portfolioDir: str
       return;
     }
 
-    const { path: elementPath, name, type } = req.body as { path?: string; name?: string; type?: string };
+    const { path: elementPath, name: rawName, type } = req.body as { path?: string; name?: string; type?: string };
 
-    if (!elementPath || !type || !name) {
+    if (!elementPath || !type || !rawName) {
       res.status(400).json({ error: 'Missing required fields: path, name, type' });
       return;
     }
+
+    // NFC-normalize name before safety checks to prevent Unicode homograph bypasses (#1736)
+    const name = normalizeInput(rawName);
 
     if (elementPath.includes('..') || name.includes('..')) {
       res.status(400).json({ error: 'Invalid path or name' });

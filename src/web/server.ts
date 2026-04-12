@@ -16,19 +16,50 @@ import { join, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
-import { mkdir, readdir } from 'node:fs/promises';
+import { mkdir, readdir, readFile as readFileFs } from 'node:fs/promises';
 import { createApiRoutes, createGatewayApiRoutes } from './routes.js';
 import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
-import { createSetupRoutes } from './routes/setupRoutes.js';
+import { createSetupRoutes, repairNvmLauncherOnStartup } from './routes/setupRoutes.js';
+import { createTotpRoutes } from './routes/totpRoutes.js';
+import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
+import { env } from '../config/env.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
+import type { ConsoleTokenStore } from './console/consoleToken.js';
+import { createAuthMiddleware } from './middleware/authMiddleware.js';
+import { PACKAGE_VERSION } from '../generated/version.js';
+
+/**
+ * Public path prefixes that never require authentication (#1780).
+ * These endpoints return safe metadata or act as health probes — requiring
+ * tokens on them would break monitoring and client detection without adding
+ * real security value.
+ */
+const PUBLIC_PATH_PREFIXES = [
+  '/api/health',
+  '/api/setup/version',
+  '/api/setup/mcpb',
+  '/api/setup/detect',
+  '/api/setup/license',
+];
+
+/** Placeholder in index.html that is replaced with the current console token. */
+const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
+/** Placeholder in index.html that is replaced with the running server version. */
+const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_PORT = 3939;
+/**
+ * Default port for standalone `startWebServer` calls. Reads from the
+ * `DOLLHOUSE_WEB_CONSOLE_PORT` env var so there is a single source of
+ * truth (see `src/config/env.ts`). Callers passing an explicit `port` in
+ * `WebServerOptions` override this default.
+ */
+const DEFAULT_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const CONSOLE_HOST = 'dollhouse.localhost';
 const ALLOWED_PAGE_EXTENSIONS = new Set(['.html', '.htm']);
 /** Max JSON body for setup routes (install/open-config). Ingest routes use their own 1mb limit. */
@@ -37,6 +68,10 @@ const SETUP_BODY_LIMIT = '1kb';
 /** Track whether the web server is already running in-process. */
 let serverRunning = false;
 let serverPort = DEFAULT_PORT;
+/** Active HTTP server instance — tracked so _resetServerState can close it. */
+let activeHttpServer: import('node:http').Server | null = null;
+/** Cached token store for openPortfolioBrowser — prevents duplicate instances on the same file. */
+let cachedTokenStore: ConsoleTokenStore | null = null;
 
 /** Check whether the web server has been started in this process. */
 export function isWebServerRunning(): boolean {
@@ -44,10 +79,40 @@ export function isWebServerRunning(): boolean {
 }
 
 /**
+ * Reset module-level server state. Exported for testing only —
+ * allows tests to exercise startWebServer/bindAndListen without
+ * interference from prior runs in the same process.
+ * @internal
+ */
+export function _resetServerState(): void {
+  if (activeHttpServer) {
+    activeHttpServer.close();
+    activeHttpServer = null;
+  }
+  serverRunning = false;
+  serverPort = DEFAULT_PORT;
+  cachedTokenStore = null;
+}
+
+/**
+ * Gracefully shut down the HTTP server (#1856).
+ * Closes the active server and resets module state so the port is freed
+ * immediately rather than lingering until process exit.
+ */
+export function shutdownWebServer(): void {
+  if (activeHttpServer) {
+    activeHttpServer.close();
+    activeHttpServer = null;
+    serverRunning = false;
+    logger.info(`[WebUI] HTTP server closed on port ${serverPort}`);
+  }
+}
+
+/**
  * Options for starting the web server.
  */
 export interface WebServerOptions {
-  /** Port to bind to (default: 3939) */
+  /** Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`, see `src/config/env.ts`) */
   port?: number;
   /** Path to the portfolio directory (e.g., ~/.dollhouse/portfolio) */
   portfolioDir: string;
@@ -66,6 +131,25 @@ export interface WebServerOptions {
   metricsSink?: MemoryMetricsSink;
   /** Additional routers to mount before the SPA fallback (e.g., ingest routes) */
   additionalRouters?: import('express').Router[];
+  /**
+   * Console token store (#1780). When provided, the server will:
+   *   1. Mount Bearer token auth middleware before protected routers.
+   *   2. Inject the primary token into index.html so the browser client
+   *      can attach it to fetch calls and EventSource URLs.
+   *   3. Append the token file location to the startup banner.
+   * Auth enforcement is still gated on DOLLHOUSE_WEB_AUTH_ENABLED — the
+   * middleware is a pass-through when the flag is false (the Phase 1 default).
+   */
+  tokenStore?: ConsoleTokenStore;
+}
+
+/**
+ * Result of attempting to bind the HTTP server to a port.
+ */
+export interface BindResult {
+  success: boolean;
+  error?: 'EADDRINUSE' | 'OTHER';
+  detail?: string;
 }
 
 /**
@@ -78,6 +162,8 @@ export interface WebServerResult {
   logBroadcast?: (entry: import('../logging/types.js').UnifiedLogEntry) => void;
   /** Metrics snapshot function — call with each snapshot to push to SSE clients */
   metricsOnSnapshot?: (snapshot: import('../metrics/types.js').MetricSnapshot) => void;
+  /** Result of the port binding attempt */
+  bindResult?: BindResult;
 }
 
 /**
@@ -168,22 +254,66 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       "default-src 'self'",
       "script-src 'self' cdn.jsdelivr.net cdnjs.cloudflare.com",
       "style-src 'self' 'unsafe-inline' cdnjs.cloudflare.com cdn.jsdelivr.net",
+      "img-src 'self' data:",
       "connect-src 'self' raw.githubusercontent.com",
       "font-src 'self'",
     ].join('; '));
     next();
   });
 
+  // Console token authentication middleware (#1780). Mounted before any /api
+  // routes so every protected endpoint goes through it. When the feature flag
+  // DOLLHOUSE_WEB_AUTH_ENABLED is false (Phase 1 default) this is a pass-through.
+  // Public endpoints in PUBLIC_PATH_PREFIXES always bypass auth regardless of flag.
+  if (options.tokenStore) {
+    const authMiddleware = createAuthMiddleware({
+      store: options.tokenStore,
+      enabled: env.DOLLHOUSE_WEB_AUTH_ENABLED,
+      publicPathPrefixes: PUBLIC_PATH_PREFIXES,
+      label: 'api',
+    });
+    app.use('/api', authMiddleware);
+    logger.info(
+      `[WebUI] Console auth middleware mounted ${env.DOLLHOUSE_WEB_AUTH_ENABLED ? 'ENFORCING' : 'pass-through (flag off)'}`,
+    );
+
+    // TOTP enrollment routes (#1794). Mounted AFTER the /api auth middleware
+    // because the router adds its own always-on auth guard — the global auth
+    // middleware at /api is a pass-through during Phase 1 rollout, but the
+    // TOTP router enforces regardless of DOLLHOUSE_WEB_AUTH_ENABLED so an
+    // attacker with local port access cannot pre-enroll a second factor and
+    // lock the legitimate user out.
+    app.use('/api/console/totp', createTotpRoutes({ store: options.tokenStore }));
+    logger.info('[WebUI] TOTP routes mounted at /api/console/totp (always-on auth)');
+
+    // Token management routes (#1795). Mounted alongside the TOTP router with
+    // the same always-on auth pattern. Currently hosts the rotation endpoint;
+    // future token management operations (list, revoke) go here too.
+    app.use('/api/console/token', createTokenRoutes({ store: options.tokenStore }));
+    logger.info('[WebUI] Token routes mounted at /api/console/token (always-on auth)');
+  }
+
   // Setup routes: auto-install DollhouseMCP to MCP clients (mount BEFORE API routes)
   // Body limit scoped to setup routes only — ingest routes need 1mb for follower log forwarding
   const setupJsonParser = express.json({ limit: SETUP_BODY_LIMIT, type: 'application/json' });
-  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler } = createSetupRoutes();
+  const { installHandler, openConfigHandler, versionHandler, mcpbRedirectHandler, detectHandler, getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler } = createSetupRoutes();
   app.post('/api/setup/install', setupJsonParser, installHandler);
   app.post('/api/setup/open-config', setupJsonParser, openConfigHandler);
   app.get('/api/setup/version', versionHandler);
   app.get('/api/setup/mcpb', mcpbRedirectHandler);
   app.get('/api/setup/detect', detectHandler);
+  app.get('/api/setup/license', getLicenseHandler);
+  app.post('/api/setup/license', setupJsonParser, setLicenseHandler);
+  app.post('/api/setup/license/verify', setupJsonParser, verifyLicenseHandler);
+  app.post('/api/setup/license/resend', setupJsonParser, resendVerificationHandler);
   logger.info('[WebUI] Setup routes mounted at /api/setup');
+
+  // Fire-and-forget NVM launcher repair: recreates the wrapper if deleted and
+  // patches any pre-existing configs that still use bare `npx`. No-ops when
+  // NVM is absent or on Windows. Never delays server startup.
+  repairNvmLauncherOnStartup().catch(err =>
+    logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+  );
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
@@ -201,33 +331,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.warn('[WebUI] API routes using direct filesystem access (no MCP-AQL handler available)');
   }
 
-  // Console routes: logs, metrics, health
-  let logRoutes: LogRoutesResult | undefined;
-  let metricsRoutes: MetricsRoutesResult | undefined;
-
-  if (options.memorySink) {
-    logRoutes = createLogRoutes(options.memorySink);
-    app.use('/api', logRoutes.router);
-    result.logBroadcast = logRoutes.broadcast;
-    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
-  }
-
-  if (options.metricsSink) {
-    metricsRoutes = createMetricsRoutes(options.metricsSink);
-    app.use('/api', metricsRoutes.router);
-    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
-    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
-  }
-
-  if (options.memorySink) {
-    const healthRouter = createHealthRoutes({
-      memorySink: options.memorySink,
-      metricsSink: options.metricsSink,
-      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
-      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
-    });
-    app.use('/api', healthRouter);
-  }
+  // Console routes: logs, metrics, health — extracted to keep cognitive
+  // complexity of startWebServer manageable.
+  mountConsoleRoutes(app, options, result);
 
   // Serve ~/.dollhouse/pages/ at /pages/ — dashboards, generated content, stack views
   const pagesDir = join(dirname(options.portfolioDir), 'pages');
@@ -258,10 +364,52 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
 
   // Static frontend files
   const publicDir = join(__dirname, 'public');
-  app.use(express.static(publicDir));
+  // Serve static assets but skip index.html — the SPA fallback below
+  // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
+  // meta tag). Without this, express.static serves the raw template
+  // and the browser never gets the auth token (#1780).
+  const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+  app.use(express.static(publicDir, {
+    index: false,
+    // In debug mode, disable caching on all static assets (JS, CSS) so
+    // UI changes are picked up on normal reload without Cmd+Shift+R.
+    ...(isDebug ? { etag: false, lastModified: false, maxAge: 0 } : {}),
+  }));
 
-  // SPA fallback
-  app.get('/{*path}', (req, res) => {
+  // SPA fallback with console token injection (#1780).
+  // Reads index.html on first request, substitutes the {{CONSOLE_TOKEN}} placeholder
+  // with the current token value, and caches the rendered string. The cache is
+  // auto-invalidated when the primary token changes (rotation), so a page reload
+  // after rotation picks up the new token without a server restart.
+  let cachedIndexHtml: string | null = null;
+  let cachedTokenValue: string | null = null;
+  const indexHtmlPath = join(publicDir, 'index.html');
+
+  const renderIndexHtml = async (): Promise<string> => {
+    const tokenValue = options.tokenStore?.getPrimaryTokenValue() ?? '';
+    // Auto-invalidate cache when the token changes (rotation).
+    // In debug mode, always re-read from disk so UI changes are picked up on reload.
+    if (!isDebug && cachedIndexHtml !== null && cachedTokenValue === tokenValue) {
+      return cachedIndexHtml;
+    }
+    const template = await readFileFs(indexHtmlPath, 'utf8');
+    // Defensive HTML attribute escape. Tokens are strict 64-char lowercase hex
+    // today so no escaping is actually needed, but if the token format ever
+    // changes this prevents an HTML-injection regression from landing silently.
+    const escapedToken = tokenValue
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    cachedIndexHtml = template
+      .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
+    cachedTokenValue = tokenValue;
+    return cachedIndexHtml;
+  };
+
+  app.get('/{*path}', async (req, res) => {
     const normalizedPath = req.path.normalize('NFC');
     if (normalizedPath.startsWith('/api/')) {
       res.status(404).json({ error: `API route not found: ${normalizedPath}` });
@@ -271,7 +419,20 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       res.status(404).json({ error: `Page not found: ${normalizedPath}` });
       return;
     }
-    res.sendFile(join(publicDir, 'index.html'));
+    try {
+      const html = await renderIndexHtml();
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      // In debug mode, prevent browser caching so UI changes are picked up
+      // immediately. In production, allow short caching for performance.
+      const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+      res.setHeader('Cache-Control', isDebug
+        ? 'no-cache, no-store, must-revalidate'
+        : 'private, max-age=60');
+      res.send(html);
+    } catch (err) {
+      logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);
+      res.status(500).send('Failed to load console');
+    }
   });
 
   // Global error handler — catch Express errors and route to logger instead of terminal.
@@ -286,40 +447,128 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     }
   });
 
-  // Bind to localhost only — handle port conflicts gracefully
-  // NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
-  // is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
-  // stderr is safe for human-readable messages in both MCP and standalone modes.
-  await new Promise<void>((resolve) => {
+  // Bind to localhost only — handle port conflicts gracefully.
+  // Extracted to a helper to keep startWebServer's cognitive complexity manageable.
+  result.bindResult = await bindAndListen(app, port, options);
+
+  return result;
+}
+
+/**
+ * Mount the logs, metrics, and health routes. These are only mounted when the
+ * corresponding sinks are provided (memory log sink for logs+health, metrics
+ * sink for the metrics tab). Extracted from startWebServer to cap the main
+ * function's cognitive complexity.
+ */
+function mountConsoleRoutes(
+  app: import('express').Express,
+  options: WebServerOptions,
+  result: WebServerResult,
+): void {
+  let logRoutes: LogRoutesResult | undefined;
+  let metricsRoutes: MetricsRoutesResult | undefined;
+
+  if (options.memorySink) {
+    logRoutes = createLogRoutes(options.memorySink);
+    app.use('/api', logRoutes.router);
+    result.logBroadcast = logRoutes.broadcast;
+    logger.info('[WebUI] Log viewer routes mounted at /api/logs');
+  }
+
+  if (options.metricsSink) {
+    metricsRoutes = createMetricsRoutes(options.metricsSink);
+    app.use('/api', metricsRoutes.router);
+    result.metricsOnSnapshot = metricsRoutes.onSnapshot;
+    logger.info('[WebUI] Metrics routes mounted at /api/metrics');
+  }
+
+  if (options.memorySink) {
+    const healthRouter = createHealthRoutes({
+      memorySink: options.memorySink,
+      metricsSink: options.metricsSink,
+      logClientCount: logRoutes ? logRoutes.clientCount : () => 0,
+      metricsClientCount: metricsRoutes ? metricsRoutes.clientCount : () => 0,
+    });
+    app.use('/api', healthRouter);
+  }
+}
+
+/**
+ * Print the startup banner to stderr.
+ *
+ * NOTE: Use stderr for terminal output, not stdout. In MCP stdio mode, stdout
+ * is reserved for JSON-RPC messages — any non-JSON output corrupts the protocol.
+ * stderr is safe for human-readable messages in both MCP and standalone modes.
+ */
+function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefined): void {
+  const url = `http://${CONSOLE_HOST}:${port}`;
+  const fallbackUrl = `http://127.0.0.1:${port}`;
+  logger.info(`[WebUI] Management console running at ${url}`);
+  console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
+  if (tokenStore) {
+    console.error(`  Session token: ${tokenStore.getFilePath()}\n`);
+  }
+  console.error(`  Type "q" or "quit" to exit.\n`);
+}
+
+// Stale process recovery — extracted to StaleProcessRecovery.ts for independent testing (#1850).
+import { recoverStalePort } from './console/StaleProcessRecovery.js';
+export { findPidOnPort, killStaleProcess, recoverStalePort } from './console/StaleProcessRecovery.js';
+
+/**
+ * Attempt a single port bind. Returns a BindResult without any recovery logic.
+ */
+function attemptBind(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<BindResult> {
+  return new Promise<BindResult>((resolve) => {
     const httpServer = app.listen(port, '127.0.0.1', () => {
       serverRunning = true;
       serverPort = port;
-      const url = `http://${CONSOLE_HOST}:${port}`;
-      const fallbackUrl = `http://127.0.0.1:${port}`;
-      logger.info(`[WebUI] Management console running at ${url}`);
-      console.error(`\n  DollhouseMCP Management Console\n  ${url}\n  ${fallbackUrl} (fallback)\n`);
-      console.error(`  Type "q" or "quit" to exit.\n`);
-
+      activeHttpServer = httpServer;
+      printStartupBanner(port, options.tokenStore);
       if (options.openBrowser) {
-        openInBrowser(url);
+        openInBrowser(`http://${CONSOLE_HOST}:${port}`);
       }
-      resolve();
+      resolve({ success: true });
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        const url = `http://${CONSOLE_HOST}:${port}`;
-        logger.info(`[WebUI] Port ${port} already in use — opening existing console`);
-        console.error(`\n  DollhouseMCP Management Console (existing instance)\n  ${url}\n`);
-        if (options.openBrowser) {
-          openInBrowser(url);
-        }
+        resolve({ success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` });
       } else {
         logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
+        resolve({ success: false, error: 'OTHER', detail: err.message });
       }
-      resolve(); // Web console is optional — don't block startup
     });
   });
+}
 
+/**
+ * Bind the Express app to 127.0.0.1:port. On EADDRINUSE, attempt to find
+ * and kill the stale DollhouseMCP process holding the port, then retry once.
+ */
+async function bindAndListen(
+  app: import('express').Express,
+  port: number,
+  options: WebServerOptions,
+): Promise<BindResult> {
+  const result = await attemptBind(app, port, options);
+  if (result.success || result.error !== 'EADDRINUSE') return result;
+
+  // Port occupied — attempt stale process recovery and retry
+  if (await recoverStalePort(port)) {
+    const retryResult = await attemptBind(app, port, options);
+    if (retryResult.success) return retryResult;
+  }
+
+  // Still can't bind — fall through with warning
+  logger.warn(`[WebUI] Port ${port} already in use — another process holds this port`);
+  console.error(`\n  DollhouseMCP Management Console (existing instance)\n  http://${CONSOLE_HOST}:${port}\n`);
+  if (options.openBrowser) {
+    openInBrowser(`http://${CONSOLE_HOST}:${port}`);
+  }
   return result;
 }
 
@@ -333,33 +582,89 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
  * Called by the `open_portfolio_browser` MCP-AQL operation (Issue #774).
  *
  * @param portfolioDir - Path to the portfolio directory (e.g., ~/.dollhouse/portfolio)
- * @param port - Port to bind to (default: 3939)
+ * @param port - Port to bind to (defaults to `DOLLHOUSE_WEB_CONSOLE_PORT`)
  * @returns Result with URL, server status, and browser open status
  */
-export async function openPortfolioBrowser(portfolioDir: string, port?: number, mcpAqlHandler?: MCPAQLHandler, tab?: string, urlParams?: Record<string, string>): Promise<BrowserOpenResult> {
-  const targetPort = port || DEFAULT_PORT;
+/**
+ * Options for opening the portfolio browser.
+ */
+export interface OpenBrowserOptions {
+  portfolioDir: string;
+  port?: number;
+  mcpAqlHandler?: MCPAQLHandler;
+  tab?: string;
+  urlParams?: Record<string, string>;
+  memorySink?: MemoryLogSink;
+  metricsSink?: MemoryMetricsSink;
+}
+
+/**
+ * Self-provision sinks, token store, and ingest routes, then start the web
+ * server. Extracted from openPortfolioBrowser to keep cognitive complexity
+ * manageable (SonarCloud S3776).
+ */
+async function startFallbackServer(options: OpenBrowserOptions, port: number): Promise<void> {
+  let memorySink = options.memorySink;
+  let metricsSink = options.metricsSink;
+
+  if (!memorySink) {
+    const { MemoryLogSink: LogSink } = await import('../logging/sinks/MemoryLogSink.js');
+    memorySink = new LogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink: MetricsSink } = await import('../metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MetricsSink(240);
+  }
+
+  // Reuse cached token store — two instances on the same file can race on writes.
+  if (!cachedTokenStore) {
+    const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
+    const { pickRandomTokenName } = await import('./console/SessionNames.js');
+    cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    try { await cachedTokenStore.ensureInitialized(pickRandomTokenName()); }
+    catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
+  }
+
+  // logBroadcast is deferred — wired after startWebServer returns the real broadcast fn.
+  let liveBroadcast: ((entry: import('../logging/types.js').UnifiedLogEntry) => void) | undefined;
+  const { createIngestRoutes } = await import('./console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (entry) => liveBroadcast?.(entry),
+  });
+  ingestResult.registerConsoleSession();
+
+  const webResult = await startWebServer({
+    portfolioDir: options.portfolioDir,
+    port,
+    openBrowser: false,
+    mcpAqlHandler: options.mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    tokenStore: cachedTokenStore,
+    additionalRouters: [ingestResult.router],
+  });
+
+  liveBroadcast = webResult.logBroadcast;
+}
+
+export async function openPortfolioBrowser(options: OpenBrowserOptions): Promise<BrowserOpenResult> {
+  const targetPort = options.port || DEFAULT_PORT;
   const baseUrl = `http://${CONSOLE_HOST}:${targetPort}`;
 
   // Build URL with optional tab hash and query parameters
-  // Format: http://host:port/#tab?key=value&key=value
   let url = baseUrl;
-  if (tab) {
-    const qs = urlParams ? new URLSearchParams(urlParams).toString() : '';
-    url = `${baseUrl}/#${tab}${qs ? '?' + qs : ''}`;
-  } else if (urlParams && Object.keys(urlParams).length > 0) {
-    const qs = new URLSearchParams(urlParams).toString();
+  if (options.tab) {
+    const qs = options.urlParams ? new URLSearchParams(options.urlParams).toString() : '';
+    url = `${baseUrl}/#${options.tab}${qs ? '?' + qs : ''}`;
+  } else if (options.urlParams && Object.keys(options.urlParams).length > 0) {
+    const qs = new URLSearchParams(options.urlParams).toString();
     url = `${baseUrl}/#portfolio?${qs}`;
   }
 
   const alreadyRunning = serverRunning;
 
   if (!serverRunning) {
-    await startWebServer({
-      portfolioDir,
-      port: targetPort,
-      openBrowser: false, // We'll open manually below to capture the result
-      mcpAqlHandler,
-    });
+    await startFallbackServer(options, targetPort);
   }
 
   const browserResult = await openInBrowser(url);

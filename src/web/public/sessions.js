@@ -14,7 +14,15 @@
 (function() {
   'use strict';
 
-  var SESSION_POLL_INTERVAL = 5000;
+  function getConfiguredNumber(key, fallback) {
+    var config = globalThis.DollhouseConsoleConfig;
+    var value = config && Number(config[key]);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
+  }
+
+  var SESSION_POLL_INTERVAL = getConfiguredNumber('sessionPollIntervalMs', 5000);
+  var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
+  var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
   var sessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
@@ -59,12 +67,31 @@
     var logSelect = document.getElementById('log-session-filter');
     if (logSelect) logSelect.value = sessionId;
 
-    // Trigger log re-filter
+    // Trigger log re-filter with the selected session
     if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
-      window.DollhouseConsole.logs.refilter();
+      window.DollhouseConsole.logs.refilter(sessionId);
     }
 
     refreshSelectionState();
+  }
+
+  function showSessionsError(message) {
+    var target = document.getElementById('session-indicator');
+    if (!target || !target.parentElement) return;
+    var banner = document.getElementById('sessions-error-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'sessions-error-banner';
+      banner.className = 'tab-error-banner';
+      target.parentElement.insertBefore(banner, target);
+    }
+    banner.textContent = message;
+    banner.hidden = false;
+  }
+
+  function clearSessionsError() {
+    var banner = document.getElementById('sessions-error-banner');
+    if (banner) banner.hidden = true;
   }
 
   // Update checkmarks and selected styling without rebuilding DOM
@@ -142,7 +169,6 @@
     dropdownBuilt = false;
 
     var count = active.length;
-    if (count === 0) return;
 
     // Box button
     var box = document.createElement('button');
@@ -226,6 +252,37 @@
         if (s.color) nameEl.style.color = s.color;
         item.appendChild(nameEl);
 
+        // Session status badges (#1805) — two independent dimensions:
+        // 1. Auth status (filled/empty circle + text)
+        // 2. Client attachment (checkmark/X + text)
+        // Shape + text + colorblind-safe color (blue/orange) = three
+        // independent channels so no single channel carries meaning alone.
+        var authBadge = document.createElement('span');
+        authBadge.className = 'session-status-badge';
+        if (s.authenticated) {
+          authBadge.textContent = '\u25CF Auth';
+          authBadge.dataset.status = 'positive';
+          authBadge.title = 'Authenticated session';
+        } else {
+          authBadge.textContent = '\u25CB No auth';
+          authBadge.dataset.status = 'negative';
+          authBadge.title = 'Unauthenticated session';
+        }
+        item.appendChild(authBadge);
+
+        var clientBadge = document.createElement('span');
+        clientBadge.className = 'session-status-badge';
+        if (s.kind === 'mcp') {
+          clientBadge.textContent = '\u2713 Client';
+          clientBadge.dataset.status = 'positive';
+          clientBadge.title = 'MCP client attached';
+        } else {
+          clientBadge.textContent = '\u2717 No client';
+          clientBadge.dataset.status = 'negative';
+          clientBadge.title = 'No MCP client attached';
+        }
+        item.appendChild(clientBadge);
+
         var uptimeEl = document.createElement('span');
         uptimeEl.className = 'session-dropdown-uptime';
         uptimeEl.dataset.startedAt = s.startedAt;
@@ -240,9 +297,25 @@
         killBtn.addEventListener('click', function(e) {
           e.stopPropagation();
           if (!confirm('Stop session ' + displayName(s) + '?')) return;
-          fetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
-            .then(function() { fetchSessions(); })
-            .catch(function() {});
+          DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
+            .then(function(res) {
+              if (!res.ok) {
+                alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+                fetchSessions();
+                return;
+              }
+              return res.json();
+            })
+            .then(function(data) {
+              if (!data) return;
+              if (data.reason === 'pending-kill') {
+                alert('Session ' + displayName(s) + ' will be terminated shortly.\nWaiting for the process to identify itself, then it will be killed.');
+              }
+              fetchSessions();
+            })
+            .catch(function(err) {
+              alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
+            });
         });
         item.appendChild(killBtn);
 
@@ -292,7 +365,7 @@
     if (!logPanel) return;
     if (document.getElementById('log-session-filter')) return;
 
-    var filterBar = logPanel.querySelector('.log-filters');
+    var filterBar = logPanel.querySelector('.log-controls');
     if (!filterBar) return;
 
     var group = document.createElement('div');
@@ -306,6 +379,10 @@
     group.querySelector('select').addEventListener('change', function() {
       applyFilter(this.value);
     });
+
+    // If sessions loaded before the log controls mounted, populate the
+    // newly injected filter immediately instead of waiting for the next poll.
+    updateSessionFilterOptions();
   }
 
   // Update session filter dropdown options
@@ -326,18 +403,28 @@
     }
   }
 
-  // Fetch sessions from the API
+  /**
+   * Fetch sessions from the API. The server handles federation with the
+   * legacy port (3939) server-side to avoid CORS issues (#1805).
+   */
   function fetchSessions() {
-    fetch('/api/sessions').then(function(res) {
-      if (!res.ok) return;
+    DollhouseAuth.apiFetch('/api/sessions').then(function(res) {
+      if (!res.ok) {
+        showSessionsError('Failed to load sessions.');
+        return;
+      }
       return res.json();
     }).then(function(data) {
       if (data && data.sessions) {
         sessions = data.sessions;
         updateSessionIndicator();
         updateSessionFilterOptions();
+        clearSessionsError();
       }
-    }).catch(function() {});
+    }).catch(function(err) {
+      console.warn('[Sessions] Fetch failed:', err);
+      showSessionsError('Failed to load sessions.');
+    });
   }
 
   // Expose for logs.js integration
@@ -355,10 +442,10 @@
     var tryInject = setInterval(function() {
       injectSessionFilter();
       retries++;
-      if (document.getElementById('log-session-filter') || retries > 20) {
+      if (document.getElementById('log-session-filter') || retries > SESSION_FILTER_INJECTION_MAX_RETRIES) {
         clearInterval(tryInject);
       }
-    }, 500);
+    }, SESSION_FILTER_INJECTION_RETRY_INTERVAL);
   }
 
   if (document.readyState === 'loading') {

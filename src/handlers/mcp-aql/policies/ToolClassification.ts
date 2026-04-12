@@ -199,6 +199,13 @@ const DANGEROUS_BASH_PATTERNS = [
   'doas *',
   'su -*',
   'eval *',
+  // Inline interpreter execution (#1782) — arbitrary code via -c/-e flags
+  'python -c *',
+  'python3 -c *',
+  'node -e *',
+  'node --eval *',
+  'perl -e *',
+  'ruby -e *',
   // Pipe-to-shell patterns (with and without spaces, multiple shells)
   '*| sh',
   '*| sh *',

@@ -224,6 +224,41 @@ export interface WizardConfig {
   skippedSections?: string[]; // Track which sections were skipped
 }
 
+export type LicenseTier = 'agpl' | 'free-commercial' | 'paid-commercial';
+
+export interface LicenseConfig {
+  tier: LicenseTier;
+  email?: string;            // Required for commercial tiers
+  attestedAt?: string;       // ISO timestamp of attestation
+  telemetryRequired?: boolean; // true for commercial tiers (license condition)
+  revenueScale?: string;     // Paid commercial: "$1M–$5M", "$5M–$25M", etc.
+  companyName?: string;      // Paid commercial: required
+  useCase?: string;          // Paid commercial: required
+}
+
+/** Branded type for validated port numbers (1024–65535). */
+export type PortNumber = number & { readonly __brand: 'PortNumber' };
+
+/** Validate and brand a port number. Returns undefined if invalid. */
+export function validatePort(value: unknown): PortNumber | undefined {
+  const num = typeof value === 'string' ? Number(value) : value;
+  if (typeof num !== 'number' || !Number.isFinite(num)) return undefined;
+  const port = Math.floor(num);
+  if (port < 1024 || port > 65535) return undefined;
+  return port as PortNumber;
+}
+
+export interface ConsoleConfig {
+  /**
+   * Web console port (1024–65535). Resolution hierarchy:
+   *   1. --port CLI flag (standalone --web mode only)
+   *   2. This config value (~/.dollhouse/config.yml → console.port)
+   *   3. DOLLHOUSE_WEB_CONSOLE_PORT env var
+   *   4. Default: 41715
+   */
+  port: number;
+}
+
 export interface SourcePriorityConfigData {
   order: string[];  // Array of 'local' | 'github' | 'collection'
   stop_on_first: boolean;
@@ -242,6 +277,8 @@ export interface DollhouseConfig {
   wizard: WizardConfig;
   autoLoad: AutoLoadConfig;
   retentionPolicy: RetentionPolicyConfig;
+  license: LicenseConfig;
+  console: ConsoleConfig;
   source_priority?: SourcePriorityConfigData;
 }
 
@@ -265,6 +302,23 @@ export class ConfigManager {
   private config: DollhouseConfig | null = null;
   private readonly fileOperations: IFileOperationsService;
   private os: typeof os;
+
+  /**
+   * Extract console.port from raw YAML config content without full
+   * ConfigManager initialization. Uses FAILSAFE_SCHEMA for security
+   * (no code execution). Returns undefined if not found or invalid.
+   */
+  static readPortFromYaml(yamlContent: string): number | undefined {
+    try {
+      const parsed = yaml.load(yamlContent, { schema: yaml.FAILSAFE_SCHEMA }) as Record<string, any> | null;
+      const raw = parsed?.console?.port;
+      if (raw === undefined || raw === null) return undefined;
+      const port = Number(raw);
+      return Number.isFinite(port) ? port : undefined;
+    } catch {
+      return undefined;
+    }
+  }
 
   constructor(fileOperations: IFileOperationsService, osModule: typeof os) {
     this.fileOperations = fileOperations;
@@ -380,6 +434,12 @@ export class ConfigManager {
       wizard: {
         completed: false,
         dismissed: false
+      },
+      license: {
+        tier: 'agpl'
+      },
+      console: {
+        port: 41715
       },
       /**
        * Retention Policy Configuration (Issue #51)
@@ -625,6 +685,18 @@ export class ConfigManager {
     
     // SECURITY: Validate path to prevent prototype pollution
     validatePropertyPath(path, 'path');
+
+    // Runtime validation for known typed settings (#1840)
+    if (path === 'console.port') {
+      const validated = validatePort(value);
+      if (!validated) {
+        return {
+          success: false,
+          message: `Invalid port: ${value}. Must be an integer between 1024 and 65535.`,
+        };
+      }
+      value = validated;
+    }
 
     const keys = path.split('.');
     let current: any = this.config;

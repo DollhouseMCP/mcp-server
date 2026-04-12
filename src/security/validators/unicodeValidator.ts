@@ -12,6 +12,7 @@
  */
 
 import { SecurityMonitor } from '../securityMonitor.js';
+import { escalateSeverity } from '../constants.js';
 
 export interface UnicodeValidationResult {
   isValid: boolean;
@@ -52,7 +53,10 @@ export class UnicodeValidator {
   
   /**
    * Common homograph/confusable character mappings
-   * Maps visually similar Unicode characters to their ASCII equivalents
+   * Maps visually similar Unicode characters to their ASCII equivalents.
+   * Performance: ~110 entries; replaceConfusables() iterates the full map
+   * per call but uses Map.has() lookups (O(1) per char). Negligible at
+   * current size — profile before optimizing if the map grows beyond ~500.
    */
   private static readonly CONFUSABLE_MAPPINGS: Map<string, string> = new Map([
     // Cyrillic to Latin
@@ -60,11 +64,15 @@ export class UnicodeValidator {
     ['А', 'A'], ['В', 'B'], ['Е', 'E'], ['К', 'K'], ['М', 'M'], ['Н', 'H'], ['О', 'O'], 
     ['Р', 'P'], ['С', 'C'], ['Т', 'T'], ['У', 'Y'], ['Х', 'X'],
     
-    // Greek to Latin
+    // Greek lowercase to Latin
     ['α', 'a'], ['β', 'b'], ['γ', 'g'], ['δ', 'd'], ['ε', 'e'], ['ζ', 'z'], ['η', 'h'],
     ['θ', 'th'], ['ι', 'i'], ['κ', 'k'], ['λ', 'l'], ['μ', 'm'], ['ν', 'n'], ['ξ', 'x'],
     ['ο', 'o'], ['π', 'p'], ['ρ', 'r'], ['σ', 's'], ['τ', 't'], ['υ', 'u'], ['φ', 'f'],
     ['χ', 'ch'], ['ψ', 'ps'], ['ω', 'w'],
+    // Greek uppercase to Latin — visually identical to Latin capitals (#1782)
+    ['\u0391', 'A'], ['\u0392', 'B'], ['\u0395', 'E'], ['\u0397', 'H'], ['\u0399', 'I'],
+    ['\u039A', 'K'], ['\u039C', 'M'], ['\u039D', 'N'], ['\u039F', 'O'], ['\u03A1', 'P'],
+    ['\u03A4', 'T'], ['\u03A5', 'Y'], ['\u03A7', 'X'],
     
     // Mathematical symbols to ASCII (various styles)
     ['𝒂', 'a'], ['𝒃', 'b'], ['𝒄', 'c'], ['𝒅', 'd'], ['𝒆', 'e'], ['𝒇', 'f'], ['𝒈', 'g'], ['𝒉', 'h'], ['𝒊', 'i'], ['𝒋', 'j'], ['𝒌', 'k'], ['𝒍', 'l'], ['𝒎', 'm'], ['𝒏', 'n'], ['𝒐', 'o'], ['𝒑', 'p'], ['𝒒', 'q'], ['𝒓', 'r'], ['𝒔', 's'], ['𝒕', 't'], ['𝒖', 'u'], ['𝒗', 'v'], ['𝒘', 'w'], ['𝒙', 'x'], ['𝒚', 'y'], ['𝒛', 'z'],
@@ -111,13 +119,13 @@ export class UnicodeValidator {
       const suspiciousPatterns = this.detectSuspiciousPatterns(content);
       issues.push(...suspiciousPatterns.issues);
       if (suspiciousPatterns.severity) {
-        severity = this.escalateSeverity(severity, suspiciousPatterns.severity);
+        severity = escalateSeverity(severity, suspiciousPatterns.severity);
       }
 
       // 2. Remove direction override characters (prevents RLO/LRO attacks)
       if (this.DIRECTION_OVERRIDE_CHARS.test(normalized)) {
         issues.push('Direction override characters detected');
-        severity = this.escalateSeverity(severity, 'high');
+        severity = escalateSeverity(severity, 'high');
         normalized = normalized.replace(this.DIRECTION_OVERRIDE_CHARS, '');
         
         SecurityMonitor.logSecurityEvent({
@@ -134,10 +142,10 @@ export class UnicodeValidator {
         const hasDirectionMarks = /[\u200E\u200F]/.test(normalized);
         if (hasDirectionMarks) {
           issues.push('Direction marks (LRM/RLM) detected');
-          severity = this.escalateSeverity(severity, 'high');
+          severity = escalateSeverity(severity, 'high');
         } else {
           issues.push('Zero-width or non-printable characters detected');
-          severity = this.escalateSeverity(severity, 'medium');
+          severity = escalateSeverity(severity, 'medium');
         }
         normalized = normalized
           .replace(this.ZERO_WIDTH_CHARS, '')
@@ -151,7 +159,7 @@ export class UnicodeValidator {
       const mixedScriptResult = this.detectMixedScripts(normalized);
       if (mixedScriptResult.isSuspicious) {
         issues.push(`Mixed script usage detected: ${mixedScriptResult.scripts.join(', ')}`);
-        severity = this.escalateSeverity(severity, 'high');
+        severity = escalateSeverity(severity, 'high');
         
         SecurityMonitor.logSecurityEvent({
           type: 'UNICODE_MIXED_SCRIPT',
@@ -167,7 +175,7 @@ export class UnicodeValidator {
       if (confusableResult.hasConfusables) {
         normalized = confusableResult.normalized;
         issues.push('Confusable Unicode characters detected and normalized');
-        severity = this.escalateSeverity(severity, 'medium');
+        severity = escalateSeverity(severity, 'medium');
         
         // Log if this happens in legitimate multilingual context
         if (!mixedScriptResult.isSuspicious) {
@@ -237,7 +245,7 @@ export class UnicodeValidator {
     for (const { range, name } of suspiciousRanges) {
       if (range.test(content)) {
         issues.push(`Suspicious Unicode range detected: ${name}`);
-        severity = this.escalateSeverity(severity, 'medium');
+        severity = escalateSeverity(severity, 'medium');
       }
     }
 
@@ -245,7 +253,7 @@ export class UnicodeValidator {
     // This avoids ReDoS vulnerabilities from complex regex patterns
     if (this.hasMalformedSurrogates(content)) {
       issues.push('Malformed surrogate pairs detected');
-      severity = this.escalateSeverity(severity, 'high');
+      severity = escalateSeverity(severity, 'high');
     }
 
     return { issues, severity };
@@ -290,20 +298,6 @@ export class UnicodeValidator {
        detectedScripts.includes('CYRILLIC'));
 
     return { isSuspicious, scripts: detectedScripts };
-  }
-
-  /**
-   * Escalate severity level (higher severity takes precedence)
-   */
-  private static escalateSeverity(
-    current: 'low' | 'medium' | 'high' | 'critical' | undefined, 
-    newSeverity: 'low' | 'medium' | 'high' | 'critical'
-  ): 'low' | 'medium' | 'high' | 'critical' {
-    const severityLevels = { low: 1, medium: 2, high: 3, critical: 4 };
-    const currentLevel = current ? severityLevels[current] : 0;
-    const newLevel = severityLevels[newSeverity];
-    
-    return newLevel > currentLevel ? newSeverity : (current || 'low');
   }
 
   /**

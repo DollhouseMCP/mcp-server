@@ -1,0 +1,113 @@
+# OSV-Scanner Ignore Configuration
+# Purpose: OpenSSF Scorecard queries OSV.dev independently of Dependabot.
+# Dismissing Dependabot alerts has no effect on the Scorecard Vulnerabilities
+# score — only osv-scanner.toml entries are respected.
+#
+# Analysis date: 2026-04-06
+# Related issue: https://github.com/DollhouseMCP/mcp-server/issues/1800
+#
+# Total dismissed: 20 alerts across 5 packages (as of 2026-04-06)
+#   handlebars: 7 (dev-only, ts-jest transitive)
+#   tar:        6 (dead code, install-mcp→giget never imported)
+#   picomatch:  3 (dev-only, jest/eslint transitive)
+#   lodash:     2 (dev-only, archiver transitive)
+#   path-to-regexp: 2 (tolerable risk, localhost + static routes)
+
+# --- handlebars (7 alerts) ---
+# Dev dependency only — transitive dep of ts-jest.
+# Never imported by source code, does not ship to production.
+# Last modified upstream: 2026-03-28 to 2026-03-30
+
+[[IgnoredVulns]]
+id = "GHSA-2w6w-674q-4c4q"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-xhpv-hc6g-r9c6"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-xjpj-3mr7-gcpf"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-3mfm-83xf-c92r"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-7rx3-28cr-v5wh"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-442j-39wm-28r2"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-2qvq-rjwj-gvw9"
+reason = "handlebars is a dev-only transitive dep of ts-jest. Never imported by source code, does not ship to production."
+
+# --- tar (6 alerts) ---
+# Transitive dep via install-mcp → giget → tar@6.2.1.
+# install-mcp's runtime code (dist/run.js) never imports giget or tar.
+# The library is installed but never loaded. Dead code path.
+# Last modified upstream: 2026-02-04 to 2026-03-16
+
+[[IgnoredVulns]]
+id = "GHSA-9ppj-qmqm-q256"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+[[IgnoredVulns]]
+id = "GHSA-qffp-2rhf-9h96"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+[[IgnoredVulns]]
+id = "GHSA-83g3-92jg-28cx"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+[[IgnoredVulns]]
+id = "GHSA-34x7-hfp2-rc4v"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+[[IgnoredVulns]]
+id = "GHSA-r6q2-hw4h-h46w"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+[[IgnoredVulns]]
+id = "GHSA-8qq5-rm4j-mr97"
+reason = "tar is a transitive dep via install-mcp→giget. install-mcp never imports giget at runtime — dead code path."
+
+# --- lodash (2 alerts) ---
+# Dev dependency only — transitive dep of archiver (used only in tests).
+# No source code imports lodash. Does not ship to production.
+# Last modified upstream: 2026-04-02
+
+[[IgnoredVulns]]
+id = "GHSA-r5fr-rjxr-66jc"
+reason = "lodash is a dev-only transitive dep of archiver (used only in tests). Does not ship to production."
+
+[[IgnoredVulns]]
+id = "GHSA-f23m-r3pf-42rh"
+reason = "lodash is a dev-only transitive dep of archiver (used only in tests). Does not ship to production."
+
+# --- path-to-regexp (2 alerts) ---
+# Runtime dep via Express 5.2.1, but server binds exclusively to 127.0.0.1
+# with static route patterns. No user-controlled route registration.
+# ReDoS requires complex optional groups we don't define.
+# Last modified upstream: 2026-03-30
+
+[[IgnoredVulns]]
+id = "GHSA-27v5-c462-wpq7"
+reason = "Express server binds to 127.0.0.1 only with static route patterns. No user-controlled routing. Will resolve with Express router update."
+
+[[IgnoredVulns]]
+id = "GHSA-j3q9-mxjg-w52f"
+reason = "Express server binds to 127.0.0.1 only with static route patterns. No user-controlled routing. Will resolve with Express router update."
+
+# --- picomatch (3 alerts, 1 GHSA ID) ---
+# Dev dependency only — transitive dep of jest/eslint.
+# Does not ship to production.
+# Last modified upstream: 2026-03-28
+
+[[IgnoredVulns]]
+id = "GHSA-3v7f-55p6-f55p"
+reason = "picomatch is a dev-only transitive dep of jest/eslint. Does not ship to production."

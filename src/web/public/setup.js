@@ -39,24 +39,25 @@
   const npxCmd = (tag) => `npx -y ${PKG}@${tag}`;
 
   /** Build all platform configs for a given pinned version */
-  function buildConfigs(version) {
+  function buildConfigs(version, channel = 'latest') {
+    const ch = channel;
     const result = {};
     for (const { id, rootKey, cli, toml } of PLATFORMS) {
       const entry = {
         npx: cli
-          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd('latest')}`, isTerminal: true }
-          : jsonConfig(rootKey, npxCmd('latest')),
+          ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(ch)}`, isTerminal: true }
+          : jsonConfig(rootKey, npxCmd(ch)),
         global: cli
           ? { code: `${cli} mcp add dollhousemcp -- ${npxCmd(version)}`, isTerminal: true }
           : jsonConfig(rootKey, npxCmd(version)),
       };
       if (cli) {
-        entry.npxJson = jsonConfig(rootKey, npxCmd('latest'));
+        entry.npxJson = jsonConfig(rootKey, npxCmd(ch));
         entry.globalJson = jsonConfig(rootKey, npxCmd(version));
       }
       if (toml) {
         const tomlBlock = (tag) => `[mcp_servers.dollhousemcp]\ncommand = "npx"\nargs = ["-y", "${PKG}@${tag}"]`;
-        entry.npxToml = { code: tomlBlock('latest') };
+        entry.npxToml = { code: tomlBlock(ch) };
         entry.globalToml = { code: tomlBlock(version) };
       }
       result[id] = entry;
@@ -64,9 +65,22 @@
     return result;
   }
 
+  // ── Channel constants ────────────────────────────────────────────────
+  const CHANNELS = {
+    STABLE: 'latest',
+    RC: 'rc',
+    BETA: 'beta',
+  };
+  const VALID_CHANNELS = new Set(Object.values(CHANNELS));
+  const DEFAULT_CHANNEL = CHANNELS.STABLE;
+
+  /** Validate and normalize a channel value. Falls back to stable if invalid. */
+  const normalizeChannel = (ch) => VALID_CHANNELS.has(ch) ? ch : DEFAULT_CHANNEL;
+
   // Start with a placeholder version, update once we fetch from server
   let pinnedVersion = 'latest';
-  let configs = buildConfigs(pinnedVersion);
+  let currentChannel = DEFAULT_CHANNEL;
+  let configs = buildConfigs(pinnedVersion, currentChannel);
 
   // ── Current method state ──────────────────────────────────────────────
 
@@ -111,6 +125,7 @@
     // Cache DOM elements queried on every toggle click
     const prereq = document.getElementById('setup-pinned-prereq');
     const mcpbSection = document.getElementById('setup-mcpb-section');
+    const channelToggle = document.getElementById('setup-channel-toggle');
 
     const handleToggle = (btn) => {
       const method = btn.dataset.method;
@@ -125,6 +140,7 @@
 
       if (prereq) prereq.hidden = method !== 'global';
       if (mcpbSection) mcpbSection.hidden = method !== 'global';
+      if (channelToggle) channelToggle.hidden = method === 'global';
 
       updateAllConfigs(method);
       updateInstallButtonLabels();
@@ -133,6 +149,44 @@
 
     buttons.forEach((btn) => {
       btn.addEventListener('click', () => handleToggle(btn));
+    });
+
+    // Sync initial visibility — if the browser restored a non-default
+    // active button (e.g. pinned was selected before reload), apply
+    // the hidden state now without waiting for a click.
+    if (channelToggle) channelToggle.hidden = currentMethod === 'global';
+  };
+
+  // ── Channel selector ──────────────────────────────────────────────────
+
+  /** User-facing descriptions for each release channel, shown below the selector. */
+  const CHANNEL_HINTS = {
+    latest: 'Recommended for most users.',
+    rc: 'Preview of the next stable release. May have minor issues.',
+    beta: 'Cutting-edge features. May be unstable.',
+  };
+
+  const initChannelSelector = () => {
+    const select = document.getElementById('setup-channel-select');
+    const hint = document.getElementById('setup-channel-hint');
+    if (!select) return;
+
+    select.addEventListener('change', () => {
+      currentChannel = normalizeChannel(select.value);
+      if (hint) hint.textContent = CHANNEL_HINTS[currentChannel] || '';
+      configs = buildConfigs(pinnedVersion, currentChannel);
+      updateAllConfigs(currentMethod);
+      // Clear is-success/is-match state so buttons can be re-evaluated
+      document.querySelectorAll('.setup-install-btn').forEach((btn) => {
+        btn.classList.remove('is-success', 'is-match');
+        btn.disabled = false;
+      });
+      document.querySelectorAll('.setup-install-status').forEach((s) => {
+        s.textContent = '';
+        s.className = 'setup-install-status';
+      });
+      updateInstallButtonLabels();
+      updateDetectionState();
     });
   };
 
@@ -285,9 +339,10 @@
     const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
 
     // Update Install buttons
+    const channelLabel = currentChannel === 'latest' ? '' : ` (${currentChannel})`;
     document.querySelectorAll('.setup-install-btn').forEach((btn) => {
       if (btn.classList.contains('is-success') || btn.classList.contains('is-match')) return;
-      btn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      btn.textContent = isPinned ? `Configure v${pinnedVersion}` : `Configure Now${channelLabel}`;
     });
 
     // Update auto-install badges and descriptions
@@ -298,12 +353,21 @@
       if (isPinned) {
         desc.textContent = `Installs DollhouseMCP v${pinnedVersion}. This version will not auto-update.`;
       } else {
-        // Restore original text based on which panel it's in
+        // Restore text reflecting the selected channel.
+        // Use textContent for dynamic values to prevent DOM XSS (CodeQL: DOM text reinterpreted as HTML).
         const panel = desc.closest('.setup-panel');
+        const safeChannel = normalizeChannel(currentChannel);
         if (panel?.id === 'setup-panel-claude-desktop') {
-          desc.innerHTML = 'Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.';
+          desc.textContent = '';
+          desc.append(
+            `Pulls the ${safeChannel} version of DollhouseMCP on every startup. Uses `,
+          );
+          const code = document.createElement('code');
+          code.textContent = `npx @${safeChannel}`;
+          desc.append(code);
+          desc.append(' under the hood. Restart Claude Desktop after.');
         } else if (panel?.id === 'setup-panel-claude-code') {
-          desc.textContent = 'Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.';
+          desc.textContent = `Adds DollhouseMCP to Claude Code, pulling the ${safeChannel} version on every startup.`;
         }
       }
     });
@@ -311,7 +375,17 @@
 
   // ── Install buttons ────────────────────────────────────────────────────
 
-  /** Handle Install Now button click */
+  /** Format an install error for display. Detects channel-specific 404s. */
+  const formatInstallError = (err) => {
+    const msg = err.message || 'Installation failed';
+    const isChannelError = currentChannel !== DEFAULT_CHANNEL &&
+      (msg.includes('404') || msg.includes('Not Found') || msg.includes('not found'));
+    return isChannelError
+      ? `No ${currentChannel} release is published yet. Switch to Stable or try again later.`
+      : `${msg}. Try the manual config below.`;
+  };
+
+  /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
     const client = btn.dataset.installClient;
     if (!client) return;
@@ -320,7 +394,7 @@
     const originalText = btn.textContent;
 
     btn.disabled = true;
-    btn.textContent = 'Installing...';
+    btn.textContent = 'Configuring...';
     btn.classList.add('is-loading');
     if (status) {
       status.textContent = '';
@@ -331,9 +405,11 @@
       const payload = { client };
       if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
         payload.version = pinnedVersion;
+      } else if (currentChannel !== 'latest') {
+        payload.channel = currentChannel;
       }
 
-      const res = await fetch('/api/setup/install', {
+      const res = await DollhouseAuth.apiFetch('/api/setup/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -346,7 +422,9 @@
       btn.textContent = 'Verifying...';
 
       // Verify the install by re-detecting — confirms config was written
+      // and re-renders the current config display with the new values.
       await fetchDetection();
+      updateDetectionState();
       const verified = detectedConfigs[clientToPlatformReverse[client]]?.installed;
 
       btn.textContent = 'Installed';
@@ -366,7 +444,7 @@
       btn.disabled = false;
       btn.classList.remove('is-loading');
       if (status) {
-        status.textContent = err.message || 'Installation failed. Try the manual config below.';
+        status.textContent = formatInstallError(err);
         status.classList.add('is-error');
       }
     }
@@ -490,7 +568,7 @@
     };
 
     try {
-      const res = await fetch('/api/setup/open-config', {
+      const res = await DollhouseAuth.apiFetch('/api/setup/open-config', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ client }),
@@ -516,7 +594,7 @@
 
   const fetchVersion = async () => {
     try {
-      const res = await fetch('/api/setup/version');
+      const res = await DollhouseAuth.apiFetch('/api/setup/version');
       if (!res.ok) return;
       const data = await res.json();
 
@@ -524,8 +602,8 @@
       pinnedVersion = data.latest?.version || data.running?.version || pinnedVersion;
       if (pinnedVersion === 'latest') return;
 
-      // Rebuild configs with real version
-      configs = buildConfigs(pinnedVersion);
+      // Rebuild configs with real version and current channel
+      configs = buildConfigs(pinnedVersion, currentChannel);
 
       // Update prereq section
       const versionLabel = document.getElementById('pinned-version-label');
@@ -639,7 +717,7 @@
     }
   };
 
-  /** Update notice, badge, and button for a single platform based on detection match */
+  /** Update notice, badge, button, AND current config display for a single platform */
   const updatePlatformDetectionState = (platformId) => {
     const detected = detectedConfigs[platformId];
     if (!detected?.installed) return;
@@ -651,6 +729,12 @@
     updateDetectionNotice(panel?.querySelector('.setup-installed-notice'), matches);
     updateDetectionBadge(tabBtn?.querySelector('.setup-tab-badge'), matches);
     updateDetectionButton(panel?.querySelector('.setup-install-btn'), matches);
+
+    // Refresh the "Current config" code block with the latest detected config
+    if (detected.currentConfig && panel) {
+      const codeEl = panel.querySelector('.setup-installed-notice pre code');
+      if (codeEl) codeEl.textContent = JSON.stringify(detected.currentConfig, null, 2);
+    }
   };
 
   const updateDetectionNotice = (notice, matches) => {
@@ -680,7 +764,8 @@
       installBtn.classList.add('is-match');
     } else {
       const isPinned = currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest';
-      installBtn.textContent = isPinned ? `Install v${pinnedVersion}` : 'Install Now';
+      const channelLabel = currentChannel === DEFAULT_CHANNEL ? '' : ` (${currentChannel})`;
+      installBtn.textContent = isPinned ? `Configure v${pinnedVersion}` : `Configure Now${channelLabel}`;
       installBtn.disabled = false;
       installBtn.classList.remove('is-match');
     }
@@ -727,7 +812,7 @@
   /** Fetch detection results from API and update all platform states */
   const fetchDetection = async () => {
     try {
-      const res = await fetch('/api/setup/detect');
+      const res = await DollhouseAuth.apiFetch('/api/setup/detect');
       if (!res.ok) return;
       const data = await res.json();
       for (const [clientId, info] of Object.entries(data)) {
@@ -751,12 +836,12 @@
   const openBtnHtml = (openClient) =>
     openClient ? ` <button class="setup-open-btn" type="button" data-open-client="${openClient}">Open config file</button>` : '';
 
-  /** Build the Install Now + CLI terminal command section */
+  /** Build the Configure Now + CLI terminal command section */
   const renderInstallSection = (p) => {
     let html = '';
     if (p.installClient) {
       html += '<div class="setup-method setup-method-primary">';
-      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Install Now</button>`;
+      html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Configure Now</button>`;
       html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
     }
     if (p.cli) {
@@ -827,16 +912,453 @@
     }
   };
 
+  // ── License selector (#1746) ──────────────────────────────────────────
+
+  function formatActivationDate(license) {
+    if (license.verifiedAt) return new Date(license.verifiedAt).toLocaleString();
+    if (license.attestedAt) return new Date(license.attestedAt).toLocaleString();
+    return '—';
+  }
+
+  function initLicense() {
+    const tiers = document.getElementById('license-tiers');
+    if (!tiers) return;
+
+    const tierButtons = tiers.querySelectorAll('.license-tier');
+    const details = {
+      'agpl': document.getElementById('license-detail-agpl'),
+      'free-commercial': document.getElementById('license-detail-free-commercial'),
+      'paid-commercial': document.getElementById('license-detail-paid-commercial'),
+    };
+    const savedBanner = document.getElementById('license-saved');
+    const savedText = document.getElementById('license-saved-text');
+
+    function selectTier(tier) {
+      // Update button states
+      tierButtons.forEach(btn => {
+        const selected = btn.dataset.tier === tier;
+        btn.classList.toggle('is-selected', selected);
+        btn.setAttribute('aria-pressed', String(selected));
+      });
+      // Show/hide detail panels. If the selected tier has an active license,
+      // keep the form hidden — showLicenseDetails() will display the details
+      // card instead (#1841).
+      const hideForm = activeLicense?.status === 'active' && activeLicense?.tier === tier && tier !== 'agpl';
+      for (const [key, el] of Object.entries(details)) {
+        if (el) el.hidden = key !== tier || hideForm;
+      }
+      if (hideForm) showLicenseDetails(activeLicense);
+      // Hide saved banner when switching
+      if (savedBanner) savedBanner.hidden = true;
+    }
+
+    // Click handlers for tier buttons
+    tierButtons.forEach(btn => {
+      btn.addEventListener('click', () => selectTier(btn.dataset.tier));
+    });
+
+    // Form submission: Free Commercial
+    const freeForm = document.getElementById('license-form-free-commercial');
+    if (freeForm) {
+      freeForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const status = document.getElementById('license-status-free-commercial');
+        const data = new FormData(freeForm);
+        await submitLicense({
+          tier: 'free-commercial',
+          email: data.get('email'),
+          telemetryAcknowledged: !!data.get('telemetry'),
+          attributionAcknowledged: !!data.get('attribution'),
+          revenueAttested: !!data.get('attestation'),
+        }, status, 'Commercial license activated');
+      });
+    }
+
+    // Form submission: Paid Commercial
+    const paidForm = document.getElementById('license-form-paid-commercial');
+    if (paidForm) {
+      paidForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const status = document.getElementById('license-status-paid-commercial');
+        const data = new FormData(paidForm);
+        await submitLicense({
+          tier: 'paid-commercial',
+          email: data.get('email'),
+          revenueScale: data.get('revenueScale'),
+          companyName: data.get('companyName') || undefined,
+          useCase: data.get('useCase') || undefined,
+          telemetryAcknowledged: !!data.get('telemetry'),
+        }, status, 'Enterprise inquiry sent — our team will reach out within 2 business days');
+      });
+    }
+
+    const verificationPanel = document.getElementById('license-verification');
+    const verifyForm = document.getElementById('license-verify-form');
+    const verifyEmailSpan = document.getElementById('license-verify-email');
+    const verifyStatus = document.getElementById('license-verify-status');
+    const verifyTimer = document.getElementById('license-verify-timer');
+    const resendBtn = document.getElementById('license-resend-btn');
+    let countdownInterval = null;
+
+    let verificationPollInterval = null;
+
+    function showVerificationUI(email) {
+      if (verificationPanel) verificationPanel.hidden = false;
+      if (verifyEmailSpan) verifyEmailSpan.textContent = email;
+      if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+      startCountdown(10 * 60);
+      startVerificationPolling();
+    }
+
+    function hideVerificationUI() {
+      if (verificationPanel) verificationPanel.hidden = true;
+      if (countdownInterval) { clearInterval(countdownInterval); countdownInterval = null; }
+      stopVerificationPolling();
+    }
+
+    /** Poll license status every 3 seconds while verification is pending.
+     *  When the user clicks the verify link in another tab, this tab
+     *  auto-detects the activation and updates without a refresh. */
+    function startVerificationPolling() {
+      stopVerificationPolling();
+      verificationPollInterval = setInterval(async () => {
+        try {
+          const res = await fetch('/api/setup/license');
+          if (!res.ok) return;
+          const license = await res.json();
+          if (license.status === 'active') {
+            handleVerifySuccess(license);
+          }
+        } catch {
+          // Ignore polling errors
+        }
+      }, 3000);
+    }
+
+    function stopVerificationPolling() {
+      if (verificationPollInterval) {
+        clearInterval(verificationPollInterval);
+        verificationPollInterval = null;
+      }
+    }
+
+    function startCountdown(seconds) {
+      if (countdownInterval) clearInterval(countdownInterval);
+      let remaining = seconds;
+      function update() {
+        if (!verifyTimer) return;
+        if (remaining <= 0) {
+          verifyTimer.textContent = 'Code expired. Click "Resend code" to get a new one.';
+          clearInterval(countdownInterval);
+          return;
+        }
+        const m = Math.floor(remaining / 60);
+        const s = remaining % 60;
+        verifyTimer.textContent = `Code expires in ${m}:${String(s).padStart(2, '0')}`;
+        remaining--;
+      }
+      update();
+      countdownInterval = setInterval(update, 1000);
+    }
+
+    async function submitLicense(body, statusEl, successMsg) {
+      if (statusEl) {
+        statusEl.textContent = '';
+        statusEl.className = 'license-form-status';
+      }
+      try {
+        const res = await fetch('/api/setup/license', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          if (statusEl) {
+            statusEl.textContent = json.error || 'Failed to save';
+            statusEl.className = 'license-form-status is-error';
+          }
+          return;
+        }
+
+        // Commercial tiers: show verification code input
+        if (json.verificationRequired) {
+          if (statusEl) {
+            statusEl.textContent = 'Check your email for a verification code.';
+            statusEl.className = 'license-form-status is-success';
+          }
+          showVerificationUI(body.email);
+          return;
+        }
+
+        // AGPL or already verified: show success
+        if (statusEl) {
+          statusEl.textContent = '';
+          statusEl.className = 'license-form-status is-success';
+        }
+        hideVerificationUI();
+        if (savedBanner && savedText) {
+          savedText.textContent = successMsg;
+          savedBanner.hidden = false;
+        }
+      } catch (err) {
+        console.debug('License submission failed:', err);
+        if (statusEl) {
+          statusEl.textContent = 'Network error — is the server running?';
+          statusEl.className = 'license-form-status is-error';
+        }
+      }
+    }
+
+    // Verification form submission
+    if (verifyForm) {
+      verifyForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const data = new FormData(verifyForm);
+        const code = data.get('code');
+        if (verifyStatus) { verifyStatus.textContent = ''; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+          });
+          const json = await res.json();
+          if (!res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Verification failed';
+              verifyStatus.className = 'license-form-status is-error';
+            }
+            return;
+          }
+
+          // Verification succeeded
+          handleVerifySuccess(json.license);
+        } catch (err) {
+          console.debug('Verification failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error — is the server running?';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+      });
+    }
+
+    // Resend verification code
+    if (resendBtn) {
+      resendBtn.addEventListener('click', async () => {
+        resendBtn.disabled = true;
+        if (verifyStatus) { verifyStatus.textContent = 'Sending new code...'; verifyStatus.className = 'license-form-status'; }
+
+        try {
+          const res = await fetch('/api/setup/license/resend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+          });
+          const json = await res.json();
+          if (res.ok) {
+            if (verifyStatus) {
+              verifyStatus.textContent = 'New code sent. Check your email.';
+              verifyStatus.className = 'license-form-status is-success';
+            }
+            startCountdown(10 * 60);
+          } else if (verifyStatus) {
+            verifyStatus.textContent = json.error || 'Failed to resend';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        } catch (err) {
+          console.debug('Resend failed:', err);
+          if (verifyStatus) {
+            verifyStatus.textContent = 'Network error';
+            verifyStatus.className = 'license-form-status is-error';
+          }
+        }
+        setTimeout(() => { resendBtn.disabled = false; }, 5000);
+      });
+    }
+
+    // Track whether the user has an active commercial license
+    let activeLicense = null;
+
+    // AGPL selection: confirm if downgrading from active commercial license
+    tierButtons.forEach(btn => {
+      if (btn.dataset.tier === 'agpl') {
+        btn.addEventListener('click', async () => {
+          if (activeLicense?.status === 'active' && activeLicense?.tier !== 'agpl') {
+            const tierLabel = activeLicense.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+            const confirmed = confirm(
+              `You have an active ${tierLabel} license. Switching to AGPL will deactivate your ${tierLabel} license.\n\nYou can reactivate your ${tierLabel} license at any time.\n\nAre you sure?`
+            );
+            if (!confirmed) {
+              // Restore the previous tier selection (selectTier handles
+              // re-hiding the form when activeLicense is set)
+              selectTier(activeLicense.tier);
+              return;
+            }
+          }
+          await submitLicense({ tier: 'agpl' }, null, 'AGPL-3.0 license selected');
+          activeLicense = null;
+          hideLicenseDetails();
+        });
+      }
+    });
+
+    const licenseDetailsPanel = document.getElementById('license-active-details');
+    const licenseInfoTable = document.getElementById('license-info-tbody');
+
+    function showLicenseDetails(license) {
+      if (!licenseDetailsPanel || !licenseInfoTable) return;
+      if (license?.status !== 'active' || license?.tier === 'agpl') {
+        licenseDetailsPanel.hidden = true;
+        return;
+      }
+
+      // Hide the activation form for the active tier — the details panel replaces it (#1841)
+      const activeForm = details[license.tier];
+      if (activeForm) activeForm.hidden = true;
+
+      const tierLabel = license.tier === 'free-commercial' ? 'Free Commercial' : 'Enterprise';
+      const rows = [
+        ['License type', tierLabel],
+        ['Email', license.email || '—'],
+        ['Status', 'Active'],
+        ['Activated', formatActivationDate(license)],
+        ['Telemetry', license.telemetryRequired ? 'Enabled (license requirement)' : 'Not required'],
+      ];
+      if (license.tier === 'paid-commercial') {
+        if (license.revenueScale) rows.push(['Revenue scale', license.revenueScale]);
+        if (license.companyName) rows.push(['Company', license.companyName]);
+        if (license.useCase) rows.push(['Use case', license.useCase]);
+      }
+
+      licenseInfoTable.innerHTML = rows
+        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
+        .join('');
+      licenseDetailsPanel.hidden = false;
+    }
+
+    function hideLicenseDetails() {
+      if (licenseDetailsPanel) licenseDetailsPanel.hidden = true;
+    }
+
+    function prefillFreeCommercialForm(license) {
+      if (freeForm && license.email) {
+        freeForm.querySelector('[name="email"]').value = license.email;
+      }
+    }
+
+    function prefillEnterpriseForm(license) {
+      if (!paidForm) return;
+      if (license.email) paidForm.querySelector('[name="email"]').value = license.email;
+      if (license.revenueScale) paidForm.querySelector('[name="revenueScale"]').value = license.revenueScale;
+      if (license.companyName) paidForm.querySelector('[name="companyName"]').value = license.companyName;
+      if (license.useCase) paidForm.querySelector('[name="useCase"]').value = license.useCase;
+    }
+
+    function showSavedBanner(license) {
+      if (license.tier === 'agpl' || !license.attestedAt) return;
+      if (!savedBanner || !savedText) return;
+      const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+      savedText.textContent = tierLabel + ' license active';
+      savedBanner.hidden = false;
+      showLicenseDetails(license);
+    }
+
+    // Load saved license on page load
+    async function loadSavedLicense() {
+      try {
+        const res = await fetch('/api/setup/license');
+        if (!res.ok) return;
+        const license = await res.json();
+        if (!license.tier || !details[license.tier]) return;
+        selectTier(license.tier);
+        if (license.tier === 'free-commercial') prefillFreeCommercialForm(license);
+        if (license.tier === 'paid-commercial') prefillEnterpriseForm(license);
+
+        // Show verification UI if license is pending
+        if (license.status === 'pending' && license.email) {
+          showVerificationUI(license.email);
+          return;
+        }
+
+        if (license.status === 'active') {
+          activeLicense = license;
+          showSavedBanner(license);
+        }
+      } catch (err) {
+        // Default AGPL is fine — log for debugging only
+        if (typeof console !== 'undefined') console.debug('License load skipped:', err);
+      }
+    }
+
+    function handleVerifySuccess(license) {
+      hideVerificationUI();
+      for (const el of Object.values(details)) {
+        if (el) el.hidden = true;
+      }
+      activeLicense = license;
+      if (savedBanner && savedText) {
+        const tierLabel = license.tier === 'free-commercial' ? 'Commercial' : 'Enterprise';
+        savedText.textContent = tierLabel + ' license verified and activated';
+        savedBanner.hidden = false;
+      }
+      showLicenseDetails(license);
+    }
+
+    async function handleAutoVerifyFailure(json) {
+      const license = await (await fetch('/api/setup/license')).json();
+      if (license.status === 'pending' && license.email) {
+        showVerificationUI(license.email);
+      }
+      if (verifyStatus) {
+        verifyStatus.textContent = json.error || 'Verification failed';
+        verifyStatus.className = 'license-form-status is-error';
+      }
+    }
+
+    // Auto-verify from email click-through link (#verify=CODE)
+    async function checkHashVerification() {
+      const hash = globalThis.location.hash;
+      const match = /^#verify=(\d{6})$/.exec(hash);
+      if (!match) return;
+
+      const code = match[1];
+      history.replaceState(null, '', globalThis.location.pathname + '#setup');
+
+      try {
+        const res = await fetch('/api/setup/license/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code }),
+        });
+        const json = await res.json();
+        if (res.ok) {
+          handleVerifySuccess(json.license);
+        } else {
+          await handleAutoVerifyFailure(json);
+        }
+      } catch (err) {
+        console.debug('Auto-verification failed:', err);
+      }
+    }
+
+    loadSavedLicense();
+    checkHashVerification();
+  }
+
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
   renderGeneratedPanels();
   highlightOSPaths(os);
   initMethodToggle();
+  initChannelSelector();
   initPlatformTabs();
   initCopyButtons();
   initInstallButtons();
   initOpenButtons();
   fetchVersion();
   fetchDetection();
+  initLicense();
 })();

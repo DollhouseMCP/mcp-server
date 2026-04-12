@@ -318,6 +318,9 @@ New configuration options in v2.0:
 | `DOLLHOUSE_MAX_BACKUPS_PER_ELEMENT` | `3` | Max backups per element per day (1-50) |
 | `DOLLHOUSE_SESSION_ID` | auto | Session identifier for activation persistence |
 | `DOLLHOUSE_USER` | OS username | Author attribution for created elements |
+| `DOLLHOUSE_WEB_AUTH_ENABLED` | `false` | Enforce Bearer token auth on web console port 41715 (#1780). Phase 1 default-off — will flip to `true` in a follow-up release. |
+| `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` | Optional override for the console token file path. |
+| `DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION` | `true` | Require out-of-band confirmation (Phase 2: OS dialog or TOTP) for token rotation. Set `false` for headless CI. |
 
 ---
 

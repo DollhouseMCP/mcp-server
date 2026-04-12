@@ -13,6 +13,11 @@
       "reason": "Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Input is served from the DollhouseMCP server which normalizes before serving."
     },
     {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web/public/consoleAuth.js",
+      "reason": "Client-side browser JavaScript (#1780 console auth helper). UnicodeValidator is a Node.js module unavailable in browser context. Token is read from a server-injected meta tag, normalized via native String.prototype.normalize('NFC'), and rejected unless it matches /^[0-9a-f]{64}$/ (strict hex format). The authoritative normalization + validation happens in the middleware sanitizePresentedToken() and consoleToken.verify() on the server side before any comparison runs."
+    },
+    {
       "rule": "DMCP-SEC-006",
       "file": "src/elements/memories/types.ts",
       "reason": "Type definitions only - no security operations to log"

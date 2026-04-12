@@ -9,6 +9,7 @@
 
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
+import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
@@ -70,7 +71,9 @@ export class ContentValidator {
    * The patterns below represent known attack vectors from security research
    * and real-world exploit attempts against AI systems.
    */
-  // Prompt injection patterns that could compromise AI assistants
+  // Prompt injection patterns that could compromise AI assistants.
+  // MAINTENANCE: Review periodically for false positives (run integration tests in
+  // tests/integration/security-audit-batch-a.integration.test.ts) and new attack vectors.
   private static readonly INJECTION_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'critical'; description: string }> = [
     // System prompt override attempts
     { pattern: /\[SYSTEM:\s*.*?\]/gi, severity: 'critical', description: 'System prompt override' },
@@ -86,8 +89,12 @@ export class ContentValidator {
     { pattern: /forget\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /forget\s+your\s+training/gi, severity: 'critical', description: 'Instruction override' },
     { pattern: /override\s+your\s+programming/gi, severity: 'critical', description: 'Instruction override' },
-    { pattern: /you\s+are\s+now\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
-    { pattern: /act\s+as\s+(admin|root|system|sudo)/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /you\s+are\s+now\s+(in\s+)?(admin|root|system|sudo|developer|debug|test|DAN)\s*(mode)?/gi, severity: 'critical', description: 'Role elevation attempt' },
+    // Specific dangerous roles only — "act as \w+" would false-positive on persona
+    // content like "act as a helpful teacher" (#1782-4, review feedback)
+    { pattern: /act\s+as\s+(admin|root|system|sudo|superuser|DAN)\b/gi, severity: 'critical', description: 'Role elevation attempt' },
+    { pattern: /pretend\s+you\s+have\s+no\s+(guidelines|restrictions|rules|limits)/gi, severity: 'critical', description: 'Guideline bypass attempt' },
+    { pattern: /\b(jailbreak|do\s+anything\s+now|DAN\s+mode)\b/gi, severity: 'critical', description: 'Jailbreak attempt' },
     
     // Data exfiltration attempts
     { pattern: /export\s+all\s+(files|data|personas|tokens|credentials|api\s+keys)/gi, severity: 'critical', description: 'Data exfiltration' },
@@ -96,8 +103,8 @@ export class ContentValidator {
     { pattern: /show\s+me\s+all\s+(tokens|credentials|secrets|api\s+keys)/gi, severity: 'high', description: 'Credential disclosure' },
     
     // Command execution patterns
-    { pattern: /curl\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
-    { pattern: /wget\s+[^\s]+\.(com|net|org|io|dev)/gi, severity: 'critical', description: 'External command execution' },
+    { pattern: /curl\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
+    { pattern: /wget\s+[^\s]{1,500}/gi, severity: 'critical', description: 'External command execution' },
     { pattern: /\$\([^)]+\)/g, severity: 'critical', description: 'Command substitution' },
     // SECURITY: Backtick command detection with ReDoS mitigation
     // FIX (PR #1313): Fixed ReDoS vulnerabilities by replacing .* with [^`]*
@@ -404,6 +411,7 @@ export class ContentValidator {
         logEvents: false
       })) {
         detectedPatterns.push(description);
+        logger.debug(`Content injection blocked: ${description} (${severity}) — pattern: ${pattern.source}`);
 
         // Update highest severity
         if (severity === 'critical' || (severity === 'high' && highestSeverity !== 'critical')) {

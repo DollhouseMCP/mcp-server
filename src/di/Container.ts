@@ -425,7 +425,9 @@ export class DollhouseContainer {
           version: VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
-          console: env.DOLLHOUSE_WEB_CONSOLE ? 'http://dollhouse.localhost:3939' : 'disabled',
+          console: env.DOLLHOUSE_WEB_CONSOLE
+            ? `http://dollhouse.localhost:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`
+            : 'disabled',
         },
       });
 
@@ -857,15 +859,8 @@ export class DollhouseContainer {
       await new Promise(resolve => setTimeout(resolve, testDelay));
     }
 
-    await this.deferredMemoryAutoload(timer);
-    await this.deferredActivationRestore(timer);
-    await this.deferredPolicyExport();
-    await this.deferredLogHooks(timer);
-    await this.deferredMetricsCollectors(timer);
-    await this.deferredWebConsole(timer);
-    await this.deferredDangerZoneInit(timer);
-    await this.deferredPatternEncryption(timer);
-    await this.deferredBackgroundValidator(timer);
+    await this.completeSinkSetup(timer);
+    await this.completeConsoleSetup(timer);
 
     this.deferredSetupComplete = true;
 
@@ -876,8 +871,42 @@ export class DollhouseContainer {
     );
   }
 
-  private async deferredMemoryAutoload(timer: StartupTimer): Promise<void> {
-    timer.startPhase('memory_autoload', false);
+  /**
+   * Wire sinks, hooks, collectors, and security — everything EXCEPT
+   * the web console leader election and permission server.
+   *
+   * Called by completeDeferredSetup() in MCP stdio mode, and directly
+   * by the --web standalone path which IS the server (#1866).
+   */
+  public async completeSinkSetup(timer?: StartupTimer): Promise<void> {
+    await this.deferredMemoryAutoload(timer);
+    await this.deferredActivationRestore(timer);
+    await this.deferredPolicyExport();
+    await this.deferredLogHooks(timer);
+    await this.deferredMetricsCollectors(timer);
+    await this.deferredDangerZoneInit(timer);
+    await this.deferredPatternEncryption(timer);
+    await this.deferredBackgroundValidator(timer);
+  }
+
+  /**
+   * Leader election, web console server, and permission server.
+   * Only called in MCP stdio mode — --web standalone mode IS the server (#1866).
+   */
+  public async completeConsoleSetup(timer?: StartupTimer): Promise<void> {
+    // Sweep stale port files from prior sessions before any port operations (#1856).
+    // Runs unconditionally — stale files accumulate regardless of DOLLHOUSE_WEB_CONSOLE.
+    try {
+      const { sweepStalePortFiles } = await import('../web/portDiscovery.js');
+      await sweepStalePortFiles();
+    } catch { /* sweep failure is non-fatal */ }
+
+    await this.deferredWebConsole(timer);
+    await this.deferredPermissionServer(timer);
+  }
+
+  private async deferredMemoryAutoload(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('memory_autoload', false);
     try {
       const configManager = this.resolve<ConfigManager>('ConfigManager');
       const config = configManager.getConfig();
@@ -903,11 +932,11 @@ export class DollhouseContainer {
     } catch (error) {
       logger.error('[Container] Memory auto-load failed:', error);
     }
-    timer.endPhase('memory_autoload');
+    timer?.endPhase('memory_autoload');
   }
 
-  private async deferredActivationRestore(timer: StartupTimer): Promise<void> {
-    timer.startPhase('activation_restore', false);
+  private async deferredActivationRestore(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('activation_restore', false);
     try {
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
       await activationStore.initialize();
@@ -918,7 +947,7 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
-    timer.endPhase('activation_restore');
+    timer?.endPhase('activation_restore');
   }
 
   private async deferredPolicyExport(): Promise<void> {
@@ -930,8 +959,8 @@ export class DollhouseContainer {
     }
   }
 
-  private async deferredLogHooks(timer: StartupTimer): Promise<void> {
-    timer.startPhase('log_hooks', false);
+  private async deferredLogHooks(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('log_hooks', false);
     try {
       const logManager = this.resolve<LogManager>('LogManager');
       const logCleanups = wireLogHooks(logManager, this);
@@ -939,11 +968,11 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Failed to wire log hooks:', error);
     }
-    timer.endPhase('log_hooks');
+    timer?.endPhase('log_hooks');
   }
 
-  private async deferredMetricsCollectors(timer: StartupTimer): Promise<void> {
-    timer.startPhase('metrics_collectors', false);
+  private async deferredMetricsCollectors(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('metrics_collectors', false);
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');
       this.wireMetricsCollectors(metricsManager);
@@ -952,7 +981,7 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Metrics wiring skipped:', error);
     }
-    timer.endPhase('metrics_collectors');
+    timer?.endPhase('metrics_collectors');
   }
 
   /** Try to resolve a service, returning undefined if not registered */
@@ -977,8 +1006,8 @@ export class DollhouseContainer {
     }
   }
 
-  private async deferredWebConsole(timer: StartupTimer): Promise<void> {
-    timer.startPhase('web_console', false);
+  private async deferredWebConsole(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('web_console', false);
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
@@ -990,6 +1019,10 @@ export class DollhouseContainer {
       const mcpAqlHandler = this.tryResolve<MCPAQLHandler>('mcpAqlHandler');
       const logManager = this.resolve<LogManager>('LogManager');
 
+      // Resolve console port: config file → env var → default (#1840)
+      const configManager = this.resolve<ConfigManager>('ConfigManager');
+      const configPort = configManager.getSetting<number>('console.port');
+
       const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
       const result = await startUnifiedConsole({
         sessionId,
@@ -999,28 +1032,62 @@ export class DollhouseContainer {
         mcpAqlHandler,
         registerLogSink: (sink) => logManager.registerSink(sink),
         wireSSEBroadcasts: (webResult, mSink) => this.wireSSEBroadcasts(webResult, mSink),
+        port: configPort,
       });
 
       logger.info(`[Container] Web console started as ${result.role}`);
     } catch (error) {
       logger.warn('[Container] Web console startup failed:', error);
     }
-    timer.endPhase('web_console');
+    timer?.endPhase('web_console');
   }
 
-  private async deferredDangerZoneInit(timer: StartupTimer): Promise<void> {
-    timer.startPhase('danger_zone_init', false);
+  private async deferredPermissionServer(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('permission_server', false);
+    try {
+      if (!env.DOLLHOUSE_PERMISSION_SERVER) {
+        logger.debug('[Container] Permission server disabled via DOLLHOUSE_PERMISSION_SERVER=false');
+        return;
+      }
+
+      if (!env.DOLLHOUSE_WEB_CONSOLE) {
+        logger.debug('[Container] Permission server skipped — web console is disabled');
+        return;
+      }
+
+      // Permission routes are already mounted on the unified web console.
+      // We just need to write the port file so the PreToolUse hook script
+      // can discover it. No separate server — use the existing console port.
+      const port = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+      const startMs = Date.now();
+
+      const { writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
+      logger.debug(`[Container] Writing permission server port file for port ${port}`);
+      await writePortFile(port);
+      registerPortCleanup();
+      logger.debug(`[Container] Port cleanup handlers registered`);
+
+      const elapsedMs = Date.now() - startMs;
+      logger.info(`[Container] Permission server port file written (port ${port}, ${elapsedMs}ms)`);
+    } catch (error) {
+      logger.warn('[Container] Permission server startup failed:', error);
+    }
+    timer?.endPhase('permission_server');
+  }
+
+  private async deferredDangerZoneInit(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('danger_zone_init', false);
     try {
       const dangerZoneEnforcer = this.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
       await dangerZoneEnforcer.initialize();
     } catch (error) {
       logger.warn('[Container] DangerZoneEnforcer initialization failed:', error);
     }
-    timer.endPhase('danger_zone_init');
+    timer?.endPhase('danger_zone_init');
   }
 
-  private async deferredPatternEncryption(timer: StartupTimer): Promise<void> {
-    timer.startPhase('pattern_encryption', false);
+  private async deferredPatternEncryption(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('pattern_encryption', false);
     try {
       const patternEncryptor = this.resolve('PatternEncryptor') as PatternEncryptor;
       await patternEncryptor.initialize();
@@ -1028,11 +1095,11 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Pattern encryption initialization failed:', error);
     }
-    timer.endPhase('pattern_encryption');
+    timer?.endPhase('pattern_encryption');
   }
 
-  private async deferredBackgroundValidator(timer: StartupTimer): Promise<void> {
-    timer.startPhase('background_validator', false);
+  private async deferredBackgroundValidator(timer?: StartupTimer): Promise<void> {
+    timer?.startPhase('background_validator', false);
     try {
       const backgroundValidator = this.resolve('BackgroundValidator') as any;
       backgroundValidator.start();
@@ -1040,7 +1107,7 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Background validator start failed:', error);
     }
-    timer.endPhase('background_validator');
+    timer?.endPhase('background_validator');
   }
 
   /**
@@ -1606,6 +1673,12 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    // Close the HTTP server first so the port is freed immediately (#1856)
+    try {
+      const { shutdownWebServer } = await import('../web/server.js');
+      shutdownWebServer();
+    } catch { /* web server not started */ }
+
     // Close MetricsManager before general disposal (flush final snapshot)
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');

@@ -285,11 +285,11 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
         // FIX: Issue #20 - Catch duplicate errors from TemplateManager
         try {
           const template = await context.templateManager.create({
-            ...sanitized,
             name: validatedName,
             description: validatedDescription,
             instructions: instructions,
             content: content || '',
+            metadata: sanitized,
           });
           const successMsg = `${warningText}✅ Created template '${template.metadata.name}' successfully`;
           return { content: [{ type: "text", text: `${context.getPersonaIndicator()}${successMsg}` }] };

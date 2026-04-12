@@ -18,6 +18,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 jest.mock('../../../../src/services/validation/ValidationService.js');
 jest.mock('../../../../src/services/validation/TriggerValidationService.js');
@@ -90,6 +91,40 @@ describe('AgentElementValidator', () => {
         // V1 agents without goal should be valid
         expect(result.isValid).toBe(true);
         expect(result.errors).toHaveLength(0);
+      });
+
+      it('should reject whitespace-only content', async () => {
+        const data = {
+          name: 'Test Agent',
+          description: 'A test agent',
+          content: '   '
+        };
+
+        const result = await validator.validateCreate(data);
+
+        expect(result.isValid).toBe(false);
+        expect(result.errors).toContain('Content is too short (minimum 10 characters)');
+      });
+
+      it('should reject content exceeding the maximum allowed length', async () => {
+        mockValidationService.validateContent.mockReturnValueOnce({
+          isValid: false,
+          sanitizedContent: 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1),
+          detectedPatterns: [
+            `Content exceeds maximum length of ${SECURITY_LIMITS.MAX_CONTENT_LENGTH} characters after normalization`
+          ]
+        });
+
+        const data = {
+          name: 'Test Agent',
+          description: 'A test agent',
+          content: 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1)
+        };
+
+        const result = await validator.validateCreate(data);
+
+        expect(result.isValid).toBe(false);
+        expect(result.errors.some(e => e.includes('exceeds maximum length') || e.includes('Content validation failed'))).toBe(true);
       });
 
       it('should reject non-object goal', async () => {

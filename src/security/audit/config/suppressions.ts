@@ -67,6 +67,11 @@ export const suppressions: Suppression[] = [
     file: 'src/web/public/metrics.js',
     reason: 'FALSE POSITIVE: Browser-side Date.toLocaleTimeString() concatenation for display label. Not SQL — the codebase does not use SQL.'
   },
+  {
+    rule: 'CWE-89-001',
+    file: 'src/web/public/security.js',
+    reason: 'FALSE POSITIVE: HTML string concatenation building DOM markup for the Auth tab. All values HTML-escaped via esc() helper. Not SQL — the codebase does not use SQL. PR #1791'
+  },
 
   // ========================================
   // Metrics & Web Console False Positives
@@ -95,6 +100,21 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: 'src/web/public/setup.js',
     reason: 'FALSE POSITIVE: Client-side browser JavaScript. User inputs (platform tab clicks, method toggle) are matched against hardcoded DOM element IDs only — no free-text processing. Server-side handlers in setupRoutes.ts use UnicodeValidator.normalize() on all API input. UnicodeValidator is a Node.js module unavailable in browser context.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/security.js',
+    reason: 'FALSE POSITIVE: Client-side browser JavaScript for the Auth tab. All user input (TOTP codes) is sent to server-side endpoints (totpRoutes.ts, tokenRoutes.ts) which normalize via consoleRouteHelpers.ts getNormalizedStringField(). The esc() helper applies NFC normalization for display. UnicodeValidator is a Node.js module unavailable in browser context. PR #1791'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/totpRoutes.ts',
+    reason: 'FALSE POSITIVE: All user input fields (code, pendingId, label) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/routes/tokenRoutes.ts',
+    reason: 'FALSE POSITIVE: All user input fields (confirmationCode) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
   },
 
   // ========================================
@@ -1096,6 +1116,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: 'src/web/public/app.js',
     reason: 'Client-side browser JavaScript. UnicodeValidator is a Node.js module unavailable in browser context. Input served from DollhouseMCP server which normalizes before serving.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web/public/consoleAuth.js',
+    reason: 'Client-side browser JavaScript (#1780 console auth helper). UnicodeValidator is a Node.js module unavailable in browser context. Token is read from a server-injected meta tag, normalized via native String.prototype.normalize(\'NFC\'), and rejected unless it matches /^[0-9a-f]{64}$/ (strict hex format). The authoritative normalization + validation happens in the middleware sanitizePresentedToken() and consoleToken.verify() on the server side before any comparison runs.'
   },
   {
     rule: 'DMCP-SEC-004',

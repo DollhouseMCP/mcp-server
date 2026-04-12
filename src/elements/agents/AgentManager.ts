@@ -87,6 +87,10 @@ interface ParsedAgentFile {
   content: string;
 }
 
+type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
+  content?: string;
+};
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
@@ -193,7 +197,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     description: string,
     content: string,
-    metadata?: Partial<AgentMetadata> & { content?: string }
+    metadata?: AgentCreateMetadata
   ): Promise<ElementCreationResult> {
     try {
       await this.initialize();
@@ -201,22 +205,29 @@ export class AgentManager extends BaseElementManager<Agent> {
       // Normalize goal input before validation - LLMs may pass string or object
       // Strip 'content' from metadata to prevent it from overwriting the positional
       // content param (which is the agent's instructions text) in the validation call.
-      const { content: _referenceContent, ...metadataWithoutContent } = (metadata || {}) as Record<string, unknown>;
-      const normalizedMetadata: Partial<AgentMetadataV2> = { ...metadataWithoutContent } as Partial<AgentMetadataV2>;
-      if ((metadata as Partial<AgentMetadataV2>)?.goal !== undefined) {
+      const { content: referenceContent, ...metadataWithoutContent } = metadata ?? {};
+      const normalizedMetadata: Partial<AgentMetadataV2> = {
+        ...metadataWithoutContent
+      };
+      if (metadata?.goal !== undefined) {
         normalizedMetadata.goal = this.normalizeGoalInput(
-          (metadata as Partial<AgentMetadataV2>).goal as string | Partial<AgentGoalConfig>
+          metadata.goal as string | Partial<AgentGoalConfig>
         );
       }
 
-      // Use specialized validator for input validation
-      // Include metadata to validate V2 fields (goal, activates, tools, systemPrompt, autonomy)
-      const validationResult = await this.validator.validateCreate({
+      // Use specialized validator for input validation.
+      // Agents support dual-field creation: behavioral instructions and optional
+      // reference content. Validation prefers behavioral instructions when both
+      // fields are present so existing instruction-first agents keep their
+      // current semantics while content-only agents still validate correctly.
+      const validationInput: Record<string, unknown> = {
         name,
         description,
-        content,
         ...normalizedMetadata
-      });
+      };
+      const primaryText = this.getPrimaryValidationText(content, referenceContent);
+      validationInput.content = primaryText ?? '';
+      const validationResult = await this.validator.validateCreate(validationInput);
 
       if (!validationResult.isValid) {
         return {
@@ -266,12 +277,17 @@ export class AgentManager extends BaseElementManager<Agent> {
       agent.extensions.instructions = sanitizedInstructions;
 
       // Set reference content if provided (v2.0 dual-field architecture)
-      const referenceContent = (metadata as { content?: string } | undefined)?.content;
-      if (referenceContent) {
+      if (typeof referenceContent === 'string' && referenceContent.trim().length > 0) {
         const contentValidationResult = ContentValidator.validateAndSanitize(
-          String(referenceContent),
+          referenceContent,
           { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
         );
+        if (!contentValidationResult.isValid) {
+          return {
+            success: false,
+            message: `Validation failed: ${(contentValidationResult.detectedPatterns || ['Content validation failed']).join(', ')}`
+          };
+        }
         agent.content = contentValidationResult.sanitizedContent || '';
       }
 
@@ -348,6 +364,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Cache the element after successful creation
       this.cacheElement(agent, filename);
+      await this.storageLayer.notifySaved(filename, absolutePath);
       // Note: No reload() here — cacheElement() stores the element correctly.
       // See Issue #491 for why PersonaManager's reload-after-create was removed.
 
@@ -1164,7 +1181,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 3. Unicode normalization via InputNormalizer
     const normalized = InputNormalizer.normalize(parameters, '$.parameters');
-    if (normalized.hasCriticalIssues) {
+    if (normalized.hasHighOrCriticalIssues) {
       throw new Error(
         `Template parameter security validation failed: ${normalized.errors.join('; ')}`
       );
@@ -2186,6 +2203,21 @@ export class AgentManager extends BaseElementManager<Agent> {
       lines.push(description);
     }
     return lines.join('\n');
+  }
+
+  /**
+   * Select the text that should satisfy create-time content validation.
+   * Behavioral instructions remain the primary source, while reference content
+   * acts as the fallback for content-only agent creation.
+   */
+  private getPrimaryValidationText(content: string, referenceContent: unknown): string | undefined {
+    if (typeof content === 'string' && content.trim().length > 0) {
+      return content;
+    }
+    if (typeof referenceContent === 'string' && referenceContent.trim().length > 0) {
+      return referenceContent;
+    }
+    return undefined;
   }
 
   /**

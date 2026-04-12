@@ -115,6 +115,41 @@ describe('Setup Routes — API Endpoints', () => {
       }
     });
 
+    it('accepts channel parameter for release channel installs', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'beta' });
+
+      // Should not get 400 — channel is valid
+      expect(res.status).not.toBe(400);
+    });
+
+    it('accepts rc channel parameter', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'rc' });
+
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores invalid channel values (falls back to latest)', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: 'nightly' });
+
+      // Invalid channel is silently ignored, not rejected — falls back to @latest
+      expect(res.status).not.toBe(400);
+    });
+
+    it('ignores channel with shell injection attempt', async () => {
+      const res = await request(app)
+        .post('/api/setup/install')
+        .send({ client: 'claude', channel: '; rm -rf /' });
+
+      // Invalid channel ignored, falls back to @latest — no 500
+      expect(res.status).not.toBe(500);
+    });
+
     it('normalizes client name to lowercase', async () => {
       const res = await request(app)
         .post('/api/setup/install')
@@ -122,6 +157,33 @@ describe('Setup Routes — API Endpoints', () => {
 
       // Should not reject as unsupported
       expect(res.status).not.toBe(400);
+    });
+
+    it('success response includes nvmMitigationApplied field', async () => {
+      // Use _runInstallMcp injection so install always succeeds without the real binary
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        _skipRateLimit: true,
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude' })
+        .expect(200);
+
+      // Field must be present on every success response
+      expect(res.body).toHaveProperty('nvmMitigationApplied');
+      // Value is one of: true (applied), false (failed), null (not applicable)
+      expect([true, false, null]).toContain(res.body.nvmMitigationApplied);
+      // Other standard fields still present
+      expect(res.body.success).toBe(true);
+      expect(res.body.client).toBe('claude');
+      expect(res.body.version).toBeDefined();
     });
   });
 
@@ -323,17 +385,17 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
-  describe('Install Now buttons (static panels)', () => {
-    it('has Install Now for claude (in HTML)', () => {
+  describe('Configure Now buttons (static panels)', () => {
+    it('has Configure Now for claude (in HTML)', () => {
       expect(html).toContain('data-install-client="claude"');
     });
 
-    it('has Install Now for claude-code (in HTML)', () => {
+    it('has Configure Now for claude-code (in HTML)', () => {
       expect(html).toContain('data-install-client="claude-code"');
     });
   });
 
-  describe('Install Now buttons (generated panels)', () => {
+  describe('Configure Now buttons (generated panels)', () => {
     it('JS PLATFORMS registry defines installClient for generated platforms', () => {
       const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
       for (const client of generatedWithInstall) {
@@ -495,6 +557,38 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
   });
 
+  describe('Release channel selector', () => {
+    it('has channel selector fieldset', () => {
+      expect(html).toContain('id="setup-channel-toggle"');
+    });
+
+    it('has channel select dropdown', () => {
+      expect(html).toContain('id="setup-channel-select"');
+    });
+
+    it('has Stable, Release Candidate, and Beta options', () => {
+      expect(html).toContain('value="latest"');
+      expect(html).toContain('value="rc"');
+      expect(html).toContain('value="beta"');
+      expect(html).toContain('>Stable<');
+      expect(html).toContain('>Release Candidate<');
+      expect(html).toContain('>Beta<');
+    });
+
+    it('defaults to Stable', () => {
+      expect(html).toContain('value="latest" selected');
+    });
+
+    it('has accessible hint text linked via aria-describedby', () => {
+      expect(html).toContain('aria-describedby="setup-channel-hint"');
+      expect(html).toContain('id="setup-channel-hint"');
+    });
+
+    it('has Release channel legend', () => {
+      expect(html).toContain('Release channel');
+    });
+  });
+
   describe('Verify section', () => {
     it('has verification prompt', () => {
       expect(html).toContain('What DollhouseMCP tools do you have available?');
@@ -555,6 +649,40 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
   });
 
+  describe('Channel selector logic', () => {
+    it('tracks currentChannel state', () => {
+      expect(js).toContain("let currentChannel = DEFAULT_CHANNEL");
+    });
+
+    it('has channel hints for all three channels', () => {
+      expect(js).toContain('CHANNEL_HINTS');
+      expect(js).toContain("latest:");
+      expect(js).toContain("rc:");
+      expect(js).toContain("beta:");
+    });
+
+    it('buildConfigs accepts channel parameter with default', () => {
+      expect(js).toMatch(/function buildConfigs\(version,\s*channel\s*=\s*'latest'\)/);
+    });
+
+    it('passes channel to buildConfigs on selector change', () => {
+      expect(js).toContain("configs = buildConfigs(pinnedVersion, currentChannel)");
+    });
+
+    it('sends channel in install payload when non-stable', () => {
+      expect(js).toContain('payload.channel = currentChannel');
+    });
+
+    it('shows channel label on install button when non-stable', () => {
+      expect(js).toContain("channelLabel");
+      expect(js).toContain("`Configure Now${channelLabel}`");
+    });
+
+    it('updates hint text on channel change', () => {
+      expect(js).toContain("hint.textContent = CHANNEL_HINTS[currentChannel]");
+    });
+  });
+
   describe('Functions', () => {
     it('exports OS detection', () => {
       expect(js).toContain('detectOS');
@@ -562,6 +690,10 @@ describe('Setup Tab — JavaScript Integrity', () => {
 
     it('exports method toggle init', () => {
       expect(js).toContain('initMethodToggle');
+    });
+
+    it('exports channel selector init', () => {
+      expect(js).toContain('initChannelSelector');
     });
 
     it('exports platform tabs init', () => {
@@ -628,6 +760,22 @@ describe('Setup Tab — CSS Integrity', () => {
     expect(css).toContain('@media');
     expect(css).toContain('max-width: 640px');
   });
+
+  it('defines channel selector styles', () => {
+    expect(css).toContain('.setup-channel-toggle');
+    expect(css).toContain('.setup-channel-select');
+    expect(css).toContain('.setup-channel-hint');
+    expect(css).toContain('.setup-channel-legend');
+  });
+
+  it('channel select has focus state', () => {
+    expect(css).toContain('.setup-channel-select:focus');
+  });
+
+  it('channel toggle has hidden attribute override to prevent display:flex conflict', () => {
+    expect(css).toContain('.setup-channel-toggle[hidden]');
+    expect(css).toContain('display: none');
+  });
 });
 
 // ── Regression tests ──────────────────────────────────────────────────
@@ -670,7 +818,7 @@ describe('Setup Tab — Regressions', () => {
   });
 
   describe('UX copy quality', () => {
-    it('auto-install leads with action not mechanism', () => {
+    it('auto-configure leads with action not mechanism', () => {
       // "Pulls the latest version" should come before "Uses npx"
       const pullsIdx = html.indexOf('Pulls the latest version');
       const usesNpxIdx = html.indexOf('Uses <code>npx @latest</code>');
@@ -710,7 +858,10 @@ describe('Setup Tab — Regressions', () => {
 
   describe('Version fetching in JS', () => {
     it('fetches from /api/setup/version', () => {
-      expect(js).toContain("fetch('/api/setup/version')");
+      // Since #1780, fetches go through DollhouseAuth.apiFetch so they can
+      // attach the console token when auth is enforced. We just check that
+      // the URL is present — whether it's via native fetch or the wrapper.
+      expect(js).toContain("'/api/setup/version'");
     });
 
     it('updates pinned-version-label element', () => {
@@ -725,8 +876,8 @@ describe('Setup Tab — Regressions', () => {
       expect(js).toContain('pinned-local-cmd');
     });
 
-    it('rebuilds configs with fetched version', () => {
-      expect(js).toContain('configs = buildConfigs(pinnedVersion)');
+    it('rebuilds configs with fetched version and channel', () => {
+      expect(js).toContain('configs = buildConfigs(pinnedVersion, currentChannel)');
     });
   });
 
@@ -743,10 +894,46 @@ describe('Setup Tab — Regressions', () => {
       expect(appJs).toContain("localStorage.getItem(TAB_KEY)");
     });
 
-    it('first visit defaults to setup tab', () => {
+    it('shows setup tab when stored version does not match current version', () => {
       const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Version comparison — positive branch restores tab, else branch shows setup
+      expect(appJs).toContain("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
       expect(appJs).toContain("switchToTab('setup')");
-      expect(appJs).toContain('dollhousemcp-setup-seen');
+    });
+
+    it('stores the version string (not "1") in the setup-seen flag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion)');
+      // Must NOT store the old hard-coded sentinel value
+      expect(appJs).not.toContain("localStorage.setItem(SETUP_SEEN_KEY, '1')");
+    });
+
+    it('reads server version from the dollhouse-server-version meta tag', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      expect(appJs).toContain('meta[name="dollhouse-server-version"]');
+    });
+
+    it('validates version format before using it (rejects malformed values)', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // Semver-like validation guard present
+      expect(appJs).toContain(String.raw`/^\d+\.\d+\.\d+/.test(`);
+      // Falls back to 'unknown' for invalid versions
+      expect(appJs).toContain("'unknown'");
+    });
+
+    it('version check takes priority over saved-tab restoration', () => {
+      const appJs = readFileSync(join(PUBLIC_DIR, 'app.js'), 'utf-8');
+      // The version check block must appear before the savedTab block in source
+      const versionCheckIdx = appJs.indexOf("localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion");
+      const savedTabIdx = appJs.indexOf("localStorage.getItem(TAB_KEY)");
+      expect(versionCheckIdx).toBeGreaterThan(0);
+      expect(savedTabIdx).toBeGreaterThan(0);
+      expect(versionCheckIdx).toBeLessThan(savedTabIdx);
+    });
+
+    it('index.html has the dollhouse-server-version meta tag placeholder', () => {
+      expect(html).toContain('name="dollhouse-server-version"');
+      expect(html).toContain('{{DOLLHOUSE_VERSION}}');
     });
   });
 
@@ -845,7 +1032,128 @@ describe('Setup Tab — Regressions', () => {
 
     it('JS updates button label to show pinned version', () => {
       expect(js).toContain('updateInstallButtonLabels');
-      expect(js).toContain('Install v${pinnedVersion}');
+      expect(js).toContain('Configure v${pinnedVersion}');
+    });
+  });
+
+  describe('Channel selector regression', () => {
+    it('channel selector initializes after method toggle', () => {
+      const methodIdx = js.indexOf('initMethodToggle()');
+      const channelIdx = js.indexOf('initChannelSelector()');
+      expect(methodIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(-1);
+      expect(channelIdx).toBeGreaterThan(methodIdx);
+    });
+
+    it('channel defaults to latest on page load', () => {
+      expect(js).toContain("let currentChannel = DEFAULT_CHANNEL");
+    });
+
+    it('no hardcoded @beta or @rc package references in source', () => {
+      expect(js).not.toContain('@dollhousemcp/mcp-server@rc');
+      expect(js).not.toContain('@dollhousemcp/mcp-server@beta');
+    });
+
+    it('channel selector updates configs on change', () => {
+      expect(js).toContain('updateAllConfigs(currentMethod)');
+    });
+
+    it('backend allowlists channel values', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain("ALLOWED_INSTALL_CHANNELS");
+      expect(ts).toContain("'latest'");
+      expect(ts).toContain("'beta'");
+      expect(ts).toContain("'rc'");
+    });
+
+    it('backend normalizes channel input', () => {
+      const ts = readFileSync(join(process.cwd(), 'src/web/routes/setupRoutes.ts'), 'utf-8');
+      expect(ts).toContain('UnicodeValidator.normalize(channel)');
+    });
+
+    it('channel selector hidden on init when pinned mode is active', () => {
+      // The init sync line must apply hidden state without waiting for a click
+      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
+    });
+
+    it('channel change re-evaluates detection state', () => {
+      // The change handler is inside initChannelSelector — extract a wider range
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain('updateDetectionState()');
+    });
+
+    it('channel change clears is-success state from buttons', () => {
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain("remove('is-success'");
+    });
+
+    it('channel change clears install status messages', () => {
+      const start = js.indexOf("select.addEventListener('change'");
+      const end = js.indexOf('/** Rewrite code blocks', start);
+      const changeHandler = js.slice(start, end);
+      expect(changeHandler).toContain('setup-install-status');
+    });
+
+    it('description text uses channel variable not hardcoded @latest', () => {
+      // The Claude Desktop description must reflect the selected channel
+      expect(js).not.toContain("Uses <code>npx @latest</code>");
+      expect(js).toContain('safeChannel');
+    });
+
+    it('description uses textContent not innerHTML for XSS safety', () => {
+      // CodeQL: DOM text reinterpreted as HTML
+      const descSection = js.slice(
+        js.indexOf('Restore text reflecting the selected channel'),
+        js.indexOf('Restart Claude Desktop after'),
+      );
+      expect(descSection).toContain('desc.textContent');
+      expect(descSection).toContain("document.createElement('code')");
+      expect(descSection).not.toContain('desc.innerHTML');
+    });
+
+    it('has channel constants and normalizeChannel validator', () => {
+      expect(js).toContain('CHANNELS');
+      expect(js).toContain('VALID_CHANNELS');
+      expect(js).toContain('DEFAULT_CHANNEL');
+      expect(js).toContain('normalizeChannel');
+    });
+
+    it('formatInstallError handles missing channel releases', () => {
+      expect(js).toContain('formatInstallError');
+      expect(js).toContain('No ${currentChannel} release is published yet');
+    });
+
+    it('updateDetectionButton includes channel label', () => {
+      // When config doesn't match, button should show "Configure Now (rc)" not just "Configure Now"
+      const btnFn = js.slice(
+        js.indexOf('const updateDetectionButton'),
+        js.indexOf('/** Create a badge'),
+      );
+      expect(btnFn).toContain('channelLabel');
+      expect(btnFn).toContain('DEFAULT_CHANNEL');
+    });
+
+    it('install success refreshes current config code block', () => {
+      // After fetchDetection, updateDetectionState must be called to refresh the config display
+      const installSection = js.slice(
+        js.indexOf('Verify the install by re-detecting'),
+        js.indexOf('showCompletionBanner'),
+      );
+      expect(installSection).toContain('updateDetectionState()');
+    });
+
+    it('updatePlatformDetectionState refreshes config code block', () => {
+      // The function must update the <pre><code> content, not just the notice text
+      const fn = js.slice(
+        js.indexOf('const updatePlatformDetectionState'),
+        js.indexOf('const updateDetectionNotice'),
+      );
+      expect(fn).toContain('pre code');
+      expect(fn).toContain('JSON.stringify(detected.currentConfig');
     });
   });
 
@@ -958,6 +1266,87 @@ describe('Setup Tab — Regressions', () => {
   });
 });
 
+// ── License form visibility regression (#1841) ──────────────────────────
+// Ensures the activation form is hidden when a commercial license is active,
+// and restored correctly during tier switching.
+
+describe('Setup Tab — License Form Visibility (#1841)', () => {
+  let js: string;
+  let html: string;
+
+  beforeAll(async () => {
+    js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+  });
+
+  describe('HTML structure', () => {
+    it('has license detail panels for free-commercial and paid-commercial', () => {
+      expect(html).toContain('id="license-detail-free-commercial"');
+      expect(html).toContain('id="license-detail-paid-commercial"');
+    });
+
+    it('has license active details panel', () => {
+      expect(html).toContain('id="license-active-details"');
+    });
+
+    it('license active details panel is hidden by default', () => {
+      const match = /id="license-active-details"[^>]*/.exec(html);
+      expect(match?.[0]).toContain('hidden');
+    });
+  });
+
+  describe('JS: showLicenseDetails hides activation form', () => {
+    it('hides the activation form for the active tier', () => {
+      expect(js).toContain('const activeForm = details[license.tier]');
+      expect(js).toContain('activeForm.hidden = true');
+    });
+
+    it('uses const not var for activeForm', () => {
+      expect(js).not.toMatch(/var activeForm\b/);
+    });
+  });
+
+  describe('JS: selectTier handles active license', () => {
+    it('checks activeLicense when selecting a tier', () => {
+      expect(js).toContain("activeLicense?.status === 'active'");
+      expect(js).toContain("activeLicense?.tier === tier");
+    });
+
+    it('calls showLicenseDetails when returning to active tier', () => {
+      // selectTier must call showLicenseDetails(activeLicense) when hideForm is true
+      expect(js).toContain('if (hideForm) showLicenseDetails(activeLicense)');
+    });
+
+    it('uses const not var for hideForm', () => {
+      expect(js).not.toMatch(/var hideForm\b/);
+    });
+  });
+
+  describe('JS: AGPL downgrade cancel restores state', () => {
+    it('calls selectTier on cancel to restore previous tier', () => {
+      expect(js).toContain('selectTier(activeLicense.tier)');
+    });
+
+    it('does not need separate showLicenseDetails call on cancel (selectTier handles it)', () => {
+      // The AGPL cancel path should NOT have its own showLicenseDetails call
+      // because selectTier now handles it centrally
+      const agplSection = js.slice(
+        js.indexOf('AGPL selection: confirm'),
+        js.indexOf('const licenseDetailsPanel')
+      );
+      const showDetailsCount = (agplSection.match(/showLicenseDetails/g) || []).length;
+      expect(showDetailsCount).toBe(0);
+    });
+  });
+
+  describe('JS: loadSavedLicense shows details on page load', () => {
+    it('calls showSavedBanner which calls showLicenseDetails', () => {
+      expect(js).toContain('showSavedBanner(license)');
+      expect(js).toContain('showLicenseDetails(license)');
+    });
+  });
+});
+
 // ── Generated panel DOM validation ────────────────────────────────────
 // Uses JSDOM to execute setup.js against the actual HTML template,
 // then validates the rendered DOM output programmatically.
@@ -1033,7 +1422,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('platforms with installClient have an Install Now button', () => {
+  it('platforms with installClient have a Configure Now button', () => {
     const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
     for (const p of withInstall) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1043,7 +1432,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('LM Studio does not have an Install Now button', () => {
+  it('LM Studio does not have a Configure Now button', () => {
     const panel = document.getElementById('setup-panel-lmstudio');
     const btn = panel?.querySelector('.setup-install-btn');
     expect(btn).toBeNull();
@@ -1105,6 +1494,242 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     const parsed = JSON.parse(text);
     expect(parsed.servers).toBeDefined();
     expect(parsed.mcpServers).toBeUndefined();
+  });
+});
+
+// ── Channel selector interaction tests ────────────────────────────────
+// Uses JSDOM to simulate user interactions: switching channels, clicking
+// Configure, and verifying the DOM updates correctly at each step.
+
+describe('Setup Tab — Channel Selector Interactions', () => {
+  let document: Document;
+  let window: any;
+
+  beforeAll(async () => {
+    const { JSDOM } = await import('jsdom');
+    const html = await readFileAsync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
+    const js = await readFileAsync(join(PUBLIC_DIR, 'setup.js'), 'utf-8');
+    const authJs = await readFileAsync(join(PUBLIC_DIR, 'consoleAuth.js'), 'utf-8');
+
+    const dom = new JSDOM(html, {
+      url: 'http://localhost:41715/',
+      runScripts: 'dangerously',
+      pretendToBeVisual: true,
+    });
+    document = dom.window.document;
+    window = dom.window;
+
+    // Realistic mock data matching actual Claude Desktop detection output
+    const mockDetection = {
+      'claude-desktop': {
+        installed: true,
+        currentConfig: {
+          command: 'npx',
+          args: ['@dollhousemcp/mcp-server@latest'],
+          env: { DOLLHOUSE_DEBUG: 'true' },
+        },
+      },
+      'cursor': {
+        installed: false,
+      },
+    };
+    let fetchFailMode = false; // toggle for network failure tests
+    dom.window.fetch = ((url: string) => {
+      if (fetchFailMode) return Promise.reject(new Error('Network error'));
+      if (url.includes('/api/setup/version')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            version: '2.0.12-rc.10',
+            mcpbUrl: '/api/setup/mcpb',
+            npmTag: 'rc',
+          }),
+        });
+      }
+      if (url.includes('/api/setup/detect')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(mockDetection),
+        });
+      }
+      if (url.includes('/api/setup/install')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true }),
+        });
+      }
+      return Promise.resolve({ ok: false });
+    }) as unknown as typeof fetch;
+
+    Object.defineProperty(dom.window.navigator, 'clipboard', {
+      value: { writeText: () => Promise.resolve() },
+    });
+
+    // Load consoleAuth first (setup.js depends on DollhouseAuth)
+    const authScript = document.createElement('script');
+    authScript.textContent = authJs;
+    document.body.appendChild(authScript);
+
+    const scriptEl = document.createElement('script');
+    scriptEl.textContent = js;
+    document.body.appendChild(scriptEl);
+
+    // Wait for async init (fetch calls settle and DOM updates)
+    // Poll for the channel selector to be initialized rather than using an arbitrary delay
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      if (document.getElementById('setup-channel-select')) break;
+    }
+  });
+
+  function getChannelSelect(): HTMLSelectElement | null {
+    return document.getElementById('setup-channel-select') as HTMLSelectElement | null;
+  }
+
+  function getInstallBtn(): HTMLButtonElement | null {
+    return document.querySelector('[data-install-client="claude"]') as HTMLButtonElement | null;
+  }
+
+  function getNotice(): HTMLElement | null {
+    return document.querySelector('#setup-panel-claude-desktop .setup-installed-notice');
+  }
+
+  function switchChannel(value: string) {
+    const select = getChannelSelect();
+    if (!select) return;
+    select.value = value;
+    select.dispatchEvent(new window.Event('change'));
+  }
+
+  describe('Initial state with @latest config', () => {
+    it('channel selector defaults to Stable', () => {
+      const select = getChannelSelect();
+      expect(select?.value).toBe('latest');
+    });
+  });
+
+  describe('Switch from Stable to RC', () => {
+    beforeAll(() => switchChannel('rc'));
+
+    it('button is not stuck in is-success state', () => {
+      const btn = getInstallBtn();
+      expect(btn?.classList.contains('is-success')).toBe(false);
+    });
+
+    it('button is enabled', () => {
+      const btn = getInstallBtn();
+      expect(btn?.disabled).not.toBe(true);
+    });
+
+    it('button text includes rc channel label', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      // Should say "Configure Now (rc)" or similar — not "Already configured"
+      expect(text).toContain('rc');
+      expect(text).not.toContain('Already configured');
+    });
+  });
+
+  describe('Switch back to Stable', () => {
+    beforeAll(() => switchChannel('latest'));
+
+    it('button resets from rc state', () => {
+      const btn = getInstallBtn();
+      expect(btn?.classList.contains('is-success')).toBe(false);
+    });
+
+    it('button text does not include channel label for stable', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).not.toContain('(rc)');
+      expect(text).not.toContain('(latest)');
+    });
+  });
+
+  describe('Switch to Beta (no releases)', () => {
+    beforeAll(() => switchChannel('beta'));
+
+    it('button shows beta channel label', () => {
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).toContain('beta');
+    });
+
+    it('button is enabled for configuration', () => {
+      const btn = getInstallBtn();
+      expect(btn?.disabled).not.toBe(true);
+    });
+  });
+
+  describe('Rapid channel switching', () => {
+    it('handles rapid switches without breaking', () => {
+      switchChannel('rc');
+      switchChannel('latest');
+      switchChannel('beta');
+      switchChannel('rc');
+      switchChannel('latest');
+
+      const btn = getInstallBtn();
+      // Should be in a clean state after rapid switching
+      expect(btn?.classList.contains('is-success')).toBe(false);
+      expect(btn?.classList.contains('is-loading')).toBe(false);
+    });
+  });
+
+  describe('Invalid channel value', () => {
+    it('falls back to stable for unknown channel', () => {
+      switchChannel('nightly');
+      // normalizeChannel should reject 'nightly' and use DEFAULT_CHANNEL
+      const btn = getInstallBtn();
+      const text = btn?.textContent || '';
+      expect(text).not.toContain('nightly');
+    });
+  });
+
+  describe('Description text updates with channel', () => {
+    it('shows @rc in description when RC selected', () => {
+      switchChannel('rc');
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const descs = panel?.querySelectorAll('.setup-method-desc') || [];
+      let found = false;
+      descs.forEach((desc) => {
+        if (desc.textContent?.includes('@rc')) found = true;
+      });
+      expect(found).toBe(true);
+    });
+
+    it('shows @latest in description when Stable selected', () => {
+      switchChannel('latest');
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const descs = panel?.querySelectorAll('.setup-method-desc') || [];
+      let found = false;
+      descs.forEach((desc) => {
+        if (desc.textContent?.includes('@latest')) found = true;
+      });
+      expect(found).toBe(true);
+    });
+  });
+
+  describe('Non-installed platform', () => {
+    it('cursor shows Configure Now without detection state', () => {
+      const panel = document.getElementById('setup-panel-cursor');
+      const btn = panel?.querySelector('.setup-install-btn') as HTMLButtonElement | null;
+      // Cursor is not installed — no detection notice, button should be available
+      if (btn) {
+        expect(btn.classList.contains('is-match')).toBe(false);
+        expect(btn.disabled).not.toBe(true);
+      }
+    });
+  });
+
+  describe('Config preserves env vars', () => {
+    it('detected config includes DOLLHOUSE_DEBUG env var', () => {
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const code = panel?.querySelector('.setup-installed-notice pre code');
+      if (code?.textContent) {
+        expect(code.textContent).toContain('DOLLHOUSE_DEBUG');
+      }
+    });
   });
 });
 

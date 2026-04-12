@@ -1,12 +1,13 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "2.0.11",
+  "version": "2.0.12",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
     "dollhousemcp": "dist/index.js",
-    "mcp-server": "dist/index.js"
+    "mcp-server": "dist/index.js",
+    "dollhouse-console-token": "dist/cli/console-token.js"
   },
   "scripts": {
     "prebuild": "npm run build:safety && node scripts/generate-version.js",
@@ -54,12 +55,16 @@
     "security:audit:verbose": "tsx scripts/run-security-audit.ts --verbose",
     "typecheck:scripts": "tsc --noEmit --project tsconfig.scripts.json",
     "pre-commit": "npm run security:rapid && npm run typecheck:scripts && npm audit --audit-level=high",
+    "test:playwright": "npx playwright test",
+    "test:playwright:headed": "npx playwright test --headed",
+    "test:playwright:ui": "npx playwright test --ui",
     "test:e2e": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs",
     "test:e2e:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs --watch",
     "test:e2e:verbose": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs --verbose",
     "test:roundtrip": "npm run test:e2e",
     "test:roundtrip:manual": "./scripts/test-roundtrip-workflow.sh",
     "test:roundtrip:cleanup": "./scripts/test-roundtrip-workflow.sh cleanup",
+    "test:totp:manual": "tsx scripts/totp-manual-test.ts",
     "qa:direct": "node scripts/qa-direct-test.js",
     "test:e2e:real": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest test/e2e/real-github-integration.test.ts --verbose",
     "test:e2e:real:mcp": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest test/e2e/mcp-tool-flow.test.ts --verbose",
@@ -166,7 +171,9 @@
     "js-yaml": "^4.1.1",
     "jsdom": "^24.1.3",
     "node-fetch": "^3.3.2",
+    "otpauth": "^9.5.0",
     "posthog-node": "^5.24.17",
+    "qrcode": "^1.5.4",
     "uuid": "^11.1.0",
     "zod": "^4.3.6"
   },
@@ -174,6 +181,7 @@
     "@eslint/js": "^9.38.0",
     "@jest/globals": "^30.3.0",
     "@modelcontextprotocol/inspector": "^0.21.1",
+    "@playwright/test": "^1.59.1",
     "@types/archiver": "^7.0.0",
     "@types/dompurify": "^3.2.0",
     "@types/express": "^5.0.6",
@@ -181,6 +189,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^24.10.0",
+    "@types/qrcode": "^1.5.6",
     "@types/semver": "^7.7.1",
     "@types/supertest": "^7.2.0",
     "@types/uuid": "^10.0.0",
@@ -210,6 +219,8 @@
     },
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "3.14.2"
-    }
+    },
+    "hono": "4.12.12",
+    "@hono/node-server": "1.19.13"
   }
 }

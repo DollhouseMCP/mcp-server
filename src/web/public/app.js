@@ -34,6 +34,41 @@ function safeParseYaml(content) {
   }
 }
 
+globalThis.DollhouseConsoleUI = globalThis.DollhouseConsoleUI || {};
+
+/**
+ * Show or update a visible error banner within a tab panel.
+ *
+ * Creates the banner lazily on first use, then reuses it for later updates.
+ *
+ * @param {string} targetId - DOM id of the tab panel or container that owns the banner
+ * @param {string} bannerId - Stable DOM id for the banner element
+ * @param {string} message - User-visible message to render inside the banner
+ */
+globalThis.DollhouseConsoleUI.showBanner = function(targetId, bannerId, message) {
+  const target = document.getElementById(targetId);
+  if (!target) return;
+  let banner = document.getElementById(bannerId);
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = bannerId;
+    banner.className = 'tab-error-banner';
+    target.prepend(banner);
+  }
+  banner.textContent = message;
+  banner.hidden = false;
+};
+
+/**
+ * Hide an existing tab-level error banner without removing its DOM node.
+ *
+ * @param {string} bannerId - Stable DOM id for the banner element
+ */
+globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
+  const banner = document.getElementById(bannerId);
+  if (banner) banner.hidden = true;
+};
+
 (() => {
   const REPO    = 'DollhouseMCP/collection';
   const BRANCH  = 'main';
@@ -74,6 +109,7 @@ function safeParseYaml(content) {
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   function mergeCollectionData(data) {
+    globalThis.DollhouseConsoleUI?.clearBanner?.('collection-error-banner');
     const CANONICAL_TYPES = new Set(['agents','personas','skills','templates','memories','ensembles']);
     collectionElements = Object.entries(data.index)
       .filter(([type]) => CANONICAL_TYPES.has(type))
@@ -96,7 +132,7 @@ function safeParseYaml(content) {
       showGridMessage('loading', 'Loading portfolio…');
 
       // Load portfolio from local API
-      const portfolioRes = await fetch('/api/elements');
+      const portfolioRes = await DollhouseAuth.apiFetch('/api/elements');
       if (!portfolioRes.ok) throw new Error(`HTTP ${portfolioRes.status} fetching portfolio`);
       const portfolioData = await portfolioRes.json();
 
@@ -116,10 +152,17 @@ function safeParseYaml(content) {
       applyFilters();
 
       // Load community collection (non-blocking — portfolio shows immediately)
-      fetch('/api/collection')
-        .then(r => r.ok ? r.json() : Promise.reject('not available'))
+      DollhouseAuth.apiFetch('/api/collection')
+        .then(r => r.ok ? r.json() : Promise.reject(new Error('collection request failed')))
         .then(mergeCollectionData)
-        .catch(() => { /* collection not available — portfolio-only mode */ });
+        .catch((err) => {
+          console.warn('[App] Collection fetch unavailable:', err);
+          globalThis.DollhouseConsoleUI?.showBanner?.(
+            'tab-portfolio',
+            'collection-error-banner',
+            'Community collection unavailable — showing local portfolio only.'
+          );
+        });
 
       const updated = document.getElementById('footer-updated');
       if (updated) {
@@ -537,7 +580,7 @@ function safeParseYaml(content) {
       if (el._content) {
         content = el._content;
       } else if (el._local) {
-        const res = await fetch(`/api/elements/${el.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/elements/${el.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         content = await res.text();
       } else {
@@ -630,7 +673,7 @@ function safeParseYaml(content) {
     btn.textContent = '⏳ Installing…';
     btn.disabled = true;
     try {
-      const res = await fetch('/api/install', {
+      const res = await DollhouseAuth.apiFetch('/api/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ path: element.path, name: element.name, type: element.type }),
@@ -726,13 +769,13 @@ function safeParseYaml(content) {
       if (element._content) {
         content = element._content;
       } else if (element._local) {
-        const res = await fetch(`/api/elements/${element.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/elements/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         structured = data;
         content = data.raw;
       } else {
-        const res = await fetch(`/api/collection/content/${element.path}`);
+        const res = await DollhouseAuth.apiFetch(`/api/collection/content/${element.path}`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         structured = data;
@@ -1931,15 +1974,22 @@ function safeParseYaml(content) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
-    const tabInits = { logs: false, metrics: false, permissions: false };
+    const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
+    // Server version injected at request time — used to show Setup tab once per version
+    // so upgraders automatically see it on each new release (not just first-ever visit).
+    // Validate format (semver-like) before trusting the value; malformed falls back to
+    // 'unknown' which safely triggers setup on every load rather than silently skipping.
+    const _rawVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
+    const currentServerVersion = /^\d+\.\d+\.\d+/.test(_rawVersion) ? _rawVersion : 'unknown';
 
     // Determine which tab to show on load:
-    // 1. Saved tab from last visit (localStorage)
-    // 2. Setup tab on first-ever visit
-    // 3. Portfolio (HTML default)
+    // 1. URL hash (deep link)
+    // 2. Saved tab from last visit (localStorage)
+    // 3. Setup tab if not seen on this version yet
+    // 4. Portfolio (HTML default)
     const switchToTab = (tabName) => {
       if (!consoleTabs) return;
       const btn = consoleTabs.querySelector(`[data-tab="${tabName}"]`);
@@ -2066,11 +2116,16 @@ function safeParseYaml(content) {
     }
 
     if (!applyHashTab()) {
-      const savedTab = localStorage.getItem(TAB_KEY);
-      if (savedTab) {
-        switchToTab(savedTab);
-      } else if (!localStorage.getItem(SETUP_SEEN_KEY)) {
-        localStorage.setItem(SETUP_SEEN_KEY, '1');
+      // Version check takes priority over saved tab — upgraders must see Setup
+      // regardless of whether they have a saved tab from their previous session.
+      if (localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion) {
+        const savedTab = localStorage.getItem(TAB_KEY);
+        if (savedTab) {
+          switchToTab(savedTab);
+          lazyInitTab(savedTab, tabInits);
+        }
+      } else {
+        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
         switchToTab('setup');
       }
     }
@@ -2094,19 +2149,35 @@ function safeParseYaml(content) {
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
-      if (tab === 'logs' && dc?.logs) {
-        if (!tabInits.logs) { tabInits.logs = true; dc.logs.init(params); }
-        else if (dc.logs.refresh) { dc.logs.refresh(); }
-      }
-      if (tab === 'metrics' && dc?.metrics) {
-        if (!tabInits.metrics) { tabInits.metrics = true; dc.metrics.init(params); }
-        else if (dc.metrics.refresh) { dc.metrics.refresh(); }
-      }
-      if (tab === 'permissions' && dc?.permissions) {
-        if (!tabInits.permissions) { tabInits.permissions = true; dc.permissions.init(params); }
-        else if (dc.permissions.refresh) { dc.permissions.refresh(); }
+      const module = dc?.[tab];
+      if (!module) return;
+      if (!tabInits[tab]) {
+        tabInits[tab] = true;
+        module.init(params);
+      } else if (module.refresh) {
+        module.refresh();
       }
     }
+
+    // 401 recovery (#1792): when the cached token becomes stale (rotation,
+    // restart, file deletion), consoleAuth.js fires this event. Show a
+    // persistent, idempotent reload banner so the user knows why the UI
+    // stopped updating.
+    globalThis.addEventListener('dollhouse:session-expired', function () {
+      if (document.getElementById('session-expired-toast')) return;
+      const toast = document.createElement('div');
+      toast.id = 'session-expired-toast';
+      toast.setAttribute('role', 'alert');
+      toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
+        + 'background:#b91c1c;color:#fff;padding:12px 24px;border-radius:8px;'
+        + 'font-size:14px;z-index:99999;display:flex;align-items:center;gap:12px;'
+        + 'box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+      toast.innerHTML = 'Console session token changed\u2009\u2014\u2009'
+        + '<button style="background:#fff;color:#b91c1c;border:none;padding:6px 16px;'
+        + 'border-radius:4px;cursor:pointer;font-weight:600;font-size:14px"'
+        + ' onclick="location.reload()">Reload</button>';
+      document.body.appendChild(toast);
+    });
 
     init();
   });

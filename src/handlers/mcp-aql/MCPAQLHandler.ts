@@ -3141,8 +3141,16 @@ export class MCPAQLHandler {
     const tab = typeof params?.tab === 'string' ? params.tab : undefined;
     const urlParams = params ? MCPAQLHandler.extractUrlParams(params) : undefined;
 
-    // Issue #796: Pass MCPAQLHandler to web server for gateway routing
-    const result = await openPortfolioBrowser(portfolioDir, undefined, this, tab, urlParams);
+    // Issue #796: Pass MCPAQLHandler to web server for gateway routing.
+    // Issue #1850: Pass sinks so fallback server has full console functionality.
+    const result = await openPortfolioBrowser({
+      portfolioDir,
+      mcpAqlHandler: this,
+      tab,
+      urlParams,
+      memorySink: this.handlers.memorySink,
+      metricsSink: this.handlers.metricsSink,
+    });
 
     const status = result.alreadyRunning ? 'already running' : 'started';
     const browserStatus = result.browserOpened ? 'opened' : 'could not open automatically';

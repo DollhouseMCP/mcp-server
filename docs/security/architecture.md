@@ -255,11 +255,13 @@ Multiple validators protect against injection attacks, Unicode exploits, and mal
 
 The `ContentValidator` class detects prompt injection attacks using deterministic pattern matching (not AI-based detection). This was a deliberate design choice -- pattern matching cannot be socially engineered. Detection covers:
 - System/admin/assistant prompt overrides (`[SYSTEM: ...]`, `[ADMIN: ...]`)
-- Role impersonation attempts
+- Role impersonation attempts (specific dangerous roles: admin, root, system, sudo, superuser, DAN)
 - Instruction override patterns
 - Code execution directives
+- External command execution (`curl`/`wget` with any URL, not just specific TLDs — #1782-1)
+- Jailbreak and guideline bypass patterns (`DAN mode`, `do anything now`, `pretend you have no guidelines` — #1782-4)
 
-Context-aware validation: Skills may legitimately contain code patterns (eval, exec, require) that would be blocked in other element types (Issue #456).
+Context-aware validation: Skills may legitimately contain code patterns (eval, exec, require) that would be blocked in other element types (Issue #456). Pattern maintenance guidance and false-positive regression tests are in `tests/integration/security-audit-batch-a.integration.test.ts`.
 
 ### 4.2 Unicode Validator
 
@@ -268,7 +270,7 @@ Context-aware validation: Skills may legitimately contain code patterns (eval, e
 The `UnicodeValidator` prevents Unicode-based bypass attacks:
 - **Direction override attacks**: Strips RLO/LRO/RLE/LRE and isolate formatting characters (U+202A-U+202E, U+2066-U+2069)
 - **Zero-width injection**: Removes zero-width spaces, joiners, and BOM characters
-- **Homograph attacks**: Maps confusable characters (Cyrillic-to-Latin, Greek-to-Latin) via `CONFUSABLE_MAPPINGS`
+- **Homograph attacks**: Maps ~110 confusable characters (Cyrillic-to-Latin, Greek lowercase and uppercase to Latin — #1782-2, fullwidth, mathematical) via `CONFUSABLE_MAPPINGS`
 - **Mixed script detection**: Identifies strings mixing multiple Unicode scripts
 - **Non-printable character stripping**: Removes C0/C1 control codes and non-characters
 
@@ -390,7 +392,7 @@ The `classifyTool()` function classifies CLI tools into four risk levels:
 |------------|----------|---------|
 | `safe` | Auto-allow | Read, Grep, Glob, WebFetch, git status, npm test |
 | `moderate` | Evaluate against policies | Edit, Write, Agent, unclassified bash |
-| `dangerous` | Auto-deny | rm -rf, sudo, eval, curl pipe to shell |
+| `dangerous` | Auto-deny | rm -rf, sudo, eval, curl pipe to shell, `python3 -c`, `node -e`, `perl -e`, `ruby -e` (#1782-3) |
 | `blocked` | Always denied | mkfs, dd if=, fork bombs |
 
 ### 6.2 Bash Command Classification
@@ -458,6 +460,26 @@ The `TokenManager` class provides secure GitHub token management:
 - Token scope validation against required/optional scopes
 - Unicode validation on token strings via `UnicodeValidator`
 
+### 7.1b Console Session Token (#1780)
+
+**Source files:** `src/web/console/consoleToken.ts`, `src/web/middleware/authMiddleware.ts`
+
+The management console on port 41715 protects its API with a Bearer token stored at `~/.dollhouse/run/console-token.auth.json` (0600 permissions, owner-only). The token is 32 bytes of cryptographic randomness (64 hex chars), generated on first leader election and persisted across restarts. Rotation is explicit-only — restarts do not cycle the token.
+
+**Middleware behavior:**
+- Gated on `DOLLHOUSE_WEB_AUTH_ENABLED` (default `false` during Phase 1 rollout, will flip to `true` in a follow-up PR)
+- Checks `Authorization: Bearer <token>` header, with a `?token=<token>` query fallback for SSE streams (EventSource cannot set headers)
+- Uses `crypto.timingSafeEqual` to prevent side-channel attacks on token comparison
+- Public path allowlist exempts `/api/health`, `/api/setup/version`, `/api/setup/mcpb`, `/api/setup/detect` — metadata endpoints that have no sensitive state
+
+**Forward-compatible schema:** Token entries include `scopes`, `elementBoundaries`, `tenant`, `platform`, and `labels` fields from day one. Phase 1 treats all tokens as admin-scoped; Phase 2 flips real scope enforcement on without schema migration. Phase 3 adds multi-tenant element boundary filtering for enterprise deployments.
+
+**Browser token delivery:** The server injects the current token into `index.html` via a `<meta name="dollhouse-console-token">` tag at request time. The client-side helper (`public/consoleAuth.js`) reads the tag and wraps all fetch/EventSource calls to attach the token automatically.
+
+**Follower token delivery:** Non-leader MCP processes read the token file directly on startup (`getPrimaryTokenFromFile`) and attach it to their ingest POSTs. The leader owns the file; followers are read-only consumers.
+
+**See also:** [Console Authentication guide](../guides/console-auth.md), [External API Access guide](../guides/external-api-access.md)
+
 ### 7.2 Rate Limiting
 
 Rate limiting is applied at multiple points:
@@ -521,10 +543,14 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | Threat | Layer | Mitigation | Source File |
 |--------|-------|------------|-------------|
 | Prompt injection via element content | 4 | Pattern-based detection in `ContentValidator`, context-aware exemptions | `src/security/contentValidator.ts` |
-| Unicode bypass attacks (homograph, RTL, zero-width) | 4 | `UnicodeValidator` normalization at boundary, confusable mappings | `src/security/validators/unicodeValidator.ts` |
+| Unicode bypass attacks (homograph, RTL, zero-width) | 4 | `UnicodeValidator` normalization at boundary, ~110 confusable mappings (Cyrillic, Greek, fullwidth, math) | `src/security/validators/unicodeValidator.ts` |
+| Unicode homograph path traversal | 4, 5 | NFC normalization on `name` param before `..` / `\` checks (#1736) | `src/web/routes.ts` |
+| Consumed approval memory leak | 1 | `expireStaleApprovals` evicts consumed single-use records (#1782-5) | `src/handlers/mcp-aql/GatekeeperSession.ts` |
+| Inline interpreter code execution | 6 | `python -c`, `node -e`, `perl -e`, `ruby -e` classified as dangerous (#1782-3) | `src/handlers/mcp-aql/policies/ToolClassification.ts` |
 | YAML deserialization attacks | 4 | `CORE_SCHEMA` only, size limits, bomb detection | `src/security/secureYamlParser.ts` |
 | Path traversal / symlink attacks | 5 | `PathValidator` with symlink resolution, allowed directory list | `src/security/pathValidator.ts` |
 | Token exposure in logs/errors | 7 | AES-256-GCM encryption, token redaction, sanitized errors | `src/security/tokenManager.ts` |
+| Unauthenticated access to web console API | 7 | Bearer token auth middleware, 0600 token file, localhost binding (#1780) | `src/web/middleware/authMiddleware.ts`, `src/web/console/consoleToken.ts` |
 | Brute force token validation | 7 | Rate-limited validation operations | `src/security/tokenManager.ts` |
 | ReDoS (regex denial of service) | 4 | `SafeRegex` with timeouts, input length limits, pattern caching | `src/security/dosProtection.ts` |
 | Unauthorized agent execution | 1 | `execute_agent` is `CONFIRM_SINGLE_USE` + `canBeElevated: false` | `src/handlers/mcp-aql/policies/OperationPolicies.ts` |
@@ -589,6 +615,7 @@ Persistence can be disabled via `DOLLHOUSE_ACTIVATION_PERSISTENCE=false` for eph
 | `RateLimiterSecurity.test.ts` | Rate limiting effectiveness |
 | `securityMonitor.test.ts` | Security event logging |
 | `metadata-security.test.ts` | Metadata injection |
+| `security-audit-batch-a.integration.test.ts` | End-to-end: curl/wget bypass, Greek confusables, interpreter patterns, injection precision + false positives |
 | `ensemble-security-audit.test.ts` | Ensemble security |
 | `mcp-sdk-security.test.ts` | MCP protocol security |
 

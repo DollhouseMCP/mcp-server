@@ -84,7 +84,7 @@ export class Template extends BaseElement implements IElement {
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
   private readonly MAX_TEMPLATE_SIZE = 100 * 1024; // 100KB max template size
-  private readonly MAX_VARIABLE_COUNT = 100;       // Max variables per template
+  private static readonly MAX_VARIABLE_COUNT = 100; // Max variables per template
   private readonly MAX_INCLUDE_DEPTH = 5;          // Prevent infinite include loops
   private readonly MAX_STRING_LENGTH = 10000;      // Max length for string variables
 
@@ -136,8 +136,8 @@ export class Template extends BaseElement implements IElement {
 
     // SECURITY FIX #3 & #4: Validate variables
     if (this.metadata.variables) {
-      if (this.metadata.variables.length > this.MAX_VARIABLE_COUNT) {
-        throw ErrorHandler.createError(`Variable count ${this.metadata.variables.length} exceeds maximum ${this.MAX_VARIABLE_COUNT}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TOO_MANY_VARIABLES);
+      if (this.metadata.variables.length > Template.MAX_VARIABLE_COUNT) {
+        throw ErrorHandler.createError(`Variable count ${this.metadata.variables.length} exceeds maximum ${Template.MAX_VARIABLE_COUNT}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.TOO_MANY_VARIABLES);
       }
       
       this.metadata.variables = this.metadata.variables.map(variable => ({
@@ -247,6 +247,78 @@ export class Template extends BaseElement implements IElement {
       this.parsedSections = Template.parseSections(this.content);
     }
     return this.parsedSections;
+  }
+
+  /**
+   * Scan `content` for `{{placeholder}}` patterns and return a merged variable
+   * list. Existing entries are preserved unchanged (user-set descriptions,
+   * types, required flags, etc.); new placeholders are added with defaults:
+   * `type: 'string'`, `required: false`. (#1896)
+   *
+   * Respects section mode — only the `<template>` section is scanned,
+   * matching the substitution engine's scope.
+   *
+   * **Performance:** Single-pass regex scan — O(n) in content length.
+   * Called by `TemplateManager.save()` on every create/edit, so content
+   * is already validated and size-bounded (≤ 100 KB) before reaching here.
+   *
+   * @param content - Raw template content (may include section tags)
+   * @param existingVariables - Already-declared variables; never overwritten
+   * @returns Merged variable list: existing entries first, new entries appended
+   *
+   * @example
+   * // New template — empty schema gets fully populated
+   * deriveVariablesFromContent('Hello {{name}}, score: {{score}}')
+   * // → [{ name: 'name', type: 'string', required: false },
+   * //    { name: 'score', type: 'string', required: false }]
+   *
+   * @example
+   * // Existing entry preserved; only the missing placeholder is added
+   * deriveVariablesFromContent('{{name}} earns {{points}}', [
+   *   { name: 'name', type: 'string', required: true, description: 'Display name' }
+   * ])
+   * // → [{ name: 'name', type: 'string', required: true, description: 'Display name' },
+   * //    { name: 'points', type: 'string', required: false }]
+   */
+  static deriveVariablesFromContent(
+    content: string,
+    existingVariables: TemplateVariable[] = []
+  ): TemplateVariable[] {
+    const { isSectionMode, templateSection } = Template.parseSections(content);
+    const scanContent = isSectionMode ? templateSection : content;
+
+    const pattern = /\{\{\s*([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s*\}\}/g;
+    const seen = new Set<string>();
+    let match;
+    while ((match = pattern.exec(scanContent)) !== null) {
+      seen.add(match[1]);
+    }
+
+    const existingNames = new Set(existingVariables.map(v => v.name));
+    const result: TemplateVariable[] = [...existingVariables];
+
+    for (const name of seen) {
+      if (!existingNames.has(name)) {
+        result.push({ name, type: 'string', required: false });
+      }
+    }
+
+    // Enforce the same MAX_VARIABLE_COUNT limit as the constructor.
+    // When auto-derive would exceed the cap, truncate and surface a structured
+    // error so the calling LLM knows to split the content across templates.
+    if (result.length > Template.MAX_VARIABLE_COUNT) {
+      const overflow = result.splice(Template.MAX_VARIABLE_COUNT);
+      const overflowNames = overflow.map(v => v.name).join(', ');
+      throw ErrorHandler.createError(
+        `Auto-derive reached the ${Template.MAX_VARIABLE_COUNT}-variable limit. ` +
+        `${overflow.length} placeholder(s) were not registered: ${overflowNames}. ` +
+        `Split this content across multiple templates and combine them in an ensemble.`,
+        ErrorCategory.VALIDATION_ERROR,
+        ValidationErrorCodes.TOO_MANY_VARIABLES
+      );
+    }
+
+    return result;
   }
 
   private compile(): CompiledTemplate {
@@ -722,20 +794,20 @@ export class Template extends BaseElement implements IElement {
   public override validate(): ElementValidationResult {
     const result = super.validate();
 
-    // Initialize arrays if not present
-    // FIX: Use nullish coalescing assignment (SonarCloud S6606)
-    result.errors ??= [];
-    result.warnings ??= [];
-    
+    // Capture arrays as locals so TypeScript knows they're always defined
+    // and call sites never need ! or inline ??= expressions (S1121, S6606).
+    const errors = result.errors ??= [];
+    const warnings = result.warnings ??= [];
+
     // Content validation
     if (!this.content || this.content.trim().length === 0) {
-      result.errors.push({
+      errors.push({
         field: 'content',
         message: 'Template content cannot be empty',
         code: 'EMPTY_CONTENT'
       });
     }
-    
+
     // Check for unmatched tokens.
     // Issue #705: In section mode, only count tokens within the <template> section —
     // <style> and <script> sections are raw passthrough where }} is intentional.
@@ -745,44 +817,44 @@ export class Template extends BaseElement implements IElement {
     const openTokens = (tokenCheckContent.match(/\{\{/g) || []).length;
     const closeTokens = (tokenCheckContent.match(/\}\}/g) || []).length;
     if (openTokens !== closeTokens) {
-      result.errors.push({
+      errors.push({
         field: 'content',
         message: 'Template has unmatched variable tokens',
         code: 'UNMATCHED_TOKENS'
       });
     }
-    
+
     // Validate output format
     const validFormats = ['markdown', 'html', 'json', 'yaml', 'text', 'xml'];
     if (this.metadata.output_format && !validFormats.includes(this.metadata.output_format)) {
-      result.warnings.push({
+      warnings.push({
         field: 'output_format',
         message: `Unknown output format '${this.metadata.output_format}'. Common formats: ${validFormats.join(', ')}`,
         severity: 'low'
       });
     }
-    
+
     // Validate variables
     if (this.metadata.variables) {
       const variableNames = new Set<string>();
-      
+
       this.metadata.variables.forEach((variable, index) => {
         // Check for duplicate names
         if (variableNames.has(variable.name)) {
-          result.errors!.push({
+          errors.push({
             field: `variables[${index}].name`,
             message: `Duplicate variable name '${variable.name}'`,
             code: 'DUPLICATE_VARIABLE'
           });
         }
         variableNames.add(variable.name);
-        
+
         // Validate regex patterns
         if (variable.validation) {
           try {
             new RegExp(variable.validation);
           } catch (e) {
-            result.errors!.push({
+            errors.push({
               field: `variables[${index}].validation`,
               message: `Invalid regex pattern: ${e}`,
               code: 'INVALID_REGEX'
@@ -791,15 +863,15 @@ export class Template extends BaseElement implements IElement {
         }
       });
     }
-    
+
     // Check if all tokens have corresponding variable definitions
     const compiled = this.compile();
     const definedVars = new Set(this.metadata.variables?.map(v => v.name) || []);
-    const usedVars = new Set(compiled.tokens.map(t => t.variable.split('.')[0]));
-    
+    const usedVars = new Set(compiled.tokens.map(t => t.variable));
+
     usedVars.forEach(varName => {
       if (!definedVars.has(varName)) {
-        result.warnings!.push({
+        warnings.push({
           field: 'variables',
           message: `Template uses undefined variable '${varName}'`,
           severity: 'medium'

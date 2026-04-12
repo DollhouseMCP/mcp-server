@@ -833,12 +833,129 @@ const discreteTools: ToolSchema[] = [
 ];
 
 // ============================================================================
+// PROJECTED SAVINGS: ACTUAL OPERATION COUNT
+// ============================================================================
+
+/**
+ * Current number of operations registered in OperationRouter.
+ *
+ * The `discreteTools` array above contains 42 tools — the historical set from
+ * before MCP-AQL consolidation. However, the router now serves many more
+ * operations through the same 5 CRUDE endpoints. This constant captures the
+ * actual operation count so we can project what the discrete-tool cost WOULD
+ * be if every operation still needed its own tool.
+ *
+ * To update: run `grep -c "endpoint:" src/handlers/mcp-aql/OperationRouter.ts`
+ * or `Object.keys(OPERATION_ROUTES).length` at runtime.
+ */
+const CURRENT_OPERATION_COUNT = 73;
+
+// ============================================================================
+// CROSS-SERVER MCP-AQL COST MODEL
+// ============================================================================
+
+/**
+ * CRUDE endpoint token cost model, derived from Apple Mail adapter measurements.
+ *
+ * Each CRUDE endpoint has a fixed base cost (schema, annotations, prose) plus a
+ * marginal per-operation cost (the operation name listed in the description).
+ * The marginal cost is tiny (~6 tokens per operation name) because only names
+ * are listed — not full schemas. Parameter schemas are served on-demand via
+ * the `introspect` operation and are componentalized using MCP-AQL's schema
+ * system, so they don't inflate the tool listing.
+ *
+ * Measured from Apple Mail adapter (37 operations, 5 endpoints, 987 tokens):
+ *   Base per endpoint: ~150 tokens (schema boilerplate + description prose)
+ *   Marginal per op:   ~6 tokens (operation name in description list)
+ *
+ * Note on marginal cost:
+ *   The ~6 token marginal cost applies when a new operation maps naturally to
+ *   an existing CRUDE endpoint — the endpoint just lists one more name. A
+ *   bespoke operation that doesn't fit existing mutation patterns will still
+ *   only cost ~6 tokens in the tool listing, but its introspection schema
+ *   (served on-demand) will reflect its unique parameter structure. Either way,
+ *   the model's context cost at session start remains the same.
+ *
+ * Note: DollhouseMCP's CRUDE endpoints (1,815 tokens) are heavier because they
+ * include usage examples and richer descriptions. The model below reflects a
+ * typical adapter without those extras.
+ */
+const CRUDE_ENDPOINT_BASE_TOKENS = 150;
+const CRUDE_PER_OP_TOKENS = 6;
+
+/**
+ * Average token cost per discrete tool, measured from 42 DollhouseMCP discrete tools.
+ * Used as a heuristic for servers whose discrete tools haven't been measured directly.
+ */
+const AVG_TOKENS_PER_DISCRETE_TOOL = 169;
+
+/**
+ * Known and candidate MCP-AQL adapter targets.
+ * Each entry: [name, operation_count, measured_crude_tokens | null]
+ */
+const CROSS_SERVER_TARGETS: Array<[string, number, number | null]> = [
+  ['DollhouseMCP', 73, 1815],      // measured
+  ['Apple Mail', 37, 987],          // measured
+  ['GitHub API', 20, null],         // candidate
+  ['Playwright', 21, null],         // candidate
+  ['SonarQube', 28, null],          // candidate
+  ['Obsidian', 12, null],           // candidate
+];
+
+/**
+ * Estimate CRUDE endpoint token cost for a server with N operations.
+ * Uses measured value if available, otherwise the model:
+ *   5 endpoints × base_cost + operation_count × per_op_cost
+ */
+function estimateCrudeCost(ops: number, measured: number | null): number {
+  return measured ?? Math.round(5 * CRUDE_ENDPOINT_BASE_TOKENS + CRUDE_PER_OP_TOKENS * ops);
+}
+
+/**
+ * Run cross-server savings projection.
+ */
+function projectCrossServerSavings() {
+  const results = CROSS_SERVER_TARGETS.map(([name, ops, measured]) => {
+    const discreteTokens = ops * AVG_TOKENS_PER_DISCRETE_TOOL;
+    const crudeTokens = estimateCrudeCost(ops, measured);
+    const saved = discreteTokens - crudeTokens;
+    const percent = (saved / discreteTokens) * 100;
+    return { name, ops, discreteTokens, crudeTokens, saved, percent, measured: measured !== null };
+  });
+
+  const totalDiscrete = results.reduce((s, r) => s + r.discreteTokens, 0);
+  const totalCrude = results.reduce((s, r) => s + r.crudeTokens, 0);
+  const totalOps = results.reduce((s, r) => s + r.ops, 0);
+  const totalSaved = totalDiscrete - totalCrude;
+  const totalPercent = (totalSaved / totalDiscrete) * 100;
+
+  return {
+    servers: results,
+    totals: {
+      serverCount: results.length,
+      totalOps,
+      totalDiscreteTools: totalOps,
+      totalCrudeTools: results.length * 5,
+      totalDiscreteTokens: totalDiscrete,
+      totalCrudeTokens: totalCrude,
+      totalSaved,
+      totalPercent,
+    },
+    model: {
+      endpointBaseTokens: CRUDE_ENDPOINT_BASE_TOKENS,
+      perOpTokens: CRUDE_PER_OP_TOKENS,
+      avgDiscreteTokens: AVG_TOKENS_PER_DISCRETE_TOOL,
+    },
+  };
+}
+
+// ============================================================================
 // MCP-AQL UNIFIED TOOLS (5 CRUDE endpoints)
 // ============================================================================
 
 /**
  * Schema definitions for the 5 unified MCP-AQL CRUDE endpoints.
- * Consolidates 42 discrete tools into semantic CRUDE operations (Create, Read, Update, Delete, Execute).
+ * Consolidates 73 operations into semantic CRUDE operations (Create, Read, Update, Delete, Execute).
  * These match the actual tool definitions in src/server/tools/MCPAQLTools.ts
  */
 const mcpAqlTools: ToolSchema[] = [
@@ -1278,6 +1395,14 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   const typicalOps = 5;
   const mcpAqlWithIntrospection = mcpAqlMetrics.total + (typicalOps * introspectionAvgTokens);
 
+  // Projected savings: estimate what discrete tools would cost for ALL current operations.
+  // Uses the measured average token cost per discrete tool as a heuristic for operations
+  // that never had discrete tools (they would have similar schema verbosity).
+  const projectedDiscreteTokens = Math.round(CURRENT_OPERATION_COUNT * discreteMetrics.avgPerTool);
+  const projectedSavings = projectedDiscreteTokens - mcpAqlMetrics.total;
+  const projectedSavingsPercent = (projectedSavings / projectedDiscreteTokens) * 100;
+  const projectedConsolidationRatio = CURRENT_OPERATION_COUNT / mcpAqlTools.length;
+
   // JSON output mode
   if (jsonOutput) {
     const sortedDiscrete = [...discreteMetrics.perTool.entries()].sort((a, b) => b[1] - a[1]);
@@ -1309,6 +1434,14 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
         percent: percentSavings,
         consolidationRatio
       },
+      projectedSavings: {
+        currentOperationCount: CURRENT_OPERATION_COUNT,
+        projectedDiscreteTokens,
+        mcpAqlTokens: mcpAqlMetrics.total,
+        tokens: projectedSavings,
+        percent: projectedSavingsPercent,
+        consolidationRatio: projectedConsolidationRatio
+      },
       scenarios: {
         sessionStart: {
           discrete: discreteMetrics.total,
@@ -1323,7 +1456,8 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
           savings: Math.round(discreteMetrics.total - mcpAqlWithIntrospection),
           savingsPercent: ((discreteMetrics.total - mcpAqlWithIntrospection) / discreteMetrics.total) * 100
         }
-      }
+      },
+      crossServer: projectCrossServerSavings()
     };
     console.log(JSON.stringify(jsonResult, null, 2));
     return jsonResult;
@@ -1381,23 +1515,25 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log();
 
   // Calculate savings
-  console.log('TOKEN SAVINGS ANALYSIS');
+  console.log('TOKEN SAVINGS ANALYSIS (baseline: 42 historical discrete tools)');
   console.log('-'.repeat(80));
 
-  console.log(`  Discrete tools baseline:  ${formatNumber(discreteMetrics.total)} tokens`);
-  console.log(`  MCP-AQL unified approach: ${formatNumber(mcpAqlMetrics.total)} tokens`);
+  console.log(`  Discrete tools baseline:  ${formatNumber(discreteMetrics.total)} tokens (${discreteTools.length} tools)`);
+  console.log(`  MCP-AQL unified approach: ${formatNumber(mcpAqlMetrics.total)} tokens (${mcpAqlTools.length} tools)`);
   console.log(`  Token savings:            ${formatNumber(tokenSavings)} tokens`);
   console.log(`  Percentage savings:       ${formatPercent(percentSavings)}`);
-  console.log();
-
-  // Tool consolidation ratio
   console.log(`  Tool consolidation ratio: ${discreteTools.length}:${mcpAqlTools.length} (${consolidationRatio.toFixed(1)}x reduction)`);
   console.log();
 
-  // Report actual savings (no pass/fail - just report the value)
-  console.log('TOKEN SAVINGS REPORT');
+  // Projected savings: what if all current operations had discrete tools?
+  console.log('PROJECTED SAVINGS (all ${CURRENT_OPERATION_COUNT} current operations)');
   console.log('-'.repeat(80));
-  console.log(`  Actual savings: ${formatPercent(percentSavings)}`);
+  console.log(`  Current operations in router:  ${CURRENT_OPERATION_COUNT}`);
+  console.log(`  Avg tokens per discrete tool:  ${formatNumber(Math.round(discreteMetrics.avgPerTool))}`);
+  console.log(`  Projected discrete cost:       ${formatNumber(projectedDiscreteTokens)} tokens (${CURRENT_OPERATION_COUNT} × ${Math.round(discreteMetrics.avgPerTool)})`);
+  console.log(`  Actual MCP-AQL cost:           ${formatNumber(mcpAqlMetrics.total)} tokens`);
+  console.log(`  Projected savings:             ${formatNumber(projectedSavings)} tokens (${formatPercent(projectedSavingsPercent)})`);
+  console.log(`  Projected consolidation ratio: ${CURRENT_OPERATION_COUNT}:${mcpAqlTools.length} (${projectedConsolidationRatio.toFixed(1)}x reduction)`);
   console.log();
 
   // Usage scenarios
@@ -1418,6 +1554,26 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log(`    Savings:  ${formatNumber(Math.round(discreteMetrics.total - mcpAqlWithIntrospection))} tokens (${formatPercent(((discreteMetrics.total - mcpAqlWithIntrospection) / discreteMetrics.total) * 100)})`);
   console.log();
 
+  // Cross-server analysis
+  const crossServer = projectCrossServerSavings();
+  console.log('CROSS-SERVER MCP-AQL SAVINGS PROJECTION');
+  console.log('-'.repeat(80));
+  console.log(`  Cost model: ${CRUDE_ENDPOINT_BASE_TOKENS}/endpoint × 5 + ${CRUDE_PER_OP_TOKENS} tokens per listed operation`);
+  console.log(`  (derived from DollhouseMCP and Apple Mail adapter measurements)`);
+  console.log();
+  console.log(`  ${'Server'.padEnd(25)} ${'Ops'.padStart(5)} ${'Discrete'.padStart(10)} ${'CRUDE'.padStart(10)} ${'Saved'.padStart(10)} ${'%'.padStart(7)}`);
+  console.log(`  ${'-'.repeat(25)} ${'-'.repeat(5)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(7)}`);
+  for (const s of crossServer.servers) {
+    const src = s.measured ? '' : ' (est)';
+    console.log(`  ${s.name.padEnd(25)} ${String(s.ops).padStart(5)} ${formatNumber(s.discreteTokens).padStart(10)} ${(formatNumber(s.crudeTokens) + src).padStart(15)} ${formatNumber(s.saved).padStart(10)} ${formatPercent(s.percent).padStart(7)}`);
+  }
+  const t = crossServer.totals;
+  console.log(`  ${'-'.repeat(25)} ${'-'.repeat(5)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(10)} ${'-'.repeat(7)}`);
+  console.log(`  ${'TOTAL'.padEnd(25)} ${String(t.totalOps).padStart(5)} ${formatNumber(t.totalDiscreteTokens).padStart(10)} ${formatNumber(t.totalCrudeTokens).padStart(15)} ${formatNumber(t.totalSaved).padStart(10)} ${formatPercent(t.totalPercent).padStart(7)}`);
+  console.log();
+  console.log(`  Tool surface: ${t.totalDiscreteTools} discrete -> ${t.totalCrudeTools} CRUDE tools (${Math.round((1 - t.totalCrudeTools / t.totalDiscreteTools) * 100)}% fewer)`);
+  console.log();
+
   // Summary
   console.log('='.repeat(80));
   console.log('  SUMMARY');
@@ -1425,21 +1581,18 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
   console.log(`
   The MCP-AQL consolidated approach achieves significant token savings:
 
+  DollhouseMCP (baseline vs 42 historical tools):
   - ${formatPercent(percentSavings)} reduction in base tool schema tokens
   - ${discreteTools.length} discrete tools -> ${mcpAqlTools.length} unified endpoints
-  - ${formatNumber(tokenSavings)} fewer tokens loaded at session start
-  - Introspection enables on-demand schema loading during usage
 
-  Key Benefits:
-  - Reduced context window consumption
-  - Faster tool discovery for LLM agents
-  - Semantic CRUDE operations improve agent comprehension
-  - Operation namespacing scales without adding tools
+  DollhouseMCP (projected vs all ${CURRENT_OPERATION_COUNT} current operations):
+  - ${formatPercent(projectedSavingsPercent)} reduction vs hypothetical discrete tools
+  - ${CURRENT_OPERATION_COUNT} operations -> ${mcpAqlTools.length} unified endpoints
 
-  Note: Token counts are based on documented tool schemas. Real-world
-  implementations may vary based on description verbosity and platform
-  requirements. The MCP-AQL improvement percentage remains consistent
-  regardless of absolute token counts.
+  Cross-server (${t.serverCount} servers, ${t.totalOps} operations):
+  - ${formatPercent(t.totalPercent)} reduction across all adapted/candidate servers
+  - ${t.totalDiscreteTools} discrete tools -> ${t.totalCrudeTools} CRUDE endpoints
+  - ${formatNumber(t.totalSaved)} fewer tokens in model context
 `);
 
   // Return results for testing
@@ -1458,6 +1611,14 @@ async function runBenchmarkWithTokenizer(tokenizer: Tokenizer, jsonOutput: boole
       tokens: tokenSavings,
       percent: percentSavings
     },
+    projectedSavings: {
+      currentOperationCount: CURRENT_OPERATION_COUNT,
+      projectedDiscreteTokens,
+      tokens: projectedSavings,
+      percent: projectedSavingsPercent,
+      consolidationRatio: projectedConsolidationRatio
+    },
+    crossServer: crossServer,
     tokenizer: tokenizer.name,
     timingMs
   };

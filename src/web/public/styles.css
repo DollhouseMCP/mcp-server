@@ -1375,6 +1375,10 @@ body.modal-open { overflow: hidden; }
 .site-footer {
   border-top: 1px solid var(--line);
   padding: 0.85rem 0 1.35rem;
+  position: sticky;
+  bottom: 0;
+  background: var(--paper);
+  z-index: 10;
 }
 
 .footer-inner {
@@ -1395,6 +1399,12 @@ body.modal-open { overflow: hidden; }
   font-size: 0.75rem;
 }
 .footer-link:hover { color: var(--accent); }
+
+.footer-copyright {
+  color: var(--ink-500);
+  font-size: 0.75rem;
+  margin-left: auto;
+}
 
 .footer-updated {
   margin-left: auto;
@@ -1716,4 +1726,16 @@ fieldset.topic-filters {
     transition: none !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ── Tab error banners (#1866) ─────────────────────────────────────────── */
+.tab-error-banner {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  margin-bottom: 8px;
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309; /* NOSONAR — contrast computed against page bg, not rgba tint */
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  font-family: var(--font-mono);
 }

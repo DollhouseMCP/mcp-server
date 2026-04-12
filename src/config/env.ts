@@ -128,10 +128,101 @@ const envSchema = z.object({
   DOLLHOUSE_LOG_MAX_FILES_PER_CATEGORY: z.coerce.number().default(100),
 
   // ============================================================================
+  // Permission Server Configuration
+  // ============================================================================
+  /**
+   * Enable the HTTP permission evaluation server for PreToolUse hooks.
+   * When true, starts an HTTP endpoint on a dynamic port after deferred
+   * setup completes. Writes port to ~/.dollhouse/run/permission-server.port
+   * for hook script discovery. Required for autonomous agent permission
+   * management via Claude Code hooks.
+   */
+  DOLLHOUSE_PERMISSION_SERVER: z.coerce.boolean().default(true),
+
   // Web Console Configuration
   // ============================================================================
-  /** Enable the unified web console (logs + metrics tabs on port 3939) */
+  /** Enable the unified web console (logs + metrics tabs) */
   DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
+
+  /**
+   * Port the web console leader binds to (#1794, #1798).
+   *
+   * Default: 41715 — "AILIS" on a phone keypad, after the AI Layer
+   * Interface Specification that DollhouseMCP implements. Also "Alice"
+   * in Gaelic.
+   *
+   * Port selection criteria (verified 2026-04-06):
+   *   - Not registered with IANA (no entry in the service name registry)
+   *   - Not in nmap services database (never observed in the wild)
+   *   - No known application, security tool, or malware associations
+   *   - Below the macOS ephemeral range (49152-65535), so `bind()`
+   *     does not race with kernel-allocated source ports
+   *   - In the IANA user port range (1024-49151)
+   *   - Not adjacent to the pre-authentication default (3939)
+   *
+   * Previous default was 5907 ("LOGS" upside down on a calculator),
+   * which conflicted with Stellar Cyber's HTTP GKE log parser.
+   *
+   * Override via env var if 41715 collides with something in your
+   * environment — every runtime reference reads from this single value.
+   */
+  DOLLHOUSE_WEB_CONSOLE_PORT: z.coerce.number().int().min(1024).max(65535).default(41715),
+
+  /**
+   * Issue #1780: Enforce Bearer token authentication on the web console API.
+   * When true, all protected endpoints require a valid token from the
+   * console token file. When false (the pre-Phase-2 default), the token
+   * file is still generated but the middleware does not enforce — this
+   * lets the infrastructure land without breaking existing consumers.
+   * Will flip to default `true` in a follow-up PR once all consumers
+   * (browser, followers, bridge) have been updated to attach tokens.
+   */
+  DOLLHOUSE_WEB_AUTH_ENABLED: z.coerce.boolean().default(false),
+
+  /**
+   * Issue #1780: Optional override for the console token file location.
+   * When unset, `ConsoleTokenStore` falls back to its built-in default
+   * under `~/.dollhouse/run/`. Mainly useful for tests and for enterprise
+   * deployments that mount a shared token file from a secrets volume.
+   */
+  DOLLHOUSE_CONSOLE_TOKEN_FILE: z.string().optional(),
+
+  /**
+   * Optional override for the console leader lock file location (#1794).
+   * When unset, `LeaderElection` falls back to its built-in default under
+   * `~/.dollhouse/run/`. Primarily useful for tests that need isolation
+   * between runs and for deployments that split runtime state across
+   * multiple installations on the same machine.
+   */
+  DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE: z.string().optional(),
+
+  // Leader/Follower Recovery (#1850)
+  // ============================================================================
+
+  /**
+   * Issue #1850: Retry delays (in ms) when the leader fails to bind the console
+   * port due to EADDRINUSE. Each value is a successive backoff delay.
+   * Default: 1s, 2s, 4s (7s total). Increase for slow or remote environments.
+   */
+  DOLLHOUSE_CONSOLE_BIND_RETRY_DELAYS: z.string()
+    .optional()
+    .transform(v => v ? v.split(',').map(Number).filter(n => !Number.isNaN(n) && n > 0) : undefined),
+
+  /**
+   * Issue #1850: Number of consecutive forwarding failures before a follower
+   * declares the leader dead and attempts self-promotion. Higher values reduce
+   * false positives in high-latency environments but delay recovery.
+   * Default: 10.
+   */
+  DOLLHOUSE_CONSOLE_MAX_FORWARD_FAILURES: z.coerce.number().int().min(1).max(100).default(10),
+
+  /**
+   * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)
+   * for privileged actions like token rotation. Default is true for safety;
+   * set to false for headless CI and scripted deployments that need to rotate
+   * without human interaction.
+   */
+  DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION: z.coerce.boolean().default(true),
 
   // ============================================================================
   // Security Configuration
@@ -204,6 +295,12 @@ const envSchema = z.object({
   DOLLHOUSE_DISABLE_ENCRYPTION: z.coerce.boolean().default(false),
   DOLLHOUSE_ENCRYPTION_SECRET: z.string().optional(),
   DOLLHOUSE_ENCRYPTION_SALT: z.string().optional(),
+
+  // Token encryption secret (SEC-01, #1735)
+  // When set, replaces the predictable machine-derived passphrase for token encryption.
+  // Strongly recommended for any shared or multi-user environment.
+  // Minimum 32 characters enforced to prevent weak passphrases.
+  DOLLHOUSE_TOKEN_SECRET: z.string().min(32).optional(),
 });
 
 /**

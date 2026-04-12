@@ -7,6 +7,13 @@
   <meta name="description" content="DollhouseMCP management console — portfolio, logs, metrics">
   <meta http-equiv="X-Content-Type-Options" content="nosniff">
   <meta http-equiv="X-Frame-Options" content="DENY">
+  <!-- Console session token (#1780) — injected by server at request time.
+       When auth is enabled, browser JS reads this tag and attaches the value
+       as an Authorization: Bearer header on fetch calls, or as a ?token= query
+       param on EventSource connections. An empty value means auth is off. -->
+  <meta name="dollhouse-console-token" content="{{CONSOLE_TOKEN}}">
+  <!-- Server version — injected at request time for version-aware UI behaviour (e.g. setup-seen per version). -->
+  <meta name="dollhouse-server-version" content="{{DOLLHOUSE_VERSION}}">
   <link rel="stylesheet" href="fonts.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="logs.css">
@@ -14,6 +21,7 @@
   <link rel="stylesheet" href="permissions.css">
   <link rel="stylesheet" href="sessions.css">
   <link rel="stylesheet" href="setup.css">
+  <link rel="stylesheet" href="security.css">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -32,10 +40,11 @@
     <div class="header-right">
       <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
         <button class="console-tab" data-tab="setup">Setup</button>
-        <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+        <button class="console-tab" data-tab="security">Auth</button>
         <button class="console-tab" data-tab="logs">Logs</button>
         <button class="console-tab" data-tab="metrics">Metrics</button>
         <button class="console-tab" data-tab="permissions">Permissions</button>
+        <button class="console-tab active" data-tab="portfolio">Portfolio</button>
       </nav>
       <div class="session-indicator" id="session-indicator" title="Active sessions"></div>
       <div class="site-stats" id="stats" aria-live="polite"></div>
@@ -54,8 +63,8 @@
           <span class="setup-status-dot"></span>
           <span>DollhouseMCP is running on your machine</span>
         </div>
-        <h2 class="setup-hero-title">Connect your AI client</h2>
-        <p class="setup-hero-sub">Pick your platform below. Click <strong>Install Now</strong> to auto-configure, or copy the config manually.</p>
+        <h2 class="setup-hero-title">Connect DollhouseMCP to your AI client</h2>
+        <p class="setup-hero-sub">Pick your platform below. Click <strong>Configure Now</strong> to connect, or copy the config manually.</p>
       </div>
 
       <fieldset class="setup-method-toggle" id="setup-method-toggle">
@@ -68,6 +77,16 @@
           <strong>Pinned version</strong>
           <span>Lock to a specific version, update when you choose</span>
         </button>
+      </fieldset>
+
+      <fieldset class="setup-channel-toggle" id="setup-channel-toggle">
+        <legend class="setup-channel-legend">Release channel</legend>
+        <select id="setup-channel-select" class="setup-channel-select" aria-describedby="setup-channel-hint">
+          <option value="latest" selected>Stable</option>
+          <option value="rc">Release Candidate</option>
+          <option value="beta">Beta</option>
+        </select>
+        <span class="setup-channel-hint" id="setup-channel-hint">Recommended for most users.</span>
       </fieldset>
 
       <!-- Pinned install prereq (hidden by default, shown when pinned selected) -->
@@ -115,10 +134,10 @@ npm install @dollhousemcp/mcp-server</code></pre>
       <!-- Claude Desktop -->
       <section class="setup-panel is-active" role="tabpanel" id="setup-panel-claude-desktop" aria-labelledby="setup-tab-claude-desktop">
         <div class="setup-method setup-method-primary">
-          <h3>Auto-install <span class="setup-method-badge setup-badge">auto-updating</span></h3>
+          <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.</p>
           <div class="setup-install-row">
-            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude">Install Now</button>
+            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude">Configure Now</button>
             <span class="setup-install-status" data-install-status="claude"></span>
           </div>
         </div>
@@ -155,10 +174,10 @@ npm install @dollhousemcp/mcp-server</code></pre>
       <!-- Claude Code -->
       <section class="setup-panel" role="tabpanel" id="setup-panel-claude-code" aria-labelledby="setup-tab-claude-code" hidden>
         <div class="setup-method setup-method-primary">
-          <h3>Auto-install <span class="setup-method-badge setup-badge">auto-updating</span></h3>
+          <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.</p>
           <div class="setup-install-row">
-            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude-code">Install Now</button>
+            <button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="claude-code">Configure Now</button>
             <span class="setup-install-status" data-install-status="claude-code"></span>
           </div>
         </div>
@@ -209,11 +228,163 @@ npm install @dollhousemcp/mcp-server</code></pre>
         </div>
       </div>
 
+      <!-- License selector (#1746 Step 3) -->
+      <div class="license-section" id="license-section">
+        <h3 class="license-heading">Choose your license</h3>
+        <p class="license-sub">DollhouseMCP is free and open source. Commercial use has simple, fair terms.</p>
+
+        <div class="license-tiers" id="license-tiers">
+          <!-- AGPL -->
+          <button class="license-tier is-selected" data-tier="agpl" type="button">
+            <span class="license-tier-price-label license-tier-price-label--free">Free</span>
+            <div class="license-tier-header">
+              <span class="license-tier-radio"></span>
+              <div>
+                <strong class="license-tier-name">AGPL-3.0</strong>
+                <span class="license-tier-badge license-tier-badge--default">default</span>
+              </div>
+            </div>
+            <p class="license-tier-desc">Open source. Share-alike license. No sign-up, no telemetry required.</p>
+          </button>
+
+          <!-- Free Commercial -->
+          <button class="license-tier" data-tier="free-commercial" type="button">
+            <span class="license-tier-price-label license-tier-price-label--free">Free</span>
+            <div class="license-tier-header">
+              <span class="license-tier-radio"></span>
+              <div>
+                <strong class="license-tier-name">Commercial</strong>
+              </div>
+            </div>
+            <p class="license-tier-desc">For companies earning under $1 million annual revenue. Attribution required.</p>
+          </button>
+
+          <!-- Paid Commercial / Enterprise -->
+          <button class="license-tier" data-tier="paid-commercial" type="button">
+            <span class="license-tier-price-label license-tier-price-label--paid">Paid</span>
+            <div class="license-tier-header">
+              <span class="license-tier-radio"></span>
+              <div>
+                <strong class="license-tier-name">Enterprise</strong>
+              </div>
+            </div>
+            <p class="license-tier-desc">For companies over $1M annual revenue, or white label. Priority support and SLA options available.</p>
+          </button>
+        </div>
+
+        <!-- AGPL detail (shown by default) -->
+        <div class="license-detail" id="license-detail-agpl">
+          <div class="license-detail-content">
+            <p>You're using DollhouseMCP under the <a href="https://www.gnu.org/licenses/agpl-3.0.en.html" target="_blank" rel="noopener">GNU Affero General Public License v3</a>. No action needed &mdash; this is the default.</p>
+            <ul class="license-detail-list">
+              <li>Use, modify, and distribute freely</li>
+              <li>Derivative works must also be AGPL-licensed</li>
+              <li>Source code must be made available to users who interact with the software over a network</li>
+              <li>Original copyright and license notices must be preserved</li>
+              <li>No telemetry collection</li>
+              <li>Community support via GitHub</li>
+            </ul>
+          </div>
+        </div>
+
+        <!-- Free Commercial detail (hidden) -->
+        <div class="license-detail" id="license-detail-free-commercial" hidden>
+          <form class="license-form" id="license-form-free-commercial" autocomplete="off">
+            <label class="license-form-label">
+              Email address
+              <input class="license-form-input" type="email" name="email" required maxlength="254" placeholder="you@company.com" />
+              <span class="license-form-hint">Your license confirmation will be sent to this address. A valid email is required to receive your license.</span>
+            </label>
+            <label class="license-form-check">
+              <input type="checkbox" name="telemetry" required />
+              <span>I acknowledge that anonymous usage telemetry will be collected as a condition of this license</span>
+            </label>
+            <label class="license-form-check">
+              <input type="checkbox" name="attribution" required />
+              <span>I acknowledge I will provide attribution when DollhouseMCP is used in any commercial product</span>
+            </label>
+            <label class="license-form-check">
+              <input type="checkbox" name="attestation" required />
+              <span>I attest that my organization's annual revenue is under $1,000,000 USD</span>
+            </label>
+            <button class="setup-btn setup-btn-primary license-submit-btn" type="submit">Activate Commercial License</button>
+            <p class="license-form-status" id="license-status-free-commercial"></p>
+          </form>
+        </div>
+
+        <!-- Paid Commercial detail (hidden) -->
+        <div class="license-detail" id="license-detail-paid-commercial" hidden>
+          <form class="license-form" id="license-form-paid-commercial" autocomplete="off">
+            <label class="license-form-label">
+              Email address
+              <input class="license-form-input" type="email" name="email" required maxlength="254" placeholder="you@company.com" />
+              <span class="license-form-hint">Your license confirmation will be sent to this address. A valid email is required to receive your license.</span>
+            </label>
+            <label class="license-form-label">
+              Revenue scale
+              <select class="license-form-select" name="revenueScale" required>
+                <option value="" disabled selected>Select range</option>
+                <option value="$1M–$5M">$1M – $5M</option>
+                <option value="$5M–$25M">$5M – $25M</option>
+                <option value="$25M–$100M">$25M – $100M</option>
+                <option value="$100M+">$100M+</option>
+              </select>
+            </label>
+            <label class="license-form-label">
+              Company name
+              <input class="license-form-input" type="text" name="companyName" required maxlength="200" placeholder="Acme Corp" />
+            </label>
+            <label class="license-form-label">
+              Use case
+              <textarea class="license-form-textarea" name="useCase" rows="2" required maxlength="500" placeholder="Brief description of how you're using DollhouseMCP"></textarea>
+            </label>
+            <label class="license-form-check">
+              <input type="checkbox" name="telemetry" required />
+              <span>I acknowledge that anonymous usage telemetry will be collected as a condition of this license</span>
+            </label>
+            <button class="setup-btn setup-btn-primary license-submit-btn" type="submit">Send Inquiry</button>
+            <p class="license-form-status" id="license-status-paid-commercial"></p>
+          </form>
+        </div>
+
+        <!-- Verification code input (shown after commercial form submit) -->
+        <div class="license-detail license-verification" id="license-verification" hidden>
+          <form class="license-form" id="license-verify-form" autocomplete="off">
+            <p class="license-verify-intro">We sent a 6-digit verification code to <strong id="license-verify-email"></strong>.</p>
+            <label class="license-form-label">
+              Verification code
+              <input class="license-form-input license-code-input" type="text" name="code" required maxlength="6" pattern="\d{6}" placeholder="000000" inputmode="numeric" autocomplete="one-time-code" />
+            </label>
+            <div class="license-verify-actions">
+              <button class="setup-btn setup-btn-primary license-submit-btn" type="submit">Verify</button>
+              <button class="setup-btn setup-btn-secondary" type="button" id="license-resend-btn">Resend code</button>
+            </div>
+            <p class="license-form-status" id="license-verify-status"></p>
+            <p class="license-verify-timer" id="license-verify-timer"></p>
+          </form>
+        </div>
+
+        <!-- Saved confirmation (shown after successful save) -->
+        <div class="license-saved" id="license-saved" hidden>
+          <span class="license-saved-icon">&#10003;</span>
+          <span class="license-saved-text" id="license-saved-text">License saved</span>
+        </div>
+
+        <!-- License details (shown when a commercial license is active) -->
+        <div class="license-detail license-active-details" id="license-active-details" hidden>
+          <div class="license-detail-content">
+            <h4 style="margin: 0 0 12px;">Your license</h4>
+            <table class="license-info-table" id="license-info-table"><thead><tr><th>Field</th><th>Value</th></tr></thead><tbody id="license-info-tbody"></tbody></table>
+            <p class="license-file-path">License file: <code>~/.dollhouse/license.json</code></p>
+          </div>
+        </div>
+      </div>
+
       <div class="setup-footer">
         <p>Full documentation for all platforms (Continue, Docker, local LLMs) in the
           <a href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/quick-start.md" target="_blank" rel="noopener">quick start guide</a>.
         </p>
-        <p>Auto-install powered by <a href="https://github.com/supermemoryai/install-mcp" target="_blank" rel="noopener">install-mcp</a> by <a href="https://github.com/dhravyashah" target="_blank" rel="noopener">Dhravya Shah</a>.</p>
+        <p>Auto-configure powered by <a href="https://github.com/supermemoryai/install-mcp" target="_blank" rel="noopener">install-mcp</a> by <a href="https://github.com/dhravyashah" target="_blank" rel="noopener">Dhravya Shah</a>.</p>
       </div>
     </div>
   </div>
@@ -292,6 +463,66 @@ npm install @dollhousemcp/mcp-server</code></pre>
     <div id="permissions-dashboard-root"></div>
   </div>
 
+  <!-- Tab: Security (#1791) -->
+  <div id="tab-security" class="tab-panel" hidden>
+    <div id="security-dashboard-root"></div>
+  </div>
+
+  <!-- Auth tab intro content (#1816) — edit here, not in security.js -->
+  <template id="sec-intro-template">
+    <section class="sec-card sec-card--intro" data-collapsed="true" aria-labelledby="sec-intro-title">
+      <button class="sec-card-header" type="button" aria-expanded="false">
+        <h3 class="sec-card-title" id="sec-intro-title">Console Authentication
+          <span class="sec-intro-summary">&mdash; how it can protect your sessions, permissions, and configurations</span>
+        </h3>
+        <span class="sec-card-toggle" aria-hidden="true">&#9662;</span>
+      </button>
+      <div class="sec-card-body">
+        <h4 class="sec-intro-subtitle">Why this matters</h4>
+        <ul class="sec-intro-list">
+          <li><strong>Prompt injection defense</strong> &mdash; Your LLM
+            processes content from the outside world: web searches, emails,
+            documents, links. Any of these can carry hidden instructions
+            targeting DollhouseMCP &mdash; attempting to create malicious
+            elements, alter permissions, or change your configuration.
+            Authentication ensures those attempts fail. The attacker
+            doesn&rsquo;t have your token, and TOTP means sensitive
+            operations require a code from your phone that no injection
+            can reach.</li>
+          <li><strong>Defense in depth</strong> &mdash; DollhouseMCP
+            validates and sanitizes inputs at the server level, but no
+            single layer is foolproof. Authentication adds an independent
+            barrier: even if an attack gets past input validation, it still
+            can&rsquo;t perform privileged operations without your
+            credentials.</li>
+          <li><strong>Shared environments</strong> &mdash; On shared
+            workstations, multi-user servers, or containers with mapped
+            ports, authentication prevents other users or network-adjacent
+            processes from accessing this console or any of its
+            capabilities.</li>
+        </ul>
+
+        <h4 class="sec-intro-subtitle">How it works</h4>
+        <ul class="sec-intro-list">
+          <li><strong>Console Token</strong> &mdash; A secret key generated
+            on first run. Every API request must carry it. Without the token,
+            other processes on your machine can&rsquo;t touch the console.
+            Use the <strong>Copy</strong> button below to share the token
+            with external services, scripts, or tools that need to access
+            the DollhouseMCP API on your behalf.</li>
+          <li><strong>Authenticator (TOTP)</strong> &mdash; An optional second
+            factor from your phone. Even if the token leaks, sensitive actions
+            like rotation still need a 6-digit code from your authenticator
+            app that changes every 30 seconds.</li>
+        </ul>
+
+        <a class="sec-intro-link"
+           href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/guides/console-auth.md"
+           target="_blank" rel="noopener">Full documentation &rarr;</a>
+      </div>
+    </section>
+  </template>
+
   <dialog id="element-modal" class="modal" aria-labelledby="modal-title">
     <div class="modal-overlay" id="modal-overlay"></div>
     <div class="modal-dialog">
@@ -326,10 +557,11 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <a href="https://github.com/DollhouseMCP/collection" class="footer-link">GitHub Repository</a>
+      <a href="https://github.com/DollhouseMCP/mcp-server" class="footer-link">GitHub Repository</a>
       <a href="./collection-index.json" class="footer-link">JSON API</a>
       <a href="https://dollhousemcp.com" class="footer-link">DollhouseMCP</a>
       <span class="footer-updated" id="footer-updated"></span>
+      <span class="footer-copyright">&copy; 2026 DollhouseMCP</span>
     </div>
   </footer>
 
@@ -358,11 +590,15 @@ npm install @dollhousemcp/mcp-server</code></pre>
         id="hljs-theme-dark" disabled>
   <!-- uPlot for metrics charts -->
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
+  <!-- Console auth helper must load first — it reads the token meta tag and
+       exposes window.DollhouseAuth for all subsequent scripts (#1780). -->
+  <script src="consoleAuth.js"></script>
   <script src="setup.js"></script>
   <script src="app.js"></script>
   <script src="logs.js"></script>
   <script src="metrics.js"></script>
   <script src="permissions.js"></script>
   <script src="sessions.js"></script>
+  <script src="security.js"></script>
 </body>
 </html>

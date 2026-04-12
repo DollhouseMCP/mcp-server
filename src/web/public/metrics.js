@@ -144,10 +144,19 @@
     });
   }
 
+  // ── Error banners (#1866) ────────────────────────────────────────────────
+  function showMetricsError(message) {
+    globalThis.DollhouseConsoleUI?.showBanner?.('tab-metrics', 'metrics-error-banner', message);
+  }
+
+  function clearMetricsError() {
+    globalThis.DollhouseConsoleUI?.clearBanner?.('metrics-error-banner');
+  }
+
   // ── Data fetching ────────────────────────────────────────────────────────
   async function fetchLatest() {
     try {
-      const res = await fetch('/api/metrics?latest=true');
+      const res = await DollhouseAuth.apiFetch('/api/metrics?latest=true');
       if (!res.ok) return;
       const data = await res.json();
       if (data.snapshots?.length > 0) {
@@ -160,21 +169,29 @@
         const cutoff = Date.now() - TIME_RANGES['1h'];
         historySnapshots = historySnapshots.filter(s => new Date(s.timestamp).getTime() > cutoff);
         renderAll(lastSnapshot.metrics);
+        clearMetricsError();
       }
-    } catch { /* network error, will retry */ }
+    } catch (err) {
+      console.warn('[Metrics] Fetch failed:', err);
+      showMetricsError('Failed to load metrics — retrying...');
+    }
   }
 
   async function fetchHistory() {
     try {
       const since = new Date(Date.now() - TIME_RANGES[activeRange]).toISOString();
-      const res = await fetch(`/api/metrics?latest=false&since=${since}&limit=100`);
+      const res = await DollhouseAuth.apiFetch(`/api/metrics?latest=false&since=${since}&limit=100`);
       if (!res.ok) return;
       const data = await res.json();
       if (data.snapshots) {
         historySnapshots = data.snapshots.reverse(); // oldest first
         if (lastSnapshot) renderAll(lastSnapshot.metrics);
       }
-    } catch { /* network error */ }
+      clearMetricsError();
+    } catch (err) {
+      console.warn('[Metrics] History fetch failed:', err);
+      showMetricsError('Failed to load metrics history — retrying...');
+    }
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────
@@ -403,7 +420,7 @@
     if (securityEventsCache && (now - securityEventsCacheTime) < SECURITY_CACHE_TTL) {
       renderSecurityEvents(securityEventsCache);
     } else {
-      fetch('/api/logs?category=security&level=warn&limit=5')
+      DollhouseAuth.apiFetch('/api/logs?category=security&level=warn&limit=5')
         .then(r => r.ok ? r.json() : null)
         .then(data => {
           if (data?.entries) {
@@ -412,9 +429,10 @@
             renderSecurityEvents(data.entries);
           }
         })
-        .catch(() => {
+        .catch((err) => {
+          console.warn('[Metrics] Security events fetch failed:', err);
           const el = document.getElementById('security-recent-events');
-          if (el) el.innerHTML = '';
+          if (el) el.textContent = 'Failed to load security events';
         });
     }
   }

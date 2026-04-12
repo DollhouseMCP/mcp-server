@@ -1,5 +1,92 @@
 # Changelog
 
+## [2.0.12] - 2026-04-12
+
+### Authenticated Web Console
+
+The management console at `http://dollhouse.localhost:41715` now requires authentication. Console sessions are issued signed tokens; TOTP enrollment provides a second factor for sensitive operations such as token rotation.
+
+- **Session token auth** — console issues a signed bearer token on first connect; subsequent requests require it (#1787)
+- **TOTP enrollment** — Phase 2 interactive TOTP setup with QR code, ±60s validation window, rate limiting (#1794)
+- **Auth tab** — dedicated tab surfaces the active token, enrollment flow, and session event log (#1807)
+- **CLI token commands** — `dollhousemcp token show/rotate/revoke` manage the console token from the terminal (#1790)
+- **Browser 401 recovery** — expired-session toast with one-click re-auth, no full-page reload (#1792)
+- **Token rotation** — TOTP-confirmed rotation endpoint; HTML cache auto-invalidates on rotation (#1795, #1804)
+- **Permanent port 41715** — "AILIS" on a phone keypad; env-var overridable (#1798)
+
+### Setup Tab & Install Experience
+
+- **Release channel selector** — switch between Stable, RC, and Beta channels; config snippets update live (#1835)
+- **License selector** — commercial license activation with email verification on the Setup tab (#1826, #1831)
+- **Setup tab per-version** — tab reopens once per new version so users see what changed, then stays out of the way (#1905)
+- **NVM-aware launcher** — install script auto-detects and wires NVM so `node` is always in PATH on restart (#1902)
+- **Cleaner install UX** — channel label, button state clears on channel change, current config refreshes after install (#1850, #1862, #1864)
+
+### Permission Server
+
+- **Hook-based agent permissioning** — `dollhousemcp-permission-server` evaluates Gatekeeper policies for external hooks, enabling autonomous agent approval flows outside the MCP session (#1777)
+
+### Element Reliability Fixes
+
+- **Template variable auto-derive** — `{{placeholder}}` tokens in template content are automatically registered as variable schema entries on save; renders never silently return unfilled text (#1896)
+- **Ghost session cleanup** — sessions that return 404 on kill are now reaped from the active list; permanent kill + pending kill flows unified (#1870)
+- **Ensemble stale cache** — LRU cache flushed on ensemble activation so newly added members appear immediately (#1895)
+- **Agent storage index** — index updated correctly after create, fixing stale list after first agent add (#1877)
+- **Ensemble member deactivation** — members deactivate cleanly without leaving orphaned state (#1878)
+- **Template variable routing** — normalization hardened so variables survive round-trip edits (#1879)
+- **Memory addEntry transport** — transport-layer regression for memory entries resolved (#1880)
+- **Content-only agent creation** — agents can now be created with content only, without requiring all metadata fields (#1893)
+
+### Security
+
+- **NFC normalization on web routes** — all route `name` and `file` parameters are NFC-normalized before path traversal checks, closing a Unicode homograph bypass (#1736)
+- **Hono CVE** — pinned hono 4.12.12 and @hono/node-server 1.19.13 via npm overrides (#1908)
+- **Startup error sanitization** — production startup failures no longer leak stack traces or internal paths (#1848)
+- **Vulnerability triage** — osv-scanner.toml, GHSA reclassification monitor, Dependabot alert triage tooling (#1800)
+
+### Developer Experience
+
+- **Console discovery hints** — element list/search/activate operations surface the console URL so LLMs can direct users there (#1849)
+- **Session auth status indicators** — two-dimension status badge in session dropdown shows auth state at a glance (#1805)
+- **Web console regressions** — comprehensive fix pass covering tabs, sinks, Auth panel init, and leader/follower edge cases (#1881)
+
+### Breaking Change
+
+The web console default port moved **3939 → 41715**. Update bookmarks and any scripts referencing `localhost:3939`. The old port continues to work if a legacy (pre-auth) DollhouseMCP process is running there.
+
+## [2.0.11-rc.1] - 2026-04-08
+
+Release candidate for v2.0.11 — console auth, permissions, licensing, port 41715, channel selector
+
+## [Unreleased] — Phase 2 authenticated console
+
+### Breaking: Web console default port moved from 3939 → 41715
+
+The authenticated web console (Phase 2 and later) binds to port **41715** by default, not 3939. The associated state files now live at:
+
+- `~/.dollhouse/run/console-leader.auth.lock` (was `console-leader.lock`)
+- `~/.dollhouse/run/console-token.auth.json` (was `console-token.json`)
+
+**Why:** Pre-authentication DollhouseMCP installations (≤ 2.0.x) continue to use port 3939 and the legacy file paths. The port + filename separation lets a legacy installation and an authenticated installation coexist on the same machine with zero interference — different ports, different lock files, different token files, independent leader-election spaces. This avoids a confusing "security popping on and off" UX when a user has both a pre-auth Claude Desktop install and an authenticated Claude Code install running simultaneously.
+
+**Configurability:** The port, lock file path, and token file path are now all driven by env vars with a single source of truth in `src/config/env.ts`. Changing any of them is a one-line edit — no hunt-and-peck across the codebase:
+
+| Env var | Default |
+|---|---|
+| `DOLLHOUSE_WEB_CONSOLE_PORT` | `41715` |
+| `DOLLHOUSE_CONSOLE_LEADER_LOCK_FILE` | `~/.dollhouse/run/console-leader.auth.lock` |
+| `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` |
+
+Port 41715 spells "AILIS" on a phone keypad — the AI Layer Interface Specification.
+
+**Legacy detection:** When the authenticated console starts, it checks for an active legacy (pre-auth) DollhouseMCP process on port 3939 and logs a warning if one is found, explaining the coexistence and the differing security posture.
+
+**Consumer impact:**
+- **DollhouseBridge**: will need a matching port update when it consumes Phase 2 features — tracking issue filed
+- **User bookmarks / shell scripts**: update `localhost:3939` references to `localhost:41715` (or set `DOLLHOUSE_WEB_CONSOLE_PORT` to whatever you prefer)
+- **Docs**: all `docs/guides/*.md` references updated
+- **Nothing breaks silently**: the auth console simply isn't on 3939 anymore; the legacy console continues to work there untouched
+
 ## [2.0.7] - 2026-04-02
 
 ### Clean terminal output for `--web` mode

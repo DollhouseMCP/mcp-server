@@ -16,7 +16,7 @@ import { logger } from '../../utils/logger.js';
  * Famous puppets, marionettes, and puppet characters from around the world.
  * Order doesn't matter — the pool is shuffled on startup.
  */
-const ALL_PUPPET_NAMES: readonly string[] = [
+export const ALL_PUPPET_NAMES: readonly string[] = [
   // Classic & traditional
   'Punch',
   'Judy',
@@ -115,6 +115,78 @@ function shuffleArray<T>(arr: T[]): T[] {
 
 /** Shuffled copy of the name pool — randomized on each process start */
 const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
+
+/**
+ * Iconic attire and accessories drawn from famous dolls, puppets, and
+ * theatrical characters throughout history. Used to name console tokens
+ * so they never collide with the session puppet-name pool (#1871).
+ *
+ * Names evoke costume pieces — a token is something you wear or carry,
+ * not a person.
+ */
+export const ALL_TOKEN_NAMES: readonly string[] = [
+  // Victorian & theatrical
+  'Top Hat',
+  'Monocle',
+  'Trench Coat',
+  'Opera Cape',
+  'Opera Gloves',
+  'Velvet Cloak',
+  'Lace Collar',
+  'Silk Cravat',
+  'Waistcoat',
+  'Gilt Button',
+
+  // Phantom, masks, mystery
+  'Half Mask',
+  'Domino Mask',
+  'Feathered Mask',
+
+  // Punch & Judy / Harlequin
+  'Jester Bells',
+  'Diamond Suit',
+  'Bell Cap',
+  'Slapstick',
+  'Red Nose',
+
+  // Puppet traditions
+  'Marionette Strings',
+  'Cracked Porcelain',
+  'Papier-Mâché',
+
+  // Classic dolls & characters
+  'Pink Corvette',
+  'Red Yarn Hair',
+  'Sailor Suit',
+  'Yellow Hat',
+  'Ruby Slippers',
+  'Glass Slipper',
+  'Blue Ribbon',
+  'Striped Stockings',
+
+  // Wizard / witch / fantasy
+  'Pointed Hat',
+  'Broomstick',
+  'Silver Wand',
+  'Tin Crown',
+  'Straw Hat',
+
+  // Adventure & mystery
+  'Deerstalker',
+  'Magnifying Glass',
+  'Feathered Cap',
+  'Silver Buckle',
+  'Wicker Basket',
+];
+
+/**
+ * Pick a random token name from the attire pool.
+ * Used by the console token module to name newly created tokens (#1871).
+ * Drawn from a separate pool to avoid collision with session puppet names.
+ */
+export function pickRandomTokenName(): string {
+  return ALL_TOKEN_NAMES[randomInt(ALL_TOKEN_NAMES.length)];
+}
 
 /**
  * Canonical colors for each puppet character.
