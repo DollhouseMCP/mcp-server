@@ -1,5 +1,59 @@
 # Changelog
 
+## [2.0.12] - 2026-04-12
+
+### Authenticated Web Console
+
+The management console at `http://dollhouse.localhost:41715` now requires authentication. Console sessions are issued signed tokens; TOTP enrollment provides a second factor for sensitive operations such as token rotation.
+
+- **Session token auth** — console issues a signed bearer token on first connect; subsequent requests require it (#1787)
+- **TOTP enrollment** — Phase 2 interactive TOTP setup with QR code, ±60s validation window, rate limiting (#1794)
+- **Auth tab** — dedicated tab surfaces the active token, enrollment flow, and session event log (#1807)
+- **CLI token commands** — `dollhousemcp token show/rotate/revoke` manage the console token from the terminal (#1790)
+- **Browser 401 recovery** — expired-session toast with one-click re-auth, no full-page reload (#1792)
+- **Token rotation** — TOTP-confirmed rotation endpoint; HTML cache auto-invalidates on rotation (#1795, #1804)
+- **Permanent port 41715** — "AILIS" on a phone keypad; env-var overridable (#1798)
+
+### Setup Tab & Install Experience
+
+- **Release channel selector** — switch between Stable, RC, and Beta channels; config snippets update live (#1835)
+- **License selector** — commercial license activation with email verification on the Setup tab (#1826, #1831)
+- **Setup tab per-version** — tab reopens once per new version so users see what changed, then stays out of the way (#1905)
+- **NVM-aware launcher** — install script auto-detects and wires NVM so `node` is always in PATH on restart (#1902)
+- **Cleaner install UX** — channel label, button state clears on channel change, current config refreshes after install (#1850, #1862, #1864)
+
+### Permission Server
+
+- **Hook-based agent permissioning** — `dollhousemcp-permission-server` evaluates Gatekeeper policies for external hooks, enabling autonomous agent approval flows outside the MCP session (#1777)
+
+### Element Reliability Fixes
+
+- **Template variable auto-derive** — `{{placeholder}}` tokens in template content are automatically registered as variable schema entries on save; renders never silently return unfilled text (#1896)
+- **Ghost session cleanup** — sessions that return 404 on kill are now reaped from the active list; permanent kill + pending kill flows unified (#1870)
+- **Ensemble stale cache** — LRU cache flushed on ensemble activation so newly added members appear immediately (#1895)
+- **Agent storage index** — index updated correctly after create, fixing stale list after first agent add (#1877)
+- **Ensemble member deactivation** — members deactivate cleanly without leaving orphaned state (#1878)
+- **Template variable routing** — normalization hardened so variables survive round-trip edits (#1879)
+- **Memory addEntry transport** — transport-layer regression for memory entries resolved (#1880)
+- **Content-only agent creation** — agents can now be created with content only, without requiring all metadata fields (#1893)
+
+### Security
+
+- **NFC normalization on web routes** — all route `name` and `file` parameters are NFC-normalized before path traversal checks, closing a Unicode homograph bypass (#1736)
+- **Hono CVE** — pinned hono 4.12.12 and @hono/node-server 1.19.13 via npm overrides (#1908)
+- **Startup error sanitization** — production startup failures no longer leak stack traces or internal paths (#1848)
+- **Vulnerability triage** — osv-scanner.toml, GHSA reclassification monitor, Dependabot alert triage tooling (#1800)
+
+### Developer Experience
+
+- **Console discovery hints** — element list/search/activate operations surface the console URL so LLMs can direct users there (#1849)
+- **Session auth status indicators** — two-dimension status badge in session dropdown shows auth state at a glance (#1805)
+- **Web console regressions** — comprehensive fix pass covering tabs, sinks, Auth panel init, and leader/follower edge cases (#1881)
+
+### Breaking Change
+
+The web console default port moved **3939 → 41715**. Update bookmarks and any scripts referencing `localhost:3939`. The old port continues to work if a legacy (pre-auth) DollhouseMCP process is running there.
+
 ## [2.0.11-rc.1] - 2026-04-08
 
 Release candidate for v2.0.11 — console auth, permissions, licensing, port 41715, channel selector

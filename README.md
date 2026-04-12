@@ -100,7 +100,7 @@ Dollhouse elements are modular building blocks that customize your AI. When you 
 |---|---|
 | **Dollhouse Personas** | Shape behavior, tone, expertise, and priorities. <br> Act as security principals with permission policies that control what the AI can do. |
 | **Dollhouse Skills*** | Add discrete capabilities the AI can activate on demand. <br> Code review, data analysis, penetration testing, translation, and more. |
-| **Dollhouse Templates** | Standardize outputs with variable substitution. <br> Reports, emails, briefs, documentation — consistent structure every time. |
+| **Dollhouse Templates** | Standardize outputs with variable substitution. <br> Reports, emails, briefs, documentation — consistent structure every time. Variables are auto-derived from `{{placeholder}}` tokens in content — no manual schema needed. |
 | **Dollhouse Agents** | Execute multi-step goals autonomously. <br> State tracking, resilience policies, autonomy evaluation, and an execution lifecycle. |
 | **Dollhouse Memories** | Persist structured context across sessions. <br> Facts, preferences, project state. Can auto-load on startup. |
 | **Dollhouse Ensembles** | Bundle multiple elements into one activatable unit. <br> Activation strategies, conflict resolution, and coordinated permission policies. |
