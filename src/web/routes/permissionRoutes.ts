@@ -112,7 +112,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       const decision = (opResult.data as Record<string, unknown>)?.decision ?? 'unknown';
-      logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
+      logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${String(decision)} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
       trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
