@@ -619,9 +619,9 @@ async function startFallbackServer(options: OpenBrowserOptions, port: number): P
   // Reuse cached token store — two instances on the same file can race on writes.
   if (!cachedTokenStore) {
     const { ConsoleTokenStore: TokenStore } = await import('./console/consoleToken.js');
-    const { pickRandomPuppetName } = await import('./console/SessionNames.js');
+    const { pickRandomTokenName } = await import('./console/SessionNames.js');
     cachedTokenStore = new TokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-    try { await cachedTokenStore.ensureInitialized(pickRandomPuppetName()); }
+    try { await cachedTokenStore.ensureInitialized(pickRandomTokenName()); }
     catch (err) { logger.warn('[WebUI] Failed to init token store for browser open', err); }
   }
 

@@ -930,10 +930,10 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       // Mirrors UnifiedConsole.ts:startAsLeader() — without this,
       // /api/console/totp and /api/console/token return 404.
       const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
-      const { pickRandomPuppetName } = await import('./web/console/SessionNames.js');
+      const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
       const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
       try {
-        await tokenStore.ensureInitialized(pickRandomPuppetName());
+        await tokenStore.ensureInitialized(pickRandomTokenName());
       } catch (err) {
         console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
       }
