@@ -87,9 +87,9 @@ class TestElementManager extends BaseElementManager<TestElement> {
     fileLockManager: FileLockManager,
     fileOperationsService: FileOperationsService,
     validationRegistry: ValidationRegistry,
-    options: BaseElementManagerOptions = {}
+    options: Partial<BaseElementManagerOptions> = {}
   ) {
-    super(elementType, portfolioManager, fileLockManager, options, fileOperationsService, validationRegistry);
+    super(elementType, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher(), ...options }, fileOperationsService, validationRegistry);
   }
 
   protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {

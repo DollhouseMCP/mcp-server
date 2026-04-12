@@ -47,17 +47,37 @@ import {
 } from '../../config/performance-constants.js';
 import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 import type { BackupService } from '../../services/BackupService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
 
 export interface BaseElementManagerOptions {
   elementDirOverride?: string;
-  eventDispatcher?: ElementEventDispatcher;
+  eventDispatcher: ElementEventDispatcher;
   elementCacheTTL?: number;
   pathCacheTTL?: number;
   enableFileWatcher?: boolean;
   autoReloadOnExternalChange?: boolean;
+  fileWatchService?: FileWatchService;
+  memoryBudget?: CacheMemoryBudget;
+  backupService?: BackupService;
+}
+
+/**
+ * Standard dependency injection interface for element managers.
+ * Replaces positional constructor parameters with a single typed object.
+ * Required and optional deps coexist naturally without parameter ordering issues.
+ */
+export interface ElementManagerDeps {
+  portfolioManager: PortfolioManager;
+  fileLockManager: FileLockManager;
+  fileOperationsService: FileOperationsService;
+  validationRegistry: ValidationRegistry;
+  serializationService: SerializationService;
+  metadataService: MetadataService;
+  eventDispatcher: ElementEventDispatcher;
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
@@ -204,7 +224,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     elementType: ElementType,
     portfolioManager: PortfolioManager,
     fileLockManager: FileLockManager,
-    options: BaseElementManagerOptions = {},
+    options: BaseElementManagerOptions,
     fileOperationsService: FileOperationsService,
     validationRegistry: ValidationRegistry
   ) {
@@ -260,7 +280,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       );
     }
 
-    this.eventDispatcher = options.eventDispatcher ?? new ElementEventDispatcher();
+    this.eventDispatcher = options.eventDispatcher;
     this.autoReloadOnExternalChange =
       options.autoReloadOnExternalChange ?? process.env.AUTO_RELOAD_ON_EXTERNAL_CHANGE === 'true';
 

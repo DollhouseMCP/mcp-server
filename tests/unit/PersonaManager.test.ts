@@ -14,6 +14,8 @@ import { createMockPortfolioManager, createTestMetadataService } from '../helper
 import { ValidationRegistry } from '../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../src/services/validation/ValidationService.js';
+import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../src/services/SerializationService.js';
 
 /**
  * PersonaManager Unit Tests
@@ -81,16 +83,18 @@ describe('PersonaManager', () => {
     );
 
     // Create PersonaManager instance
-    personaManager = new PersonaManager(
-      mockPortfolioManager as unknown as PortfolioManager,
-      DEFAULT_INDICATOR_CONFIG,
-      mockFileLockManager,
-      mockFileOperationsService,
+    personaManager = new PersonaManager({
+      portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
+      fileLockManager: mockFileLockManager,
+      fileOperationsService: mockFileOperationsService,
       validationRegistry,
+      serializationService: new SerializationService(),
       metadataService,
-      mockPersonaImporter,
-      mockNotifier
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      personaImporter: mockPersonaImporter,
+      notifier: mockNotifier,
+    });
   });
 
   afterEach(() => {
@@ -594,16 +598,18 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
         );
 
         // Create a fresh PersonaManager with the clean metadata service
-        const freshPersonaManager = new PersonaManager(
-          mockPortfolioManager as unknown as PortfolioManager,
-          DEFAULT_INDICATOR_CONFIG,
-          mockFileLockManager,
-          mockFileOperationsService,
-          freshValidationRegistry,
-          freshMetadataService,
-          mockPersonaImporter,
-          mockNotifier
-        );
+        const freshPersonaManager = new PersonaManager({
+          portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+          indicatorConfig: DEFAULT_INDICATOR_CONFIG,
+          fileLockManager: mockFileLockManager,
+          fileOperationsService: mockFileOperationsService,
+          validationRegistry: freshValidationRegistry,
+          serializationService: new SerializationService(),
+          metadataService: freshMetadataService,
+          eventDispatcher: new ElementEventDispatcher(),
+          personaImporter: mockPersonaImporter,
+          notifier: mockNotifier,
+        });
 
         const user = freshPersonaManager.getCurrentUserForAttribution();
 

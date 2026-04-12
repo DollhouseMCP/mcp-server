@@ -22,6 +22,7 @@ import fs from 'fs/promises';
 import os from 'os';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -68,14 +69,15 @@ describe('autoIncrementVersion in editElement', () => {
     );
 
     // Initialize SkillManager
-    skillManager = new SkillManager(
+    skillManager = new SkillManager({
       portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    });
 
     // Set up mocks
     jest.clearAllMocks();

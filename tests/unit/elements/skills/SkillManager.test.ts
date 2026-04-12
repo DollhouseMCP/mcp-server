@@ -19,6 +19,7 @@ import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -52,14 +53,15 @@ describe('SkillManager', () => {
     );
 
     // Create SkillManager with all required dependencies
-    skillManager = new SkillManager(
+    skillManager = new SkillManager({
       portfolioManager,
       fileLockManager,
-      fileOperations,
+      fileOperationsService: fileOperations,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    });
 
     await portfolioManager.initialize();
   });

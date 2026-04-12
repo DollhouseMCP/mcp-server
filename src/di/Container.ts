@@ -345,25 +345,22 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       undefined
     ));
-    this.register('PersonaManager', () => new PersonaManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('IndicatorConfig'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('MetadataService'),
-      this.resolve('PersonaImporter'),
-      this.resolve('StateChangeNotifier'),
-      this.resolve('ContextTracker'),
-      {
-        eventDispatcher: this.resolve('ElementEventDispatcher'),
-        enableFileWatcher: true,
-        autoReloadOnExternalChange: true,
-        fileWatchService: this.resolve('FileWatchService'),
-        memoryBudget: this.resolve('CacheMemoryBudget'),
-        backupService: this.resolve('BackupService')
-      }
-    ));
+    this.register('PersonaManager', () => new PersonaManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      indicatorConfig: this.resolve('IndicatorConfig'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+      personaImporter: this.resolve('PersonaImporter'),
+      notifier: this.resolve('StateChangeNotifier'),
+      contextTracker: this.resolve('ContextTracker'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+    }));
     this.register('InitializationService', () => new InitializationService(
       this.resolve('PersonaManager')
     ));
@@ -497,68 +494,68 @@ export class DollhouseContainer {
     }));
 
     // ELEMENT MANAGERS
-    this.register('SkillManager', () => new SkillManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('TemplateManager', () => new TemplateManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
+    this.register('SkillManager', () => new SkillManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('TemplateManager', () => new TemplateManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
-    this.register('AgentManager', () => new AgentManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('MemoryManager', () => new MemoryManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('EnsembleManager', () => new EnsembleManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
+    this.register('AgentManager', () => new AgentManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      baseDir: this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('MemoryManager', () => new MemoryManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('EnsembleManager', () => new EnsembleManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
     Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
     // Issue #51: Configure retention policy resolver for Memory class
     Memory.configureRetentionPolicyResolver(() => this.resolve('RetentionPolicyService'));

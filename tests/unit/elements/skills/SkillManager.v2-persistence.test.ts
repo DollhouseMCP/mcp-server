@@ -31,6 +31,7 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -60,14 +61,15 @@ describe('SkillManager — element quality: markdown body (#713)', () => {
       metadataService
     );
 
-    skillManager = new SkillManager(
-      mockPortfolioManager as any,
+    skillManager = new SkillManager({
+      portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    });
   });
 
   afterEach(() => {

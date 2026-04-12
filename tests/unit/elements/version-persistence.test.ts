@@ -22,6 +22,7 @@ import { ValidationRegistry } from '../../../src/services/validation/ValidationR
 import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 
 describe('Version Persistence', () => {
   let testDir: string;
@@ -65,15 +66,16 @@ describe('Version Persistence', () => {
     );
 
     // AgentManager needs a special registration for its baseDir argument
-    container.register('AgentManager', () => new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      testDir,
-      container.resolve('FileOperationsService'),
+    container.register('AgentManager', () => new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: testDir,
+      fileOperationsService: container.resolve('FileOperationsService'),
       validationRegistry,
       serializationService,
-      metadataService
-    ));
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    }));
     agentManager = container.resolve<AgentManager>('AgentManager');
   });
 

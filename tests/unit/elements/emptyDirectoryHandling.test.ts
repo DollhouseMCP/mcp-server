@@ -23,6 +23,7 @@ import { ValidationService } from '../../../src/services/validation/ValidationSe
 import { ElementType } from '../../../src/portfolio/types.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 
 describe('Empty Directory Handling', () => {
   let testDir: string;
@@ -100,15 +101,16 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager(
-        container.resolve('PortfolioManager'),
-        container.resolve('FileLockManager'),
-        nonExistentDir,
-        container.resolve('FileOperationsService'),
+      container.register('AgentManager', () => new AgentManager({
+        portfolioManager: container.resolve('PortfolioManager'),
+        fileLockManager: container.resolve('FileLockManager'),
+        baseDir: nonExistentDir,
+        fileOperationsService: container.resolve('FileOperationsService'),
         validationRegistry,
         serializationService,
-        metadataService
-      ));
+        metadataService,
+        eventDispatcher: new ElementEventDispatcher(),
+      }));
       const manager = container.resolve<AgentManager>('AgentManager');
       
       // list() should return empty array
@@ -134,15 +136,16 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager(
-        container.resolve('PortfolioManager'),
-        container.resolve('FileLockManager'),
-        testDir,
-        container.resolve('FileOperationsService'),
+      container.register('AgentManager', () => new AgentManager({
+        portfolioManager: container.resolve('PortfolioManager'),
+        fileLockManager: container.resolve('FileLockManager'),
+        baseDir: testDir,
+        fileOperationsService: container.resolve('FileOperationsService'),
         validationRegistry,
         serializationService,
-        metadataService
-      ));
+        metadataService,
+        eventDispatcher: new ElementEventDispatcher(),
+      }));
       const manager = container.resolve<AgentManager>('AgentManager');
 
       const agents = await manager.list();
@@ -178,15 +181,16 @@ describe('Empty Directory Handling', () => {
         new TriggerValidationService(),
         metadataService
       );
-      container.register('AgentManager', () => new AgentManager(
-        container.resolve('PortfolioManager'),
-        container.resolve('FileLockManager'),
-        testDir,
-        container.resolve('FileOperationsService'),
+      container.register('AgentManager', () => new AgentManager({
+        portfolioManager: container.resolve('PortfolioManager'),
+        fileLockManager: container.resolve('FileLockManager'),
+        baseDir: testDir,
+        fileOperationsService: container.resolve('FileOperationsService'),
         validationRegistry,
         serializationService,
-        metadataService
-      ));
+        metadataService,
+        eventDispatcher: new ElementEventDispatcher(),
+      }));
       const agentManager = container.resolve<AgentManager>('AgentManager');
       const templateManager = container.resolve<TemplateManager>('TemplateManager');
       

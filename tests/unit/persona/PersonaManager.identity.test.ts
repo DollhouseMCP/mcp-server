@@ -29,6 +29,8 @@ import {
   createMockPortfolioManager,
   createMockValidationRegistry,
 } from '../../helpers/di-mocks.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
 
 // MetadataService mock — controls what the fallback chain returns
 const mockGetCurrentUser = jest.fn<() => string>().mockReturnValue('os-fallback-user');
@@ -51,18 +53,17 @@ beforeAll(async () => {
 });
 
 function createPersonaManager(contextTracker?: ContextTracker) {
-  return new PersonaManager(
-    createMockPortfolioManager(),
-    mockIndicatorConfig,
-    mockFileLockManager,
-    mockFileOps,
-    createMockValidationRegistry(),
-    mockMetadataService,
-    undefined, // personaImporter
-    undefined, // notifier
+  return new PersonaManager({
+    portfolioManager: createMockPortfolioManager(),
+    indicatorConfig: mockIndicatorConfig,
+    fileLockManager: mockFileLockManager,
+    fileOperationsService: mockFileOps,
+    validationRegistry: createMockValidationRegistry(),
+    serializationService: new SerializationService(),
+    metadataService: mockMetadataService,
+    eventDispatcher: new ElementEventDispatcher(),
     contextTracker,
-    {}, // baseOptions
-  );
+  });
 }
 
 function makeSession(overrides: Partial<SessionContext> = {}): SessionContext {

@@ -26,6 +26,8 @@ import { ValidationRegistry } from '../../../src/services/validation/ValidationR
 import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
 
 describe('PersonaElementManager Integration', () => {
   let personaManager: PersonaManager;
@@ -86,16 +88,18 @@ describe('PersonaElementManager Integration', () => {
     );
 
     // Create PersonaManager instance
-    personaManager = new PersonaManager(
-      mockPortfolioManager as unknown as PortfolioManager,
-      DEFAULT_INDICATOR_CONFIG,
-      mockFileLockManager,
-      mockFileOperationsService,
+    personaManager = new PersonaManager({
+      portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
+      fileLockManager: mockFileLockManager,
+      fileOperationsService: mockFileOperationsService,
       validationRegistry,
+      serializationService: new SerializationService(),
       metadataService,
-      mockPersonaImporter,
-      mockNotifier
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      personaImporter: mockPersonaImporter,
+      notifier: mockNotifier,
+    });
   });
 
   afterEach(() => {

@@ -13,6 +13,7 @@ import { ValidationRegistry } from '../../../src/services/validation/ValidationR
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
 import { MetadataService } from '../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 
 class TestElement implements IElement {
   id: string;
@@ -118,7 +119,7 @@ describe('Element YAML security (BaseElementManager integration)', () => {
     );
 
     // Create TestElementManager with proper DI including ValidationRegistry
-    manager = new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, {}, fileOperationsService, validationRegistry);
+    manager = new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher() }, fileOperationsService, validationRegistry);
   });
 
   afterEach(async () => {

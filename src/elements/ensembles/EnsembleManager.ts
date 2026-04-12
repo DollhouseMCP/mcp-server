@@ -21,9 +21,7 @@ import { Ensemble, EnsembleMetadata, EnsembleElement } from './Ensemble.js';
 import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { BaseElementManager } from '../base/BaseElementManager.js';
-import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
+import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import {
@@ -37,13 +35,9 @@ import {
   ACTIVATION_MODES
 } from './constants.js';
 import type { ActivationStrategy, ConflictResolutionStrategy, ElementRole, ActivationMode } from './types.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { VALIDATION_PATTERNS, SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -71,24 +65,27 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
   private validationService: ValidationService;
   private serializationService: SerializationService;
+  private metadataService: MetadataService;
   private activeEnsembleNames: Set<string> = new Set();
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    private metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService,
-    eventDispatcher?: ElementEventDispatcher
-  ) {
-    super(ElementType.ENSEMBLE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
+  constructor(deps: ElementManagerDeps) {
+    super(
+      ElementType.ENSEMBLE,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
     this.ensemblesDir = this.elementDir;
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
+    this.metadataService = deps.metadataService;
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
   }
 
   protected override getElementLabel(): string {

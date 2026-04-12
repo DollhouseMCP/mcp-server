@@ -14,6 +14,7 @@ import { ElementType } from '../../../src/portfolio/types.js';
 import { createPortfolioTestEnvironment, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService: MetadataService = createTestMetadataService();
@@ -37,16 +38,17 @@ describe('AgentManager integration', () => {
       metadataService
     );
 
-    manager = new AgentManager(
-      env.portfolioManager,
+    manager = new AgentManager({
+      portfolioManager: env.portfolioManager,
       fileLockManager,
-      env.testDir,
+      baseDir: env.testDir,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+    });
     await manager.initialize();
 
     agentsDir = path.join(env.testDir, ElementType.AGENT);

@@ -27,6 +27,7 @@ import { TriggerValidationService } from '../../src/services/validation/TriggerV
 import { MetadataService } from '../../src/services/MetadataService.js';
 import { FileWatchService } from '../../src/services/FileWatchService.js';
 import { createRealMemoryManager } from '../helpers/di-mocks.js';
+import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -142,15 +143,16 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
       fileOperationsService
     );
 
-    const memoryManager = new MemoryManager(
+    const memoryManager = new MemoryManager({
       portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+    });
 
     const operationalTelemetry = new OperationalTelemetry(configManager);
 

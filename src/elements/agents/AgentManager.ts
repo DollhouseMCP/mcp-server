@@ -3,7 +3,6 @@
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
  */
 
-import { FileOperationsService } from '../../services/FileOperationsService.js';
 import * as path from 'path';
 
 import { Agent } from './Agent.js';
@@ -44,8 +43,11 @@ import {
   createDangerZoneOperation,
   createExecutionContext,
 } from './safetyTierService.js';
-import { BaseElementManager } from '../base/BaseElementManager.js';
-import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
+import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+
+export interface AgentManagerDeps extends ElementManagerDeps {
+  baseDir: string;
+}
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
@@ -54,15 +56,11 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { InputNormalizer } from '../../security/InputNormalizer.js';
 import { SafeRegex } from '../../security/dosProtection.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { logger } from '../../utils/logger.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -108,26 +106,27 @@ export class AgentManager extends BaseElementManager<Agent> {
   // Issue #142: Static resolver for VerificationStore (DI pattern)
   private static verificationStoreResolver?: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    baseDir: string,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService,
-    eventDispatcher?: ElementEventDispatcher
-  ) {
-    const elementDirOverride = path.join(baseDir, ElementType.AGENT);
-    super(ElementType.AGENT, portfolioManager, fileLockManager, { elementDirOverride, fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
+  constructor(deps: AgentManagerDeps) {
+    const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
+    super(
+      ElementType.AGENT,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        elementDirOverride,
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
     this.stateDir = path.join(this.elementDir, STATE_DIRECTORY);
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
-    this.metadataService = metadataService;
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
+    this.metadataService = deps.metadataService;
   }
 
   protected override getElementLabel(): string {
