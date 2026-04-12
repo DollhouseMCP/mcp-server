@@ -17,6 +17,7 @@ import { SerializationService } from '../../../../src/services/SerializationServ
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -46,14 +47,15 @@ describe('TemplateManager', () => {
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('TemplateManager', () => new TemplateManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    ));
+    container.register('TemplateManager', () => new TemplateManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    }));
 
     portfolioManager = container.resolve('PortfolioManager');
     await portfolioManager.initialize();

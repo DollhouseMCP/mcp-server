@@ -1,7 +1,9 @@
 import os from "os";
 import * as path from "path";
-import { PACKAGE_VERSION, PACKAGE_VERSION as VERSION } from "../generated/version.js";
+import { PACKAGE_VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
+import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
+import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
 import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
 import { RelationshipManager } from "../portfolio/RelationshipManager.js";
 import { NLPScoringManager } from "../portfolio/NLPScoringManager.js";
@@ -291,6 +293,17 @@ export class DollhouseContainer {
       this.resolve('ContextTracker')
     ));
     this.register('MCPLogger', () => logger);
+    // SecurityMonitor: DI-managed instance wired into the static facade.
+    // Eagerly resolved to replace the fallback before handlers start logging.
+    this.register('SecurityMonitor', () => {
+      const instance = new SecurityMonitor();
+      SecurityMonitor.setInstance(instance);
+      return instance;
+    });
+    this.resolve('SecurityMonitor');
+    // Resilience: DI-managed instances (moved from module-level singletons)
+    this.register('CircuitBreakerState', () => new CircuitBreakerState());
+    this.register('ResilienceMetricsTracker', () => new ResilienceMetricsTracker());
 
     this.register('PersonaImporter', () => {
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
@@ -332,25 +345,22 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       undefined
     ));
-    this.register('PersonaManager', () => new PersonaManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('IndicatorConfig'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('MetadataService'),
-      this.resolve('PersonaImporter'),
-      this.resolve('StateChangeNotifier'),
-      this.resolve('ContextTracker'),
-      {
-        eventDispatcher: this.resolve('ElementEventDispatcher'),
-        enableFileWatcher: true,
-        autoReloadOnExternalChange: true,
-        fileWatchService: this.resolve('FileWatchService'),
-        memoryBudget: this.resolve('CacheMemoryBudget'),
-        backupService: this.resolve('BackupService')
-      }
-    ));
+    this.register('PersonaManager', () => new PersonaManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      indicatorConfig: this.resolve('IndicatorConfig'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+      personaImporter: this.resolve('PersonaImporter'),
+      notifier: this.resolve('StateChangeNotifier'),
+      contextTracker: this.resolve('ContextTracker'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+    }));
     this.register('InitializationService', () => new InitializationService(
       this.resolve('PersonaManager')
     ));
@@ -425,9 +435,9 @@ export class DollhouseContainer {
         category: 'application',
         level: 'info',
         source: 'DollhouseMCP',
-        message: `DollhouseMCP v${VERSION} starting`,
+        message: `DollhouseMCP v${PACKAGE_VERSION} starting`,
         data: {
-          version: VERSION,
+          version: PACKAGE_VERSION,
           logLevel: config.logLevel,
           logFormat: config.logFormat,
           console: env.DOLLHOUSE_WEB_CONSOLE
@@ -484,68 +494,68 @@ export class DollhouseContainer {
     }));
 
     // ELEMENT MANAGERS
-    this.register('SkillManager', () => new SkillManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('TemplateManager', () => new TemplateManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
+    this.register('SkillManager', () => new SkillManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('TemplateManager', () => new TemplateManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
-    this.register('AgentManager', () => new AgentManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('MemoryManager', () => new MemoryManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('EnsembleManager', () => new EnsembleManager(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('FileOperationsService'),
-      this.resolve('ValidationRegistry'),
-      this.resolve('SerializationService'),
-      this.resolve('MetadataService'),
-      this.resolve('FileWatchService'),
-      this.resolve('CacheMemoryBudget'),
-      this.resolve('BackupService'),
-      this.resolve('ElementEventDispatcher')
-    ));
+    this.register('AgentManager', () => new AgentManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      baseDir: this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('MemoryManager', () => new MemoryManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
+    this.register('EnsembleManager', () => new EnsembleManager({
+      portfolioManager: this.resolve('PortfolioManager'),
+      fileLockManager: this.resolve('FileLockManager'),
+      fileOperationsService: this.resolve('FileOperationsService'),
+      validationRegistry: this.resolve('ValidationRegistry'),
+      serializationService: this.resolve('SerializationService'),
+      metadataService: this.resolve('MetadataService'),
+      fileWatchService: this.resolve('FileWatchService'),
+      memoryBudget: this.resolve('CacheMemoryBudget'),
+      backupService: this.resolve('BackupService'),
+      eventDispatcher: this.resolve('ElementEventDispatcher'),
+    }));
     Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
     // Issue #51: Configure retention policy resolver for Memory class
     Memory.configureRetentionPolicyResolver(() => this.resolve('RetentionPolicyService'));
@@ -1280,6 +1290,8 @@ export class DollhouseContainer {
       set: (value: string | null) => {
         if (value) {
           // Issue #843: activatePersona is now async but this setter is synchronous.
+          // Known limitation: under concurrent sessions, this fire-and-forget races on
+          // shared PersonaManager state. Scoped DI gives each session its own PersonaManager.
           // Fire-and-forget — PersonaHandler does its own lookup before calling set().
           // Log at error level since activation failures here indicate stale state.
           personaManager.activatePersona(value).catch(err =>
@@ -1342,6 +1354,12 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService')
     );
 
+    // Wire auto-submit check now that CollectionHandler exists.
+    // SubmitToPortfolioTool was registered before CollectionHandler was constructed,
+    // so the callback is set post-construction to close the wiring gap.
+    this.resolve<SubmitToPortfolioTool>('SubmitToPortfolioTool')
+      .setAutoSubmitCheck(() => collectionHandler.isAutoSubmitEnabled());
+
     const portfolioHandler = new PortfolioHandler(
       this.resolve('GitHubAuthManager'),
       this.resolve('PortfolioManager'),
@@ -1353,7 +1371,8 @@ export class DollhouseContainer {
       this.resolve('ConfigManager'),
       this.resolve('FileOperationsService'),
       this.resolve('TokenManager'),
-      this.resolve('PortfolioRepoManager')
+      this.resolve('PortfolioRepoManager'),
+      collectionHandler
     );
 
     const githubAuthHandler = new GitHubAuthHandler(
@@ -1431,6 +1450,8 @@ export class DollhouseContainer {
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
       operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
       gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
+      circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
+      resilienceMetrics: this.resolve<ResilienceMetricsTracker>('ResilienceMetricsTracker'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },

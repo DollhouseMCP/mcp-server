@@ -20,6 +20,8 @@ import { ValidationRegistry } from '../src/services/validation/ValidationRegistr
 import { ValidationService } from '../src/services/validation/ValidationService.js';
 import { TriggerValidationService } from '../src/services/TriggerValidationService.js';
 import { MetadataService } from '../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../src/services/SerializationService.js';
 
 const NUM_FILES = parseInt(process.argv[2]) || 100;
 const TEST_DIR = path.join(process.cwd(), 'test-tmp', `persona-benchmark-${Date.now()}`);
@@ -82,16 +84,18 @@ async function main() {
   const triggerValidationService = new TriggerValidationService();
   const validationRegistry = new ValidationRegistry(validationService, triggerValidationService, metadataService);
 
-  const personaManager = new PersonaManager(
+  const personaManager = new PersonaManager({
     portfolioManager,
     indicatorConfig,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
+    serializationService: new SerializationService(),
     metadataService,
+    eventDispatcher: new ElementEventDispatcher(),
     personaImporter,
-    notifier
-  );
+    notifier,
+  });
 
   try {
     // Step 1: Create all files

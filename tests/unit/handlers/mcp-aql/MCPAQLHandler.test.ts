@@ -2202,8 +2202,8 @@ describe('MCPAQLHandler', () => {
 
       tracker.trackSaveFrequency('test-memory');
 
-      expect(tracker.saveFrequencyCounters.has('test-memory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('test-memory').timestamps.length).toBe(1);
+      expect(tracker.saveFrequencyCounters.has('default:test-memory')).toBe(true);
+      expect(tracker.saveFrequencyCounters.get('default:test-memory').timestamps.length).toBe(1);
       // Should not warn for a single call
       expect(loggerWarnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('Save frequency warn threshold'),
@@ -2222,8 +2222,8 @@ describe('MCPAQLHandler', () => {
 
       // All three should have been tracked under the same key
       expect(tracker.saveFrequencyCounters.size).toBe(1);
-      expect(tracker.saveFrequencyCounters.has('mymemory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('mymemory').timestamps.length).toBe(3);
+      expect(tracker.saveFrequencyCounters.has('default:mymemory')).toBe(true);
+      expect(tracker.saveFrequencyCounters.get('default:mymemory').timestamps.length).toBe(3);
     });
 
     it('should set warned flag when warn threshold is reached', () => {
@@ -2237,7 +2237,7 @@ describe('MCPAQLHandler', () => {
         tracker.trackSaveFrequency('heavy-memory');
       }
 
-      const counter = tracker.saveFrequencyCounters.get('heavy-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:heavy-memory');
       expect(counter.warned).toBe(true);
       expect(loggerWarnSpy).toHaveBeenCalledWith(
         '[MCPAQLHandler] Save frequency warn threshold exceeded',
@@ -2263,7 +2263,7 @@ describe('MCPAQLHandler', () => {
         tracker.trackSaveFrequency('runaway-memory');
       }
 
-      const counter = tracker.saveFrequencyCounters.get('runaway-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:runaway-memory');
       expect(counter.critical).toBe(true);
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         '[MCPAQLHandler] Save frequency critical threshold exceeded',
@@ -2289,7 +2289,7 @@ describe('MCPAQLHandler', () => {
 
       // Manually set up a counter with stale timestamps that will be pruned
       const oldTimestamp = Date.now() - 120000; // 2 minutes ago (outside default 60s window)
-      tracker.saveFrequencyCounters.set('recovery-memory', {
+      tracker.saveFrequencyCounters.set('default:recovery-memory', {
         timestamps: Array(60).fill(oldTimestamp),
         warned: true,
         critical: true,
@@ -2298,7 +2298,7 @@ describe('MCPAQLHandler', () => {
       // One new call — stale timestamps get pruned, count drops to 1
       tracker.trackSaveFrequency('recovery-memory');
 
-      const counter = tracker.saveFrequencyCounters.get('recovery-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:recovery-memory');
       expect(counter.timestamps.length).toBe(1);
       expect(counter.warned).toBe(false);
       expect(counter.critical).toBe(false);
@@ -2322,7 +2322,7 @@ describe('MCPAQLHandler', () => {
 
       expect(tracker.saveFrequencyCounters.size).toBe(500);
       expect(tracker.saveFrequencyCounters.has('memory-0')).toBe(false);
-      expect(tracker.saveFrequencyCounters.has('memory-overflow')).toBe(true);
+      expect(tracker.saveFrequencyCounters.has('default:memory-overflow')).toBe(true);
     });
 
     it('should not warn again after warned flag is already set', () => {
@@ -2350,6 +2350,54 @@ describe('MCPAQLHandler', () => {
       expect(newWarnCallCount).toBe(warnCallCount);
 
       loggerWarnSpy.mockRestore();
+    });
+  });
+
+  describe('session isolation', () => {
+    it('should produce session-prefixed keys via sessionKey()', () => {
+      const h = handler as any;
+
+      const key = h.sessionKey('my-agent');
+      expect(key).toBe('default:my-agent');
+      expect(key).toContain(':');
+    });
+
+    it('should isolate abortedGoals between sessions', () => {
+      const h = handler as any;
+
+      // Session A aborts a goal
+      h.abortedGoals.add('default:goal-123');
+
+      // Session B's goal with the same ID is independent
+      h.abortedGoals.add('session-b:goal-123');
+
+      expect(h.abortedGoals.has('default:goal-123')).toBe(true);
+      expect(h.abortedGoals.has('session-b:goal-123')).toBe(true);
+
+      // Removing Session A's goal doesn't affect Session B
+      h.abortedGoals.delete('default:goal-123');
+      expect(h.abortedGoals.has('default:goal-123')).toBe(false);
+      expect(h.abortedGoals.has('session-b:goal-123')).toBe(true);
+    });
+
+    it('should isolate executingAgents between sessions', () => {
+      const h = handler as any;
+
+      // Session A starts agent "coder"
+      h.executingAgents.set('session-a:coder', { name: 'coder', startedAt: Date.now() });
+
+      // Session B starts the same agent name
+      h.executingAgents.set('session-b:coder', { name: 'coder', startedAt: Date.now() });
+
+      // Both exist independently
+      expect(h.executingAgents.has('session-a:coder')).toBe(true);
+      expect(h.executingAgents.has('session-b:coder')).toBe(true);
+      expect(h.executingAgents.size).toBe(2);
+
+      // Deleting Session A doesn't affect Session B
+      h.executingAgents.delete('session-a:coder');
+      expect(h.executingAgents.has('session-a:coder')).toBe(false);
+      expect(h.executingAgents.has('session-b:coder')).toBe(true);
     });
   });
 });

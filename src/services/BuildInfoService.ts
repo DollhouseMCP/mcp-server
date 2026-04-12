@@ -259,8 +259,8 @@ export class BuildInfoService {
     try {
       // SECURITY NOTE: Git commands return system-controlled data - not user input
       // Git commit hashes and branch names are controlled by git, no Unicode normalization needed
-      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
-      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
+      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
       
       return { commit, branch };
     } catch {

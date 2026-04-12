@@ -6,7 +6,7 @@ import { getValidatedLockTimeout } from '../config/performance-constants.js';
 
 /**
  * FileLockManager - Prevents race conditions in concurrent file operations
- * 
+ *
  * Features:
  * - Resource-based locking with automatic cleanup
  * - Configurable timeouts to prevent deadlocks
@@ -14,6 +14,11 @@ import { getValidatedLockTimeout } from '../config/performance-constants.js';
  * - Lock queueing for concurrent requests
  * - Comprehensive error handling and logging
  * - Performance metrics tracking
+ *
+ * CONCURRENCY CONTRACT: When a timeout fires, the CALLER gets an error
+ * immediately, but the lock stays in the map until the underlying operation
+ * actually completes. Subsequent callers queue behind the real operation,
+ * preventing zombie races. See #1874.
  */
 export class FileLockManager {
   // Map of resource identifiers to their lock promises
@@ -41,8 +46,13 @@ export class FileLockManager {
   private readonly TEMP_DIR = '.tmp';
 
   /**
-   * Execute an operation with exclusive lock on a resource
-   * @param resource - Unique identifier for the resource (e.g., 'persona:name')
+   * Execute an operation with exclusive lock on a resource.
+   *
+   * The lock stays in the map until the operation actually completes —
+   * NOT until the caller's timeout fires. This prevents zombie operations
+   * from racing with subsequent callers.
+   *
+   * @param resource - Unique identifier for the resource (e.g., 'element:/path/to/file')
    * @param operation - Async function to execute while holding the lock
    * @param options - Lock options including timeout
    * @returns Result of the operation
@@ -54,15 +64,15 @@ export class FileLockManager {
   ): Promise<T> {
     const startTime = Date.now();
     this.metrics.totalLockRequests++;
-    
-    // Wait for any existing operation on this resource
+
+    // Step 1: Wait for any existing operation on this resource
     const existingLock = this.locks.get(resource);
     if (existingLock) {
       this.metrics.concurrentWaits++;
       const shortResource = path.basename(resource);
       logger.debug(`Lock contention on: ${shortResource}`, { resource });
       this.logListener?.('debug', 'Detect lock contention', { resource });
-      
+
       try {
         await existingLock;
       } catch {
@@ -70,59 +80,59 @@ export class FileLockManager {
         logger.debug(`Previous operation on ${resource} failed, proceeding`);
       }
     }
-    
-    // Create new lock for this operation
-    const timeout = options.timeout || this.DEFAULT_TIMEOUT_MS;
-    const lockPromise = this.executeWithTimeout(operation, timeout, resource);
-    this.locks.set(resource, lockPromise);
-    
+
+    // Step 2: Start the real operation immediately
+    const operationPromise = operation();
+
+    // Step 3: Store a suppressed copy in the map.
+    // Subsequent callers await THIS — the actual work, not a timeout-wrapped shell.
+    // .catch(() => {}) prevents unhandled rejection if the operation rejects
+    // before any caller awaits operationPromise directly.
+    const suppressedPromise = operationPromise.catch(() => {});
+    this.locks.set(resource, suppressedPromise);
+
+    // Step 4: Clean up the map entry when the operation actually finishes.
+    // Identity check prevents stale cleanup from removing a newer lock.
+    suppressedPromise.finally(() => {
+      if (this.locks.get(resource) === suppressedPromise) {
+        this.locks.delete(resource);
+      }
+    });
+
+    // Step 5: Race against timeout for the CALLER's benefit only.
+    // If timeout fires, the caller gets an error, but the lock stays
+    // in the map until the real operation completes (step 4).
+    const timeout = options.timeout ?? this.DEFAULT_TIMEOUT_MS;
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        this.metrics.lockTimeouts++;
+        this.logListener?.('warn', 'Lock acquisition times out', { resource, timeoutMs: timeout });
+        reject(new Error(`Lock operation timeout for resource: ${resource}`));
+      }, timeout);
+    });
+
     try {
-      const result = await lockPromise;
-      
-      // Record metrics
+      const result = await Promise.race([operationPromise, timeoutPromise]);
+      clearTimeout(timeoutHandle);
+
+      // Record metrics on success (timeout path doesn't reach here)
       const waitTime = Date.now() - startTime;
       if (!this.metrics.lockWaitTime.has(resource)) {
         this.metrics.lockWaitTime.set(resource, []);
       }
       this.metrics.lockWaitTime.get(resource)!.push(waitTime);
-      
-      // Only log locks that actually waited (>5ms indicates real contention)
+
       if (waitTime > 5) {
         const shortResource = path.basename(resource);
         logger.debug(`Slow lock: ${shortResource} (${waitTime}ms)`);
       }
-      return result;
-    } finally {
-      // Clean up lock - unconditional delete is safe and race-free
-      // This operation completed, so remove its lock from the map
-      this.locks.delete(resource);
-    }
-  }
 
-  /**
-   * Execute operation with timeout protection
-   */
-  private async executeWithTimeout<T>(
-    operation: () => Promise<T>,
-    timeoutMs: number,
-    resource: string
-  ): Promise<T> {
-    let timeoutHandle: NodeJS.Timeout | undefined;
-    
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      timeoutHandle = setTimeout(() => {
-        this.metrics.lockTimeouts++;
-        this.logListener?.('warn', 'Lock acquisition times out', { resource, timeoutMs });
-        reject(new Error(`Lock operation timeout for resource: ${resource}`));
-      }, timeoutMs);
-    });
-    
-    try {
-      const result = await Promise.race([operation(), timeoutPromise]);
-      if (timeoutHandle) clearTimeout(timeoutHandle);
       return result;
     } catch (error) {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+      clearTimeout(timeoutHandle);
+      // Do NOT delete the lock — the operation may still be running.
+      // The suppressedPromise.finally() callback handles map cleanup.
       throw error;
     }
   }
@@ -138,17 +148,17 @@ export class FileLockManager {
   ): Promise<void> {
     const tempPath = await this.getTempFilePath(filePath);
     const dir = path.dirname(tempPath);
-    
+
     try {
       // Ensure temp directory exists
       await fs.mkdir(dir, { recursive: true });
-      
+
       // Write to temporary file
       await fs.writeFile(tempPath, content, options);
-      
+
       // Atomic rename (on same filesystem)
       await fs.rename(tempPath, filePath);
-      
+
     } catch (error) {
       // Clean up temp file on error
       try {
@@ -196,7 +206,7 @@ export class FileLockManager {
         avgWaitTimes.set(resource, Math.round(avg));
       }
     }
-    
+
     return {
       totalRequests: this.metrics.totalLockRequests,
       activeLocksCount: this.locks.size,

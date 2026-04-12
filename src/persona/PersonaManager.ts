@@ -22,15 +22,13 @@ import { generateUniqueId } from '../utils/filesystem.js';
 import { logger } from '../utils/logger.js';
 import { isDefaultPersona } from '../constants/defaultPersonas.js';
 import { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
-import { BaseElementManager, type BaseElementManagerOptions } from '../elements/base/BaseElementManager.js';
+import { BaseElementManager, type ElementManagerDeps } from '../elements/base/BaseElementManager.js';
 import { VALIDATION_CONSTANTS } from '../elements/base/ElementValidation.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
-import { ValidationRegistry } from '../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../services/validation/ValidationService.js';
 import { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
-import { FileOperationsService } from '../services/FileOperationsService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 import { STDIO_DEFAULT_USER_ID } from '../context/StdioSession.js';
@@ -50,9 +48,12 @@ interface ValidatedPersonaInputs {
   author: string;
 }
 
-interface PersonaManagerOptions extends BaseElementManagerOptions {
+
+export interface PersonaManagerDeps extends ElementManagerDeps {
+  indicatorConfig: IndicatorConfig;
   personaImporter?: PersonaImporter;
   notifier?: StateChangeNotifier;
+  contextTracker?: ContextTracker;
 }
 
 export class PersonaManager extends BaseElementManager<PersonaElement> {
@@ -76,30 +77,31 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private metadataService: MetadataService;
   private readonly serializationService: SerializationService;
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    indicatorConfig: IndicatorConfig,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    metadataService: MetadataService,
-    personaImporter?: PersonaImporter,
-    notifier?: StateChangeNotifier,
-    contextTracker?: ContextTracker,
-    baseOptions: PersonaManagerOptions = {}
-  ) {
-    super(ElementType.PERSONA, portfolioManager, fileLockManager, baseOptions, fileOperationsService, validationRegistry);
-    this.portfolioManager = portfolioManager;
-    this.fileLockManager = fileLockManager;
+  constructor(deps: PersonaManagerDeps) {
+    super(
+      ElementType.PERSONA,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
+    this.portfolioManager = deps.portfolioManager;
+    this.fileLockManager = deps.fileLockManager;
 
-    this.indicatorConfig = indicatorConfig;
-    this.personaImporter = baseOptions.personaImporter ?? personaImporter;
-    this.notifier = baseOptions.notifier ?? notifier;
+    this.indicatorConfig = deps.indicatorConfig;
+    this.personaImporter = deps.personaImporter;
+    this.notifier = deps.notifier;
     this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.contextTracker = contextTracker;
-    this.metadataService = metadataService;
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.contextTracker = deps.contextTracker;
+    this.metadataService = deps.metadataService;
     this.serializationService = new SerializationService();
     this.initializePathValidator();
   }

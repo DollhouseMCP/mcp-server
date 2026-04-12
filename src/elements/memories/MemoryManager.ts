@@ -14,8 +14,7 @@ import { Memory, MemoryMetadata } from './Memory.js';
 import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { BaseElementManager } from '../base/BaseElementManager.js';
-import type { ElementEventDispatcher } from '../../events/ElementEventDispatcher.js';
+import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import {
   getValidatedScanCooldown,
   getValidatedIndexDebounce,
@@ -25,7 +24,6 @@ import type { IStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 import { MemoryMetadataExtractor } from '../../storage/MemoryMetadataExtractor.js';
 import { LRUCache } from '../../cache/LRUCache.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
@@ -33,17 +31,14 @@ import { ContentValidator } from '../../security/contentValidator.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { MemoryType } from './types.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
@@ -121,27 +116,30 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
+  private readonly metadataService: MetadataService;
 
   // Track active memories by name (stable identifier) - Issue #18 Phase 4
   private activeMemoryNames: Set<string> = new Set();
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    private metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService,
-    eventDispatcher?: ElementEventDispatcher
-  ) {
-    super(ElementType.MEMORY, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService, eventDispatcher }, fileOperationsService, validationRegistry);
+  constructor(deps: ElementManagerDeps) {
+    super(
+      ElementType.MEMORY,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
     this.memoriesDir = this.elementDir;
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
+    this.metadataService = deps.metadataService;
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
   }
 
   /**

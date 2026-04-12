@@ -28,6 +28,7 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -333,15 +334,16 @@ activates:
     ));
 
     // Create AgentManager instance
-    const agentManagerInstance = new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    );
+    const agentManagerInstance = new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    });
 
     // Set up element manager resolver for activating elements
     AgentManager.setElementManagerResolver((managerName: string) => {

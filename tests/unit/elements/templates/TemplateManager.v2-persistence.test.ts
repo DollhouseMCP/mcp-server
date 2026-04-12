@@ -32,6 +32,7 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -61,14 +62,15 @@ describe('TemplateManager — element quality: markdown body (#713)', () => {
       metadataService
     );
 
-    templateManager = new TemplateManager(
-      mockPortfolioManager as any,
+    templateManager = new TemplateManager({
+      portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    });
   });
 
   afterEach(() => {

@@ -43,6 +43,7 @@ import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.j
 import type { IndicatorConfig } from '../../src/config/indicator-config.js';
 import type { PersonaImporter } from '../../src/persona/export-import/PersonaImporter.js';
 import type { StateChangeNotifier } from '../../src/services/StateChangeNotifier.js';
+import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
 
 /**
  * Create a real MetadataService for tests.
@@ -509,15 +510,16 @@ export function createRealSkillManager(
     metadataService
   );
 
-  return new SkillManager(
+  return new SkillManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+  });
 }
 
 /**
@@ -544,15 +546,16 @@ export function createRealTemplateManager(
     metadataService
   );
 
-  return new TemplateManager(
+  return new TemplateManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+  });
 }
 
 /**
@@ -579,15 +582,16 @@ export function createRealMemoryManager(
     metadataService
   );
 
-  return new MemoryManager(
+  return new MemoryManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+  });
 }
 
 /**
@@ -614,15 +618,16 @@ export function createRealEnsembleManager(
     metadataService
   );
 
-  return new EnsembleManager(
+  return new EnsembleManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+  });
 }
 
 /**
@@ -662,16 +667,17 @@ export function createRealAgentManager(
   // Use portfolioDir as baseDir if not specified
   const agentBaseDir = baseDir ?? portfolioDir;
 
-  return new AgentManager(
+  return new AgentManager({
     portfolioManager,
     fileLockManager,
-    agentBaseDir,
-    fileOperations,
+    baseDir: agentBaseDir,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+  });
 }
 
 /**
@@ -721,18 +727,19 @@ export function createRealPersonaManager(
     bracketStyle: 'square'
   };
 
-  return new PersonaManager(
+  return new PersonaManager({
     portfolioManager,
     indicatorConfig,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
+    serializationService: new SerializationService(),
     metadataService,
-    overrides?.personaImporter,
-    overrides?.notifier,
-    undefined, // contextTracker — injected by DI container in production
-    { fileWatchService } // baseOptions
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    personaImporter: overrides?.personaImporter,
+    notifier: overrides?.notifier,
+  });
 }
 
 /**

@@ -87,9 +87,9 @@ class TestElementManager extends BaseElementManager<TestElement> {
     fileLockManager: FileLockManager,
     fileOperationsService: FileOperationsService,
     validationRegistry: ValidationRegistry,
-    options: BaseElementManagerOptions = {}
+    options: Partial<BaseElementManagerOptions> = {}
   ) {
-    super(elementType, portfolioManager, fileLockManager, options, fileOperationsService, validationRegistry);
+    super(elementType, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher(), ...options }, fileOperationsService, validationRegistry);
   }
 
   protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {
@@ -175,6 +175,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
     fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
       return fs.readFile(filePath, 'utf-8');
     }) as any;
+    (fileLockManager as any).withLock = jest.fn(
+      async (_resource: string, fn: () => Promise<unknown>) => fn()
+    );
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
 
     jest.clearAllMocks();

@@ -26,6 +26,7 @@ import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 describe('EnsembleManager', () => {
   let ensembleManager: EnsembleManager;
@@ -58,14 +59,15 @@ describe('EnsembleManager', () => {
       new TriggerValidationService(),
       metadataService
     );
-    ensembleManager = new EnsembleManager(
-      mockPortfolioManager as any,
+    ensembleManager = new EnsembleManager({
+      portfolioManager: mockPortfolioManager as any,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    });
 
     // Set up mocks
     jest.clearAllMocks();

@@ -1,8 +1,13 @@
 /**
  * Security Monitor for DollhouseMCP
- * 
- * Centralized security event logging and monitoring system
- * for tracking and alerting on security-related events.
+ *
+ * Centralized security event logging and monitoring system.
+ *
+ * ARCHITECTURE: Static facade backed by a DI-managed instance.
+ * Call sites use SecurityMonitor.logSecurityEvent() (static API).
+ * At startup, the DI container creates an instance and wires it via
+ * SecurityMonitor.setInstance(). The static methods delegate to the
+ * instance, enabling future session-scoped monitoring in Phase 3.
  */
 
 import { logger } from '../utils/logger.js';
@@ -75,143 +80,153 @@ const DEDUP_WINDOW_MS = 60_000;
 const DEDUP_MAX_SIZE = 500;
 
 export class SecurityMonitor {
-  private static eventCount = 0;
-  private static events = new EvictingQueue<SecurityLogEntry>(1000);
-  private static logListener?: (entry: SecurityLogEntry) => void;
-  private static readonly dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
+  // ── Instance state (used when wired via DI) ──────────────────────────
+  private _eventCount = 0;
+  private readonly _events = new EvictingQueue<SecurityLogEntry>(1000);
+  private _logListener?: (entry: SecurityLogEntry) => void;
+  private readonly _dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
 
-  static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
-    this.logListener = fn;
-    return () => { this.logListener = undefined; };
+  // ── Static facade state (fallback when no instance wired) ────────────
+  private static _instance: SecurityMonitor | null = null;
+  private static _fallback = new SecurityMonitor();
+
+  /** Wire the DI-managed instance. Called once at container startup. */
+  static setInstance(instance: SecurityMonitor): void {
+    this._instance = instance;
   }
 
-  /**
-   * Logs a security event, suppressing repeated identical events within the dedup window.
-   */
-  static logSecurityEvent(event: SecurityEvent): void {
-    // Deduplicate: same type + source + details within 60s window = suppress
-    if (this.dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
+  /** Get the active instance (DI-managed or fallback). */
+  private static get active(): SecurityMonitor {
+    return this._instance ?? this._fallback;
+  }
+
+  // ── Instance methods ─────────────────────────────────────────────────
+
+  instanceAddLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
+    this._logListener = fn;
+    return () => { this._logListener = undefined; };
+  }
+
+  instanceLogSecurityEvent(event: SecurityEvent): void {
+    if (this._dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
       return;
     }
 
     const logEntry: SecurityLogEntry = {
       ...event,
       timestamp: new Date().toISOString(),
-      id: `SEC-${Date.now()}-${++this.eventCount}`,
+      id: `SEC-${Date.now()}-${++this._eventCount}`,
     };
 
-    // Bounded FIFO eviction — EvictingQueue handles capacity
-    this.events.push(logEntry);
-    this.logListener?.(logEntry);
-
-    // In MCP servers, we cannot write to stderr/stdout as it breaks the JSON-RPC protocol
-    // Security events are stored in memory and can be retrieved via API
-    // Only send critical alerts via the proper channel
+    this._events.push(logEntry);
+    this._logListener?.(logEntry);
 
     if (event.severity === 'CRITICAL') {
-      this.sendSecurityAlert(logEntry);
+      logger.error('[CRITICAL SECURITY ALERT]', {
+        type: event.type,
+        details: event.details,
+        timestamp: logEntry.timestamp,
+        id: logEntry.id
+      });
+
+      if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
+        // Alert mechanism integration point (Slack, PagerDuty, SIEM)
+      }
     }
   }
 
-  /**
-   * Sends security alerts for critical events
-   */
-  private static sendSecurityAlert(event: SecurityLogEntry): void {
-    // In a production environment, this would integrate with:
-    // - Slack webhooks
-    // - Email alerts
-    // - PagerDuty
-    // - Security Information and Event Management (SIEM) systems
-    
-    // Log critical security alerts with structured data
-    // DO NOT use console.error in MCP servers as it breaks the JSON-RPC protocol
-    logger.error('[CRITICAL SECURITY ALERT]', {
-      type: event.type,
-      details: event.details,
-      timestamp: event.timestamp,
-      id: event.id
-    });
-    
-    // If in production mode with proper config, send actual alerts
-    if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
-      // TODO: Implement actual alert mechanisms
-    }
+  instanceGetRecentEvents(count: number = 100): SecurityLogEntry[] {
+    return this._events.toArray().slice(-count);
   }
 
-  /**
-   * Gets recent security events for analysis
-   */
-  static getRecentEvents(count: number = 100): SecurityLogEntry[] {
-    return this.events.toArray().slice(-count);
+  instanceGetEventsBySeverity(severity: SecurityEvent['severity']): SecurityLogEntry[] {
+    return this._events.toArray().filter(event => event.severity === severity);
   }
 
-  /**
-   * Gets events by severity
-   */
-  static getEventsBySeverity(severity: SecurityEvent['severity']): SecurityLogEntry[] {
-    return this.events.toArray().filter(event => event.severity === severity);
+  instanceGetEventsByType(type: SecurityEvent['type']): SecurityLogEntry[] {
+    return this._events.toArray().filter(event => event.type === type);
   }
 
-  /**
-   * Gets events by type
-   */
-  static getEventsByType(type: SecurityEvent['type']): SecurityLogEntry[] {
-    return this.events.toArray().filter(event => event.type === type);
-  }
-
-  /**
-   * Generates a security report
-   */
-  static generateSecurityReport(): {
+  instanceGenerateSecurityReport(): {
     totalEvents: number;
     eventsBySeverity: Record<string, number>;
     eventsByType: Record<string, number>;
     recentCriticalEvents: SecurityLogEntry[];
   } {
     const eventsBySeverity: Record<string, number> = {
-      CRITICAL: 0,
-      HIGH: 0,
-      MEDIUM: 0,
-      LOW: 0,
+      CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0,
     };
-
     const eventsByType: Record<string, number> = {};
 
-    for (const event of this.events.toArray()) {
+    for (const event of this._events.toArray()) {
       eventsBySeverity[event.severity]++;
       eventsByType[event.type] = (eventsByType[event.type] || 0) + 1;
     }
 
     return {
-      totalEvents: this.events.size,
+      totalEvents: this._events.size,
       eventsBySeverity,
       eventsByType,
-      recentCriticalEvents: this.getEventsBySeverity('CRITICAL').slice(-10),
+      recentCriticalEvents: this.instanceGetEventsBySeverity('CRITICAL').slice(-10),
     };
   }
 
-  /**
-   * Clears old events (for memory management)
-   */
-  static clearOldEvents(daysToKeep: number = 7): void {
+  instanceClearOldEvents(daysToKeep: number = 7): void {
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysToKeep);
     const cutoffTimestamp = cutoffDate.toISOString();
 
-    const remaining = this.events.toArray().filter(
+    const remaining = this._events.toArray().filter(
       event => event.timestamp >= cutoffTimestamp
     );
-    this.events.reset([...remaining]);
+    this._events.reset([...remaining]);
   }
 
-  /**
-   * TESTING ONLY: Clears all events and resets counter
-   * Should only be called in test cleanup (afterEach/afterAll)
-   * to prevent test pollution from accumulated security events
-   */
+  instanceClearAllEventsForTesting(): void {
+    this._events.clear();
+    this._eventCount = 0;
+    this._dedup.clear();
+  }
+
+  // ── Static facade (delegates to active instance) ─────────────────────
+
+  static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
+    return this.active.instanceAddLogListener(fn);
+  }
+
+  static logSecurityEvent(event: SecurityEvent): void {
+    this.active.instanceLogSecurityEvent(event);
+  }
+
+  static getRecentEvents(count: number = 100): SecurityLogEntry[] {
+    return this.active.instanceGetRecentEvents(count);
+  }
+
+  static getEventsBySeverity(severity: SecurityEvent['severity']): SecurityLogEntry[] {
+    return this.active.instanceGetEventsBySeverity(severity);
+  }
+
+  static getEventsByType(type: SecurityEvent['type']): SecurityLogEntry[] {
+    return this.active.instanceGetEventsByType(type);
+  }
+
+  static generateSecurityReport() {
+    return this.active.instanceGenerateSecurityReport();
+  }
+
+  static clearOldEvents(daysToKeep: number = 7): void {
+    this.active.instanceClearOldEvents(daysToKeep);
+  }
+
+  /** @internal Backward-compat accessor for tests that access SecurityMonitor['events'] directly. */
+  static get events(): EvictingQueue<SecurityLogEntry> {
+    return this.active._events;
+  }
+
   static clearAllEventsForTesting(): void {
-    this.events.clear();
-    this.eventCount = 0;
-    this.dedup.clear();
+    this.active.instanceClearAllEventsForTesting();
+    // Also reset the instance binding for test isolation
+    this._instance = null;
+    this._fallback = new SecurityMonitor();
   }
 }

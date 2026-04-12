@@ -18,6 +18,7 @@ import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
+import type { CollectionHandler } from './CollectionHandler.js';
 import { normalizeElementType, formatElementTypesList } from '../utils/elementTypeNormalization.js';
 
 /**
@@ -50,7 +51,8 @@ export class PortfolioHandler {
         private readonly configManager: ConfigManager,
         fileOperations: FileOperationsService,
         tokenManager: TokenManager,
-        portfolioRepoManager: PortfolioRepoManager
+        portfolioRepoManager: PortfolioRepoManager,
+        private readonly collectionHandler?: CollectionHandler
     ) {
         // Validation moved to constructor parameters with readonly
         if (!portfolioPullHandler) {
@@ -405,12 +407,7 @@ export class PortfolioHandler {
           }
     
           if (options.autoSubmit !== undefined) {
-            // Set the environment variable for auto-submit
-            if (options.autoSubmit) {
-              process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
-            } else {
-              delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
-            }
+            this.collectionHandler?.setAutoSubmitEnabled(options.autoSubmit);
             statusText += `📤 Auto-submit to collection: ${options.autoSubmit ? 'Enabled' : 'Disabled'}\n`;
           }
     
@@ -420,7 +417,7 @@ export class PortfolioHandler {
     
           // Show current configuration
           statusText += `\n📋 **Current Settings**:\n`;
-          const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+          const autoSubmitEnabled = this.collectionHandler?.isAutoSubmitEnabled() ?? false;
           statusText += `  • Auto-submit: ${autoSubmitEnabled ? 'Enabled' : 'Disabled'}\n`;
           statusText += `  • Repository name: ${getPortfolioRepositoryName()}\n`;
           statusText += `  • Default visibility: public\n`;
@@ -432,7 +429,7 @@ export class PortfolioHandler {
             }],
             data: {
               config: {
-                autoSubmit: process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true',
+                autoSubmit: autoSubmitEnabled,
                 repositoryName: getPortfolioRepositoryName(),
                 defaultVisibility: 'public'
               }

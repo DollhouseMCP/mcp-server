@@ -38,6 +38,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { normalizeAutonomyKeys, normalizeResilienceKeys, normalizeGoalKeys, isOneOf } from '../../../../src/elements/agents/constants.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -186,15 +187,16 @@ describe('AgentManager v2 Metadata Persistence', () => {
       metadataService
     ));
 
-    container.register('AgentManager', () => new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    ));
+    container.register('AgentManager', () => new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');
   });

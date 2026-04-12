@@ -13,6 +13,7 @@ import { FileWatchService } from '../../../src/services/FileWatchService.js';
 import { ElementType } from '../../../src/portfolio/types.js';
 import { createPortfolioTestEnvironment, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
 
 // Create a shared MetadataService instance for all tests
@@ -29,15 +30,16 @@ describe('MemoryManager integration', () => {
   let validationRegistry: ValidationRegistry;
 
   const createManager = () => {
-    return new MemoryManager(
-      env.portfolioManager,
+    return new MemoryManager({
+      portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+    });
   };
 
   beforeAll(async () => {
