@@ -135,7 +135,11 @@ export class ResilienceMetricsTracker {
   }
 }
 
-/** Module-level singleton instance (Issue #526) */
+/**
+ * Default metrics tracker instance used by tests and convenience functions.
+ * In production, the DI container creates a separate instance injected
+ * into MCPAQLHandler. This module-level default is not used in production.
+ */
 export const resilienceMetrics = new ResilienceMetricsTracker();
 
 /**

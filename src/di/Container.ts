@@ -2,6 +2,8 @@ import os from "os";
 import * as path from "path";
 import { PACKAGE_VERSION, PACKAGE_VERSION as VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
+import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
+import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
 import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
 import { RelationshipManager } from "../portfolio/RelationshipManager.js";
 import { NLPScoringManager } from "../portfolio/NLPScoringManager.js";
@@ -291,6 +293,17 @@ export class DollhouseContainer {
       this.resolve('ContextTracker')
     ));
     this.register('MCPLogger', () => logger);
+    // SecurityMonitor: DI-managed instance wired into the static facade.
+    // Eagerly resolved to replace the fallback before handlers start logging.
+    this.register('SecurityMonitor', () => {
+      const instance = new SecurityMonitor();
+      SecurityMonitor.setInstance(instance);
+      return instance;
+    });
+    this.resolve('SecurityMonitor');
+    // Resilience: DI-managed instances (moved from module-level singletons)
+    this.register('CircuitBreakerState', () => new CircuitBreakerState());
+    this.register('ResilienceMetricsTracker', () => new ResilienceMetricsTracker());
 
     this.register('PersonaImporter', () => {
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
@@ -1342,6 +1355,12 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService')
     );
 
+    // Wire auto-submit check now that CollectionHandler exists.
+    // SubmitToPortfolioTool was registered before CollectionHandler was constructed,
+    // so the callback is set post-construction to close the wiring gap.
+    this.resolve<SubmitToPortfolioTool>('SubmitToPortfolioTool')
+      .setAutoSubmitCheck(() => collectionHandler.isAutoSubmitEnabled());
+
     const portfolioHandler = new PortfolioHandler(
       this.resolve('GitHubAuthManager'),
       this.resolve('PortfolioManager'),
@@ -1353,7 +1372,8 @@ export class DollhouseContainer {
       this.resolve('ConfigManager'),
       this.resolve('FileOperationsService'),
       this.resolve('TokenManager'),
-      this.resolve('PortfolioRepoManager')
+      this.resolve('PortfolioRepoManager'),
+      collectionHandler
     );
 
     const githubAuthHandler = new GitHubAuthHandler(
@@ -1431,6 +1451,8 @@ export class DollhouseContainer {
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
       operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
       gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
+      circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
+      resilienceMetrics: this.resolve<ResilienceMetricsTracker>('ResilienceMetricsTracker'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },

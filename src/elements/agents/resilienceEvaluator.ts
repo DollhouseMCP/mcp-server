@@ -109,7 +109,11 @@ export class CircuitBreakerState {
   }
 }
 
-/** Singleton circuit breaker instance shared across all resilience evaluations */
+/**
+ * Default circuit breaker instance used by tests.
+ * In production, the DI container creates a separate instance injected
+ * into MCPAQLHandler. This module-level default is not used in production.
+ */
 export const circuitBreaker = new CircuitBreakerState();
 
 // =============================================================================
@@ -145,15 +149,16 @@ export interface ResilienceContext {
  */
 export function evaluateResiliencePolicy(
   policy: AgentResiliencePolicy | undefined,
-  context: ResilienceContext
+  context: ResilienceContext,
+  breaker: CircuitBreakerState = circuitBreaker
 ): ResilienceAction {
   const resolved = resolvePolicy(policy);
 
   if (context.trigger === 'step_limit') {
-    return evaluateStepLimitResilience(resolved, context);
+    return evaluateStepLimitResilience(resolved, context, breaker);
   }
 
-  return evaluateFailureResilience(resolved, context);
+  return evaluateFailureResilience(resolved, context, breaker);
 }
 
 /**
@@ -209,10 +214,11 @@ export function calculateBackoff(
 
 function evaluateStepLimitResilience(
   policy: Required<AgentResiliencePolicy>,
-  context: ResilienceContext
+  context: ResilienceContext,
+  breaker: CircuitBreakerState
 ): ResilienceAction {
   // Circuit breaker check — immediately pause if recently tripped
-  if (context.agentName && circuitBreaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
+  if (context.agentName && breaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
     return {
       action: 'pause',
       reason: 'Circuit breaker: agent recently exhausted resilience limits — forcing immediate pause to prevent re-execution loop',
@@ -237,7 +243,7 @@ function evaluateStepLimitResilience(
   if (maxContinuations > 0 && context.continuationCount >= maxContinuations) {
     // Trip the circuit breaker so re-execution within cooldown is blocked
     if (context.agentName) {
-      circuitBreaker.trip(context.agentName);
+      breaker.trip(context.agentName);
     }
     return {
       action: 'pause',
@@ -268,10 +274,11 @@ function evaluateStepLimitResilience(
 
 function evaluateFailureResilience(
   policy: Required<AgentResiliencePolicy>,
-  context: ResilienceContext
+  context: ResilienceContext,
+  breaker: CircuitBreakerState
 ): ResilienceAction {
   // Circuit breaker check — immediately pause if recently tripped
-  if (context.agentName && circuitBreaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
+  if (context.agentName && breaker.isTripped(context.agentName, CIRCUIT_BREAKER_COOLDOWN_MS)) {
     return {
       action: 'pause',
       reason: 'Circuit breaker: agent recently exhausted resilience limits — forcing immediate pause to prevent re-execution loop',
@@ -295,7 +302,7 @@ function evaluateFailureResilience(
     if (context.retryCount >= maxRetries) {
       // Trip the circuit breaker so re-execution within cooldown is blocked
       if (context.agentName) {
-        circuitBreaker.trip(context.agentName);
+        breaker.trip(context.agentName);
       }
       return {
         action: 'pause',
@@ -318,7 +325,7 @@ function evaluateFailureResilience(
   if (maxContinuations > 0 && context.continuationCount >= maxContinuations) {
     // Trip the circuit breaker so re-execution within cooldown is blocked
     if (context.agentName) {
-      circuitBreaker.trip(context.agentName);
+      breaker.trip(context.agentName);
     }
     return {
       action: 'pause',

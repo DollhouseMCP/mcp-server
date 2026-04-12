@@ -67,8 +67,8 @@ import type { ElementCRUDHandler } from '../ElementCRUDHandler.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentResiliencePolicy, AgentNotification } from '../../elements/agents/types.js';
-import { evaluateResiliencePolicy, circuitBreaker, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
-import { resilienceMetrics } from '../../elements/agents/resilienceMetrics.js';
+import { evaluateResiliencePolicy, CircuitBreakerState, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
+import { ResilienceMetricsTracker } from '../../elements/agents/resilienceMetrics.js';
 import type { TemplateRenderer } from '../../utils/TemplateRenderer.js';
 import type { ElementQueryService } from '../../services/query/ElementQueryService.js';
 import { aggregateElements, validateAggregationOptions } from '../../services/query/AggregationService.js';
@@ -462,6 +462,9 @@ export interface HandlerRegistry {
   operationMetricsTracker?: OperationMetricsTracker;
   // Gatekeeper metrics: GatekeeperMetricsTracker for policy enforcement stats
   gatekeeperMetricsTracker?: GatekeeperMetricsTracker;
+  // Resilience: DI-managed instances (moved from module-level singletons)
+  circuitBreaker?: CircuitBreakerState;
+  resilienceMetrics?: ResilienceMetricsTracker;
 }
 
 /**
@@ -3524,9 +3527,9 @@ export class MCPAQLHandler {
         const completedAgent = this.executingAgents.get(elementName);
         if (completedAgent?.resiliencePolicy && (completedAgent.continuationCount > 0 || completedAgent.retryCount > 0)) {
           const isSuccess = params.outcome === 'success';
-          resilienceMetrics.recordCompletionAfterResilience(isSuccess);
+          this.handlers.resilienceMetrics?.recordCompletionAfterResilience(isSuccess);
           if (isSuccess) {
-            circuitBreaker.reset(elementName);
+            this.handlers.circuitBreaker?.reset(elementName);
           }
         }
 
@@ -3581,7 +3584,7 @@ export class MCPAQLHandler {
         // Issue #526: Track resilience outcome (abort = failure after resilience)
         const abortedAgent = this.executingAgents.get(elementName);
         if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
-          resilienceMetrics.recordCompletionAfterResilience(false);
+          this.handlers.resilienceMetrics?.recordCompletionAfterResilience(false);
         }
 
         // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
@@ -3908,15 +3911,15 @@ export class MCPAQLHandler {
       agentName,
     };
 
-    const action = evaluateResiliencePolicy(executingAgent.resiliencePolicy, context);
+    const action = evaluateResiliencePolicy(executingAgent.resiliencePolicy, context, this.handlers.circuitBreaker);
 
     // If resilience says pause, record the limit and use the original result
     if (action.action === 'pause') {
       // Track if this was a limit exhaustion (not a default-pause policy)
       if (action.reason?.includes('exhausted') || action.reason?.includes('Circuit breaker')) {
-        resilienceMetrics.recordResilienceLimit();
+        this.handlers.resilienceMetrics?.recordResilienceLimit();
         if (action.reason?.includes('Circuit breaker')) {
-          resilienceMetrics.recordCircuitBreakerTrip();
+          this.handlers.resilienceMetrics?.recordCircuitBreakerTrip();
         }
       }
       return null;
@@ -3926,7 +3929,7 @@ export class MCPAQLHandler {
     if (action.action === 'continue') {
       executingAgent.continuationCount++;
       executingAgent.retryCount = 0; // Reset retry count on continuation
-      resilienceMetrics.recordAutoContinuation();
+      this.handlers.resilienceMetrics?.recordAutoContinuation();
 
       SecurityMonitor.logSecurityEvent({
         type: 'AGENT_AUTO_CONTINUED',
@@ -3956,7 +3959,7 @@ export class MCPAQLHandler {
     // Retry: tell LLM to retry with backoff guidance
     if (action.action === 'retry') {
       executingAgent.retryCount++;
-      resilienceMetrics.recordStepRetry();
+      this.handlers.resilienceMetrics?.recordStepRetry();
 
       SecurityMonitor.logSecurityEvent({
         type: 'AGENT_STEP_RETRIED',
@@ -3987,7 +3990,7 @@ export class MCPAQLHandler {
     if (action.action === 'restart') {
       executingAgent.continuationCount++;
       executingAgent.retryCount = 0;
-      resilienceMetrics.recordAutoRestart();
+      this.handlers.resilienceMetrics?.recordAutoRestart();
 
       SecurityMonitor.logSecurityEvent({
         type: 'AGENT_AUTO_RESTARTED',

@@ -63,6 +63,7 @@ export interface SubmitToPortfolioToolDependencies {
   rateLimiter: IRateLimiter;
   fileOperations: IFileOperationsService;
   tokenManager: TokenManager;
+  isAutoSubmitEnabled?: () => boolean;
 }
 
 export class SubmitToPortfolioTool {
@@ -73,6 +74,7 @@ export class SubmitToPortfolioTool {
   private rateLimiter: IRateLimiter;
   private fileOperations: IFileOperationsService;
   private tokenManager: TokenManager;
+  private isAutoSubmitEnabled: () => boolean;
 
   constructor(apiCache: APICache, dependencies: SubmitToPortfolioToolDependencies) {
     // TYPE SAFETY FIX #1: Proper typing for apiCache parameter
@@ -98,6 +100,13 @@ export class SubmitToPortfolioTool {
     this.rateLimiter = dependencies.rateLimiter;
     this.fileOperations = dependencies.fileOperations;
     this.tokenManager = dependencies.tokenManager;
+    this.isAutoSubmitEnabled = dependencies.isAutoSubmitEnabled
+      ?? (() => process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true');
+  }
+
+  /** Wire the auto-submit check after CollectionHandler is constructed. */
+  setAutoSubmitCheck(check: () => boolean): void {
+    this.isAutoSubmitEnabled = check;
   }
 
   /**
@@ -1576,7 +1585,7 @@ export class SubmitToPortfolioTool {
       
       // For now, let's check if the user has set an environment variable
       // to auto-submit to collection (opt-in behavior)
-      const autoSubmit = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+      const autoSubmit = this.isAutoSubmitEnabled();
       
       if (!autoSubmit) {
         // User hasn't opted in to auto-submission
