@@ -339,7 +339,7 @@ describe('Template', () => {
         ]
       }, 'Hello {{defined}} and {{undefined}}!', metadataService);
       const result = template.validate();
-      
+
       expect(result.valid).toBe(true);
       expect(result.warnings).toContainEqual(
         expect.objectContaining({
@@ -348,6 +348,24 @@ describe('Template', () => {
           severity: 'medium'
         })
       );
+    });
+
+    it('should not warn for dot-notation variables registered with their full path', () => {
+      // deriveVariablesFromContent stores 'user.name' as the variable name;
+      // validate() must match against the full path, not just the root 'user'.
+      const template = new Template({
+        name: 'Dot Notation Vars',
+        variables: [
+          { name: 'user.name', type: 'string' },
+          { name: 'user.email', type: 'string' }
+        ]
+      }, 'Hello {{user.name}}, your email is {{user.email}}.', metadataService);
+      const result = template.validate();
+
+      const undefinedVarWarnings = (result.warnings ?? []).filter(
+        w => w.field === 'variables' && w.message.includes('undefined variable')
+      );
+      expect(undefinedVarWarnings).toHaveLength(0);
     });
 
     it('should suggest best practices', () => {
@@ -587,6 +605,89 @@ describe('Template', () => {
         const output = await t.render({ name: 'World' });
         expect(output.trim()).toBe('Hi World');
       });
+    });
+  });
+
+  describe('deriveVariablesFromContent() (#1896)', () => {
+    it('returns an empty array when content has no placeholders', () => {
+      const result = Template.deriveVariablesFromContent('No placeholders here.');
+      expect(result).toHaveLength(0);
+    });
+
+    it('derives a single placeholder', () => {
+      const result = Template.deriveVariablesFromContent('Hello {{name}}!');
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('name');
+      expect(result[0].type).toBe('string');
+      expect(result[0].required).toBe(false);
+    });
+
+    it('derives multiple distinct placeholders', () => {
+      const result = Template.deriveVariablesFromContent('{{first}} and {{second}} and {{third}}');
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
+      expect(names).toEqual(['first', 'second', 'third']);
+    });
+
+    it('deduplicates repeated placeholders', () => {
+      const result = Template.deriveVariablesFromContent('{{foo}} then {{foo}} again');
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('foo');
+    });
+
+    it('preserves existing variable entries unchanged', () => {
+      const existing: TemplateVariable[] = [
+        { name: 'name', type: 'string', required: true, description: 'Full name' }
+      ];
+      const result = Template.deriveVariablesFromContent('Hello {{name}}! Your score: {{score}}', existing);
+      const namVar = result.find(v => v.name === 'name')!;
+      expect(namVar.required).toBe(true);
+      expect(namVar.description).toBe('Full name');
+    });
+
+    it('adds only missing placeholders when some are already declared', () => {
+      const existing: TemplateVariable[] = [{ name: 'name', type: 'string' }];
+      const result = Template.deriveVariablesFromContent('{{name}} and {{score}}', existing);
+      expect(result).toHaveLength(2);
+      const scoreVar = result.find(v => v.name === 'score')!;
+      expect(scoreVar.type).toBe('string');
+      expect(scoreVar.required).toBe(false);
+    });
+
+    it('handles dot-notation placeholder paths', () => {
+      const result = Template.deriveVariablesFromContent('{{user.name}} at {{user.email}}');
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
+      expect(names).toEqual(['user.email', 'user.name']);
+    });
+
+    it('handles whitespace inside braces', () => {
+      const result = Template.deriveVariablesFromContent('{{ spaced }} and {{  also_spaced  }}');
+      const names = result.map(v => v.name).sort((a, b) => a.localeCompare(b));
+      expect(names).toEqual(['also_spaced', 'spaced']);
+    });
+
+    it('in section mode, only scans the <template> section', () => {
+      const content = [
+        '<template>{{title}}</template>',
+        '<style>.cls-{{ignored}} { color: red; }</style>',
+        '<script>var {{also_ignored}} = 1;</script>',
+      ].join('\n');
+      const result = Template.deriveVariablesFromContent(content);
+      expect(result).toHaveLength(1);
+      expect(result[0].name).toBe('title');
+    });
+
+    it('throws with ensemble guidance when derived count would exceed 100', () => {
+      // Build content with 101 distinct placeholders
+      const placeholders = Array.from({ length: 101 }, (_, i) => `{{var_${i}}}`).join(' ');
+      expect(() => Template.deriveVariablesFromContent(placeholders)).toThrow(
+        /Split this content across multiple templates and combine them in an ensemble/
+      );
+    });
+
+    it('succeeds when derived count is exactly 100', () => {
+      const placeholders = Array.from({ length: 100 }, (_, i) => `{{var_${i}}}`).join(' ');
+      const result = Template.deriveVariablesFromContent(placeholders);
+      expect(result).toHaveLength(100);
     });
   });
 });
