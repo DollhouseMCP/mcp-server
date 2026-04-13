@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "2.0.12-rc.13",
+  "version": "2.0.13",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,7 @@
     "dollhouse-console-token": "dist/cli/console-token.js"
   },
   "scripts": {
-    "prebuild": "npm run build:safety && node scripts/generate-version.js",
+    "prebuild": "npm run build:safety && node scripts/generate-version.js && node scripts/generate-hashes.mjs",
     "build:safety": "cd packages/safety && npm install && npm run build",
     "build": "tsc",
     "postbuild": "node -e \"const fs=require('fs'),p=require('path');function rm(d){if(fs.existsSync(d)){for(const e of fs.readdirSync(d)){const f=p.join(d,e);fs.statSync(f).isDirectory()?rm(f):fs.unlinkSync(f)}fs.rmdirSync(d)}}function cpR(s,d){fs.mkdirSync(d,{recursive:true});for(const e of fs.readdirSync(s)){const sp=p.join(s,e),dp=p.join(d,e);fs.statSync(sp).isDirectory()?cpR(sp,dp):fs.copyFileSync(sp,dp)}}cpR('src/seed-elements','dist/seed-elements');rm('dist/web/public');cpR('src/web/public','dist/web/public')\"",

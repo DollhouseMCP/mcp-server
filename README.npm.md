@@ -33,7 +33,7 @@
 
  "Create a skill for            📁 ~/.dollhouse/portfolio/    "Activate the Dollhouse
   writing blog posts"                                              Expert ensemble"
-                                 38 starter elements:
+                                 37 starter elements:
  "Edit the code review      ──▶  personas · skills ·       ──▶  Your AI now has
   persona to add security"       templates · agents ·           new behavior,
                                  memories · ensembles           capabilities, and
@@ -48,7 +48,7 @@
 - **Edit** any existing element to refine it
 - **Browse** the [community collection](https://dollhousemcp.github.io/collection/) and install elements made by other users
 
-Your **portfolio** (`~/.dollhouse/portfolio/`) is a local folder that holds all your Dollhouse elements. It ships with 38 starters — including the **dollhouse-expert-suite** ensemble (persona + knowledge base) you can activate for guided help. Everything you create or install lands here. Share back to the community or sync to GitHub whenever you're ready.
+Your **portfolio** (`~/.dollhouse/portfolio/`) is a local folder that holds all your Dollhouse elements. It ships with 37 starters — including the **dollhouse-expert-suite** ensemble (persona + knowledge base) you can activate for guided help. Everything you create or install lands here. Share back to the community or sync to GitHub whenever you're ready.
 
 ---
 
@@ -100,7 +100,7 @@ Dollhouse elements are modular building blocks that customize your AI. When you 
 |---|---|
 | **Dollhouse Personas** | Shape behavior, tone, expertise, and priorities. <br> Act as security principals with permission policies that control what the AI can do. |
 | **Dollhouse Skills*** | Add discrete capabilities the AI can activate on demand. <br> Code review, data analysis, penetration testing, translation, and more. |
-| **Dollhouse Templates** | Standardize outputs with variable substitution. <br> Reports, emails, briefs, documentation — consistent structure every time. |
+| **Dollhouse Templates** | Standardize outputs with variable substitution. <br> Reports, emails, briefs, documentation — consistent structure every time. Variables are auto-derived from `{{placeholder}}` tokens in content — no manual schema needed. |
 | **Dollhouse Agents** | Execute multi-step goals autonomously. <br> State tracking, resilience policies, autonomy evaluation, and an execution lifecycle. |
 | **Dollhouse Memories** | Persist structured context across sessions. <br> Facts, preferences, project state. Can auto-load on startup. |
 | **Dollhouse Ensembles** | Bundle multiple elements into one activatable unit. <br> Activation strategies, conflict resolution, and coordinated permission policies. |
@@ -220,7 +220,7 @@ Your Dollhouse elements live in a local portfolio at `~/.dollhouse/portfolio/`. 
 </div>
 
 - **Local-first** — Everything works offline. No account required.
-- **38 bundled elements** — 7 personas, 7 skills, 8 templates, 7 agents, 4 memories, 5 ensembles ship with the server as starter content. Includes the **dollhouse-expert-suite** ensemble (persona + knowledge base memory) for guided help, and a **Session Monitor** agent that keeps your LLM synchronized with server state changes.
+- **37 bundled elements** — 7 personas, 7 skills, 8 templates, 7 agents, 3 memories, 5 ensembles ship with the server as starter content. Includes the **dollhouse-expert-suite** ensemble (persona + knowledge base memory) for guided help, and a **Session Monitor** agent that keeps your LLM synchronized with server state changes.
 - **GitHub sync** — Optionally back up your portfolio to a GitHub repository and share elements with others.
 - **Community Collection** — [Browse the collection](https://dollhousemcp.github.io/collection/) to see what's available, then install elements directly from your AI. Or [submit your own](https://github.com/DollhouseMCP/collection).
 
