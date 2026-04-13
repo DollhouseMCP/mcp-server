@@ -75,6 +75,7 @@
       const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      window.DollhouseSessions?.setPolicySessions?.(data.knownSessions || []);
       render(data);
     } catch (err) {
       renderError(err.message);
