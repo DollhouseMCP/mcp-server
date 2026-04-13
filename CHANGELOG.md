@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.13] - 2026-04-13
+
+### Security Fixes
+
+- **False-positive CRITICAL alerts eliminated** — bundled elements containing legitimate YAML keys (`javascript:`) or educational security payloads (`wget` in pentest templates) no longer fire CRITICAL alerts at install time (#1941)
+- **JavaScript protocol injection regex tightened** — pattern now requires a non-whitespace character after the colon (`javascript[ \t]*:[ \t]*\S`), preventing bare YAML map keys from matching while still catching real `javascript:void(0)` injection attempts (#1941)
+- **Bundled element trust system** — build generates `data/HASHES.json`; at startup, `DefaultElementProvider` verifies each bundled file against its SHA-256 and registers matching hashes with `ContentValidator`; verified content bypasses injection scanning, modified files automatically lose trust (#1941)
+
+### CI/CD
+
+- **OIDC publishing restored** — removed broken `npm install -g npm@11` step that caused every publish workflow to fail with `MODULE_NOT_FOUND: promise-retry`; npm 10.x (ships with Node 22) already supports `--provenance` (#1941)
+
 ## [2.0.12] - 2026-04-12
 
 ### Authenticated Web Console
