@@ -171,7 +171,7 @@ export class DefaultElementProvider {
       }
 
       logger.debug(`[DefaultElementProvider] Registered ${registered} verified bundled element hashes`);
-    } catch (err) {
+    } catch {
       // HASHES.json missing (older install, dev mode, or stripped package) — degrade gracefully
       logger.debug('[DefaultElementProvider] data/HASHES.json not found — bundled element trust skipped');
     }

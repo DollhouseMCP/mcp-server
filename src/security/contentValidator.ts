@@ -7,7 +7,7 @@
  * Security: SEC-001 - Critical vulnerability protection
  */
 
-import { createHash } from 'crypto';
+import { createHash } from 'node:crypto';
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { logger } from '../utils/logger.js';

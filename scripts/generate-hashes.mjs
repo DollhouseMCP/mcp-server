@@ -10,10 +10,10 @@
  * (e.g. `javascript:` as a YAML key, `wget` in a pentest report template).
  */
 
-import { createHash } from 'crypto';
-import { readFileSync, writeFileSync, readdirSync, statSync } from 'fs';
-import { join, relative } from 'path';
-import { fileURLToPath } from 'url';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const dataDir = join(__dirname, '..', 'data');
@@ -29,7 +29,7 @@ function collectFiles(dir, base = dir) {
   const result = {};
   for (const entry of entries) {
     const full = join(dir, entry);
-    const rel = relative(base, full).replace(/\\/g, '/'); // normalise Windows paths
+    const rel = relative(base, full).replaceAll('\\', '/'); // normalise Windows paths
     if (statSync(full).isDirectory()) {
       Object.assign(result, collectFiles(full, base));
     } else if (entry !== 'HASHES.json') {
