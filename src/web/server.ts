@@ -438,7 +438,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // Global error handler — catch Express errors and route to logger instead of terminal.
   // Without this, Express dumps stack traces to stderr (visible in --web terminal).
   // All errors still appear in the management console's Logs tab via MemoryLogSink.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: Error, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
     const status = (err as any).status || (err as any).statusCode || 500;
     logger.warn(`[WebUI] ${err.name}: ${err.message}`);

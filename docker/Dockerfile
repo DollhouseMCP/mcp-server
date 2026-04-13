@@ -83,7 +83,15 @@ RUN mkdir -p /app/tmp /app/logs && \
 # Switch to non-root user
 USER dollhouse
 
-# No ports exposed - stdio-based MCP servers don't need network access
+# HTTP transport port (documentation hint — does not publish the port)
+EXPOSE 3000
+
+# Health check for HTTP transport mode.
+# Uses Node.js fetch (no curl needed — curl is stripped for security).
+# In stdio mode, the check fails gracefully (no HTTP server listening),
+# which is acceptable since stdio containers are short-lived.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD node -e "fetch('http://localhost:'+(process.env.DOLLHOUSE_HTTP_PORT||3000)+'/healthz').then(r=>r.ok?process.exit(0):process.exit(1)).catch(()=>process.exit(1))"
 
 # Add security labels for container metadata
 LABEL security.non-root="true" \

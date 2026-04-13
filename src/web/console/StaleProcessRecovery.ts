@@ -31,9 +31,9 @@ async function getLogger() {
   return _logger;
 }
 const logger = {
-  warn: async (...args: unknown[]) => { const l = await getLogger(); l ? l.warn(args[0] as string, args[1]) : console.error('[WARN]', ...args); },
-  info: async (...args: unknown[]) => { const l = await getLogger(); l ? l.info(args[0] as string, args[1]) : console.error('[INFO]', ...args); },
-  debug: async (...args: unknown[]) => { const l = await getLogger(); l ? l.debug(args[0] as string, args[1]) : void 0; },
+  warn: async (...args: unknown[]) => { const l = await getLogger(); if (l) { l.warn(args[0] as string, args[1]); } else { console.error('[WARN]', ...args); } },
+  info: async (...args: unknown[]) => { const l = await getLogger(); if (l) { l.info(args[0] as string, args[1]); } else { console.error('[INFO]', ...args); } },
+  debug: async (...args: unknown[]) => { const l = await getLogger(); if (l) { l.debug(args[0] as string, args[1]); } },
 };
 
 /**

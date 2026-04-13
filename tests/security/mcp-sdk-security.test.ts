@@ -101,28 +101,33 @@ describe('MCP SDK Security', () => {
   });
 
   describe('Transport Security', () => {
-    it('should use stdio transport (not affected by DNS rebinding)', async () => {
-      // Read the main index file to verify transport type
+    it('should use stdio transport as the default', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
       const indexPath = path.join(projectRoot, 'src/index.ts');
       const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // Verify StdioServerTransport is imported
+      // Verify StdioServerTransport is imported for the default transport
       expect(indexContent).toContain('StdioServerTransport');
       expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/stdio.js"');
-
-      // Verify we're NOT using HTTP-based transports
-      expect(indexContent).not.toContain('StreamableHTTPServerTransport');
-      expect(indexContent).not.toContain('SSEServerTransport');
     });
 
-    it('should instantiate StdioServerTransport', async () => {
+    it('should instantiate StdioServerTransport for stdio mode', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
       const indexPath = path.join(projectRoot, 'src/index.ts');
       const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // Verify transport is instantiated
       expect(indexContent).toMatch(/new\s+StdioServerTransport\s*\(/);
+    });
+
+    it('should use createMcpExpressApp for HTTP transport DNS rebinding protection', async () => {
+      const projectRoot = path.resolve(__dirname, '../..');
+      const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
+      const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
+
+      // StreamableHttpServer.ts must use createMcpExpressApp() from the SDK,
+      // which enables DNS rebinding protection by default (CVE-2025-66414)
+      expect(httpServerContent).toContain('createMcpExpressApp');
+      expect(httpServerContent).toContain("from '@modelcontextprotocol/sdk/server/express.js'");
     });
   });
 
@@ -155,88 +160,82 @@ describe('MCP SDK Security', () => {
   });
 
   describe('Defense in Depth', () => {
-    it('should use stdio transport in main entry point', async () => {
-      // DollhouseMCP runs via stdio, which is NOT affected by DNS rebinding
-      // This test verifies we're not using HTTP-based transports in the main server
+    it('should default to stdio transport in main entry point', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
       const indexPath = path.join(projectRoot, 'src/index.ts');
       const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // Verify we use StdioServerTransport, not HTTP-based transports
+      // Default transport is stdio (not HTTP)
       expect(indexContent).toContain('StdioServerTransport');
-      expect(indexContent).not.toContain('StreamableHTTPServerTransport');
+      // SSE transport is not used (deprecated in favor of StreamableHTTP)
       expect(indexContent).not.toContain('SSEServerTransport');
-
-      // If HTTP transports are added in the future, this test will fail
-      // reminding developers to enable DNS rebinding protection
     });
 
-    it('should not import HTTP transport modules in main server', async () => {
+    it('should not directly import raw SDK HTTP transports in main server', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
       const indexPath = path.join(projectRoot, 'src/index.ts');
       const indexContent = fs.readFileSync(indexPath, 'utf8');
 
-      // Check imports - should only import stdio transport
-      expect(indexContent).toContain('from "@modelcontextprotocol/sdk/server/stdio.js"');
+      // index.ts imports from StreamableHttpServer.ts (our wrapper),
+      // NOT directly from the SDK. The wrapper uses createMcpExpressApp()
+      // which enforces DNS rebinding protection.
       expect(indexContent).not.toContain('from "@modelcontextprotocol/sdk/server/sse.js"');
       expect(indexContent).not.toContain('from "@modelcontextprotocol/sdk/server/streamableHttp.js"');
     });
   });
 });
 
-describe('Future HTTP Transport Security', () => {
+describe('HTTP Transport Security (Phase 2)', () => {
   /**
-   * These tests document security requirements for when HTTP streaming is added.
-   * Currently DollhouseMCP uses stdio, but HTTP transport is planned.
+   * DollhouseMCP supports Streamable HTTP transport (--streamable-http).
+   * These tests verify the HTTP transport implementation meets security requirements.
    *
-   * When implementing HTTP transport:
-   * 1. Use hostHeaderValidation middleware for localhost bindings
-   * 2. Enable enableDnsRebindingProtection option
-   * 3. Require authentication for non-localhost bindings
+   * Security measures:
+   * 1. createMcpExpressApp() enforces DNS rebinding protection by default
+   * 2. Host allowlist via DOLLHOUSE_HTTP_ALLOWED_HOSTS
+   * 3. Per-client rate limiting
+   * 4. Default binding to 127.0.0.1 (localhost only)
    */
 
-  it('should have hostHeaderValidation middleware available for future HTTP use', async () => {
+  it('should use createMcpExpressApp for DNS rebinding protection', async () => {
+    const projectRoot = path.resolve(__dirname, '../..');
+    const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
+    const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
+
+    // createMcpExpressApp() enables DNS rebinding protection by default
+    expect(httpServerContent).toContain('createMcpExpressApp');
+  });
+
+  it('should have hostHeaderValidation middleware available', async () => {
     const middleware = await import('@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js');
 
-    // These will be needed when HTTP transport is implemented
     expect(middleware.hostHeaderValidation).toBeDefined();
     expect(middleware.localhostHostValidation).toBeDefined();
   });
 
-  it('should document DNS rebinding protection requirements for HTTP transport', () => {
-    const httpSecurityRequirements = {
-      // When adding StreamableHTTPServerTransport or SSEServerTransport:
-      localhostBinding: {
-        requirement: 'Use hostHeaderValidation middleware OR enableDnsRebindingProtection option',
-        allowedHosts: ['localhost', '127.0.0.1', '[::1]'],
-        reason: 'Prevents DNS rebinding attacks (CVE-2025-66414)'
-      },
-      publicBinding: {
-        requirement: 'Require authentication (OAuth, API key, etc.)',
-        reason: 'Unauthenticated public servers are vulnerable regardless of DNS rebinding protection'
-      },
-      bestPractices: [
-        'Use createMcpExpressApp() which enables protection by default',
-        'Or manually apply hostHeaderValidation() middleware',
-        'Never expose unauthenticated MCP servers to the network'
-      ]
-    };
+  it('should implement per-client rate limiting', async () => {
+    const projectRoot = path.resolve(__dirname, '../..');
+    const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
+    const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
 
-    // This test documents requirements for future implementation
-    expect(httpSecurityRequirements.localhostBinding.allowedHosts).toContain('localhost');
-    expect(httpSecurityRequirements.bestPractices.length).toBeGreaterThan(0);
+    expect(httpServerContent).toContain('consumeRateLimit');
+    expect(httpServerContent).toContain('rateLimitMaxRequests');
   });
 
-  it('should have SDK transports available for future HTTP implementation', async () => {
-    // Verify the SDK provides HTTP transports when needed
-    const sse = await import('@modelcontextprotocol/sdk/server/sse.js');
+  it('should default to localhost binding in env schema', () => {
+    // DOLLHOUSE_HTTP_HOST defaults to 127.0.0.1 in env.ts
+    // This prevents accidental exposure to the network
+    const projectRoot = path.resolve(__dirname, '../..');
+    const envPath = path.join(projectRoot, 'src/config/env.ts');
+    const envContent = fs.readFileSync(envPath, 'utf8');
+
+    // Verify the default is localhost, not 0.0.0.0
+    expect(envContent).toContain("DOLLHOUSE_HTTP_HOST: z.string().default('127.0.0.1')");
+  });
+
+  it('should have SDK transports available', async () => {
     const streamable = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
-
-    expect(sse).toHaveProperty('SSEServerTransport');
     expect(streamable).toHaveProperty('StreamableHTTPServerTransport');
-
-    // These transports accept enableDnsRebindingProtection option
-    // which should be set to true for localhost bindings
   });
 });
 

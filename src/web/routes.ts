@@ -215,7 +215,7 @@ async function loadMemoriesFromIndex(portfolioDir: string): Promise<unknown[]> {
 const installRateLimiter = new SlidingWindowRateLimiter(10, 60_000);
 
 /** Sanitize text content to prevent XSS in rendered HTML */
-function sanitizeForHtml(text: string): string {
+function _sanitizeForHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
@@ -225,7 +225,7 @@ function sanitizeForHtml(text: string): string {
 }
 
 /** Parse YAML front matter from a markdown file */
-function parseFrontMatter(content: string): { metadata: ElementDisplayMetadata; body: string } {
+function _parseFrontMatter(content: string): { metadata: ElementDisplayMetadata; body: string } {
   const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   if (!match) {
     return { metadata: {}, body: content };
@@ -241,7 +241,7 @@ function parseFrontMatter(content: string): { metadata: ElementDisplayMetadata; 
 }
 
 /** Parse a YAML-only file (memories) */
-function parseYamlFile(content: string): { metadata: ElementDisplayMetadata; body: string } {
+function _parseYamlFile(content: string): { metadata: ElementDisplayMetadata; body: string } {
   try {
     const parsed = SecureYamlParser.parseRawYaml(content);
     const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as ElementDisplayMetadata : {};

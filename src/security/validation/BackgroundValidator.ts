@@ -141,6 +141,7 @@ export class BackgroundValidator {
     this.intervalHandle = setInterval(() => {
       void this.processUntrustedMemories();
     }, this.config.intervalSeconds * 1000);
+    this.intervalHandle.unref();
   }
 
   /**

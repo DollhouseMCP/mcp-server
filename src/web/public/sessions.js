@@ -272,10 +272,10 @@
 
         var clientBadge = document.createElement('span');
         clientBadge.className = 'session-status-badge';
-        if (s.kind === 'mcp') {
+        if (s.kind === 'mcp' || s.kind === 'http') {
           clientBadge.textContent = '\u2713 Client';
           clientBadge.dataset.status = 'positive';
-          clientBadge.title = 'MCP client attached';
+          clientBadge.title = s.kind === 'http' ? 'HTTP MCP client' : 'MCP client attached';
         } else {
           clientBadge.textContent = '\u2717 No client';
           clientBadge.dataset.status = 'negative';
@@ -283,41 +283,55 @@
         }
         item.appendChild(clientBadge);
 
+        // Transport indicator for HTTP sessions
+        if (s.kind === 'http') {
+          var transportBadge = document.createElement('span');
+          transportBadge.className = 'session-status-badge';
+          transportBadge.textContent = 'HTTP';
+          transportBadge.dataset.status = 'positive';
+          transportBadge.title = 'Connected via Streamable HTTP transport';
+          item.appendChild(transportBadge);
+        }
+
         var uptimeEl = document.createElement('span');
         uptimeEl.className = 'session-dropdown-uptime';
         uptimeEl.dataset.startedAt = s.startedAt;
         uptimeEl.textContent = formatUptime(s.startedAt);
         item.appendChild(uptimeEl);
 
-        var killBtn = document.createElement('button');
-        killBtn.className = 'session-kill-btn';
-        killBtn.type = 'button';
-        killBtn.title = 'Stop ' + displayName(s);
-        killBtn.textContent = '\u00D7';
-        killBtn.addEventListener('click', function(e) {
-          e.stopPropagation();
-          if (!confirm('Stop session ' + displayName(s) + '?')) return;
-          DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
-            .then(function(res) {
-              if (!res.ok) {
-                alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+        // Kill button — only for stdio MCP sessions (HTTP and console sessions
+        // share the server process, so SIGTERM would kill everything)
+        if (s.kind === 'mcp') {
+          var killBtn = document.createElement('button');
+          killBtn.className = 'session-kill-btn';
+          killBtn.type = 'button';
+          killBtn.title = 'Stop ' + displayName(s);
+          killBtn.textContent = '\u00D7';
+          killBtn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            if (!confirm('Stop session ' + displayName(s) + '?')) return;
+            DollhouseAuth.apiFetch('/api/sessions/' + encodeURIComponent(s.sessionId) + '/kill', { method: 'POST' })
+              .then(function(res) {
+                if (!res.ok) {
+                  alert('Failed to stop session ' + displayName(s) + ': server returned ' + res.status);
+                  fetchSessions();
+                  return;
+                }
+                return res.json();
+              })
+              .then(function(data) {
+                if (!data) return;
+                if (data.reason === 'pending-kill') {
+                  alert('Session ' + displayName(s) + ' will be terminated shortly.\nWaiting for the process to identify itself, then it will be killed.');
+                }
                 fetchSessions();
-                return;
-              }
-              return res.json();
-            })
-            .then(function(data) {
-              if (!data) return;
-              if (data.reason === 'pending-kill') {
-                alert('Session ' + displayName(s) + ' will be terminated shortly.\nWaiting for the process to identify itself, then it will be killed.');
-              }
-              fetchSessions();
-            })
-            .catch(function(err) {
-              alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
-            });
-        });
-        item.appendChild(killBtn);
+              })
+              .catch(function(err) {
+                alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
+              });
+          });
+          item.appendChild(killBtn);
+        }
 
         item.addEventListener('click', function(e) {
           e.stopPropagation();
