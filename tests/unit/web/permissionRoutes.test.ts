@@ -183,6 +183,36 @@ describe('permissionRoutes', () => {
       });
     });
 
+    it('should expose known persisted policy sessions for the session picker', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 2,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [
+              { name: 'guard-a', sessionIds: ['session-b', 'session-a'] },
+              { name: 'guard-b', sessionIds: ['session-a'] },
+              { name: 'guard-c' },
+            ],
+            permissionPromptActive: false,
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.knownSessions).toEqual([
+        { sessionId: 'session-a', displayName: 'session-a', source: 'policy' },
+        { sessionId: 'session-b', displayName: 'session-b', source: 'policy' },
+      ]);
+    });
+
     it('should return 500 when handler fails', async () => {
       const handler = {
         handleRead: jest.fn().mockResolvedValue([{

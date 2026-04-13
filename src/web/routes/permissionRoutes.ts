@@ -25,6 +25,12 @@ interface PermissionDecision {
   reason?: string;
 }
 
+interface KnownPolicySession {
+  sessionId: string;
+  displayName: string;
+  source: 'policy';
+}
+
 const DECISION_BUFFER_SIZE = 200;
 const recentDecisions: PermissionDecision[] = [];
 let decisionCounter = 0;
@@ -57,6 +63,29 @@ function trackDecision(toolName: string, input: Record<string, unknown>, result:
 function asSingleResult(results: unknown): { success: boolean; data?: unknown; error?: string } {
   if (Array.isArray(results)) return results[0] || { success: false, error: 'Empty result' };
   return results as { success: boolean; data?: unknown; error?: string };
+}
+
+function extractKnownPolicySessions(elements: Array<Record<string, unknown>>): KnownPolicySession[] {
+  const seen = new Set<string>();
+  const knownSessions: KnownPolicySession[] = [];
+
+  for (const element of elements) {
+    const sessionIds = Array.isArray(element.sessionIds) ? element.sessionIds : [];
+    for (const sessionId of sessionIds) {
+      if (typeof sessionId !== 'string' || sessionId === '' || seen.has(sessionId)) {
+        continue;
+      }
+
+      seen.add(sessionId);
+      knownSessions.push({
+        sessionId,
+        displayName: sessionId,
+        source: 'policy',
+      });
+    }
+  }
+
+  return knownSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
 /**
@@ -169,6 +198,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
           ? confirmPatterns
           : ((data.combinedConfirmPatterns as string[] | undefined) ?? []),
         elements,
+        knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
         recentDecisions,
       });
