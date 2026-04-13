@@ -43,15 +43,20 @@ jobs:
       - name: Setup Node.js for npm
         uses: actions/setup-node@v4
         with:
-          # Node 22.x ships with npm 10.x, which has --provenance support since npm 9.5.0
-          node-version: '22.x'
-          # registry-url is required for OIDC detection — it creates .npmrc with a
-          # token placeholder. When NODE_AUTH_TOKEN is unset, npm expands it to an
-          # empty string, sees no valid token, and falls through to OIDC Trusted
-          # Publishing via ACTIONS_ID_TOKEN_REQUEST_URL. Without this, npm has no
-          # registry config at all and skips OIDC detection entirely.
+          # Node 24.x ships with npm 11.x — REQUIRED for OIDC Trusted Publishing.
+          # npm 10.x (Node 22) does not support the OIDC handshake and fails with
+          # ENEEDAUTH or a misleading E404. npm 11 is the minimum supported version.
+          node-version: '24.x'
+          # registry-url is required so setup-node creates .npmrc pointing at the
+          # registry. NODE_AUTH_TOKEN is explicitly cleared below so that setup-node
+          # does not inject GITHUB_TOKEN as the npm auth credential, which would
+          # conflict with OIDC Trusted Publishing.
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
+        env:
+          # CRITICAL: setup-node v4 defaults NODE_AUTH_TOKEN to GITHUB_TOKEN when
+          # registry-url is set. Clearing it lets npm fall through to OIDC auth.
+          NODE_AUTH_TOKEN: ''
 
       - name: Install dependencies
         run: npm ci
@@ -100,12 +105,9 @@ jobs:
           # Ensure provenance is enabled for OIDC detection
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
-          # Publish with provenance for supply chain security
-          # Uses OIDC authentication automatically when:
-          # 1. id-token: write permission is set
-          # 2. Running on GitHub Actions
-          # 3. No .npmrc with token configuration (we removed registry-url from setup-node)
-          # Using --loglevel verbose to diagnose OIDC issues
+          # Publish with provenance via OIDC Trusted Publishing.
+          # Requires: npm 11+ (Node 24), id-token: write, NODE_AUTH_TOKEN cleared,
+          # and a Trusted Publisher configured at npmjs.com/package/@dollhousemcp/mcp-server/access
           npm publish --provenance --access public --loglevel verbose
 
       - name: Dry run (skip publish)
