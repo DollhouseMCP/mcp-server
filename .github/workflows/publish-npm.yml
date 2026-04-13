@@ -45,8 +45,12 @@ jobs:
         with:
           # Node 22.x ships with npm 10.x, which has --provenance support since npm 9.5.0
           node-version: '22.x'
-          # NOTE: Do NOT use registry-url here! It creates .npmrc with token placeholder
-          # that blocks OIDC detection. npm will use default registry automatically.
+          # registry-url is required for OIDC detection — it creates .npmrc with a
+          # token placeholder. When NODE_AUTH_TOKEN is unset, npm expands it to an
+          # empty string, sees no valid token, and falls through to OIDC Trusted
+          # Publishing via ACTIONS_ID_TOKEN_REQUEST_URL. Without this, npm has no
+          # registry config at all and skips OIDC detection entirely.
+          registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
 
       - name: Install dependencies
