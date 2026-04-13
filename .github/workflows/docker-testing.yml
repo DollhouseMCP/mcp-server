@@ -700,6 +700,7 @@ jobs:
 
       - name: Cleanup Docker Compose
         if: always()
+        shell: bash
         run: |
           echo "🧹 Cleaning up Docker Compose..."
           cleanup_ok=false
