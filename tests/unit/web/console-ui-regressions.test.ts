@@ -347,7 +347,10 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('perm-selected-badge')?.textContent).toContain('Persisted Policy State (Debug Info)');
     expect(win.document.getElementById('perm-selected-source-list')?.textContent).toContain('autonomy-scout-demo');
     expect(win.document.getElementById('perm-selected-deny-list')?.textContent).toContain('mcp__DollhouseMCP__mcp_aql_delete*');
-    expect(apiFetch).not.toHaveBeenCalledWith('/api/permissions/status?sessionId=session-focus');
+    const selectedSessionRequests = apiFetch.mock.calls
+      .map(([url]) => url)
+      .filter((url): url is string => typeof url === 'string' && url.includes('sessionId=session-focus'));
+    expect(selectedSessionRequests).toHaveLength(0);
 
     cleanup();
   });
