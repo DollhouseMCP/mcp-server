@@ -19,6 +19,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { ContentValidator } from '../security/contentValidator.js';
 
 // File operation constants
 export const FILE_CONSTANTS = {
@@ -131,6 +132,48 @@ export class DefaultElementProvider {
     if (isDevMode && !this.config.loadTestData) {
       logger.info('[DefaultElementProvider] Development mode detected - test data loading disabled');
       logger.info('[DefaultElementProvider] To enable test data, set DOLLHOUSE_LOAD_TEST_DATA=true');
+    }
+
+    // Register bundled element hashes with ContentValidator so verified bundled
+    // content does not trigger false-positive CRITICAL injection alerts at startup.
+    this.registerBundledHashes();
+  }
+
+  /**
+   * Read data/HASHES.json (shipped with the npm package) and register each
+   * SHA-256 hash with ContentValidator as trusted bundled content.
+   *
+   * Only files whose on-disk hash matches the manifest entry are registered —
+   * any post-install modification breaks the hash and revokes trust automatically.
+   */
+  private registerBundledHashes(): void {
+    try {
+      const hashesPath = path.join(this.__dirname, '..', 'data', 'HASHES.json');
+      const raw = fsSync.readFileSync(hashesPath, 'utf-8');
+      const manifest: { files: Record<string, string> } = JSON.parse(raw);
+      const dataDir = path.join(this.__dirname, '..', 'data');
+      let registered = 0;
+
+      for (const [relPath, expectedHash] of Object.entries(manifest.files)) {
+        const fullPath = path.join(dataDir, relPath);
+        try {
+          const content = fsSync.readFileSync(fullPath);
+          const actualHash = createHash('sha256').update(content).digest('hex');
+          if (actualHash === expectedHash) {
+            ContentValidator.registerBundledHash(expectedHash);
+            registered++;
+          } else {
+            logger.warn(`[DefaultElementProvider] Bundled file hash mismatch — treating as untrusted: ${relPath}`);
+          }
+        } catch {
+          // File missing from this build's data/ — skip silently
+        }
+      }
+
+      logger.debug(`[DefaultElementProvider] Registered ${registered} verified bundled element hashes`);
+    } catch (err) {
+      // HASHES.json missing (older install, dev mode, or stripped package) — degrade gracefully
+      logger.debug('[DefaultElementProvider] data/HASHES.json not found — bundled element trust skipped');
     }
   }
   
