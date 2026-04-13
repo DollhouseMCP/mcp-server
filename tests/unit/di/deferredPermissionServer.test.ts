@@ -42,14 +42,22 @@ describe('Permission Server Wiring', () => {
     it('should write port file with correct content', async () => {
       const { writePortFile } = await import('../../../src/auto-dollhouse/portDiscovery.js');
       const runDir = path.join(os.homedir(), '.dollhouse', 'run');
+      const pidPortFile = path.join(runDir, `permission-server-${process.pid}.port`);
       const portFile = path.join(runDir, 'permission-server.port');
 
-      await writePortFile(49999);
+      const writtenFile = await writePortFile(49999);
 
-      const content = await fs.readFile(portFile, 'utf-8');
+      // Read the PID-keyed file returned by writePortFile() to avoid races with
+      // other suites that also update the shared latest-file path in CI.
+      const content = await fs.readFile(writtenFile, 'utf-8');
       expect(content.trim()).toBe('49999');
 
+      // The convenience "latest" file should still exist, but other suites may
+      // update it concurrently so we only assert presence here.
+      await expect(fs.stat(portFile)).resolves.toBeDefined();
+
       // Clean up test artifact
+      await fs.unlink(pidPortFile).catch(() => {});
       await fs.unlink(portFile).catch(() => {});
     });
   });

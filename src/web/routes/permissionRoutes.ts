@@ -25,6 +25,12 @@ interface PermissionDecision {
   reason?: string;
 }
 
+interface KnownPolicySession {
+  sessionId: string;
+  displayName: string;
+  source: 'policy';
+}
+
 const DECISION_BUFFER_SIZE = 200;
 const recentDecisions: PermissionDecision[] = [];
 let decisionCounter = 0;
@@ -57,6 +63,29 @@ function trackDecision(toolName: string, input: Record<string, unknown>, result:
 function asSingleResult(results: unknown): { success: boolean; data?: unknown; error?: string } {
   if (Array.isArray(results)) return results[0] || { success: false, error: 'Empty result' };
   return results as { success: boolean; data?: unknown; error?: string };
+}
+
+function extractKnownPolicySessions(elements: Array<Record<string, unknown>>): KnownPolicySession[] {
+  const seen = new Set<string>();
+  const knownSessions: KnownPolicySession[] = [];
+
+  for (const element of elements) {
+    const sessionIds = Array.isArray(element.sessionIds) ? element.sessionIds : [];
+    for (const sessionId of sessionIds) {
+      if (typeof sessionId !== 'string' || sessionId === '' || seen.has(sessionId)) {
+        continue;
+      }
+
+      seen.add(sessionId);
+      knownSessions.push({
+        sessionId,
+        displayName: sessionId,
+        source: 'policy',
+      });
+    }
+  }
+
+  return knownSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
 /**
@@ -130,10 +159,18 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
    * Returns current permission policies and recent decisions
    * for the live permissions dashboard.
    */
-  router.get('/permissions/status', async (_req, res) => {
+  router.get('/permissions/status', async (req, res) => {
     try {
+      const sessionId = typeof req.query['sessionId'] === 'string' && req.query['sessionId']
+        ? req.query['sessionId']
+        : undefined;
+
       const opResult = asSingleResult(await handler.handleRead({
         operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+          ...(sessionId ? { session_id: sessionId } : {}),
+        },
       }));
 
       if (!opResult.success) {
@@ -152,12 +189,16 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       res.json({
+        ...(sessionId ? { sessionId } : {}),
         activeElementCount: data.activeElementCount,
         hasAllowlist: data.hasAllowlist,
         denyPatterns: data.combinedDenyPatterns,
         allowPatterns: data.combinedAllowPatterns,
-        confirmPatterns,
+        confirmPatterns: confirmPatterns.length > 0
+          ? confirmPatterns
+          : ((data.combinedConfirmPatterns as string[] | undefined) ?? []),
         elements,
+        knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
         recentDecisions,
       });

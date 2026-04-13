@@ -201,6 +201,7 @@ async function startAsLeader(
   const ingestResult = createIngestRoutes({
     logBroadcast: (entry) => liveBroadcast?.(entry),
     metricsOnSnapshot: (snapshot) => liveMetricsOnSnapshot?.(snapshot),
+    storeMetricsSnapshot: (snapshot) => options.metricsSink?.onSnapshot(snapshot),
   });
 
   // Register the leader as a session
@@ -322,4 +323,3 @@ async function startAsFollower(
     },
   };
 }
-

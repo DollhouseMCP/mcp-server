@@ -3,7 +3,7 @@
  *
  * Shows a labeled "N sessions" box in the header. Clicking opens a
  * dropdown with selectable sessions. Selecting a session filters
- * logs and metrics to that session only.
+ * logs and refreshes any session-aware dashboard tabs.
  *
  * @security-audit-suppress DMCP-SEC-004 Client-side JS — all session data is
  * pre-normalized server-side via UnicodeValidator. Browser String.normalize('NFC')
@@ -24,6 +24,7 @@
   var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
   var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
   var sessions = [];
+  var policySessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
@@ -47,6 +48,10 @@
   /** NFC-normalize a string safely */
   function nfc(s) { try { return s.normalize('NFC'); } catch(e) { return s; } }
 
+  function isPolicyOnlySession(session) {
+    return !!(session && session.isPolicyOnly);
+  }
+
   function displayName(session) {
     if (typeof session === 'object' && session.displayName) return nfc(session.displayName);
     var id = typeof session === 'string' ? nfc(session) : nfc((session && session.sessionId) || '');
@@ -54,9 +59,72 @@
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
+  function getLiveSessions() {
+    return sessions.filter(function(s) { return s.status === 'active'; });
+  }
+
+  function getSelectableSessions() {
+    var live = getLiveSessions();
+    var liveIds = new Set(live.map(function(s) { return s.sessionId; }));
+    var merged = live.slice();
+    for (var i = 0; i < policySessions.length; i++) {
+      if (!liveIds.has(policySessions[i].sessionId)) merged.push(policySessions[i]);
+    }
+    return merged;
+  }
+
+  function getActiveTabName() {
+    var activeTab = document.querySelector('.console-tab.active');
+    return activeTab ? activeTab.dataset.tab || '' : '';
+  }
+
+  function normalizePolicySessions(list) {
+    if (!Array.isArray(list)) return [];
+
+    var seen = new Set();
+    var normalized = [];
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (!item || typeof item.sessionId !== 'string') continue;
+      var sessionId = nfc(item.sessionId).trim();
+      if (!sessionId || seen.has(sessionId)) continue;
+      seen.add(sessionId);
+      normalized.push({
+        sessionId: sessionId,
+        displayName: nfc(typeof item.displayName === 'string' && item.displayName ? item.displayName : sessionId),
+        color: '#94a3b8',
+        pid: 0,
+        startedAt: '',
+        lastHeartbeat: '',
+        status: 'policy',
+        isLeader: false,
+        authenticated: false,
+        kind: 'policy',
+        isPolicyOnly: true,
+      });
+    }
+
+    normalized.sort(function(a, b) { return a.sessionId.localeCompare(b.sessionId); });
+    return normalized;
+  }
+
+  function setPolicySessions(nextSessions) {
+    policySessions = normalizePolicySessions(nextSessions);
+    updateSessionIndicator();
+    updateSessionFilterOptions();
+  }
+
+  function allSessionsSummary(liveCount, policyCount) {
+    if (policyCount <= 0) return liveCount + ' total';
+    if (liveCount <= 0) return policyCount + ' saved';
+    return liveCount + ' live, ' + policyCount + ' saved';
+  }
+
   // Build a key from current sessions to detect changes
   function sessionListKey(list) {
-    return list.map(function(s) { return s.sessionId + ':' + s.status; }).join(',');
+    return list.map(function(s) {
+      return s.sessionId + ':' + s.status + ':' + (isPolicyOnlySession(s) ? 'policy' : 'live');
+    }).join(',');
   }
 
   // Apply session filter and update all UI to reflect it
@@ -67,8 +135,21 @@
     var logSelect = document.getElementById('log-session-filter');
     if (logSelect) logSelect.value = sessionId;
 
-    // Trigger log re-filter with the selected session
-    if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
+    if (window.DollhouseConsole && window.DollhouseConsole.permissions) {
+      if (window.DollhouseConsole.permissions.onSessionChange) {
+        window.DollhouseConsole.permissions.onSessionChange(sessionId);
+      } else if (window.DollhouseConsole.permissions.refresh) {
+        window.DollhouseConsole.permissions.refresh();
+      }
+    }
+
+    // Trigger log re-filter only when the Logs tab is active. Refiltering the
+    // virtualized log buffer can be expensive, and it should not delay session
+    // switching on other tabs like Permissions.
+    if (getActiveTabName() === 'logs'
+      && window.DollhouseConsole
+      && window.DollhouseConsole.logs
+      && window.DollhouseConsole.logs.refilter) {
       window.DollhouseConsole.logs.refilter(sessionId);
     }
 
@@ -117,7 +198,7 @@
     // Tick uptimes
     var uptimes = document.querySelectorAll('.session-dropdown-uptime');
     for (var j = 0; j < uptimes.length; j++) {
-      uptimes[j].textContent = formatUptime(uptimes[j].dataset.startedAt);
+      uptimes[j].textContent = uptimes[j].dataset.startedAt ? formatUptime(uptimes[j].dataset.startedAt) : 'saved';
     }
 
     // Update box label
@@ -125,7 +206,18 @@
     var labelEl = document.querySelector('.session-box-label');
     if (!countEl || !labelEl) return;
 
-    var active = sessions.filter(function(s) { return s.status === 'active'; });
+    var active = getLiveSessions();
+    var selectable = getSelectableSessions();
+
+    if (filterSessionId) {
+      var filtered = selectable.find(function(s) { return s.sessionId === filterSessionId; });
+      if (filtered) {
+        countEl.textContent = displayName(filtered);
+        if (filtered.color) countEl.style.color = filtered.color;
+        labelEl.textContent = isPolicyOnlySession(filtered) ? 'policy only' : ('1/' + active.length);
+        return;
+      }
+    }
 
     if (active.length === 1) {
       countEl.textContent = displayName(active[0]);
@@ -136,24 +228,16 @@
 
     // Reset color when showing count
     countEl.style.color = '';
-
-    if (filterSessionId) {
-      var filtered = active.find(function(s) { return s.sessionId === filterSessionId; });
-      if (filtered) {
-        countEl.textContent = displayName(filtered);
-        if (filtered.color) countEl.style.color = filtered.color;
-        labelEl.textContent = '1/' + active.length;
-        return;
-      }
-    }
     countEl.textContent = String(active.length);
     labelEl.textContent = active.length === 1 ? 'session' : 'sessions';
   }
 
   // Build or rebuild the session indicator — only when session list actually changes
   function updateSessionIndicator() {
-    var active = sessions.filter(function(s) { return s.status === 'active'; });
-    var key = sessionListKey(active);
+    var active = getLiveSessions();
+    var selectable = getSelectableSessions();
+    var policyOnly = selectable.filter(function(s) { return isPolicyOnlySession(s); });
+    var key = sessionListKey(selectable);
 
     // If sessions haven't changed, just refresh selection state
     if (key === lastSessionKey && dropdownBuilt) {
@@ -209,7 +293,7 @@
 
     var allCount = document.createElement('span');
     allCount.className = 'session-dropdown-role';
-    allCount.textContent = count + ' total';
+    allCount.textContent = allSessionsSummary(count, policyOnly.length);
     allItem.appendChild(allCount);
 
     allItem.addEventListener('click', function(e) {
@@ -218,10 +302,18 @@
     });
     dropdown.appendChild(allItem);
 
-    // Divider
-    var divider = document.createElement('div');
-    divider.className = 'session-dropdown-divider';
-    dropdown.appendChild(divider);
+    function appendDivider() {
+      var divider = document.createElement('div');
+      divider.className = 'session-dropdown-divider';
+      dropdown.appendChild(divider);
+    }
+
+    function appendHeading(text) {
+      var heading = document.createElement('div');
+      heading.className = 'session-dropdown-heading';
+      heading.textContent = text;
+      dropdown.appendChild(heading);
+    }
 
     // Session items — leader first, then followers
     var sorted = active.slice().sort(function(a, b) {
@@ -230,70 +322,78 @@
       return 0;
     });
 
-    for (var i = 0; i < sorted.length; i++) {
-      (function(s) {
-        var item = document.createElement('div');
-        item.className = 'session-dropdown-item';
-        item.dataset.sessionId = s.sessionId;
-        item.setAttribute('role', 'option');
+    function appendSessionItem(s) {
+      var item = document.createElement('div');
+      item.className = 'session-dropdown-item';
+      item.dataset.sessionId = s.sessionId;
+      item.setAttribute('role', 'option');
 
-        var check = document.createElement('span');
-        check.className = 'session-dropdown-check';
-        item.appendChild(check);
+      var check = document.createElement('span');
+      check.className = 'session-dropdown-check';
+      item.appendChild(check);
 
-        var dot = document.createElement('span');
-        dot.className = 'session-dot';
-        if (s.color) dot.style.background = s.color;
-        item.appendChild(dot);
+      var dot = document.createElement('span');
+      dot.className = 'session-dot';
+      if (s.color) dot.style.background = s.color;
+      item.appendChild(dot);
 
-        var nameEl = document.createElement('span');
-        nameEl.className = 'session-dropdown-name';
-        nameEl.textContent = displayName(s);
-        if (s.color) nameEl.style.color = s.color;
-        item.appendChild(nameEl);
+      var nameEl = document.createElement('span');
+      nameEl.className = 'session-dropdown-name';
+      nameEl.textContent = displayName(s);
+      if (s.color) nameEl.style.color = s.color;
+      item.appendChild(nameEl);
 
-        // Session status badges (#1805) — two independent dimensions:
-        // 1. Auth status (filled/empty circle + text)
-        // 2. Client attachment (checkmark/X + text)
-        // Shape + text + colorblind-safe color (blue/orange) = three
-        // independent channels so no single channel carries meaning alone.
-        var authBadge = document.createElement('span');
-        authBadge.className = 'session-status-badge';
-        if (s.authenticated) {
-          authBadge.textContent = '\u25CF Auth';
-          authBadge.dataset.status = 'positive';
-          authBadge.title = 'Authenticated session';
-        } else {
-          authBadge.textContent = '\u25CB No auth';
-          authBadge.dataset.status = 'negative';
-          authBadge.title = 'Unauthenticated session';
-        }
-        item.appendChild(authBadge);
+      // Session status badges (#1805) — for persisted policy sessions we
+      // switch from "live/authenticated" semantics to "saved/no client".
+      var authBadge = document.createElement('span');
+      authBadge.className = 'session-status-badge';
+      if (isPolicyOnlySession(s)) {
+        authBadge.textContent = 'Saved';
+        authBadge.dataset.status = 'positive';
+        authBadge.title = 'Persisted policy state from a prior session';
+      } else if (s.authenticated) {
+        authBadge.textContent = '\u25CF Auth';
+        authBadge.dataset.status = 'positive';
+        authBadge.title = 'Authenticated session';
+      } else {
+        authBadge.textContent = '\u25CB No auth';
+        authBadge.dataset.status = 'negative';
+        authBadge.title = 'Unauthenticated session';
+      }
+      item.appendChild(authBadge);
 
-        var clientBadge = document.createElement('span');
-        clientBadge.className = 'session-status-badge';
-        if (s.kind === 'mcp') {
-          clientBadge.textContent = '\u2713 Client';
-          clientBadge.dataset.status = 'positive';
-          clientBadge.title = 'MCP client attached';
-        } else {
-          clientBadge.textContent = '\u2717 No client';
-          clientBadge.dataset.status = 'negative';
-          clientBadge.title = 'No MCP client attached';
-        }
-        item.appendChild(clientBadge);
+      var clientBadge = document.createElement('span');
+      clientBadge.className = 'session-status-badge';
+      if (isPolicyOnlySession(s)) {
+        clientBadge.textContent = 'No client';
+        clientBadge.dataset.status = 'negative';
+        clientBadge.title = 'No live MCP client is currently attached';
+      } else if (s.kind === 'mcp') {
+        clientBadge.textContent = '\u2713 Client';
+        clientBadge.dataset.status = 'positive';
+        clientBadge.title = 'MCP client attached';
+      } else {
+        clientBadge.textContent = '\u2717 No client';
+        clientBadge.dataset.status = 'negative';
+        clientBadge.title = 'No MCP client attached';
+      }
+      item.appendChild(clientBadge);
 
-        var uptimeEl = document.createElement('span');
-        uptimeEl.className = 'session-dropdown-uptime';
-        uptimeEl.dataset.startedAt = s.startedAt;
-        uptimeEl.textContent = formatUptime(s.startedAt);
-        item.appendChild(uptimeEl);
+      var uptimeEl = document.createElement('span');
+      uptimeEl.className = 'session-dropdown-uptime';
+      uptimeEl.dataset.startedAt = s.startedAt;
+      uptimeEl.textContent = isPolicyOnlySession(s) ? 'saved' : formatUptime(s.startedAt);
+      item.appendChild(uptimeEl);
 
-        var killBtn = document.createElement('button');
-        killBtn.className = 'session-kill-btn';
-        killBtn.type = 'button';
+      var killBtn = document.createElement('button');
+      killBtn.className = 'session-kill-btn';
+      killBtn.type = 'button';
+      killBtn.textContent = '\u00D7';
+      if (isPolicyOnlySession(s)) {
+        killBtn.disabled = true;
+        killBtn.style.visibility = 'hidden';
+      } else {
         killBtn.title = 'Stop ' + displayName(s);
-        killBtn.textContent = '\u00D7';
         killBtn.addEventListener('click', function(e) {
           e.stopPropagation();
           if (!confirm('Stop session ' + displayName(s) + '?')) return;
@@ -317,15 +417,31 @@
               alert('Failed to stop session ' + displayName(s) + ': ' + (err.message || 'network error'));
             });
         });
-        item.appendChild(killBtn);
+      }
+      item.appendChild(killBtn);
 
-        item.addEventListener('click', function(e) {
-          e.stopPropagation();
-          applyFilter(filterSessionId === s.sessionId ? '' : s.sessionId);
-        });
+      item.addEventListener('click', function(e) {
+        e.stopPropagation();
+        applyFilter(filterSessionId === s.sessionId ? '' : s.sessionId);
+      });
 
-        dropdown.appendChild(item);
-      })(sorted[i]);
+      dropdown.appendChild(item);
+    }
+
+    if (sorted.length > 0) {
+      appendDivider();
+      appendHeading('Live Sessions');
+      for (var i = 0; i < sorted.length; i++) {
+        appendSessionItem(sorted[i]);
+      }
+    }
+
+    if (policyOnly.length > 0) {
+      appendDivider();
+      appendHeading('Persisted Policy State (Debug Info)');
+      for (var j = 0; j < policyOnly.length; j++) {
+        appendSessionItem(policyOnly[j]);
+      }
     }
 
     var wrapper = document.createElement('div');
@@ -391,14 +507,16 @@
     if (!select) return;
 
     var current = select.value;
-    var active = sessions.filter(function(s) { return s.status === 'active'; });
+    var selectable = getSelectableSessions();
 
     select.innerHTML = '<option value="">All Sessions</option>';
-    for (var i = 0; i < active.length; i++) {
+    for (var i = 0; i < selectable.length; i++) {
       var opt = document.createElement('option');
-      opt.value = active[i].sessionId;
-      opt.textContent = displayName(active[i]) + (active[i].isLeader ? ' (leader)' : '');
-      if (active[i].sessionId === current) opt.selected = true;
+      opt.value = selectable[i].sessionId;
+      opt.textContent = displayName(selectable[i])
+        + (selectable[i].isLeader ? ' (leader)' : '')
+        + (isPolicyOnlySession(selectable[i]) ? ' (policy only)' : '');
+      if (selectable[i].sessionId === current) opt.selected = true;
       select.appendChild(opt);
     }
   }
@@ -432,6 +550,8 @@
     getFilterSessionId: function() { return filterSessionId; },
     displayName: displayName,
     getSessions: function() { return sessions; },
+    getSelectableSessions: getSelectableSessions,
+    setPolicySessions: setPolicySessions,
   };
 
   function init() {

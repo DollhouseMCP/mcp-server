@@ -49,6 +49,31 @@ describe('Session registry (#1805)', () => {
     });
   });
 
+  describe('metrics ingestion', () => {
+    it('stores follower snapshots in the provided metrics callback', async () => {
+      const storeMetricsSnapshot = jest.fn();
+      ingestResult = createIngestRoutes({
+        logBroadcast: () => {},
+        storeMetricsSnapshot,
+      });
+      const app = buildApp(ingestResult);
+      const snapshot = {
+        id: 'snap-1',
+        timestamp: new Date().toISOString(),
+        metrics: [],
+        errors: [],
+        durationMs: 7,
+      };
+
+      const res = await request(app)
+        .post('/api/ingest/metrics')
+        .send({ sessionId: 'metrics-1', snapshot });
+
+      expect(res.status).toBe(200);
+      expect(storeMetricsSnapshot).toHaveBeenCalledWith(snapshot, 'metrics-1');
+    });
+  });
+
   describe('registerConsoleSession', () => {
     it('registers a console session with authenticated=true and kind=console', () => {
       ingestResult.registerConsoleSession();
