@@ -18,6 +18,8 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
+  const AUDIT_FEED_MIN_HEIGHT_PX = 320;
+  const AUDIT_FEED_MARGIN_PX = 24;
 
   async function fetchPermissionStatus(sessionId) {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
@@ -65,6 +67,7 @@
 
     root.innerHTML = buildDashboardHTML();
     attachCardToggles();
+    window.addEventListener('resize', scheduleAuditFeedLayout);
     poll(); // immediate first fetch
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);
   }
@@ -74,6 +77,7 @@
       clearInterval(pollTimer);
       pollTimer = null;
     }
+    window.removeEventListener('resize', scheduleAuditFeedLayout);
     initialized = false;
   }
 
@@ -109,6 +113,7 @@
     latestSelectedData = deriveSelectedSessionData(latestAggregateData, sessionId);
     renderPolicySources(latestAggregateData, latestSelectedData);
     renderSelectedSessionDetail(latestSelectedData);
+    scheduleAuditFeedLayout();
   }
 
   // ── Rendering ──────────────────────────────────────────────
@@ -122,6 +127,7 @@
     renderAllowPatterns(data);
     renderConfirmPatterns(data);
     renderLiveFeed(data);
+    scheduleAuditFeedLayout();
   }
 
   function renderError(message) {
@@ -539,6 +545,7 @@
         const collapsed = card.dataset.collapsed === 'true';
         card.dataset.collapsed = collapsed ? 'false' : 'true';
         header.setAttribute('aria-expanded', collapsed ? 'true' : 'false');
+        scheduleAuditFeedLayout();
       };
       header.addEventListener('click', toggle);
       header.addEventListener('keydown', (e) => {
@@ -554,8 +561,46 @@
         const expanded = feedCard.classList.toggle('perm-card--audit');
         expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
         expandBtn.textContent = expanded ? 'Compact Audit View' : 'Expand Audit View';
+        scheduleAuditFeedLayout();
       });
     }
+  }
+
+  function scheduleAuditFeedLayout() {
+    window.requestAnimationFrame(updateAuditFeedLayout);
+  }
+
+  function updateAuditFeedLayout() {
+    const feedCard = document.getElementById('perm-all-feed-card');
+    const feed = document.getElementById('perm-feed');
+    if (!feedCard || !feed) return;
+
+    if (!feedCard.classList.contains('perm-card--audit') || feedCard.dataset.collapsed === 'true') {
+      feed.style.removeProperty('--perm-audit-feed-height');
+      return;
+    }
+
+    const cards = Array.from(document.querySelectorAll('.perm-dashboard > .perm-card'));
+    const feedCardIndex = cards.indexOf(feedCard);
+    if (feedCardIndex === -1) return;
+
+    const reserveHeight = cards.slice(feedCardIndex + 1).reduce(function (total, card) {
+      if (card.hidden) return total;
+      const header = card.querySelector('.perm-card-header');
+      if (card.dataset.collapsed === 'true') {
+        return total + (header ? header.getBoundingClientRect().height : 0);
+      }
+      return total + card.getBoundingClientRect().height;
+    }, 0);
+
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+    const cardTop = feedCard.getBoundingClientRect().top;
+    const availableHeight = Math.max(
+      AUDIT_FEED_MIN_HEIGHT_PX,
+      viewportHeight - cardTop - reserveHeight - AUDIT_FEED_MARGIN_PX
+    );
+
+    feed.style.setProperty('--perm-audit-feed-height', `${Math.floor(availableHeight)}px`);
   }
 
   function setText(id, value) {

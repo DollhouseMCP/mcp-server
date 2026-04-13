@@ -341,7 +341,8 @@
 }
 
 .perm-card--audit .perm-feed {
-  max-height: 34rem;
+  height: var(--perm-audit-feed-height, 34rem);
+  max-height: var(--perm-audit-feed-height, 34rem);
 }
 
 .perm-feed-empty {
