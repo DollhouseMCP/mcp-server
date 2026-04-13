@@ -194,6 +194,7 @@ export class FileWatchService {
         code: reason?.error && isNodeError(reason.error) ? reason.error.code : undefined
       });
 
+      interval.unref();
       return new PollingWatcher(interval);
     };
 
@@ -284,6 +285,7 @@ export class FileWatchService {
       }
     });
 
+    watcher.unref();
     this.watchers.set(absoluteDir, { watcher, handlers });
     logger.debug('Started directory watcher', { directory: absoluteDir });
 

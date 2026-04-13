@@ -86,6 +86,7 @@ export function createMetricsRoutes(metricsSink: MemoryMetricsSink): MetricsRout
     const heartbeat = setInterval(() => {
       res.write(': heartbeat\n\n');
     }, 30_000);
+    heartbeat.unref();
 
     req.on('close', () => {
       clearInterval(heartbeat);

@@ -49,6 +49,9 @@ export class CollectionIndexManager {
   private cachedIndex: CollectionIndexCacheEntry | null = null;
   private backgroundRefreshPromise: Promise<void> | null = null;
   private isRefreshing = false;
+  private disposed = false;
+  private activeSleepTimer: ReturnType<typeof setTimeout> | null = null;
+  private activeSleepReject: ((reason: Error) => void) | null = null;
   private circuitBreakerFailures = 0;
   private circuitBreakerLastFailure = 0;
   private readonly CIRCUIT_BREAKER_THRESHOLD = 5;
@@ -313,9 +316,12 @@ export class CollectionIndexManager {
    * Fetch collection index from GitHub
    */
   private async fetchCollectionIndex(): Promise<{ data: CollectionIndex; etag?: string; lastModified?: string }> {
+    if (this.disposed) {
+      throw new Error('CollectionIndexManager disposed');
+    }
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.FETCH_TIMEOUT_MS);
-    
+
     try {
       // Build headers for conditional requests
       const headers: Record<string, string> = {
@@ -342,9 +348,7 @@ export class CollectionIndexManager {
         headers,
         signal: controller.signal
       });
-      
-      clearTimeout(timeoutId);
-      
+
       // Handle 304 Not Modified
       if (response.status === 304 && this.cachedIndex) {
         logger.debug('Collection index not modified (304), updating cache timestamp');
@@ -378,13 +382,13 @@ export class CollectionIndexManager {
       return { data: indexData, etag, lastModified };
       
     } catch (error) {
-      clearTimeout(timeoutId);
-      
       if (error instanceof Error && error.name === 'AbortError') {
         throw new Error(`Fetch timeout after ${this.FETCH_TIMEOUT_MS}ms`);
       }
-      
+
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
   
@@ -548,7 +552,17 @@ export class CollectionIndexManager {
    * Utility methods
    */
   private sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    if (this.disposed) {
+      return Promise.reject(new Error('CollectionIndexManager disposed'));
+    }
+    return new Promise((resolve, reject) => {
+      this.activeSleepReject = reject;
+      this.activeSleepTimer = setTimeout(() => {
+        this.activeSleepTimer = null;
+        this.activeSleepReject = null;
+        resolve();
+      }, ms);
+    });
   }
   
   private getErrorMessage(error: unknown): string {
@@ -622,5 +636,29 @@ export class CollectionIndexManager {
     if (this.backgroundRefreshPromise) {
       await this.backgroundRefreshPromise;
     }
+  }
+
+  /**
+   * Cancel any in-flight background refreshes, retry sleeps, and fetches.
+   *
+   * Called by DollhouseContainer.dispose() during shutdown. Without this,
+   * pending setTimeout timers and fetch operations keep the process alive
+   * after tests finish or the server stops.
+   */
+  dispose(): void {
+    this.disposed = true;
+
+    // Cancel any pending retry sleep timer
+    if (this.activeSleepTimer) {
+      clearTimeout(this.activeSleepTimer);
+      this.activeSleepTimer = null;
+    }
+    if (this.activeSleepReject) {
+      this.activeSleepReject(new Error('CollectionIndexManager disposed'));
+      this.activeSleepReject = null;
+    }
+
+    this.isRefreshing = false;
+    this.backgroundRefreshPromise = null;
   }
 }
