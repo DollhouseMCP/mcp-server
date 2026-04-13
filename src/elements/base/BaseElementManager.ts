@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { accessSync } from 'node:fs';
 import { IElementManager } from '../../types/elements/IElementManager.js';
 import { IElement, ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
@@ -1052,6 +1053,23 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     );
 
     if (this.autoReloadOnExternalChange) {
+      // Check if the file still exists before attempting reload.
+      // FileWatchService fires for deletions too — reloading a deleted file
+      // would log a spurious error. The uncacheByPath above already removed
+      // the element from the in-memory cache, which is the correct behavior
+      // for a deletion.
+      const absolutePath = path.resolve(this.elementDir, relativePath);
+      try {
+        accessSync(absolutePath);
+      } catch (fsError) {
+        // File was deleted — cache already cleared, nothing to reload
+        logger.debug('External change detected for deleted file, skipping reload', {
+          elementType: this.elementType,
+          filePath: relativePath,
+          code: fsError instanceof Error && 'code' in fsError ? (fsError as NodeJS.ErrnoException).code : undefined,
+        });
+        return;
+      }
       void this.load(relativePath).catch((error) => {
         logger.warn('Auto reload after external change failed', {
           elementType: this.elementType,

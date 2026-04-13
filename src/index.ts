@@ -896,9 +896,9 @@ async function startHttpConsole(
   let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
   let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
   let logManager: import('./logging/LogManager.js').LogManager | undefined;
-  try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch (_e) { /* optional service */ }
-  try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch (_e) { /* optional service */ }
-  try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch (_e) { /* optional service */ }
+  try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch (e) { logger.debug('[HTTP Console] MemoryLogSink not registered, using fallback', { error: (e as Error).message }); }
+  try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch (e) { logger.debug('[HTTP Console] MemoryMetricsSink not registered, using fallback', { error: (e as Error).message }); }
+  try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch (e) { logger.debug('[HTTP Console] LogManager not registered', { error: (e as Error).message }); }
 
   // Fallback sinks if not available from the container
   if (!memorySink) {
@@ -932,7 +932,7 @@ async function startHttpConsole(
 
   // Resolve MCP-AQL handler for gateway routes
   let mcpAqlHandler: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler | undefined;
-  try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (_e) { /* optional service */ }
+  try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (e) { logger.debug('[HTTP Console] MCPAQLHandler not registered', { error: (e as Error).message }); }
 
   // Start the web server
   const { startWebServer } = await import('./web/server.js');
@@ -1001,186 +1001,179 @@ async function startStreamableHttpServer(
   });
 }
 
-if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
-  // Issue #704: --web flag starts the portfolio web UI instead of MCP server
+/**
+ * Bootstrap the DI container for --web standalone mode with graceful
+ * degradation. Returns the container and resolved services, or fallback
+ * sinks if the container fails to initialize.
+ */
+async function bootstrapWebContainer(): Promise<{
+  container?: DollhouseContainer;
+  mcpAqlHandler?: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler;
+  memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink;
+  metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
+  logManager?: import('./logging/LogManager.js').LogManager;
+}> {
+  let container: DollhouseContainer | undefined;
+  let mcpAqlHandler;
+  let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
+  let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
+  let logManager: import('./logging/LogManager.js').LogManager | undefined;
+
+  try {
+    container = new DollhouseContainer();
+    await container.preparePortfolio();
+    const bundle = await container.bootstrapHandlers();
+    await container.completeSinkSetup();
+
+    try {
+      const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
+      await sweepStalePortFiles();
+    } catch { /* non-fatal */ }
+
+    mcpAqlHandler = bundle.mcpAqlHandler;
+    try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
+    try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
+    try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch { /* not registered */ }
+  } catch (err) {
+    console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
+    console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
+  }
+
+  // Fallback sinks if container bootstrap failed
+  if (!memorySink) {
+    const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
+    memorySink = new MemoryLogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MemoryMetricsSink(240);
+    try {
+      container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager')?.registerSink(metricsSink);
+    } catch { /* MetricsManager may be unavailable in degraded startup */ }
+  }
+
+  return { container, mcpAqlHandler, memorySink, metricsSink, logManager };
+}
+
+/**
+ * Listen for quit commands on stdin (standalone --web and HTTP modes).
+ * Only active when stdin is a TTY (not piped).
+ */
+function listenForQuitCommands(): void {
+  if (!process.stdin.isTTY) return;
+  process.stdin.setEncoding('utf-8');
+  process.stdin.resume();
+  let quitDebounce: ReturnType<typeof setTimeout> | null = null;
+  process.stdin.on('data', (data: string) => {
+    const cmd = data.trim().toLowerCase();
+    if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
+      if (quitDebounce) return;
+      quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
+      console.error('\n  Shutting down DollhouseMCP...\n');
+      process.exit(0);
+    }
+  });
+}
+
+/**
+ * Start DollhouseMCP in standalone --web mode.
+ * Runs the portfolio web UI without an MCP transport connection.
+ */
+async function startWebStandaloneMode(): Promise<void> {
+  const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+  const portArg = process.argv.find(a => a.startsWith('--port='));
+  const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
+  const noBrowser = process.argv.includes('--no-open');
+
+  // Pre-flight: kill any stale process squatting on our port (#1850)
+  const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
+  try {
+    const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
+    if (await recoverStalePort(targetPort)) {
+      console.error(`  Cleared stale process from port ${targetPort}\n`);
+    }
+  } catch (err) {
+    console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const { mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
+
+  const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (_entry) => { /* wired after server starts */ },
+    metricsOnSnapshot: (snapshot) => { metricsSink.onSnapshot(snapshot); },
+  });
+  ingestResult.registerConsoleSession();
+
+  const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
+  const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
+  const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  try {
+    await tokenStore.ensureInitialized(pickRandomTokenName());
+  } catch (err) {
+    console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
+  }
+
+  const resolvedPort = cliPort || await resolvePortFromConfig();
+  const { startWebServer } = await import('./web/server.js');
+  const webResult = await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+
+  if (webResult.logBroadcast && logManager) {
+    const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
+    logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+  }
+
+  listenForQuitCommands();
+}
+
+/**
+ * Start DollhouseMCP in Streamable HTTP mode with optional web console.
+ */
+async function startHttpMode(): Promise<void> {
+  const options = getStreamableHttpRuntimeOptions();
+  const container = await bootstrapHttpContainer();
+
+  let ingestRoutes: import('./web/console/IngestRoutes.js').IngestRoutesResult | undefined;
+  if (env.DOLLHOUSE_HTTP_WEB_CONSOLE) {
+    try {
+      ingestRoutes = await startHttpConsole(container);
+      console.error(`[DollhouseMCP] Management console at http://127.0.0.1:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`);
+    } catch (err) {
+      console.error('[DollhouseMCP] Web console failed to start (HTTP transport will continue):', (err as Error).message || err);
+    }
+  }
+
+  const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
+  console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+}
+
+/**
+ * Main entry point dispatcher. Selects the startup mode based on CLI flags
+ * and environment, then runs the appropriate async startup function.
+ */
+async function main(): Promise<void> {
   const isWebMode = process.argv.includes('--web');
+
   if (isWebMode) {
-    // Issue #796: Bootstrap DI container for web-only mode so API routes
-    // go through MCPAQLHandler (validated, cached, gatekeeper-checked)
-    //
-    // Suppress terminal output in --web mode unless DOLLHOUSE_DEBUG is set.
-    // All logs are still captured in MemoryLogSink and visible in the Logs tab —
-    // the terminal only needs the console URL banner, not a wall of startup noise.
     if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
       logger.setMinLevel('error');
     }
-
-    (async () => {
-      const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
-      // CLI flag parsed early; config file resolved after container bootstrap (#1840)
-      const portArg = process.argv.find(a => a.startsWith('--port='));
-      const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
-      const noBrowser = process.argv.includes('--no-open');
-
-      // Pre-flight: kill any stale DollhouseMCP process squatting on our port
-      // BEFORE any container/server setup. This is the definitive fix for #1850 —
-      // clear the port first, then start cleanly.
-      // Race condition note: a new process could grab the port between kill and
-      // our bind, but recoverStalePort's TOCTOU mitigation (500ms lock file
-      // re-read) and bindAndListen's own recovery handle that edge case.
-      const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
-      try {
-        const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
-        const recovered = await recoverStalePort(targetPort);
-        if (recovered) {
-          console.error(`  Cleared stale process from port ${targetPort}\n`);
-        }
-      } catch (err) {
-        // Non-fatal — bindAndListen will handle EADDRINUSE as a fallback.
-        // Log so operators can diagnose recovery failures.
-        console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      let container: DollhouseContainer | undefined;
-      let mcpAqlHandler;
-      let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
-      let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
-      let logManager: import('./logging/LogManager.js').LogManager | undefined;
-      try {
-        container = new DollhouseContainer();
-        await container.preparePortfolio();
-        const bundle = await container.bootstrapHandlers();
-
-        // Wire sinks, hooks, collectors, and security — skip only leader election
-        // and permission server. Standalone --web mode IS the server (#1866).
-        await container.completeSinkSetup();
-
-        // Sweep stale port files (normally done in completeConsoleSetup)
-        try {
-          const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
-          await sweepStalePortFiles();
-        } catch { /* non-fatal */ }
-
-        mcpAqlHandler = bundle.mcpAqlHandler;
-        try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
-        try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
-        try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch { /* not registered */ }
-      } catch (err) {
-        console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
-        console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
-        console.error("[DollhouseMCP] This may indicate a corrupt portfolio or missing dependencies.");
-      }
-
-      // Fallback sinks if container bootstrap failed entirely —
-      // standalone --web mode still needs working logs and metrics tabs
-      if (!memorySink) {
-        const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
-        memorySink = new MemoryLogSink({
-          appCapacity: 10000,
-          securityCapacity: 5000,
-          perfCapacity: 2000,
-          telemetryCapacity: 1000,
-        });
-      }
-      if (!metricsSink) {
-        const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
-        metricsSink = new MemoryMetricsSink(240);
-        try {
-          const metricsManager = container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager');
-          metricsManager?.registerSink(metricsSink);
-        } catch {
-          // MetricsManager may be unavailable in the degraded startup path.
-        }
-      }
-
-      // Set up ingest routes so --web mode has a session registry (#1805).
-      // Without this, the session indicator is always empty in standalone mode.
-      const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
-      const ingestResult = createIngestRoutes({
-        logBroadcast: (_entry) => { /* wired after server starts */ },
-        metricsOnSnapshot: (snapshot) => { metricsSink?.onSnapshot(snapshot); },
-      });
-      ingestResult.registerConsoleSession();
-
-      // Initialize console token store so Auth tab routes mount (#1825).
-      // Mirrors UnifiedConsole.ts:startAsLeader() — without this,
-      // /api/console/totp and /api/console/token return 404.
-      const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
-      const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
-      const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-      try {
-        await tokenStore.ensureInitialized(pickRandomTokenName());
-      } catch (err) {
-        console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
-      }
-
-      // Resolve port: CLI flag → config file → env var → default (#1840)
-      const resolvedPort = cliPort || await resolvePortFromConfig();
-
-      const { startWebServer } = await import('./web/server.js');
-      const webResult = await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
-
-      // Wire SSE log broadcast into LogManager so new log entries reach the
-      // browser SSE stream. Without this, only the backfill from MemoryLogSink
-      // appears — live entries from MCPLogger never reach WebSSELogSink.
-      if (webResult.logBroadcast && logManager) {
-        const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
-        logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
-      }
-
-      // Listen for quit commands on stdin (standalone --web mode only).
-      // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.
-      if (process.stdin.isTTY) {
-        process.stdin.setEncoding('utf-8');
-        process.stdin.resume();
-        let quitDebounce: ReturnType<typeof setTimeout> | null = null;
-        process.stdin.on('data', (data: string) => {
-          const cmd = data.trim().toLowerCase();
-          if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
-            // Debounce rapid inputs (e.g., accidental double-tap)
-            if (quitDebounce) return;
-            quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
-            console.error('\n  Shutting down DollhouseMCP...\n');
-            process.exit(0);
-          }
-        });
-      }
-    })().catch(err => {
-      console.error("[DollhouseMCP] Web UI failed to start:", err);
-      process.exit(1);
-    });
-  } else if (getRequestedTransportName() === 'streamable-http') {
-    const options = getStreamableHttpRuntimeOptions();
-    (async () => {
-      // Bootstrap shared container once for both console and HTTP transport
-      const container = await bootstrapHttpContainer();
-
-      // Optionally start the web console for session monitoring
-      let ingestRoutes: import('./web/console/IngestRoutes.js').IngestRoutesResult | undefined;
-      if (env.DOLLHOUSE_HTTP_WEB_CONSOLE) {
-        try {
-          ingestRoutes = await startHttpConsole(container);
-          console.error(`[DollhouseMCP] Management console at http://127.0.0.1:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`);
-        } catch (err) {
-          // Console failure should not block HTTP transport
-          console.error('[DollhouseMCP] Web console failed to start (HTTP transport will continue):', (err as Error).message || err);
-        }
-      }
-
-      const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
-      console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
-    })().catch(err => {
-      console.error('[DollhouseMCP] Streamable HTTP server failed to start:', err);
-      process.exit(1);
-    });
-  } else {
-    if (isDebugStartupLogging) {
-      console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
-    }
-    startServerWithRetry().catch(() => {
-      // Note: Using console.error here is intentional as it's the final error before exit
-      console.error("[DollhouseMCP] Server startup failed");
-      process.exit(1);
-    });
+    return startWebStandaloneMode();
   }
+
+  if (getRequestedTransportName() === 'streamable-http') {
+    return startHttpMode();
+  }
+
+  if (isDebugStartupLogging) {
+    console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
+  }
+  return startServerWithRetry();
+}
+
+if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
+  main().catch(err => { // NOSONAR — top-level await breaks Jest CJS transform; .catch() is required here
+    console.error('[DollhouseMCP] Server startup failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
 }

@@ -9,9 +9,9 @@
  * @module tests/helpers/httpTransportHelper
  */
 
-import { promises as fs } from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+import { promises as fs } from 'node:fs';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { DollhouseContainer } from '../../src/di/Container.js';

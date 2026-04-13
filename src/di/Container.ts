@@ -1526,9 +1526,7 @@ export class DollhouseContainer {
    * a ToolRegistry or Server — those are per-session (see createServerForHttpSession).
    */
   public async bootstrapHttpHandlers(): Promise<HandlerBundle> {
-    if (!this.httpHandlerBundle) {
-      this.httpHandlerBundle = await this.bootstrapHandlers();
-    }
+    this.httpHandlerBundle ??= await this.bootstrapHandlers();
     return this.httpHandlerBundle;
   }
 
@@ -1539,7 +1537,7 @@ export class DollhouseContainer {
    * and ServerSetup with a session-specific SessionResolver. Handlers are
    * shared across sessions — they are stateless or session-aware (Phase 2 prereqs).
    *
-   * Phase 3 TODO: Per-session ActivationStore. Currently all HTTP sessions
+   * Phase 3: Per-session ActivationStore. Currently all HTTP sessions
    * share the container's global activation state.
    *
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
@@ -1566,7 +1564,11 @@ export class DollhouseContainer {
       if (resourcesConfig?.advertise_resources === true) {
         capabilities.resources = {};
       }
-    } catch (_e) { /* config not available — use safe default */ }
+    } catch (configError) {
+      logger.debug('[HTTP Session] Config not available for resources capability, using safe default', {
+        error: configError instanceof Error ? configError.message : String(configError),
+      });
+    }
 
     const server = new Server(
       { name: 'dollhousemcp', version: PACKAGE_VERSION },
@@ -1589,7 +1591,7 @@ export class DollhouseContainer {
       server,
       dispose: async () => {
         // Server cleanup is handled by the SDK transport layer.
-        // Phase 3 TODO: dispose per-session ActivationStore here.
+        // Phase 3: dispose per-session ActivationStore here.
 
         // Clean up session-keyed state in the shared MCPAQLHandler
         // (executing agents, pending saves, frequency counters, aborted goals).

@@ -305,6 +305,15 @@ export async function createStreamableHttpRuntime(
     }
 
     const now = Date.now();
+
+    // Evict expired rate limit entries to bound Map growth from unique client IPs.
+    // Only runs when the Map exceeds 1000 entries to avoid per-request overhead.
+    if (rateLimits.size > 1000) {
+      for (const [key, record] of rateLimits) {
+        if (record.windowEndsAt <= now) rateLimits.delete(key);
+      }
+    }
+
     const clientKey = getClientKey(req);
     const current = rateLimits.get(clientKey);
 
@@ -388,6 +397,8 @@ export async function createStreamableHttpRuntime(
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
         options.onSessionCreated?.(sessionId);
+        // Fire-and-forget: replenishPoolPromise guard inside maintainSessionPool()
+        // prevents concurrent replenishment — safe to call without awaiting.
         void maintainSessionPool();
       },
     });
@@ -544,7 +555,14 @@ export async function createStreamableHttpRuntime(
     const session = sessionId ? sessions.get(sessionId) : undefined;
 
     if (!sessionId) {
-      respondWithJsonRpcError(res, 400, 'A valid mcp-session-id header is required.');
+      // GET without session ID is the SDK's SSE stream probe.
+      // Return 405 so the client silently falls back to POST-only mode.
+      // Other status codes (including 400) trigger onerror in the SDK client.
+      if (methodName === 'GET') {
+        res.status(405).end();
+      } else {
+        respondWithJsonRpcError(res, 400, 'A valid mcp-session-id header is required.');
+      }
       return;
     }
 
