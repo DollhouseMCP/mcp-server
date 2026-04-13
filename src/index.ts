@@ -873,6 +873,10 @@ async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
   await container.preparePortfolio();
   await container.bootstrapHttpHandlers();
   await container.completeSinkSetup();
+  // Mark deferred setup as complete — HTTP mode runs completeSinkSetup()
+  // directly (skipping completeConsoleSetup which handles leader election).
+  // Without this, BuildInfoService reports "Initializing" indefinitely.
+  container.deferredSetupComplete = true;
   return container;
 }
 
