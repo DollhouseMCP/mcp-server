@@ -16,6 +16,13 @@
   let initialized = false;
   let lastDecisionId = null;
 
+  async function fetchPermissionStatus(sessionId) {
+    const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+    const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   // ── Public API ─────────────────────────────────────────────
 
   window.DollhouseConsole = window.DollhouseConsole || {};
@@ -71,12 +78,18 @@
   async function poll() {
     try {
       const sessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
-      const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
-      const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      window.DollhouseSessions?.setPolicySessions?.(data.knownSessions || []);
-      render(data);
+      const [aggregateData, selectedData] = await Promise.all([
+        fetchPermissionStatus(''),
+        sessionId
+          ? fetchPermissionStatus(sessionId).catch(err => ({
+              error: err.message,
+              sessionId,
+            }))
+          : Promise.resolve(null),
+      ]);
+
+      window.DollhouseSessions?.setPolicySessions?.(aggregateData.knownSessions || []);
+      render(aggregateData, selectedData);
     } catch (err) {
       renderError(err.message);
     }
@@ -84,10 +97,11 @@
 
   // ── Rendering ──────────────────────────────────────────────
 
-  function render(data) {
+  function render(data, selectedData) {
     renderStatusBar(data);
     renderSummaryStats(data);
-    renderPolicySources(data);
+    renderPolicySources(data, selectedData);
+    renderSelectedSessionDetail(selectedData);
     renderDenyPatterns(data);
     renderAllowPatterns(data);
     renderConfirmPatterns(data);
@@ -146,23 +160,85 @@
     setText('perm-stat-asked', asked);
   }
 
-  function renderPolicySources(data) {
+  function renderPolicySources(data, selectedData) {
     const list = document.getElementById('perm-source-list');
     if (!list) return;
 
     const elements = data.elements || [];
+    const selectedSessionId = selectedData?.sessionId;
     if (elements.length === 0) {
       list.innerHTML = '<li class="perm-pattern-empty">No active elements with policies</li>';
       return;
     }
 
     list.innerHTML = elements.map(el => `
-      <li class="perm-source-item">
+      <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
         <span class="perm-source-type">${esc(el.type)}</span>
         <span class="perm-source-name">${esc(el.element_name)}</span>
         ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
       </li>
     `).join('');
+  }
+
+  function renderSelectedSessionDetail(selectedData) {
+    const card = document.getElementById('perm-selected-card');
+    const title = document.getElementById('perm-selected-title');
+    const subtitle = document.getElementById('perm-selected-subtitle');
+    const badge = document.getElementById('perm-selected-badge');
+    const sourceList = document.getElementById('perm-selected-source-list');
+    const denyList = document.getElementById('perm-selected-deny-list');
+    const allowList = document.getElementById('perm-selected-allow-list');
+    const confirmList = document.getElementById('perm-selected-confirm-list');
+
+    if (!card || !title || !subtitle || !badge || !sourceList || !denyList || !allowList || !confirmList) {
+      return;
+    }
+
+    if (!selectedData?.sessionId) {
+      card.hidden = true;
+      return;
+    }
+
+    card.hidden = false;
+
+    const sessionInfo = window.DollhouseSessions?.getSelectableSessions?.()
+      ?.find(session => session.sessionId === selectedData.sessionId);
+    const sessionLabel = window.DollhouseSessions?.displayName?.(sessionInfo || selectedData.sessionId)
+      || selectedData.sessionId;
+    const policyOnly = !!sessionInfo?.isPolicyOnly;
+
+    title.textContent = `Selected Session: ${sessionLabel}`;
+    subtitle.textContent = policyOnly
+      ? `${selectedData.sessionId} is showing saved policy state from disk. This is not a live attached client.`
+      : `${selectedData.sessionId} is the current live policy view for this session.`;
+
+    badge.hidden = !policyOnly;
+    if (policyOnly) {
+      badge.textContent = 'Persisted Policy State (Debug Info)';
+    }
+
+    if (selectedData.error) {
+      sourceList.innerHTML = `<li class="perm-pattern-empty">${esc(selectedData.error)}</li>`;
+      denyList.innerHTML = '<li class="perm-pattern-empty">Unable to load selected session</li>';
+      allowList.innerHTML = '<li class="perm-pattern-empty">Unable to load selected session</li>';
+      confirmList.innerHTML = '<li class="perm-pattern-empty">Unable to load selected session</li>';
+      return;
+    }
+
+    const elements = selectedData.elements || [];
+    sourceList.innerHTML = elements.length === 0
+      ? '<li class="perm-pattern-empty">No policy-bearing elements found for this session</li>'
+      : elements.map(el => `
+          <li class="perm-source-item perm-source-item--detail">
+            <span class="perm-source-type">${esc(el.type)}</span>
+            <span class="perm-source-name">${esc(el.element_name)}</span>
+            ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
+          </li>
+        `).join('');
+
+    renderPatternList('perm-selected-deny-list', selectedData.denyPatterns || [], 'deny');
+    renderPatternList('perm-selected-allow-list', selectedData.allowPatterns || [], 'allow');
+    renderPatternList('perm-selected-confirm-list', selectedData.confirmPatterns || [], 'confirm');
   }
 
   function renderDenyPatterns(data) {
@@ -289,10 +365,54 @@
           </div>
         </div>
 
+        <!-- Selected Session Detail -->
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-selected-card" hidden>
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
+            <h3 class="perm-card-title">Selected Session Detail</h3>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
+          </div>
+          <div class="perm-card-body">
+            <div class="perm-selected-header">
+              <div>
+                <div class="perm-selected-title" id="perm-selected-title">Selected Session</div>
+                <div class="perm-selected-subtitle" id="perm-selected-subtitle"></div>
+              </div>
+              <span class="perm-selected-badge" id="perm-selected-badge" hidden>Persisted Policy State (Debug Info)</span>
+            </div>
+
+            <div class="perm-selected-grid">
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Policy Sources</h4>
+                <ul class="perm-source-list" id="perm-selected-source-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Deny Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-deny-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Allow Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-allow-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Confirm Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-confirm-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Policy Sources -->
         <div class="perm-card" data-collapsed="false">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Policy Sources</h3>
+            <h3 class="perm-card-title">All Policy Sources</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
@@ -378,6 +498,11 @@
   function setText(id, value) {
     const el = document.getElementById(id);
     if (el) el.textContent = String(value);
+  }
+
+  function elementMatchesSelected(element, sessionId) {
+    if (!sessionId || !Array.isArray(element?.sessionIds)) return false;
+    return element.sessionIds.includes(sessionId);
   }
 
   // dmcp-sec[DMCP-SEC-004] — Client-side JS: UnicodeValidator unavailable in browser.

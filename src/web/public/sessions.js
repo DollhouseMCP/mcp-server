@@ -423,7 +423,7 @@
 
     if (policyOnly.length > 0) {
       appendDivider();
-      appendHeading('Persisted Policy State');
+      appendHeading('Persisted Policy State (Debug Info)');
       for (var j = 0; j < policyOnly.length; j++) {
         appendSessionItem(policyOnly[j]);
       }

@@ -120,6 +120,76 @@
   padding: 1rem;
 }
 
+.perm-selected-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+.perm-selected-title {
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--ink-900, #0f172a);
+}
+
+.perm-selected-subtitle {
+  margin-top: 0.35rem;
+  color: var(--ink-500, #64748b);
+  font-size: 0.8125rem;
+  max-width: 58rem;
+}
+
+.perm-selected-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  background: #fff7ed;
+  color: #9a3412;
+  border: 1px solid #fed7aa;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.perm-selected-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.perm-selected-panel {
+  border: 1px solid var(--ink-100, #e2e8f0);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  background: var(--paper-base, #f8fafc);
+}
+
+.perm-selected-panel-title {
+  margin: 0;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--ink-100, #e2e8f0);
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink-700, #334155);
+}
+
+.perm-source-item--selected {
+  background: color-mix(in srgb, var(--signal-2, #3b82f6) 10%, transparent);
+  border-left: 3px solid var(--signal-2, #3b82f6);
+  padding-left: calc(0.75rem - 3px);
+}
+
+.perm-source-item--detail {
+  background: transparent;
+}
+
 /* ── Stat Grid ─────────────────────────────────────────────── */
 
 .perm-stat-grid {
@@ -259,6 +329,12 @@
 .perm-feed-decision--allow { color: #22c55e; }
 .perm-feed-decision--deny { color: #ef4444; }
 .perm-feed-decision--ask { color: #f97316; }
+
+@media (max-width: 900px) {
+  .perm-selected-grid {
+    grid-template-columns: 1fr;
+  }
+}
 
 .perm-feed-tool {
   color: var(--ink-700, #334155);
