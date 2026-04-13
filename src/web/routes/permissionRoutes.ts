@@ -130,10 +130,18 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
    * Returns current permission policies and recent decisions
    * for the live permissions dashboard.
    */
-  router.get('/permissions/status', async (_req, res) => {
+  router.get('/permissions/status', async (req, res) => {
     try {
+      const sessionId = typeof req.query['sessionId'] === 'string' && req.query['sessionId']
+        ? req.query['sessionId']
+        : undefined;
+
       const opResult = asSingleResult(await handler.handleRead({
         operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+          ...(sessionId ? { session_id: sessionId } : {}),
+        },
       }));
 
       if (!opResult.success) {
@@ -152,11 +160,14 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       res.json({
+        ...(sessionId ? { sessionId } : {}),
         activeElementCount: data.activeElementCount,
         hasAllowlist: data.hasAllowlist,
         denyPatterns: data.combinedDenyPatterns,
         allowPatterns: data.combinedAllowPatterns,
-        confirmPatterns,
+        confirmPatterns: confirmPatterns.length > 0
+          ? confirmPatterns
+          : ((data.combinedConfirmPatterns as string[] | undefined) ?? []),
         elements,
         permissionPromptActive: data.permissionPromptActive,
         recentDecisions,

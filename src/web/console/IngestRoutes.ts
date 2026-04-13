@@ -103,6 +103,7 @@ export interface SessionEventPayload {
 export interface IngestBroadcasts {
   logBroadcast: (entry: UnifiedLogEntry) => void;
   metricsOnSnapshot?: (snapshot: MetricSnapshot) => void;
+  storeMetricsSnapshot?: (snapshot: MetricSnapshot, sessionId: string) => void;
   sessionBroadcast?: (event: SessionInfo) => void;
 }
 
@@ -283,6 +284,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     if (broadcasts.metricsOnSnapshot) {
       broadcasts.metricsOnSnapshot(payload.snapshot);
+    }
+    if (broadcasts.storeMetricsSnapshot) {
+      broadcasts.storeMetricsSnapshot(payload.snapshot, payload.sessionId);
     }
 
     // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)

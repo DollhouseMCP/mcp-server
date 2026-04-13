@@ -3,7 +3,7 @@
  *
  * Shows a labeled "N sessions" box in the header. Clicking opens a
  * dropdown with selectable sessions. Selecting a session filters
- * logs and metrics to that session only.
+ * logs and refreshes any session-aware dashboard tabs.
  *
  * @security-audit-suppress DMCP-SEC-004 Client-side JS — all session data is
  * pre-normalized server-side via UnicodeValidator. Browser String.normalize('NFC')
@@ -70,6 +70,9 @@
     // Trigger log re-filter with the selected session
     if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
       window.DollhouseConsole.logs.refilter(sessionId);
+    }
+    if (window.DollhouseConsole && window.DollhouseConsole.permissions && window.DollhouseConsole.permissions.refresh) {
+      window.DollhouseConsole.permissions.refresh();
     }
 
     refreshSelectionState();

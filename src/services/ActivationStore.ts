@@ -49,6 +49,12 @@ interface PersistedActivationState {
   activations: Record<string, PersistedActivation[]>;
 }
 
+export interface PersistedActivationStateSnapshot {
+  sessionId: string;
+  lastUpdated: string;
+  activations: Record<string, PersistedActivation[]>;
+}
+
 /** Valid element types that support activation (stored in singular form) */
 const ACTIVATABLE_TYPES = new Set(['persona', 'skill', 'agent', 'memory', 'ensemble']);
 
@@ -306,6 +312,129 @@ export class ActivationStore {
   getActivations(elementType: string): PersistedActivation[] {
     const type = normalizeType(elementType);
     return this.state.activations[type] ? [...this.state.activations[type]!] : [];
+  }
+
+  /**
+   * Read persisted activation snapshots from disk for reporting/diagnostics.
+   *
+   * This intentionally does not mutate the store's in-memory state, and it is
+   * safe to call from the web console to inspect other sessions' persisted
+   * activations without changing live policy enforcement for the current
+   * process.
+   */
+  async listPersistedActivationStates(sessionId?: string): Promise<PersistedActivationStateSnapshot[]> {
+    if (!this.enabled) {
+      return [];
+    }
+
+    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+      ? normalizeActivationIdentifier(sessionId)
+      : undefined;
+
+    try {
+      const filenames = await this.getPersistedActivationFilenames(normalizedSessionId);
+      const states = await Promise.all(
+        filenames.map(filename => this.readPersistedActivationState(filename)),
+      );
+      return states
+        .flatMap((state) => (state ? [state] : []))
+        .sort((a, b) => a.sessionId.localeCompare(b.sessionId));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.debug('[ActivationStore] Failed to enumerate activation snapshots for reporting', {
+          stateDir: this.stateDir,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return [];
+  }
+
+  private async getPersistedActivationFilenames(sessionId?: string): Promise<string[]> {
+    if (sessionId) {
+      return [`activations-${sessionId}.json`];
+    }
+
+    const filenames = await fs.readdir(this.stateDir);
+    return filenames.filter(name => /^activations-[^.]+\.json$/u.test(name));
+  }
+
+  private async readPersistedActivationState(filename: string): Promise<PersistedActivationStateSnapshot | null> {
+    const filePath = path.join(this.stateDir, filename);
+
+    try {
+      const content = await this.fileOps.readFile(filePath);
+      const data = JSON.parse(content) as PersistedActivationState;
+      if (!this.isPersistedActivationState(data)) {
+        return null;
+      }
+
+      return {
+        sessionId: data.sessionId,
+        lastUpdated: data.lastUpdated,
+        activations: this.normalizePersistedActivations(data.activations),
+      };
+    } catch (error) {
+      this.logSnapshotReadError(filePath, error);
+      return null;
+    }
+  }
+
+  private isPersistedActivationState(data: PersistedActivationState): boolean {
+    return data.version === 1
+      && typeof data.sessionId === 'string'
+      && Boolean(data.activations)
+      && typeof data.activations === 'object';
+  }
+
+  private normalizePersistedActivations(activations: PersistedActivationState['activations']): Record<string, PersistedActivation[]> {
+    const normalized: Record<string, PersistedActivation[]> = {};
+
+    for (const [type, entries] of Object.entries(activations)) {
+      if (!ACTIVATABLE_TYPES.has(type) || !Array.isArray(entries)) {
+        continue;
+      }
+
+      const normalizedEntries = entries.flatMap((entry) => this.normalizePersistedActivation(entry));
+      if (normalizedEntries.length > 0) {
+        normalized[type] = normalizedEntries;
+      }
+    }
+
+    return normalized;
+  }
+
+  private normalizePersistedActivation(entry: PersistedActivation | null | undefined): PersistedActivation[] {
+    if (!entry || typeof entry.name !== 'string') {
+      return [];
+    }
+
+    const normalizedName = normalizeActivationIdentifier(entry.name);
+    if (!normalizedName) {
+      return [];
+    }
+
+    const normalizedFilename = typeof entry.filename === 'string'
+      ? normalizeActivationIdentifier(entry.filename)
+      : undefined;
+
+    return [{
+      ...entry,
+      name: normalizedName,
+      ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+    }];
+  }
+
+  private logSnapshotReadError(filePath: string, error: unknown): void {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+
+    logger.debug('[ActivationStore] Skipping unreadable activation snapshot during reporting', {
+      filePath,
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 
   /**
