@@ -1590,7 +1590,7 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     return document.querySelector('[data-install-client="claude"]') as HTMLButtonElement | null;
   }
 
-  function getNotice(): HTMLElement | null {
+  function _getNotice(): HTMLElement | null {
     return document.querySelector('#setup-panel-claude-desktop .setup-installed-notice');
   }
 

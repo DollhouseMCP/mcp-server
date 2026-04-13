@@ -1636,8 +1636,12 @@ export class DollhouseContainer {
       server,
       dispose: async () => {
         // Server cleanup is handled by the SDK transport layer.
-        // Handler bundle is shared — nothing to dispose per-session.
         // Phase 3 TODO: dispose per-session ActivationStore here.
+
+        // Clean up session-keyed state in the shared MCPAQLHandler
+        // (executing agents, pending saves, frequency counters, aborted goals).
+        // Without this, entries accumulate as HTTP sessions disconnect.
+        bundle.mcpAqlHandler.cleanupSession(sessionContext.sessionId);
       },
     };
   }

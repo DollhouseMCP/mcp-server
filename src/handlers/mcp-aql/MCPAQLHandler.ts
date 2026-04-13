@@ -645,6 +645,49 @@ export class MCPAQLHandler {
   }
 
   /**
+   * Remove all session-keyed state for a disconnected HTTP session.
+   *
+   * The shared MCPAQLHandler uses Maps keyed by `{sessionId}:{name}` to
+   * track per-session state (executing agents, pending saves, etc.).
+   * Without cleanup, these entries accumulate as sessions connect and
+   * disconnect, causing a slow memory leak in long-running HTTP servers.
+   *
+   * Called by DollhouseContainer.createServerForHttpSession()'s dispose callback.
+   */
+  cleanupSession(sessionId: string): void {
+    const prefix = `${sessionId}:`;
+
+    // Clear pending save timers and remove entries
+    for (const [key, entry] of this.pendingSaves) {
+      if (key.startsWith(prefix)) {
+        clearTimeout(entry.timer);
+        this.pendingSaves.delete(key);
+      }
+    }
+
+    // Remove executing agent tracking
+    for (const key of this.executingAgents.keys()) {
+      if (key.startsWith(prefix)) {
+        this.executingAgents.delete(key);
+      }
+    }
+
+    // Remove save frequency counters
+    for (const key of this.saveFrequencyCounters.keys()) {
+      if (key.startsWith(prefix)) {
+        this.saveFrequencyCounters.delete(key);
+      }
+    }
+
+    // Remove aborted goals
+    for (const goal of this.abortedGoals) {
+      if (goal.startsWith(prefix)) {
+        this.abortedGoals.delete(goal);
+      }
+    }
+  }
+
+  /**
    * Get verification metrics for monitoring/diagnostics.
    * Follows the same pattern as DangerZoneEnforcer.getMetrics().
    */

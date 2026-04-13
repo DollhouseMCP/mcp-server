@@ -172,8 +172,7 @@ describe('Permission Server Integration', () => {
       const testPort = 49360;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
-          let body = '';
-          req.on('data', chunk => { body += chunk; });
+          req.on('data', () => { /* drain */ });
           req.on('end', () => {
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ decision: 'allow' }));

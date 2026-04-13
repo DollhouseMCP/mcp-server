@@ -441,14 +441,12 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     // SIGTERM the process. Even if it fails (ESRCH = already dead, EPERM = not ours),
     // mark the session as permanently killed so it never reappears (#1870).
-    let killed = false;
     try {
       process.kill(session.pid, 'SIGTERM');
-      killed = true;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ESRCH') {
-        killed = true; // process already dead — treat as successful kill
+        // process already dead — treat as successful kill
       } else {
         logger.error('[IngestRoutes] Failed to kill session', {
           displayName: session.displayName, sessionId, pid: session.pid, error: (err as Error).message,

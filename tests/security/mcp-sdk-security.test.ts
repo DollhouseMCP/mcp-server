@@ -222,11 +222,15 @@ describe('HTTP Transport Security (Phase 2)', () => {
     expect(httpServerContent).toContain('rateLimitMaxRequests');
   });
 
-  it('should default to localhost binding', () => {
+  it('should default to localhost binding in env schema', () => {
     // DOLLHOUSE_HTTP_HOST defaults to 127.0.0.1 in env.ts
     // This prevents accidental exposure to the network
-    const { env: testEnv } = require('../../src/config/env.js');
-    expect(testEnv.DOLLHOUSE_HTTP_HOST).toBe('127.0.0.1');
+    const projectRoot = path.resolve(__dirname, '../..');
+    const envPath = path.join(projectRoot, 'src/config/env.ts');
+    const envContent = fs.readFileSync(envPath, 'utf8');
+
+    // Verify the default is localhost, not 0.0.0.0
+    expect(envContent).toContain("DOLLHOUSE_HTTP_HOST: z.string().default('127.0.0.1')");
   });
 
   it('should have SDK transports available', async () => {

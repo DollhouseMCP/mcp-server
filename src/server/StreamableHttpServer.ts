@@ -586,6 +586,14 @@ export async function createStreamableHttpRuntime(
     }
 
     closingPromise = (async () => {
+      // Wait for any in-flight pool replenishment to finish.
+      // closingPromise is set before this await, so maintainSessionPool()'s
+      // while-loop guard (!closingPromise) will stop the loop from continuing
+      // to prepareSession() after the current iteration completes.
+      if (replenishPoolPromise) {
+        await replenishPoolPromise.catch(() => {});
+      }
+
       const allSessions = Array.from(sessions.keys());
       const warmSessions = pooledSessions.splice(0);
 
