@@ -1,0 +1,68 @@
+# Docker Compose configuration for DollhouseMCP Streamable HTTP transport.
+#
+# Runs DollhouseMCP as a hosted HTTP server instead of the default stdio mode.
+# MCP clients connect via Streamable HTTP at http://localhost:3000/mcp
+#
+# Usage:
+#   docker compose -f docker-compose.http.yml up --build
+#   docker compose -f docker-compose.http.yml up -d    # detached
+#
+# Health check:
+#   curl http://localhost:3000/healthz
+#
+# See docs/guides/streamable-http-hosted-mode.md for full deployment guide.
+
+services:
+  dollhousemcp-http:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      target: production
+    image: dollhousemcp:http
+    container_name: dollhousemcp-http
+
+    # HTTP servers should restart on failure (unlike stdio which exits after one session)
+    restart: unless-stopped
+
+    # Security hardening — same as stdio config
+    user: "1001:1001"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+
+    # Temporary filesystems for writable areas
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100M,mode=1777
+      - /app/tmp:noexec,nosuid,size=50M,mode=1777
+      - /app/logs:noexec,nosuid,size=50M,mode=1777
+
+    # Expose the MCP HTTP endpoint.
+    # If you change DOLLHOUSE_HTTP_PORT, update this mapping to match.
+    ports:
+      - "3000:3000"
+
+    environment:
+      - NODE_ENV=production
+      # Transport selection — switches from stdio to HTTP
+      - DOLLHOUSE_TRANSPORT=streamable-http
+      # Bind to all interfaces (required for Docker container networking)
+      - DOLLHOUSE_HTTP_HOST=0.0.0.0
+      - DOLLHOUSE_HTTP_PORT=3000
+      # DNS rebinding protection — add your domain if exposing externally
+      - DOLLHOUSE_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1
+      # Session management
+      - DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS=900000
+      - DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS=300
+      # Security and storage
+      - DOLLHOUSE_SECURITY_MODE=strict
+      - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio
+      - DOLLHOUSE_CACHE_DIR=/app/tmp/cache
+
+    # Resource limits — HTTP needs more CPU than stdio for concurrent sessions
+    mem_limit: 512m
+    cpus: 1.0
+
+    # Disable inter-container communication
+    ipc: private
