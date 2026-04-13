@@ -345,6 +345,14 @@
   max-height: var(--perm-audit-feed-height, 34rem);
 }
 
+.perm-card--audit .perm-selected-header--compact {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--paper-strong, #fff);
+  padding-bottom: 0.5rem;
+}
+
 .perm-feed-empty {
   padding: 2rem;
   text-align: center;

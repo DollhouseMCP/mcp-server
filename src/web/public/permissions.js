@@ -18,7 +18,8 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
-  const AUDIT_FEED_MIN_HEIGHT_PX = 320;
+  const AUDIT_FEED_DEFAULT_HEIGHT_PX = 544;
+  const AUDIT_FEED_MIN_HEIGHT_PX = 220;
   const AUDIT_FEED_MARGIN_PX = 24;
 
   async function fetchPermissionStatus(sessionId) {
@@ -113,7 +114,6 @@
     latestSelectedData = deriveSelectedSessionData(latestAggregateData, sessionId);
     renderPolicySources(latestAggregateData, latestSelectedData);
     renderSelectedSessionDetail(latestSelectedData);
-    scheduleAuditFeedLayout();
   }
 
   // ── Rendering ──────────────────────────────────────────────
@@ -127,7 +127,6 @@
     renderAllowPatterns(data);
     renderConfirmPatterns(data);
     renderLiveFeed(data);
-    scheduleAuditFeedLayout();
   }
 
   function renderError(message) {
@@ -562,6 +561,9 @@
         expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
         expandBtn.textContent = expanded ? 'Compact Audit View' : 'Expand Audit View';
         scheduleAuditFeedLayout();
+        if (expanded) {
+          feedCard.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
       });
     }
   }
@@ -594,13 +596,15 @@
     }, 0);
 
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-    const cardTop = feedCard.getBoundingClientRect().top;
-    const availableHeight = Math.max(
+    const cardTop = Math.max(feedCard.getBoundingClientRect().top, 0);
+    const availableHeight = viewportHeight - cardTop - reserveHeight - AUDIT_FEED_MARGIN_PX;
+    const fallbackHeight = reserveHeight > 0 ? AUDIT_FEED_MIN_HEIGHT_PX : AUDIT_FEED_DEFAULT_HEIGHT_PX;
+    const clampedHeight = Math.max(
       AUDIT_FEED_MIN_HEIGHT_PX,
-      viewportHeight - cardTop - reserveHeight - AUDIT_FEED_MARGIN_PX
+      Math.min(Math.max(availableHeight, fallbackHeight), viewportHeight - cardTop - AUDIT_FEED_MARGIN_PX)
     );
 
-    feed.style.setProperty('--perm-audit-feed-height', `${Math.floor(availableHeight)}px`);
+    feed.style.setProperty('--perm-audit-feed-height', `${Math.floor(clampedHeight)}px`);
   }
 
   function setText(id, value) {
