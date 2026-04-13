@@ -29,6 +29,10 @@ export interface StreamableHttpRuntimeOptions {
   rateLimitMaxRequests?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  /** Called when a new HTTP session is initialized (after MCP handshake). */
+  onSessionCreated?: (sessionId: string) => void;
+  /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
+  onSessionDisposed?: (sessionId: string) => void;
 }
 
 export interface StreamableHttpRuntimeHandle {
@@ -254,6 +258,7 @@ export async function createStreamableHttpRuntime(
     sessions.delete(sessionId);
     sessionTelemetry.disposed += 1;
     clearSessionTimer(session);
+    options.onSessionDisposed?.(sessionId);
 
     if (!skipTransportClose) {
       await session.transport.close().catch(() => {
@@ -382,6 +387,7 @@ export async function createStreamableHttpRuntime(
         sessionTelemetry.created += 1;
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
+        options.onSessionCreated?.(sessionId);
         void maintainSessionPool();
       },
     });

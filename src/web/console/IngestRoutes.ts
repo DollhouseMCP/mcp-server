@@ -66,8 +66,8 @@ export interface SessionInfo {
   isLeader: boolean;
   /** Whether this session connected with a valid Bearer token (#1805). */
   authenticated: boolean;
-  /** Session kind — 'mcp' for MCP stdio sessions, 'console' for the web console itself (#1805). */
-  kind: 'mcp' | 'console';
+  /** Session kind — 'mcp' for stdio, 'http' for HTTP transport, 'console' for the web console itself. */
+  kind: 'mcp' | 'console' | 'http';
 }
 
 /**
@@ -117,6 +117,10 @@ export interface IngestRoutesResult {
   registerLeaderSession: (sessionId: string, pid: number) => void;
   /** Register the web console as a session so the indicator is never empty (#1805) */
   registerConsoleSession: () => void;
+  /** Register an HTTP transport session (Phase 2.4) */
+  registerHttpSession: (sessionId: string, createdAt: number) => void;
+  /** Deregister an HTTP transport session on disconnect (Phase 2.4) */
+  deregisterHttpSession: (sessionId: string) => void;
 }
 
 /** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
@@ -425,6 +429,17 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       return;
     }
 
+    // HTTP sessions share the server process — SIGTERM would kill all sessions.
+    // Use the HTTP transport's own session management (idle timeout, client disconnect) instead.
+    if (session.kind === 'http') {
+      res.status(409).json({
+        error: 'HTTP sessions cannot be killed individually — they share the server process',
+        sessionId,
+        displayName: session.displayName,
+      });
+      return;
+    }
+
     if (!session.pid) {
       // Auto-registered orphan with unknown PID — queue for deferred kill (#1870).
       // The next heartbeat (every ~10s) carries the PID. ensureSession() will
@@ -469,7 +484,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   function reapStaleSessions(now: number): void {
     for (const [id, session] of sessions) {
       if (session.status !== 'active') continue;
-      if (session.isLeader || session.kind === 'console') continue;
+      if (session.isLeader || session.kind === 'console' || session.kind === 'http') continue;
       const age = now - new Date(session.lastHeartbeat).getTime();
       if (age <= SESSION_STALE_MS) continue;
       session.status = 'ended';
@@ -545,5 +560,50 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     logger.info('[IngestRoutes] Console session registered', { sessionId: consoleId, pid: process.pid });
   }
 
-  return { router, getSessions, registerLeaderSession, registerConsoleSession };
+  /**
+   * Register an HTTP transport session. Called when a new MCP client
+   * connects via Streamable HTTP. Unlike stdio sessions, HTTP sessions
+   * don't heartbeat — they're deregistered explicitly on disconnect.
+   */
+  function registerHttpSession(sessionId: string, createdAt: number): void {
+    if (sessions.has(sessionId) || killedSessions.has(sessionId)) return;
+    const displayName = namePool.assign(sessionId, false);
+    const color = namePool.getColor(sessionId) ?? '#3b82f6';
+    const info: SessionInfo = {
+      sessionId,
+      displayName,
+      color,
+      pid: process.pid,
+      startedAt: new Date(createdAt).toISOString(),
+      lastHeartbeat: new Date().toISOString(),
+      status: 'active',
+      isLeader: false,
+      authenticated: false,
+      kind: 'http',
+    };
+    sessions.set(sessionId, info);
+    logger.info('[IngestRoutes] HTTP session registered', {
+      displayName, sessionId,
+      activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length,
+    });
+    broadcasts.sessionBroadcast?.(info);
+  }
+
+  /**
+   * Deregister an HTTP transport session. Called when the session
+   * disconnects, expires, or the server shuts down.
+   */
+  function deregisterHttpSession(sessionId: string): void {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.status = 'ended';
+    namePool.release(sessionId);
+    logger.info('[IngestRoutes] HTTP session ended', {
+      displayName: session.displayName, sessionId,
+      activeSessions: Array.from(sessions.values()).filter(s => s.status === 'active').length,
+    });
+    broadcasts.sessionBroadcast?.(session);
+  }
+
+  return { router, getSessions, registerLeaderSession, registerConsoleSession, registerHttpSession, deregisterHttpSession };
 }

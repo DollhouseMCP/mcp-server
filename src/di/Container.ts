@@ -1488,36 +1488,10 @@ export class DollhouseContainer {
     const bundle = await this.bootstrapHandlers();
 
     const toolRegistry = new ToolRegistry(server);
-
-    // Register tools based on MCP_INTERFACE_MODE (Issue #237)
-    // - 'discrete': Register individual discrete tools (~40 tools)
-    // - 'mcpaql': Register consolidated MCP-AQL interface only (~4 or 1 tools)
-    // Token counts are logged dynamically at startup via logToolTokenStats()
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
-    if (interfaceMode === 'discrete') {
-      // Discrete mode: Register all individual tools
-      toolRegistry.registerPersonaTools(bundle.personaHandler);
-      toolRegistry.registerElementTools(bundle.elementCrudHandler);
-      toolRegistry.registerCollectionTools(bundle.collectionHandler);
-      toolRegistry.registerPortfolioTools(bundle.portfolioHandler);
-      toolRegistry.registerAuthTools(bundle.githubAuthHandler);
-      toolRegistry.registerConfigTools({
-        handleConfigOperation: (options) =>
-          bundle.configHandler.handleConfigOperation(options),
-        handleSyncOperation: (options) =>
-          bundle.syncHandler.handleSyncOperation(options),
-      });
-      toolRegistry.registerEnhancedIndexTools(
-        bundle.enhancedIndexHandler,
-        this.resolve<IndexConfigManager>('IndexConfigManager').getConfig()
-      );
-      toolRegistry.registerBuildInfoTools(this.resolve('BuildInfoService'));
-    } else {
-      // MCP-AQL mode: Register only MCP-AQL tools
-      toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
-    }
+    this.registerToolsOnRegistry(toolRegistry, bundle, interfaceMode);
 
     // Log token statistics (Issue #237 enhancement)
     this.logToolTokenStats(toolRegistry, interfaceMode, bundle.mcpAqlHandler, {
@@ -1592,7 +1566,7 @@ export class DollhouseContainer {
       if (resourcesConfig?.advertise_resources === true) {
         capabilities.resources = {};
       }
-    } catch { /* config not available — use safe default */ }
+    } catch (_e) { /* config not available — use safe default */ }
 
     const server = new Server(
       { name: 'dollhousemcp', version: PACKAGE_VERSION },
@@ -1607,8 +1581,34 @@ export class DollhouseContainer {
 
     // Register tools on this session's ToolRegistry
     const toolRegistry = new ToolRegistry(server);
-    const interfaceMode = env.MCP_INTERFACE_MODE;
+    this.registerToolsOnRegistry(toolRegistry, bundle, env.MCP_INTERFACE_MODE);
 
+    serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
+
+    return {
+      server,
+      dispose: async () => {
+        // Server cleanup is handled by the SDK transport layer.
+        // Phase 3 TODO: dispose per-session ActivationStore here.
+
+        // Clean up session-keyed state in the shared MCPAQLHandler
+        // (executing agents, pending saves, frequency counters, aborted goals).
+        // Without this, entries accumulate as HTTP sessions disconnect.
+        bundle.mcpAqlHandler.cleanupSession(sessionContext.sessionId);
+      },
+    };
+  }
+
+  /**
+   * Register tools on a ToolRegistry based on the interface mode.
+   * Used by both createHandlers() (stdio) and createServerForHttpSession() (HTTP)
+   * to avoid duplicating the tool registration logic.
+   */
+  private registerToolsOnRegistry(
+    toolRegistry: ToolRegistry,
+    bundle: HandlerBundle,
+    interfaceMode: 'discrete' | 'mcpaql',
+  ): void {
     if (interfaceMode === 'discrete') {
       toolRegistry.registerPersonaTools(bundle.personaHandler);
       toolRegistry.registerElementTools(bundle.elementCrudHandler);
@@ -1629,21 +1629,6 @@ export class DollhouseContainer {
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
     }
-
-    serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
-
-    return {
-      server,
-      dispose: async () => {
-        // Server cleanup is handled by the SDK transport layer.
-        // Phase 3 TODO: dispose per-session ActivationStore here.
-
-        // Clean up session-keyed state in the shared MCPAQLHandler
-        // (executing agents, pending saves, frequency counters, aborted goals).
-        // Without this, entries accumulate as HTTP sessions disconnect.
-        bundle.mcpAqlHandler.cleanupSession(sessionContext.sessionId);
-      },
-    };
   }
 
   /**

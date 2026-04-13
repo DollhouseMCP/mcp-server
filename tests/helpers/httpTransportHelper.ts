@@ -21,6 +21,10 @@ import {
 } from '../../src/server/StreamableHttpServer.js';
 import { createHttpSession } from '../../src/context/HttpSession.js';
 import { setHttpModeActive } from '../../src/index.js';
+import {
+  createIngestRoutes,
+  type IngestRoutesResult,
+} from '../../src/web/console/IngestRoutes.js';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -36,6 +40,10 @@ export interface HttpTestEnvironment {
   container: DollhouseContainer;
   testDir: string;
   cleanup: () => Promise<void>;
+}
+
+export interface HttpTestEnvironmentWithConsole extends HttpTestEnvironment {
+  ingestRoutes: IngestRoutesResult;
 }
 
 export interface HttpClientHandle {
@@ -127,6 +135,91 @@ export async function createHttpTestEnvironment(
   };
 }
 
+/**
+ * Create an HTTP test environment WITH IngestRoutes for console integration testing.
+ *
+ * HTTP session lifecycle events (connect/disconnect) are forwarded to the
+ * IngestRoutes session registry, so tests can verify sessions appear in
+ * getSessions() and respond correctly to kill requests.
+ */
+export async function createHttpTestEnvironmentWithConsole(
+  options: HttpTestEnvironmentOptions = {},
+): Promise<HttpTestEnvironmentWithConsole> {
+  const savedEnv: Record<string, string | undefined> = {
+    DOLLHOUSE_PORTFOLIO_DIR: process.env.DOLLHOUSE_PORTFOLIO_DIR,
+    MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
+    DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
+    DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
+  };
+
+  const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-'));
+  await Promise.all(
+    ELEMENT_TYPES.map(t => fs.mkdir(path.join(testDir, t), { recursive: true })),
+  );
+
+  process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
+  process.env.MCP_INTERFACE_MODE = 'mcpaql';
+  process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
+  process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+
+  const container = new DollhouseContainer();
+  await container.preparePortfolio();
+  await container.bootstrapHttpHandlers();
+  await container.completeSinkSetup();
+
+  setHttpModeActive(true);
+
+  // Create IngestRoutes for session tracking (same as startHttpConsole)
+  const ingestRoutes = createIngestRoutes({
+    logBroadcast: () => {},
+  });
+  ingestRoutes.registerConsoleSession();
+
+  const runtime = await createStreamableHttpRuntime(
+    async (transport) => {
+      const sessionContext = createHttpSession();
+      const { server, dispose } = container.createServerForHttpSession(sessionContext);
+      await server.connect(transport);
+      return { dispose };
+    },
+    {
+      host: '127.0.0.1',
+      port: 0,
+      mcpPath: '/mcp',
+      rateLimitMaxRequests: options.rateLimitMaxRequests ?? 0,
+      rateLimitWindowMs: options.rateLimitWindowMs ?? 60_000,
+      sessionIdleTimeoutMs: options.sessionIdleTimeoutMs ?? 0,
+      sessionPoolSize: options.sessionPoolSize ?? 0,
+      registerSignalHandlers: false,
+      onSessionCreated: (sessionId) => {
+        ingestRoutes.registerHttpSession(sessionId, Date.now());
+      },
+      onSessionDisposed: (sessionId) => {
+        ingestRoutes.deregisterHttpSession(sessionId);
+      },
+    },
+  );
+
+  return {
+    runtime,
+    container,
+    testDir,
+    ingestRoutes,
+    cleanup: async () => {
+      await runtime.close();
+      await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+      setHttpModeActive(false);
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) {
+          delete process.env[key];
+        } else {
+          process.env[key] = value;
+        }
+      }
+    },
+  };
+}
+
 // ── Client connection ──────────────────────────────────────────────────────
 
 /**
@@ -150,6 +243,9 @@ export async function connectHttpClient(
   return {
     client,
     disconnect: async () => {
+      // terminateSession() sends DELETE to the server, which triggers
+      // onSessionDisposed. client.close() alone doesn't notify the server.
+      try { await transport.terminateSession(); } catch { /* best effort */ }
       try { await client.close(); } catch { /* best effort */ }
     },
   };

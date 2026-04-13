@@ -864,40 +864,114 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
 }
 
 /**
+ * Bootstrap a shared DollhouseContainer for HTTP mode.
+ * Called once at startup — the container is shared across the web console
+ * and all HTTP sessions.
+ */
+async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
+  const container = new DollhouseContainer();
+  await container.preparePortfolio();
+  await container.bootstrapHttpHandlers();
+  await container.completeSinkSetup();
+  return container;
+}
+
+/**
+ * Start the web console alongside the HTTP transport.
+ * Runs on a separate port (DOLLHOUSE_WEB_CONSOLE_PORT, default 41715) and
+ * provides the management UI for monitoring HTTP sessions, logs, and metrics.
+ *
+ * @returns IngestRoutesResult for wiring HTTP session lifecycle into the console
+ */
+async function startHttpConsole(
+  container: DollhouseContainer,
+): Promise<import('./web/console/IngestRoutes.js').IngestRoutesResult> {
+  const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+
+  // Resolve sinks from the shared container
+  let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
+  let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
+  let logManager: import('./logging/LogManager.js').LogManager | undefined;
+  try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch (_e) { /* optional service */ }
+  try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch (_e) { /* optional service */ }
+  try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch (_e) { /* optional service */ }
+
+  // Fallback sinks if not available from the container
+  if (!memorySink) {
+    const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
+    memorySink = new MemoryLogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MemoryMetricsSink(240);
+  }
+
+  // Create ingest routes for session tracking
+  const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (_entry) => { /* wired after web server starts */ },
+  });
+  ingestResult.registerConsoleSession();
+
+  // Initialize console token store for auth
+  const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
+  const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
+  const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  try {
+    await tokenStore.ensureInitialized(pickRandomTokenName());
+  } catch (err) {
+    logger.warn('[HTTP Console] Failed to initialize console token store', err);
+  }
+
+  // Resolve web console port
+  const resolvedPort = await resolvePortFromConfig() ?? env.DOLLHOUSE_WEB_CONSOLE_PORT;
+
+  // Resolve MCP-AQL handler for gateway routes
+  let mcpAqlHandler: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler | undefined;
+  try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (_e) { /* optional service */ }
+
+  // Start the web server
+  const { startWebServer } = await import('./web/server.js');
+  const webResult = await startWebServer({
+    portfolioDir,
+    port: resolvedPort,
+    openBrowser: false,
+    mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    additionalRouters: [ingestResult.router],
+    tokenStore,
+  });
+
+  // Wire WebSSELogSink so live log entries reach the browser
+  if (webResult.logBroadcast && logManager) {
+    const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
+    logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+  }
+
+  return ingestResult;
+}
+
+/**
  * Start DollhouseMCP in Streamable HTTP transport mode.
  *
- * Bootstraps a single shared DollhouseContainer once, then creates lightweight
- * per-session MCP Servers via createServerForHttpSession(). This is the
- * shared-container architecture from the unified path forward plan.
- *
- * Phase 2: single-user identity (all sessions get userId='http-user').
- * Phase 3 will wire JWT authentication for multi-user identity.
+ * Uses a shared DollhouseContainer for all HTTP sessions. If a web console
+ * IngestRoutesResult is provided, HTTP session lifecycle events are forwarded
+ * to the console's session registry.
  */
 async function startStreamableHttpServer(
   options: StreamableHttpRuntimeOptions = {},
+  params?: { container?: DollhouseContainer; ingestRoutes?: import('./web/console/IngestRoutes.js').IngestRoutesResult },
 ): Promise<StreamableHttpRuntimeHandle> {
-  // One container for all HTTP sessions — bootstrapped once at startup
-  const container = new DollhouseContainer();
-
-  await container.preparePortfolio();
-  await container.bootstrapHttpHandlers();
-
-  // Sink setup only — wires log hooks, metrics collectors, pattern encryption,
-  // background validator, memory auto-load. No web console / leader election
-  // in HTTP mode (that's Phase 2 Step 2.4).
-  await container.completeSinkSetup();
+  const container = params?.container ?? await bootstrapHttpContainer();
+  const ingestRoutes = params?.ingestRoutes;
 
   // Activate HTTP mode error handling (no process.exit on uncaught exceptions)
   setHttpModeActive(true);
 
   return createStreamableHttpRuntime(async (transport) => {
-    // Create per-session identity
     const sessionContext = createHttpSession();
-
-    // Create per-session MCP Server wired to shared handlers
     const { server, dispose: disposeServer } = container.createServerForHttpSession(sessionContext);
-
-    // Connect this session's server to its transport
     await server.connect(transport);
 
     logger.info('[HTTP] Session connected', {
@@ -911,7 +985,16 @@ async function startStreamableHttpServer(
         await disposeServer();
       },
     };
-  }, { ...options, registerSignalHandlers: true });
+  }, {
+    ...options,
+    registerSignalHandlers: true,
+    onSessionCreated: (sessionId) => {
+      ingestRoutes?.registerHttpSession(sessionId, Date.now());
+    },
+    onSessionDisposed: (sessionId) => {
+      ingestRoutes?.deregisterHttpSession(sessionId);
+    },
+  });
 }
 
 if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
@@ -1063,16 +1146,29 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       process.exit(1);
     });
   } else if (getRequestedTransportName() === 'streamable-http') {
-    // Mutual exclusion check (--web already handled above)
     const options = getStreamableHttpRuntimeOptions();
-    startStreamableHttpServer(options)
-      .then(runtime => {
-        console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
-      })
-      .catch(err => {
-        console.error('[DollhouseMCP] Streamable HTTP server failed to start:', err);
-        process.exit(1);
-      });
+    (async () => {
+      // Bootstrap shared container once for both console and HTTP transport
+      const container = await bootstrapHttpContainer();
+
+      // Optionally start the web console for session monitoring
+      let ingestRoutes: import('./web/console/IngestRoutes.js').IngestRoutesResult | undefined;
+      if (env.DOLLHOUSE_HTTP_WEB_CONSOLE) {
+        try {
+          ingestRoutes = await startHttpConsole(container);
+          console.error(`[DollhouseMCP] Management console at http://127.0.0.1:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`);
+        } catch (err) {
+          // Console failure should not block HTTP transport
+          console.error('[DollhouseMCP] Web console failed to start (HTTP transport will continue):', (err as Error).message || err);
+        }
+      }
+
+      const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
+      console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+    })().catch(err => {
+      console.error('[DollhouseMCP] Streamable HTTP server failed to start:', err);
+      process.exit(1);
+    });
   } else {
     if (isDebugStartupLogging) {
       console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");

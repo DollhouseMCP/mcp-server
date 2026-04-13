@@ -100,7 +100,9 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_PORT: z.coerce.number().int().min(0).max(65535).default(3000),
   /** URL path for the MCP endpoint. */
   DOLLHOUSE_HTTP_MCP_PATH: z.string().default('/mcp'),
-  /** Comma-separated allowlist of Host header values (DNS rebinding protection). */
+  /** Comma-separated allowlist of Host header values (DNS rebinding protection).
+   *  When unset, the SDK's createMcpExpressApp() enforces localhost-only Host headers.
+   *  Set explicitly when binding to 0.0.0.0 in containers or behind reverse proxies. */
   DOLLHOUSE_HTTP_ALLOWED_HOSTS: z.string()
     .optional()
     .transform(parseAllowedHosts),
@@ -112,6 +114,8 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
   /** Pre-warmed session pool size (0 = disabled). */
   DOLLHOUSE_HTTP_SESSION_POOL_SIZE: z.coerce.number().int().min(0).max(32).default(0),
+  /** Start the web console alongside HTTP transport for session monitoring. */
+  DOLLHOUSE_HTTP_WEB_CONSOLE: z.coerce.boolean().default(true),
 
   // ============================================================================
   // Test Configuration

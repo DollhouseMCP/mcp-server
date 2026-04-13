@@ -173,6 +173,23 @@ The default bind address is `127.0.0.1` (localhost only). In Docker containers, 
 
 Do not bind to `0.0.0.0` on bare-metal deployments without a reverse proxy or firewall — this exposes the server to the network.
 
+## Web Console
+
+When running in HTTP mode, the web management console starts automatically on port 41715 (configurable via `DOLLHOUSE_WEB_CONSOLE_PORT`). It provides:
+
+- Real-time session monitoring — each HTTP client session appears in the session indicator with a puppet name and color
+- Log viewing with session-based filtering — click a session to see only its logs
+- Metrics dashboard — system health, cache efficiency, operation counts
+- Portfolio browser — view and manage elements
+
+The console starts before the HTTP transport, so sessions are visible as soon as they connect.
+
+To disable the console (headless mode):
+
+```bash
+DOLLHOUSE_HTTP_WEB_CONSOLE=false npm run start:http
+```
+
 ## Architecture
 
 The HTTP transport uses a shared-container model:
