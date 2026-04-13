@@ -4,16 +4,21 @@
  * Manages per-connection session state for the Gatekeeper Policy Engine.
  * Each MCP client connection gets a separate session with isolated state.
  *
- * CRITICAL: Session state is IN-MEMORY only.
- * - Confirmations are NOT persisted to disk
+ * Session state defaults to IN-MEMORY only (crash = fresh session).
+ * When an IConfirmationStore is provided (Issue #1945), mutating
+ * operations write through to the backing store for persistence
+ * across restarts. The in-memory Maps remain the hot path.
+ *
  * - Each Claude Code / Claude Desktop / etc. = separate session
  * - No cross-session policy leakage
- * - Crash = fresh session (security-first decision)
+ * - Without a backing store, crash = fresh session (security-first default)
  */
 
 import { randomUUID } from 'crypto';
 import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope } from './GatekeeperTypes.js';
 import { env } from '../../config/env.js';
+import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
+import { logger } from '../../utils/logger.js';
 
 /**
  * Client information from MCP capabilities.
@@ -90,11 +95,18 @@ export class GatekeeperSession {
   private readonly state: GatekeeperSessionState;
   private readonly maxConfirmations: number;
   private readonly maxCliApprovals: number;
+  private readonly confirmationStore?: IConfirmationStore;
   private lastExpirySweep = 0;
 
-  constructor(clientInfo?: ClientInfo, maxConfirmations: number = 100, maxCliApprovals: number = DEFAULT_MAX_CLI_APPROVALS) {
+  constructor(
+    clientInfo?: ClientInfo,
+    maxConfirmations: number = 100,
+    maxCliApprovals: number = DEFAULT_MAX_CLI_APPROVALS,
+    confirmationStore?: IConfirmationStore,
+  ) {
     this.maxConfirmations = maxConfirmations;
     this.maxCliApprovals = maxCliApprovals;
+    this.confirmationStore = confirmationStore;
     this.state = {
       sessionId: randomUUID(),
       clientInfo,
@@ -149,6 +161,11 @@ export class GatekeeperSession {
    */
   markPermissionPromptActive(): void {
     this.state.permissionPromptActive = true;
+
+    if (this.confirmationStore) {
+      this.confirmationStore.savePermissionPromptActive(true);
+      this.persistToStore();
+    }
   }
 
   /**
@@ -183,13 +200,19 @@ export class GatekeeperSession {
     }
 
     const key = this.getConfirmationKey(operation, elementType);
-    this.state.confirmations.set(key, {
+    const record: ConfirmationRecord = {
       operation,
       confirmedAt: new Date().toISOString(),
       permissionLevel,
       useCount: 0,
       elementType,
-    });
+    };
+    this.state.confirmations.set(key, record);
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveConfirmation(key, record);
+      this.persistToStore();
+    }
   }
 
   /**
@@ -229,11 +252,12 @@ export class GatekeeperSession {
 
     // For CONFIRM_SINGLE_USE, invalidate after first use
     if (confirmation.permissionLevel === 'CONFIRM_SINGLE_USE') {
-      // Delete whichever key matched (scoped or unscoped)
-      if (this.state.confirmations.has(key)) {
-        this.state.confirmations.delete(key);
-      } else {
-        this.state.confirmations.delete(operation);
+      const deleteKey = this.state.confirmations.has(key) ? key : operation;
+      this.state.confirmations.delete(deleteKey);
+
+      if (this.confirmationStore) {
+        this.confirmationStore.deleteConfirmation(deleteKey);
+        this.persistToStore();
       }
     }
 
@@ -263,7 +287,14 @@ export class GatekeeperSession {
   revokeConfirmation(operation: string, elementType?: string): boolean {
     this.touch();
     const key = this.getConfirmationKey(operation, elementType);
-    return this.state.confirmations.delete(key);
+    const deleted = this.state.confirmations.delete(key);
+
+    if (deleted && this.confirmationStore) {
+      this.confirmationStore.deleteConfirmation(key);
+      this.persistToStore();
+    }
+
+    return deleted;
   }
 
   /**
@@ -273,6 +304,11 @@ export class GatekeeperSession {
   revokeAllConfirmations(): void {
     this.touch();
     this.state.confirmations.clear();
+
+    if (this.confirmationStore) {
+      this.confirmationStore.clearAllConfirmations();
+      this.persistToStore();
+    }
   }
 
   /**
@@ -330,6 +366,12 @@ export class GatekeeperSession {
       ttlMs: clampedTtl,
     };
     this.state.cliApprovals.set(requestId, record);
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(requestId, record);
+      this.persistToStore();
+    }
+
     return requestId;
   }
 
@@ -352,6 +394,14 @@ export class GatekeeperSession {
     // Promote to session approvals if tool_session scope
     if (scope === 'tool_session') {
       this.state.cliSessionApprovals.set(record.toolName, record);
+    }
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(requestId, record);
+      if (scope === 'tool_session') {
+        this.confirmationStore.saveCliSessionApproval(record.toolName, record);
+      }
+      this.persistToStore();
     }
 
     return record;
@@ -379,6 +429,10 @@ export class GatekeeperSession {
       if (record.toolName === toolName && record.approvedAt && !record.consumed) {
         if (record.scope === 'single') {
           record.consumed = true;
+          if (this.confirmationStore) {
+            this.confirmationStore.saveCliApproval(record.requestId, record);
+            this.persistToStore();
+          }
         }
         return record;
       }
@@ -453,5 +507,16 @@ export class GatekeeperSession {
    */
   private getConfirmationKey(operation: string, elementType?: string): string {
     return elementType ? `${operation}:${elementType}` : operation;
+  }
+
+  /**
+   * Fire-and-forget persist to the backing store.
+   * No-op when no confirmation store is configured (in-memory only mode).
+   */
+  private persistToStore(): void {
+    if (!this.confirmationStore) return;
+    this.confirmationStore.persist().catch(error => {
+      logger.warn('[GatekeeperSession] Failed to persist confirmation state', { error });
+    });
   }
 }

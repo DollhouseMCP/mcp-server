@@ -83,8 +83,11 @@ import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
 import { AnthropicToDollhouseConverter, DollhouseToAnthropicConverter } from "../converters/index.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import { ActivationStore } from "../services/ActivationStore.js";
-import { VerificationStore } from "@dollhousemcp/safety";
 import { VerificationNotifier } from "../services/VerificationNotifier.js";
+import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
+import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
+import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
+import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
@@ -589,17 +592,36 @@ export class DollhouseContainer {
     ));
     // Shared stdio session — single source of truth for session identity
     this.register('StdioSession', () => createStdioSession());
-    // Issue #598: ActivationStore for per-session activation persistence
-    this.register('ActivationStore', () => {
+    // Issue #1945: Typed state persistence stores
+    this.register('ActivationStateStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      return new ActivationStore(
+      return new FileActivationStateStore(
         this.resolve('FileOperationsService'),
         undefined,
         session.sessionId
       );
     });
-    // Issue #142: VerificationStore for danger zone challenge codes (server-side)
-    this.register('VerificationStore', () => new VerificationStore());
+    // Issue #598: ActivationStore for per-session activation persistence
+    // Issue #1945: Now delegates persistence to IActivationStateStore
+    this.register('ActivationStore', () => {
+      return new ActivationStore(
+        this.resolve('ActivationStateStore')
+      );
+    });
+    // Issue #1945: ConfirmationStore for Gatekeeper state persistence
+    this.register('ConfirmationStore', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new FileConfirmationStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        session.sessionId
+      );
+    });
+    // Issue #142: ChallengeStore for danger zone challenge codes (server-side)
+    // Issue #1945: Wrapped in IChallengeStore interface for backend swappability
+    this.register('ChallengeStore', () => new InMemoryChallengeStore());
+    // Backward-compat alias — existing code resolves 'VerificationStore'
+    this.register('VerificationStore', () => this.resolve('ChallengeStore'));
     // Issue #522: Non-blocking OS dialog notifier for verification codes
     this.register('VerificationNotifier', () => new VerificationNotifier());
     this.register('TokenManager', () => new TokenManager(
@@ -980,6 +1002,15 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
+
+    // Issue #1945: Initialize ConfirmationStore for Gatekeeper state persistence
+    try {
+      const cStore = this.resolve<IConfirmationStore>('ConfirmationStore');
+      await cStore.initialize();
+    } catch (error) {
+      logger.warn('[Container] Confirmation state restoration failed:', error);
+    }
+
     timer?.endPhase('activation_restore');
   }
 
@@ -1426,11 +1457,13 @@ export class DollhouseContainer {
 
     // Issue #452: Create Gatekeeper policy engine instance
     // Issue #679: allowElementPolicyOverrides wired from env (DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES)
+    // Issue #1945: Pass ConfirmationStore for write-through persistence
+    const confirmationStore = this.resolve<IConfirmationStore>('ConfirmationStore');
     const gatekeeper = new Gatekeeper(undefined, {
       enableAuditLogging: true,
       requireDangerZoneVerification: true,
       allowElementPolicyOverrides: env.DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES,
-    });
+    }, confirmationStore);
 
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
@@ -1456,7 +1489,7 @@ export class DollhouseContainer {
       cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
       gatekeeper,  // Issue #452: Policy engine for enforce()
       dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
-      verificationStore: this.resolve('VerificationStore'),  // Issue #142: Verification codes
+      verificationStore: this.resolve('ChallengeStore'),  // Issue #142, #1945: Verification codes via IChallengeStore
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),

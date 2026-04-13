@@ -35,6 +35,17 @@ jest.unstable_mockModule('fs/promises', () => ({
 
 // Dynamic import after mocking (required for ESM)
 const { ActivationStore } = await import('../../../src/services/ActivationStore.js');
+const { FileActivationStateStore } = await import('../../../src/state/FileActivationStateStore.js');
+
+/**
+ * Helper: create an ActivationStore with the old (fileOps, stateDir, sessionId) pattern.
+ * Since Issue #1945, ActivationStore takes IActivationStateStore directly.
+ * This helper bridges the test code to the new constructor.
+ */
+function createActivationStore(fileOps: any, stateDir?: string, sessionId?: string) {
+  const backingStore = new FileActivationStateStore(fileOps, stateDir, sessionId);
+  return new ActivationStore(backingStore);
+}
 
 /**
  * Create a mock FileOperationsService with controlled read/write behavior
@@ -74,7 +85,7 @@ describe('ActivationStore', () => {
     delete process.env.DOLLHOUSE_SESSION_ID;
     delete process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE;
     mockFileOps = createMockFileOps();
-    store = new ActivationStore(mockFileOps, '/tmp/test-state');
+    store = createActivationStore(mockFileOps, '/tmp/test-state');
   });
 
   afterEach(() => {
@@ -84,37 +95,37 @@ describe('ActivationStore', () => {
 
   describe('constructor', () => {
     it('should generate unique session ID when env var not set', () => {
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should use DOLLHOUSE_SESSION_ID when set', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'my-session';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toBe('my-session');
     });
 
     it('should fall back to default for invalid session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toBe('default');
     });
 
     it('should generate unique session ID for empty session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should accept alphanumeric with hyphens and underscores', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'claude-code_v2';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toBe('claude-code_v2');
     });
 
     it('should reject session IDs starting with a number', () => {
       process.env.DOLLHOUSE_SESSION_ID = '123-session';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.getSessionId()).toBe('default');
     });
 
@@ -122,40 +133,40 @@ describe('ActivationStore', () => {
       const testStateDir = path.join('fake-home', '.dollhouse', 'test-state');
 
       it('should use provided sessionId when valid', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, 'explicit-session');
+        const s = createActivationStore(mockFileOps, testStateDir, 'explicit-session');
         expect(s.getSessionId()).toBe('explicit-session');
       });
 
       it('should fall back to default when provided sessionId has path traversal', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '../evil-path');
+        const s = createActivationStore(mockFileOps, testStateDir, '../evil-path');
         expect(s.getSessionId()).toBe('default');
       });
 
       it('should fall back to default when provided sessionId starts with number', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '123-bad');
+        const s = createActivationStore(mockFileOps, testStateDir, '123-bad');
         expect(s.getSessionId()).toBe('default');
       });
 
       it('should fall back to resolveSessionId when provided sessionId is empty string', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '');
+        const s = createActivationStore(mockFileOps, testStateDir, '');
         // Empty string triggers resolveSessionId() fallback which generates random ID
         expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
       });
 
       it('should trim whitespace from provided sessionId', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '  valid-session  ');
+        const s = createActivationStore(mockFileOps, testStateDir, '  valid-session  ');
         expect(s.getSessionId()).toBe('valid-session');
       });
 
       it('should still use resolveSessionId when sessionId param is undefined', () => {
         process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, testStateDir, undefined);
+        const s = createActivationStore(mockFileOps, testStateDir, undefined);
         expect(s.getSessionId()).toBe('from-env');
       });
 
       it('should prefer explicit sessionId over env var', () => {
         process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, testStateDir, 'from-param');
+        const s = createActivationStore(mockFileOps, testStateDir, 'from-param');
         expect(s.getSessionId()).toBe('from-param');
       });
     });
@@ -166,13 +177,13 @@ describe('ActivationStore', () => {
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=false', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.isEnabled()).toBe(false);
     });
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=0', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = '0';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = createActivationStore(mockFileOps, '/tmp/test');
       expect(s.isEnabled()).toBe(false);
     });
   });
@@ -195,7 +206,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -207,7 +218,7 @@ describe('ActivationStore', () => {
 
     it('should handle corrupt JSON gracefully', async () => {
       mockFileOps = createMockFileOps({ readFileResult: '{invalid json' });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -225,7 +236,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -246,7 +257,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -265,7 +276,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -275,7 +286,7 @@ describe('ActivationStore', () => {
 
     it('should skip initialization when persistence is disabled', async () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -293,7 +304,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -313,7 +324,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       await store.initialize();
 
@@ -366,8 +377,8 @@ describe('ActivationStore', () => {
     });
 
     it('should ignore unknown element types', () => {
-      store.recordActivation('template', 'my-template');
-      expect(store.getActivations('template')).toEqual([]);
+      store.recordActivation('webhook', 'my-webhook');
+      expect(store.getActivations('webhook')).toEqual([]);
     });
 
     it('should trigger persist on successful recording', async () => {
@@ -384,7 +395,7 @@ describe('ActivationStore', () => {
 
     it('should not persist when disabled', async () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       store.recordActivation('skill', 'code-reviewer');
 
@@ -528,7 +539,7 @@ describe('ActivationStore', () => {
 
     it('should write to session-specific file path', async () => {
       process.env.DOLLHOUSE_SESSION_ID = 'zulip-bridge';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       store.recordActivation('skill', 'my-skill');
 
@@ -542,7 +553,7 @@ describe('ActivationStore', () => {
 
     it('should handle write failures gracefully — in-memory state preserved', async () => {
       mockFileOps = createMockFileOps({ writeFileError: new Error('Disk full') });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = createActivationStore(mockFileOps, '/tmp/test-state');
 
       // Should not throw even when disk write fails
       store.recordActivation('skill', 'my-skill');
@@ -569,7 +580,7 @@ describe('ActivationStore', () => {
 
       // Read phase — create new store that reads the written content
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new ActivationStore(readMockFileOps, '/tmp/test-state');
+      const store2 = createActivationStore(readMockFileOps, '/tmp/test-state');
       await store2.initialize();
 
       expect(store2.getActivations('skill')).toHaveLength(1);

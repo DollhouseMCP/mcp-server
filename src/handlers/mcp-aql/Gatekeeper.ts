@@ -21,6 +21,7 @@ import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { GatekeeperSession, type ClientInfo } from './GatekeeperSession.js';
 import { GatekeeperConfig, type GatekeeperConfigOptions } from './GatekeeperConfig.js';
+import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
 import {
   PermissionLevel,
   GatekeeperErrorCode,
@@ -84,10 +85,11 @@ export class Gatekeeper {
 
   constructor(
     clientInfo?: ClientInfo,
-    configOptions?: GatekeeperConfigOptions
+    configOptions?: GatekeeperConfigOptions,
+    confirmationStore?: IConfirmationStore,
   ) {
     this.config = new GatekeeperConfig(configOptions);
-    this.session = new GatekeeperSession(clientInfo, this.config.maxSessionConfirmations);
+    this.session = new GatekeeperSession(clientInfo, this.config.maxSessionConfirmations, undefined, confirmationStore);
   }
 
   /**

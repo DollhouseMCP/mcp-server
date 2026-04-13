@@ -59,7 +59,7 @@ import { RateLimiterFactory } from '../../utils/RateLimiter.js';
 import { env } from '../../config/env.js';
 import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import type { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
-import type { VerificationStore } from '@dollhousemcp/safety';
+import type { IChallengeStore } from '../../state/IChallengeStore.js';
 import type { IVerificationNotifier } from '../../services/VerificationNotifier.js';
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
@@ -450,7 +450,8 @@ export interface HandlerRegistry {
   // Issue #402: DI-injected danger zone enforcer (replaces singleton import)
   dangerZoneEnforcer?: DangerZoneEnforcer;
   // Issue #142: Server-side verification store for challenge codes
-  verificationStore?: VerificationStore;
+  // Issue #1945: Changed from VerificationStore to IChallengeStore for backend swappability
+  verificationStore?: IChallengeStore;
   // Issue #522: Non-blocking OS dialog for verification codes (replaces returning code to LLM)
   verificationNotifier?: IVerificationNotifier;
   // Issue #528: MemoryLogSink for CRUDE-routed query_logs
