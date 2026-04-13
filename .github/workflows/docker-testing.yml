@@ -702,8 +702,22 @@ jobs:
         if: always()
         run: |
           echo "🧹 Cleaning up Docker Compose..."
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down
-          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f
+          cleanup_ok=false
+          for attempt in 1 2 3; do
+            if docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml down --remove-orphans; then
+              cleanup_ok=true
+              break
+            fi
+            echo "::warning::Docker Compose cleanup attempt $attempt failed; waiting for endpoints to detach"
+            docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml ps || true
+            sleep 2
+          done
+
+          if [ "$cleanup_ok" != "true" ]; then
+            echo "::warning::Docker Compose network cleanup remained busy after retries; continuing because test execution already completed"
+          fi
+
+          docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f || true
 
       - name: Docker Compose testing complete
         shell: bash
