@@ -7,6 +7,7 @@
  * Security: SEC-001 - Critical vulnerability protection
  */
 
+import { createHash } from 'node:crypto';
 import { SecurityError } from './errors.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { logger } from '../utils/logger.js';
@@ -46,6 +47,30 @@ export interface ContentValidatorOptions {
 }
 
 export class ContentValidator {
+  /**
+   * SHA-256 hashes of bundled data/ elements verified against HASHES.json at seed time.
+   * Content whose hash is in this set bypasses injection-pattern checks — it was
+   * vetted by the DollhouseMCP team before being included in the npm package.
+   * Unicode and YAML-bomb checks still run regardless.
+   *
+   * Populated by DefaultElementProvider.registerBundledHashes() on startup.
+   * Only content that matches the published HASHES.json is registered — any
+   * modification to a bundled file after install breaks the hash and revokes trust.
+   */
+  private static readonly bundledContentHashes = new Set<string>();
+
+  /** Register a SHA-256 hex hash as trusted bundled content. */
+  static registerBundledHash(sha256hex: string): void {
+    this.bundledContentHashes.add(sha256hex);
+  }
+
+  /** True if the given content hash belongs to a verified bundled element. */
+  static isBundledContent(content: string): boolean {
+    if (this.bundledContentHashes.size === 0) return false;
+    const hash = createHash('sha256').update(content).digest('hex');
+    return this.bundledContentHashes.has(hash);
+  }
+
   private static telemetryResolver?: () => SecurityTelemetry | undefined;
 
   public static configureTelemetryResolver(resolver: () => SecurityTelemetry | undefined): void {
@@ -141,7 +166,7 @@ export class ContentValidator {
     { pattern: /<object[\s>]/gi, severity: 'high', description: 'HTML object injection' },
     { pattern: /<embed[\s>]/gi, severity: 'high', description: 'HTML embed injection' },
     { pattern: /\bon\w+=\s*["']/gi, severity: 'critical', description: 'HTML event handler injection' },
-    { pattern: /javascript\s*:/gi, severity: 'critical', description: 'JavaScript protocol injection' },
+    { pattern: /javascript[ \t]*:[ \t]*\S/gi, severity: 'critical', description: 'JavaScript protocol injection' },
     // Entity-encoded variants: &#106;avascript, &#x6a;avascript, &#106;&#97;vascript, etc.
     { pattern: /&#x?[0-9a-f]+;?\s*a\s*v\s*a\s*s\s*c\s*r\s*i\s*p\s*t/gi, severity: 'critical', description: 'Encoded JavaScript protocol injection' },
     // Fully/partially entity-encoded: detects &#...script pattern (covers multi-entity encoding)
@@ -483,6 +508,22 @@ export class ContentValidator {
           `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
         );
       }
+    }
+
+    // Skip injection-pattern scanning for verified bundled elements.
+    // Content whose SHA-256 matches HASHES.json was reviewed by the DollhouseMCP
+    // team before being included in the npm package — false positives from
+    // legitimate YAML keys (javascript:) or educational payloads (wget in pentest
+    // templates) should not fire CRITICAL alerts at every install.
+    // Unicode and YAML-bomb checks above still run unconditionally.
+    if (this.isBundledContent(content)) {
+      logger.debug('[ContentValidator] Skipping injection scan for verified bundled element');
+      return {
+        isValid: true,
+        sanitizedContent: unicodeCheck.sanitized,
+        detectedPatterns: [],
+        severity: 'low'
+      };
     }
 
     // Check for injection patterns on ORIGINAL content (to catch encoded attacks)
