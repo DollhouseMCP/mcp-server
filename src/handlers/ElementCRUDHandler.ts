@@ -51,7 +51,7 @@ import {
 } from './strategies/index.js';
 import { ElementQueryService } from '../services/query/ElementQueryService.js';
 import { ValidationRegistry } from '../services/validation/ValidationRegistry.js';
-import type { ActivationStore } from '../services/ActivationStore.js';
+import type { ActivationStore, PersistedActivation, PersistedActivationStateSnapshot } from '../services/ActivationStore.js';
 import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
@@ -138,6 +138,34 @@ export class ElementCRUDHandler {
    */
   private sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
     return sanitizeMetadataRecord(metadata);
+  }
+
+  private normalizeLookupValue(value: unknown): string {
+    return typeof value === 'string'
+      ? value.normalize('NFC').trim()
+      : '';
+  }
+
+  private hasGatekeeperPolicy(metadata: Record<string, unknown> | undefined): boolean {
+    return Boolean(metadata?.['gatekeeper']);
+  }
+
+  private toPolicyElementType(type: string): string {
+    const normalizedType = this.normalizeLookupValue(type).toLowerCase();
+    switch (normalizedType) {
+      case 'personas':
+        return 'persona';
+      case 'skills':
+        return 'skill';
+      case 'agents':
+        return 'agent';
+      case 'memories':
+        return 'memory';
+      case 'ensembles':
+        return 'ensemble';
+      default:
+        return normalizedType;
+    }
   }
 
   /**
@@ -365,6 +393,22 @@ export class ElementCRUDHandler {
     }
 
     try {
+      // Active agents (async)
+      const agents = await this.agentManager.getActiveAgents();
+      for (const agent of agents) {
+        const key = `agent:${agent.metadata.name}`;
+        seen.add(key);
+        result.push({
+          type: 'agent',
+          name: agent.metadata.name,
+          metadata: agent.metadata as unknown as Record<string, unknown>,
+        });
+      }
+    } catch (error) {
+      logger.warn('Failed to gather active agents for policy evaluation', { error });
+    }
+
+    try {
       // Active ensembles (async)
       const ensembles = await this.ensembleManager.getActiveEnsembles();
       for (const e of ensembles) {
@@ -407,6 +451,128 @@ export class ElementCRUDHandler {
     }
 
     return result;
+  }
+
+  async getPolicyElementsForReport(sessionId?: string): Promise<Array<{
+    type: string;
+    name: string;
+    metadata: Record<string, unknown>;
+    sessionIds?: string[];
+  }>> {
+    const merged = new Map<string, {
+      type: string;
+      name: string;
+      metadata: Record<string, unknown>;
+      sessionIds: Set<string>;
+    }>();
+
+    const addElement = (
+      element: { type: string; name: string; metadata: Record<string, unknown> },
+      sessionIds: string[] = [],
+    ): void => {
+      if (!this.hasGatekeeperPolicy(element.metadata)) {
+        return;
+      }
+
+      const key = `${element.type}:${element.name}`;
+      const existing = merged.get(key);
+      if (existing) {
+        sessionIds.forEach(id => existing.sessionIds.add(id));
+        return;
+      }
+
+      merged.set(key, {
+        type: element.type,
+        name: element.name,
+        metadata: element.metadata,
+        sessionIds: new Set(sessionIds),
+      });
+    };
+
+    for (const activeElement of await this.getActiveElementsForPolicy()) {
+      addElement(activeElement, this.activationStore ? [this.activationStore.getSessionId()] : []);
+    }
+
+    if (this.activationStore?.isEnabled()) {
+      const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
+      const catalogs = new Map<string, Array<{ metadata?: Record<string, unknown>; filename?: string }>>();
+
+      const getCatalog = async (type: string) => {
+        const normalizedType = this.normalizeElementType(type);
+        if (!catalogs.has(normalizedType)) {
+          catalogs.set(
+            normalizedType,
+            (await this.getElements(normalizedType)) as Array<{ metadata?: Record<string, unknown>; filename?: string }>,
+          );
+        }
+        return catalogs.get(normalizedType) ?? [];
+      };
+
+      const findPersistedElement = async (
+        type: string,
+        activation: PersistedActivation,
+      ): Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null> => {
+        const catalog = await getCatalog(type);
+        const normalizedName = this.normalizeLookupValue(activation.name);
+        const normalizedFilename = this.normalizeLookupValue(activation.filename);
+
+        const found = catalog.find((element) => {
+          const metadata = element.metadata ?? {};
+          const elementName = this.normalizeLookupValue(metadata['name']);
+          const elementFilename = this.normalizeLookupValue(
+            element.filename ?? metadata['filename'] ?? metadata['sourceFile'],
+          );
+
+          return elementName === normalizedName || (normalizedFilename !== '' && elementFilename === normalizedFilename);
+        });
+
+        if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
+          return null;
+        }
+
+        return {
+          type: this.toPolicyElementType(type),
+          name: (found.metadata['name'] as string) ?? activation.name,
+          metadata: found.metadata,
+        };
+      };
+
+      for (const state of persistedStates) {
+        await this.mergePersistedPolicyState(state, addElement, findPersistedElement);
+      }
+    }
+
+    return Array.from(merged.values()).map((entry) => ({
+      type: entry.type,
+      name: entry.name,
+      metadata: entry.metadata,
+      ...(entry.sessionIds.size > 0 ? { sessionIds: Array.from(entry.sessionIds).sort() } : {}),
+    }));
+  }
+
+  private async mergePersistedPolicyState(
+    state: PersistedActivationStateSnapshot,
+    addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
+    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
+  ): Promise<void> {
+    const pending: Promise<void>[] = [];
+
+    for (const [type, activations] of Object.entries(state.activations)) {
+      for (const activation of activations ?? []) {
+        pending.push((async () => {
+          const found = await findPersistedElement(type, activation);
+          if (found) {
+            addElement(found, [state.sessionId]);
+          }
+        })());
+      }
+    }
+
+    if (pending.length === 0) {
+      return;
+    }
+
+    await Promise.allSettled(pending);
   }
 
   async deactivateElement(name: string, type: string) {

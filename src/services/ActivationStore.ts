@@ -49,6 +49,12 @@ interface PersistedActivationState {
   activations: Record<string, PersistedActivation[]>;
 }
 
+export interface PersistedActivationStateSnapshot {
+  sessionId: string;
+  lastUpdated: string;
+  activations: Record<string, PersistedActivation[]>;
+}
+
 /** Valid element types that support activation (stored in singular form) */
 const ACTIVATABLE_TYPES = new Set(['persona', 'skill', 'agent', 'memory', 'ensemble']);
 
@@ -306,6 +312,93 @@ export class ActivationStore {
   getActivations(elementType: string): PersistedActivation[] {
     const type = normalizeType(elementType);
     return this.state.activations[type] ? [...this.state.activations[type]!] : [];
+  }
+
+  /**
+   * Read persisted activation snapshots from disk for reporting/diagnostics.
+   *
+   * This intentionally does not mutate the store's in-memory state, and it is
+   * safe to call from the web console to inspect other sessions' persisted
+   * activations without changing live policy enforcement for the current
+   * process.
+   */
+  async listPersistedActivationStates(sessionId?: string): Promise<PersistedActivationStateSnapshot[]> {
+    if (!this.enabled) {
+      return [];
+    }
+
+    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
+      ? normalizeActivationIdentifier(sessionId)
+      : undefined;
+
+    const states: PersistedActivationStateSnapshot[] = [];
+
+    try {
+      const filenames = normalizedSessionId
+        ? [`activations-${normalizedSessionId}.json`]
+        : (await fs.readdir(this.stateDir)).filter(name => /^activations-[^.]+\.json$/u.test(name));
+
+      for (const filename of filenames) {
+        const filePath = path.join(this.stateDir, filename);
+        try {
+          const content = await this.fileOps.readFile(filePath);
+          const data = JSON.parse(content) as PersistedActivationState;
+          if (data.version !== 1 || typeof data.sessionId !== 'string' || !data.activations || typeof data.activations !== 'object') {
+            continue;
+          }
+
+          const activations: Record<string, PersistedActivation[]> = {};
+          for (const [type, entries] of Object.entries(data.activations)) {
+            if (!ACTIVATABLE_TYPES.has(type) || !Array.isArray(entries)) {
+              continue;
+            }
+
+            const normalizedEntries = entries.flatMap((entry) => {
+              if (!entry || typeof entry.name !== 'string') return [];
+
+              const normalizedName = normalizeActivationIdentifier(entry.name);
+              if (!normalizedName) return [];
+
+              const normalizedFilename = typeof entry.filename === 'string'
+                ? normalizeActivationIdentifier(entry.filename)
+                : undefined;
+
+              return [{
+                ...entry,
+                name: normalizedName,
+                ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+              }];
+            });
+
+            if (normalizedEntries.length > 0) {
+              activations[type] = normalizedEntries;
+            }
+          }
+
+          states.push({
+            sessionId: data.sessionId,
+            lastUpdated: data.lastUpdated,
+            activations,
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+            logger.debug('[ActivationStore] Skipping unreadable activation snapshot during reporting', {
+              filePath,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.debug('[ActivationStore] Failed to enumerate activation snapshots for reporting', {
+          stateDir: this.stateDir,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return states.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
   }
 
   /**

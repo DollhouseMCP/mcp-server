@@ -70,7 +70,9 @@
 
   async function poll() {
     try {
-      const res = await DollhouseAuth.apiFetch('/api/permissions/status');
+      const sessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
+      const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+      const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       render(data);

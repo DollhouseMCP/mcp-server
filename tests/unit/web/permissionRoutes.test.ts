@@ -144,6 +144,43 @@ describe('permissionRoutes', () => {
       expect(res.body.allowPatterns).toEqual(['Bash:git *']);
       expect(res.body.confirmPatterns).toEqual(['Bash:git merge*']);
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+        },
+      });
+    });
+
+    it('should pass session selection through to the dashboard policy query', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 1,
+            hasAllowlist: false,
+            combinedDenyPatterns: ['Bash:rm*'],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: ['Bash:git push*'],
+            elements: [],
+            permissionPromptActive: false,
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status?sessionId=session-abc');
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionId).toBe('session-abc');
+      expect(res.body.confirmPatterns).toEqual(['Bash:git push*']);
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+          session_id: 'session-abc',
+        },
+      });
     });
 
     it('should return 500 when handler fails', async () => {

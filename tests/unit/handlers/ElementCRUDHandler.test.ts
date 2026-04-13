@@ -13,6 +13,7 @@ import type { PortfolioManager } from '../../../src/portfolio/PortfolioManager.j
 import type { InitializationService } from '../../../src/services/InitializationService.js';
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
 import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
+import type { ActivationStore } from '../../../src/services/ActivationStore.js';
 
 describe('ElementCRUDHandler (DI)', () => {
   let handler: ElementCRUDHandler;
@@ -45,6 +46,8 @@ describe('ElementCRUDHandler (DI)', () => {
 
     agentManager = {
       create: jest.fn(),
+      getActiveAgents: jest.fn().mockResolvedValue([]),
+      list: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<AgentManager>;
 
     memoryManager = {
@@ -57,6 +60,8 @@ describe('ElementCRUDHandler (DI)', () => {
 
     personaHandler = {
       getActivePersona: jest.fn(),
+      getActivePersonas: jest.fn().mockReturnValue([]),
+      list: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<PersonaHandler>;
 
     portfolioManager = {
@@ -210,6 +215,90 @@ describe('ElementCRUDHandler (DI)', () => {
       // Test with 'ensemble' (singular)
       const result2 = await handler.getElementDetails('Test', 'ensemble' as any);
       expect(result2.content[0].text).toContain('🎭');
+    });
+  });
+
+  describe('policy reporting helpers', () => {
+    it('includes active agents in getActiveElementsForPolicy()', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        {
+          metadata: {
+            name: 'autonomy-scout-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const result = await handler.getActiveElementsForPolicy();
+
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent',
+          name: 'autonomy-scout-demo',
+        }),
+      ]));
+    });
+
+    it('merges persisted activation snapshots into reportable policy elements', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([
+          {
+            sessionId: 'session-other',
+            lastUpdated: new Date().toISOString(),
+            activations: {
+              skill: [{ name: 'audit-trace-demo', activatedAt: new Date().toISOString() }],
+            },
+          },
+        ]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.getActiveSkills = jest.fn().mockResolvedValue([]);
+      skillManager.list = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'skill',
+          name: 'audit-trace-demo',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+      expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
     });
   });
 });
