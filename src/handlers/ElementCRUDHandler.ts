@@ -546,7 +546,9 @@ export class ElementCRUDHandler {
       type: entry.type,
       name: entry.name,
       metadata: entry.metadata,
-      ...(entry.sessionIds.size > 0 ? { sessionIds: Array.from(entry.sessionIds).sort() } : {}),
+      ...(entry.sessionIds.size > 0
+        ? { sessionIds: Array.from(entry.sessionIds).sort((a, b) => a.localeCompare(b)) }
+        : {}),
     }));
   }
 
