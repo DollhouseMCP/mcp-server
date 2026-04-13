@@ -73,6 +73,11 @@
     return merged;
   }
 
+  function getActiveTabName() {
+    var activeTab = document.querySelector('.console-tab.active');
+    return activeTab ? activeTab.dataset.tab || '' : '';
+  }
+
   function normalizePolicySessions(list) {
     if (!Array.isArray(list)) return [];
 
@@ -130,12 +135,22 @@
     var logSelect = document.getElementById('log-session-filter');
     if (logSelect) logSelect.value = sessionId;
 
-    // Trigger log re-filter with the selected session
-    if (window.DollhouseConsole && window.DollhouseConsole.logs && window.DollhouseConsole.logs.refilter) {
-      window.DollhouseConsole.logs.refilter(sessionId);
+    if (window.DollhouseConsole && window.DollhouseConsole.permissions) {
+      if (window.DollhouseConsole.permissions.onSessionChange) {
+        window.DollhouseConsole.permissions.onSessionChange(sessionId);
+      } else if (window.DollhouseConsole.permissions.refresh) {
+        window.DollhouseConsole.permissions.refresh();
+      }
     }
-    if (window.DollhouseConsole && window.DollhouseConsole.permissions && window.DollhouseConsole.permissions.refresh) {
-      window.DollhouseConsole.permissions.refresh();
+
+    // Trigger log re-filter only when the Logs tab is active. Refiltering the
+    // virtualized log buffer can be expensive, and it should not delay session
+    // switching on other tabs like Permissions.
+    if (getActiveTabName() === 'logs'
+      && window.DollhouseConsole
+      && window.DollhouseConsole.logs
+      && window.DollhouseConsole.logs.refilter) {
+      window.DollhouseConsole.logs.refilter(sessionId);
     }
 
     refreshSelectionState();

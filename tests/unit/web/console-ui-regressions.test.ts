@@ -262,27 +262,6 @@ describe('Web console cleanup regressions', () => {
         });
       }
 
-      if (url === '/api/permissions/status?sessionId=session-focus') {
-        return Promise.resolve({
-          ok: true,
-          json: () => Promise.resolve({
-            sessionId: 'session-focus',
-            activeElementCount: 1,
-            hasAllowlist: false,
-            denyPatterns: ['mcp__DollhouseMCP__mcp_aql_delete*'],
-            allowPatterns: ['mcp__DollhouseMCP__mcp_aql_read*'],
-            confirmPatterns: ['mcp__DollhouseMCP__mcp_aql_execute*'],
-            elements: [{
-              type: 'agent',
-              element_name: 'autonomy-scout-demo',
-              description: 'Selected session details',
-            }],
-            recentDecisions: [],
-            permissionPromptActive: false,
-          }),
-        });
-      }
-
       if (url === '/api/permissions/status') {
         return Promise.resolve({
           ok: true,
@@ -290,19 +269,25 @@ describe('Web console cleanup regressions', () => {
             activeElementCount: 2,
             hasAllowlist: true,
             denyPatterns: ['Bash:rm -rf *', 'Bash:git clean -f*'],
-            allowPatterns: ['Bash:git status*'],
+            allowPatterns: [],
             confirmPatterns: ['Bash:git push*'],
             elements: [
               {
                 type: 'ensemble',
                 element_name: 'drawing-room-safety',
                 description: 'Shared baseline restrictions',
+                allowPatterns: ['Bash:git status*'],
+                confirmPatterns: [],
+                denyPatterns: [],
                 sessionIds: ['session-alpha'],
               },
               {
                 type: 'agent',
                 element_name: 'autonomy-scout-demo',
                 description: 'Selected session details',
+                allowPatterns: ['mcp__DollhouseMCP__mcp_aql_read*'],
+                confirmPatterns: ['mcp__DollhouseMCP__mcp_aql_execute*'],
+                denyPatterns: ['mcp__DollhouseMCP__mcp_aql_delete*'],
                 sessionIds: ['session-focus'],
               },
             ],
@@ -350,6 +335,7 @@ describe('Web console cleanup regressions', () => {
     expect(sourceItems).toHaveLength(2);
     expect(win.document.getElementById('perm-source-list')?.textContent).toContain('drawing-room-safety');
     expect(win.document.getElementById('perm-source-list')?.textContent).toContain('autonomy-scout-demo');
+    expect(win.document.getElementById('perm-allow-list')?.textContent).toContain('Bash:git status*');
 
     const highlighted = win.document.querySelectorAll('#perm-source-list .perm-source-item--selected');
     expect(highlighted).toHaveLength(1);
@@ -361,6 +347,7 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('perm-selected-badge')?.textContent).toContain('Persisted Policy State (Debug Info)');
     expect(win.document.getElementById('perm-selected-source-list')?.textContent).toContain('autonomy-scout-demo');
     expect(win.document.getElementById('perm-selected-deny-list')?.textContent).toContain('mcp__DollhouseMCP__mcp_aql_delete*');
+    expect(apiFetch).not.toHaveBeenCalledWith('/api/permissions/status?sessionId=session-focus');
 
     cleanup();
   });

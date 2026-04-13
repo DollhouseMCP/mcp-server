@@ -69,6 +69,8 @@ html { scroll-behavior: smooth; }
 body {
   margin: 0;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   color-scheme: light;
   color: var(--ink-900);
   background:
@@ -249,6 +251,7 @@ p, li { max-width: 69ch; }
 .site-main {
   width: min(var(--max-width), calc(100% - 2 * var(--gutter)));
   margin: 0 auto;
+  flex: 1 0 auto;
   padding: clamp(1.1rem, 3vw, 2rem) 0 3rem;
 }
 
@@ -1375,8 +1378,8 @@ body.modal-open { overflow: hidden; }
 .site-footer {
   border-top: 1px solid var(--line);
   padding: 0.85rem 0 1.35rem;
-  position: sticky;
-  bottom: 0;
+  margin-top: auto;
+  position: static;
   background: var(--paper);
   z-index: 10;
 }
