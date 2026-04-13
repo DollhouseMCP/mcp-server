@@ -62,18 +62,21 @@ describe('Permission Server Wiring', () => {
       );
 
       expect(containerSource).toContain('private async deferredPermissionServer');
-      expect(containerSource).toContain('await this.deferredPermissionServer(timer)');
+      expect(containerSource).toContain('const consoleResult = await this.deferredWebConsole(timer);');
+      expect(containerSource).toContain('await this.deferredPermissionServer(consoleResult, timer);');
       expect(containerSource).toContain('DOLLHOUSE_PERMISSION_SERVER');
     });
 
-    it('should use the existing web console port, not start a new server', async () => {
+    it('should use the elected web console port, not the default env port', async () => {
       const containerSource = await fs.readFile(
         path.join(process.cwd(), 'src/di/Container.ts'),
         'utf-8'
       );
 
-      // Should reference the console port, not start a new server
-      expect(containerSource).toContain('DOLLHOUSE_WEB_CONSOLE_PORT');
+      // Should reference the live console result, not a guessed env/default port
+      expect(containerSource).toContain("consoleResult?.role === 'leader'");
+      expect(containerSource).toContain('consoleResult.port');
+      expect(containerSource).toContain('consoleResult?.election.leaderInfo.port');
       expect(containerSource).toContain('writePortFile');
       expect(containerSource).toContain('registerPortCleanup');
 
@@ -90,7 +93,7 @@ describe('Permission Server Wiring', () => {
       // After #1866 split: webConsole and permServer are in completeConsoleSetup,
       // dangerZone is in completeSinkSetup. Verify console-group ordering.
       const webConsoleIdx = containerSource.indexOf('deferredWebConsole(timer)');
-      const permServerIdx = containerSource.indexOf('deferredPermissionServer(timer)');
+      const permServerIdx = containerSource.indexOf('deferredPermissionServer(consoleResult, timer)');
 
       expect(permServerIdx).toBeGreaterThan(webConsoleIdx);
     });
