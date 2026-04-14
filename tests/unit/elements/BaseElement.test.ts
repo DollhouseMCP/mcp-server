@@ -5,10 +5,10 @@
 import { BaseElement, normalizeVersion } from '../../../src/elements/BaseElement.js';
 import { ElementType } from '../../../src/portfolio/types.js';
 import { ElementStatus } from '../../../src/types/elements/index.js';
-import { createTestMetadataService } from '../../helpers/di-mocks.js';
+import { MetadataService } from '../../../src/services/MetadataService.js';
 
 // Create a shared MetadataService instance for all tests
-const metadataService = createTestMetadataService();
+const metadataService = new MetadataService();
 
 // Create a concrete implementation for testing
 class TestElement extends BaseElement {
@@ -261,6 +261,28 @@ describe('BaseElement', () => {
       expect(element.id).toBe(original.id);
       expect(element.metadata.name).toBe('Original');
       expect(element.metadata.description).toBe('Original description');
+    });
+
+    it('should coerce numeric versions during deserialization', () => {
+      const original = new TestElement({
+        name: 'Original',
+        description: 'Original description'
+      });
+
+      const json = JSON.stringify({
+        id: original.id,
+        type: original.type,
+        version: 1.1,
+        metadata: original.metadata,
+        references: original.references,
+        extensions: original.extensions,
+        ratings: original.ratings
+      });
+
+      const element = new TestElement();
+      element.deserialize(json);
+
+      expect(element.version).toBe('1.1.0');
     });
     
     it('should throw on invalid JSON', () => {

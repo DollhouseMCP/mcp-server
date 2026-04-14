@@ -397,7 +397,7 @@ export abstract class BaseElement implements IElement {
       // Update properties
       this.id = parsed.id;
       this.type = parsed.type;
-      this.version = parsed.version || '1.0.0';
+      this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata;
       this.references = parsed.references || [];
       this.extensions = parsed.extensions || {};
