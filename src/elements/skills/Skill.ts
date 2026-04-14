@@ -10,7 +10,7 @@
  * 5. MEDIUM: Added XSS protection through input sanitization
  */
 
-import { BaseElement } from '../BaseElement.js';
+import { BaseElement, normalizeVersion } from '../BaseElement.js';
 import { IElement, IElementMetadata, ElementValidationResult } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -450,7 +450,7 @@ export class Skill extends BaseElement implements IElement {
       
       // Update ID and version if provided
       if (parsed.id) this.id = parsed.id;
-      if (parsed.version) this.version = parsed.version;
+      if (parsed.version != null) this.version = normalizeVersion(String(parsed.version));
       
       // Restore parameters
       if (parsed.parameters) {
