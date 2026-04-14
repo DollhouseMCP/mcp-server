@@ -32,8 +32,11 @@ interface KnownPolicySession {
 }
 
 const DECISION_BUFFER_SIZE = 200;
-const recentDecisions: PermissionDecision[] = [];
-let decisionCounter = 0;
+
+interface PermissionDecisionTracker {
+  trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void;
+  getRecentDecisions(): PermissionDecision[];
+}
 
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
@@ -44,19 +47,29 @@ function extractString(obj: Record<string, unknown>, keys: string[], fallback: s
   return fallback;
 }
 
-function trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
-  const entry: PermissionDecision = {
-    id: `d-${++decisionCounter}`,
-    timestamp: new Date().toISOString(),
-    tool_name: toolName,
-    command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-    decision: extractString(result, ['decision', 'behavior'], 'unknown'),
-    reason: extractString(result, ['reason', 'message'], ''),
+function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): PermissionDecisionTracker {
+  const recentDecisions: PermissionDecision[] = [];
+  let decisionCounter = 0;
+
+  return {
+    trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
+      const entry: PermissionDecision = {
+        id: `d-${++decisionCounter}`,
+        timestamp: new Date().toISOString(),
+        tool_name: toolName,
+        command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
+        decision: extractString(result, ['decision', 'behavior'], 'unknown'),
+        reason: extractString(result, ['reason', 'message'], ''),
+      };
+      recentDecisions.unshift(entry);
+      if (recentDecisions.length > bufferSize) {
+        recentDecisions.length = bufferSize;
+      }
+    },
+    getRecentDecisions(): PermissionDecision[] {
+      return recentDecisions;
+    },
   };
-  recentDecisions.unshift(entry);
-  if (recentDecisions.length > DECISION_BUFFER_SIZE) {
-    recentDecisions.length = DECISION_BUFFER_SIZE;
-  }
 }
 
 /** Helper to extract single result from MCP-AQL batch response */
@@ -93,6 +106,7 @@ function extractKnownPolicySessions(elements: Array<Record<string, unknown>>): K
  * Must be called with the MCP-AQL handler for policy evaluation.
  */
 export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler): void {
+  const decisionTracker = createPermissionDecisionTracker();
   /**
    * POST /api/evaluate_permission
    * Permission evaluation endpoint for PreToolUse hooks.
@@ -144,7 +158,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
+      decisionTracker.trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
 
       res.json(opResult.data);
     } catch (err) {
@@ -200,7 +214,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         elements,
         knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
-        recentDecisions,
+        recentDecisions: decisionTracker.getRecentDecisions(),
       });
     } catch (err) {
       logger.error('[WebUI/Gateway] permissions/status error:', err);
