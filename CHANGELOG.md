@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.14] - 2026-04-14
+
+### Fixes
+
+- Permissions console reporting, audit feed routing, and session UX hardening
+- Permissions tab dark mode rendering fixes
+- Numeric YAML version deserialization fix for two-component versions like `1.1`
+
 ## [2.0.13] - 2026-04-13
 
 ### Security Fixes
