@@ -117,6 +117,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private readonly metadataService: MetadataService;
+  /** Issue #1948: Retention policy service ref, passed to Memory instances at construction. */
+  private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   private readonly _localActiveMemoryNames: Set<string> = new Set();
 
@@ -141,6 +143,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1948: Set retention policy service (called by Container after registration). */
+  setRetentionPolicyService(service: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean }): void {
+    this._retentionPolicyService = service;
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */
@@ -290,7 +297,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const { metadata, content: markdownContentFromFile } = this.parseMemoryFile(parsed);
 
       // Create memory instance
-      const memory = new Memory(metadata, this.metadataService);
+      const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
 
       // Fix #918: Read instructions from root-level YAML (where serializeElement writes them).
       // Previously instructions were written to root but never read back — silent data loss.
@@ -1556,7 +1563,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const { content, instructions, ...metadataFields } = metadata;
 
     // Create instance
-    const memory = new Memory(metadataFields, this.metadataService);
+    const memory = new Memory(metadataFields, this.metadataService, this, this._retentionPolicyService);
 
     // Set instructions if provided (v2.0 dual-field: memory-level directives)
     if (instructions) {
@@ -1620,7 +1627,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Create memory instance
-    const memory = new Memory(metadata, this.metadataService);
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
 
     // Load entries if present
     if (entries) {
@@ -1740,7 +1747,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
-    const memory = new Memory(metadata, this.metadataService);
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
       memory.instructions = metadata.instructions;

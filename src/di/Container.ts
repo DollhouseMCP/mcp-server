@@ -90,6 +90,7 @@ import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
 import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
+import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
@@ -179,7 +180,12 @@ export class DollhouseContainer {
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
   public deferredSetupComplete = false;
 
-  constructor() {
+  /**
+   * @param lifecycleService - Optional LifecycleService instance (created before the
+   *   container in index.ts because error handlers must be installed before any async work).
+   *   Registered in the container so it's resolvable via DI like any other service.
+   */
+  constructor(lifecycleService?: import('../lifecycle/LifecycleService.js').LifecycleService) {
     // FIX: DMCP-SEC-006 - Audit DI container initialization
     SecurityMonitor.logSecurityEvent({
       type: 'PORTFOLIO_INITIALIZATION',
@@ -188,6 +194,10 @@ export class DollhouseContainer {
       details: 'Dependency injection container initializing'
     });
     this.registerServices();
+    // Issue #1948: Register LifecycleService in DI if provided
+    if (lifecycleService) {
+      this.register('LifecycleService', () => lifecycleService);
+    }
   }
 
   /**
@@ -542,6 +552,10 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
+      // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+      elementManagerResolver: (name: string) => this.resolve(name) as import('../elements/agents/AgentManager.js').ResolvedElementManager,
+      dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
+      verificationStore: this.resolve('ChallengeStore'),
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -571,15 +585,8 @@ export class DollhouseContainer {
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
-    Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
-    // Issue #51: Configure retention policy resolver for Memory class
-    Memory.configureRetentionPolicyResolver(() => this.resolve('RetentionPolicyService'));
-    // Issue #111: Configure element manager resolver for AgentManager (element-agnostic activation)
-    AgentManager.setElementManagerResolver((managerName: string) => this.resolve(managerName));
-    // Issue #402: Configure DangerZoneEnforcer resolver for AgentManager (autonomy evaluation)
-    AgentManager.setDangerZoneEnforcerResolver(() => this.resolve('DangerZoneEnforcer'));
-    // Issue #142: Configure VerificationStore resolver for AgentManager (danger zone verification)
-    AgentManager.setVerificationStoreResolver(() => this.resolve('VerificationStore'));
+    // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
+    // to avoid eager resolution during constructor (breaks test containers).
 
     // QUERY SERVICES (Issue #38: Pagination, filtering, sorting)
     // These services are element-agnostic and can be used with any element type
@@ -597,6 +604,14 @@ export class DollhouseContainer {
     this.register('DollhouseToAnthropicConverter', () => new DollhouseToAnthropicConverter());
 
     // SECURITY SERVICES
+    // Issue #1948: PathValidator as DI-managed singleton (replaces static class state)
+    this.register('PathValidator', () => {
+      const personasDir = this.resolve<PortfolioManager>('PortfolioManager')
+        .getElementDir(ElementType.PERSONA);
+      const instance = new PathValidator(personasDir);
+      PathValidator.setRootInstance(instance);
+      return instance;
+    });
     // Issue #402: DangerZoneEnforcer as DI-managed singleton (replaces module-level singleton)
     this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService')
@@ -822,6 +837,15 @@ export class DollhouseContainer {
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
   public async preparePortfolio(): Promise<void> {
+    // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)
+    try {
+      const mm = this.resolve<MemoryManager>('MemoryManager');
+      mm.setRetentionPolicyService(this.resolve('RetentionPolicyService'));
+      Memory.setRootMemoryManager(mm as { list(): Promise<import('../elements/memories/Memory.js').Memory[]>; save(memory: import('../elements/memories/Memory.js').Memory, filePath?: string): Promise<void> });
+    } catch {
+      // Not available in test containers — safe to skip
+    }
+
     const timer = this.resolve<StartupTimer>('StartupTimer');
     const startTime = Date.now();
     const migrationManager = this.resolve<MigrationManager>('MigrationManager');
@@ -1357,7 +1381,9 @@ export class DollhouseContainer {
       throw new Error("Persona directory not initialized. Call preparePortfolio() first.");
     }
 
-    PathValidator.initialize(this.personasDir);
+    // Issue #1948: PathValidator initialized via DI (instance-based, no static mutation)
+    // Resolving here ensures it's created with the correct personasDir
+    this.resolve<PathValidator>('PathValidator');
 
     const indicatorService = this.resolve<PersonaIndicatorService>('PersonaIndicatorService');
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
@@ -1640,41 +1666,39 @@ export class DollhouseContainer {
 
     const bundle = this.httpHandlerBundle;
     const contextTracker = this.resolve<ContextTracker>('ContextTracker');
+    const sid = sessionContext.sessionId;
 
-    // Issue #1946: Pre-register HTTP session in activation registry with per-session persistence
+    // Issue #1948: Create a child container for this session's scoped services
+    const child = new SessionContainer(this, sid);
+
+    // Register per-session persistence stores
+    child.register('ActivationStateStore', () =>
+      new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
+    child.register('ActivationStore', () =>
+      new ActivationStore(child.resolve('ActivationStateStore')));
+    child.register('ConfirmationStore', () =>
+      new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
+    child.register('GatekeeperSession', () =>
+      new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+
+    // Bridge: attach per-session ActivationStore to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
-    const httpSessionState = activationRegistry.getOrCreate(sessionContext.sessionId);
-    try {
-      const httpFileStore = new FileActivationStateStore(
-        this.resolve('FileOperationsService'),
-        undefined,
-        sessionContext.sessionId,
-      );
-      httpSessionState.activationStore = new ActivationStore(httpFileStore);
-    } catch (storeError) {
-      // Clean up orphaned registry entry if store construction fails
-      activationRegistry.dispose(sessionContext.sessionId);
-      throw storeError;
-    }
+    const httpSessionState = activationRegistry.getOrCreate(sid);
+    httpSessionState.activationStore = child.resolve<ActivationStore>('ActivationStore');
 
-    // Issue #1947: Register per-session GatekeeperSession with per-session FileConfirmationStore
+    // Bridge: register per-session GatekeeperSession with the shared Gatekeeper
     const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
+    const httpGkSession = child.resolve<GatekeeperSession>('GatekeeperSession');
     try {
-      const httpConfirmStore = new FileConfirmationStore(
-        this.resolve('FileOperationsService'),
-        undefined,
-        sessionContext.sessionId,
-      );
-      const httpGkSession = new GatekeeperSession(undefined, 100, undefined, httpConfirmStore, sessionContext.sessionId);
       await httpGkSession.initialize();
-      gatekeeper.registerSession(sessionContext.sessionId, httpGkSession);
-    } catch (gkError) {
-      logger.warn('[HTTP Session] Failed to create per-session Gatekeeper — using in-memory fallback', {
-        error: gkError instanceof Error ? gkError.message : String(gkError),
+    } catch (initError) {
+      logger.warn('[HTTP Session] GatekeeperSession initialization failed — starting fresh', {
+        error: initError instanceof Error ? initError.message : String(initError),
       });
     }
+    gatekeeper.registerSession(sid, httpGkSession);
 
-    // Per-session Server instance (SDK requires one Server per transport)
+    // Per-session Server, ServerSetup, ToolRegistry — registered in child container
     const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
     try {
       const configManager = this.resolve<ConfigManager>('ConfigManager');
@@ -1688,38 +1712,31 @@ export class DollhouseContainer {
       });
     }
 
-    const server = new Server(
+    child.register('Server', () => new Server(
       { name: 'dollhousemcp', version: PACKAGE_VERSION },
       { capabilities }
-    );
+    ));
+    child.register('SessionResolver', () => (() => sessionContext) as SessionResolver);
+    child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
+    child.register('ToolRegistry', () => {
+      const registry = new ToolRegistry(child.resolve<Server>('Server'));
+      this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
+      return registry;
+    });
 
-    // Per-session SessionResolver — always returns this session's context
-    const sessionResolver: SessionResolver = () => sessionContext;
-
-    // Per-session ServerSetup (owns the tool call handler and list-tools cache)
-    const serverSetup = new ServerSetup(contextTracker, sessionResolver);
-
-    // Register tools on this session's ToolRegistry
-    const toolRegistry = new ToolRegistry(server);
-    this.registerToolsOnRegistry(toolRegistry, bundle, env.MCP_INTERFACE_MODE);
-
+    // Wire up: setup server with tools
+    const server = child.resolve<Server>('Server');
+    const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
+    const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
 
     return {
       server,
       dispose: async () => {
-        // Server cleanup is handled by the SDK transport layer.
-
-        // Issue #1946: Dispose per-session activation state
-        activationRegistry.dispose(sessionContext.sessionId);
-
-        // Issue #1947: Dispose per-session Gatekeeper state
-        gatekeeper.disposeSession(sessionContext.sessionId);
-
-        // Clean up session-keyed state in the shared MCPAQLHandler
-        // (executing agents, pending saves, frequency counters, aborted goals).
-        // Without this, entries accumulate as HTTP sessions disconnect.
-        bundle.mcpAqlHandler.cleanupSession(sessionContext.sessionId);
+        // Issue #1948: Child container disposal handles all session cleanup:
+        // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
+        // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
+        await child.dispose();
       },
     };
   }

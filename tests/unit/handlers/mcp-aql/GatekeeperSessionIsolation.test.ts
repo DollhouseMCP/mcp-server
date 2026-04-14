@@ -126,7 +126,6 @@ describe('Gatekeeper Session Isolation (Issue #1947)', () => {
 
   describe('disposeSession', () => {
     it('disposing Session A does not affect Session B', async () => {
-      const sessionA = { userId: 'user-a', sessionId: 'session-a', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
       const sessionB = { userId: 'user-b', sessionId: 'session-b', tenantId: null, transport: 'http' as const, createdAt: Date.now() };
 
       // Session B confirms

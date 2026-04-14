@@ -9,7 +9,7 @@ import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateFilename, sanitizeInput, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
-import { PathValidator } from '../security/pathValidator.js';
+// Issue #1948: PathValidator import removed — initialized via DI container, not PersonaManager
 import { FileLockManager } from '../security/fileLockManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
@@ -1464,19 +1464,14 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     });
   }
 
+  /**
+   * Issue #1948: PathValidator is now initialized by the DI container as an
+   * instance-based service. This method is kept as a no-op to avoid removing
+   * all 7 call sites in one step. The calls are harmless and can be removed
+   * in a future cleanup.
+   */
   private initializePathValidator(): void {
-    if (this.pathValidatorInitialized) {
-      return;
-    }
-
-    try {
-      PathValidator.initialize(this.personasDir);
-      this.pathValidatorInitialized = true;
-    } catch (error) {
-      logger.warn('[PersonaManager] Failed to initialize PathValidator', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+    // No-op: PathValidator initialized via DI container (Issue #1948)
   }
 
   /**

@@ -333,20 +333,10 @@ activates:
       metadataService
     ));
 
-    // Create AgentManager instance
-    const agentManagerInstance = new AgentManager({
-      portfolioManager: container.resolve('PortfolioManager'),
-      fileLockManager: container.resolve('FileLockManager'),
-      baseDir: portfolioPath,
-      fileOperationsService: container.resolve('FileOperationsService'),
-      validationRegistry: container.resolve('ValidationRegistry'),
-      serializationService: container.resolve('SerializationService'),
-      metadataService: container.resolve('MetadataService'),
-      eventDispatcher: new ElementEventDispatcher(),
-    });
-
-    // Set up element manager resolver for activating elements
-    AgentManager.setElementManagerResolver((managerName: string) => {
+    // Issue #1948: Element manager resolver passed via constructor deps.
+    // Uses lazy reference to agentManagerInstance for self-referential activation.
+    let agentManagerInstance: AgentManager;
+    const elementManagerResolver = (managerName: string) => {
       if (managerName === 'PersonaManager') {
         return {
           list: async () => [{
@@ -356,10 +346,21 @@ activates:
         } as any;
       }
       if (managerName === 'AgentManager') {
-        // Return the same agent manager to enable agent-to-agent activation
         return agentManagerInstance;
       }
       return null;
+    };
+
+    agentManagerInstance = new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+      elementManagerResolver,
     });
 
     container.register('AgentManager', () => agentManagerInstance);

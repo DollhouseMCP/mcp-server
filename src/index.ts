@@ -42,52 +42,26 @@ import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 
 // Transport-aware error handlers.
-// In stdio mode (default): exit on unhandled errors — the process is the session.
-// In HTTP mode: log and continue — one session's error must not kill the server
-// for all connected clients. Set to true when HTTP transport starts.
-let _httpModeActive = false;
+// Issue #1948: Process lifecycle managed by LifecycleService singleton.
+// The service is created eagerly here (before DI container) because error
+// handlers must be installed before any async work begins.
+import { LifecycleService } from './lifecycle/LifecycleService.js';
 
-/** Check if HTTP mode error handling is active. */
+const _lifecycleService = new LifecycleService();
+_lifecycleService.installErrorHandlers();
+
+/** The singleton LifecycleService instance. Exported for DI container registration. */
+export { _lifecycleService as lifecycleService };
+
+/** Check if HTTP mode error handling is active. Re-exported for backward compat. */
 export function isHttpModeActive(): boolean {
-  return _httpModeActive;
+  return _lifecycleService.isHttpModeActive();
 }
 
-/** Activate HTTP mode error handling. Called by the HTTP transport on startup. */
+/** Activate HTTP mode error handling. Re-exported for backward compat. */
 export function setHttpModeActive(active: boolean): void {
-  _httpModeActive = active;
+  _lifecycleService.setHttpModeActive(active);
 }
-
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught exception', {
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined,
-    transport: _httpModeActive ? 'http' : 'stdio',
-  });
-
-  if (_httpModeActive) {
-    logger.error('[Lifecycle] Uncaught exception in HTTP mode — server continues serving');
-    return;
-  }
-
-  console.error('[DollhouseMCP] Fatal error');
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason, _promise) => {
-  logger.error('Unhandled promise rejection', {
-    reason: reason instanceof Error ? reason.message : String(reason),
-    stack: reason instanceof Error ? reason.stack : undefined,
-    transport: _httpModeActive ? 'http' : 'stdio',
-  });
-
-  if (_httpModeActive) {
-    logger.error('[Lifecycle] Unhandled rejection in HTTP mode — server continues serving');
-    return;
-  }
-
-  console.error('[DollhouseMCP] Fatal error');
-  process.exit(1);
-});
 
 // Only log execution environment in debug mode
 if (process.env.DOLLHOUSE_DEBUG) {
@@ -118,7 +92,7 @@ export class DollhouseMCPServer implements IToolHandler {
    * Create a new DollhouseMCPServer instance
    *
    * @param container DollhouseContainer instance for dependency injection.
-   *                  Use `new DollhouseContainer()` for production or
+   *                  Use `new DollhouseContainer(_lifecycleService)` for production or
    *                  `createIntegrationContainer().container` for tests.
    */
   constructor(container: DollhouseContainer) {
@@ -816,7 +790,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     console.error("DEBUG: startServerWithRetry called.");
   }
   try {
-    const container = new DollhouseContainer();
+    const container = new DollhouseContainer(_lifecycleService);
     const server = new DollhouseMCPServer(container);
     await server.run();
   } catch (error) {
@@ -869,7 +843,7 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
  * and all HTTP sessions.
  */
 async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
-  const container = new DollhouseContainer();
+  const container = new DollhouseContainer(_lifecycleService);
   await container.preparePortfolio();
   await container.bootstrapHttpHandlers();
   await container.completeSinkSetup();
@@ -1020,7 +994,7 @@ async function bootstrapWebContainer(): Promise<{
   let logManager: import('./logging/LogManager.js').LogManager | undefined;
 
   try {
-    container = new DollhouseContainer();
+    container = new DollhouseContainer(_lifecycleService);
     await container.preparePortfolio();
     const bundle = await container.bootstrapHandlers();
     await container.completeSinkSetup();

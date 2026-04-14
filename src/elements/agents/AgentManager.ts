@@ -45,8 +45,30 @@ import {
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 
+/**
+ * Minimal interface for an element manager resolved by name.
+ * The resolver returns heterogeneous managers (PersonaManager, SkillManager, etc.)
+ * — this captures the common surface needed by getElementContent().
+ */
+export interface ResolvedElementManager {
+  list(): Promise<Array<{
+    metadata: { name: string; [key: string]: unknown };
+    content?: string;
+    instructions?: string;
+    getEntries?: () => unknown[];
+    elements?: Record<string, unknown>;
+    extensions?: Record<string, unknown>;
+  }>>;
+}
+
 export interface AgentManagerDeps extends ElementManagerDeps {
   baseDir: string;
+  /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
+  elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
+  dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
+  verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 }
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -100,15 +122,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActiveAgentNames: Set<string> = new Set();
 
-  // Static resolver for element manager lookup (DI pattern)
-  // This allows Agent instances to resolve managers without tight coupling
-  private static elementManagerResolver?: (managerName: string) => any;
-
-  // Issue #402: Static resolver for DangerZoneEnforcer (DI pattern)
-  private static dangerZoneEnforcerResolver?: () => import('./types.js').DangerZoneBlocker;
-
-  // Issue #142: Static resolver for VerificationStore (DI pattern)
-  private static verificationStoreResolver?: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+  private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 
   constructor(deps: AgentManagerDeps) {
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
@@ -133,6 +150,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
+    // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+    this._elementManagerResolver = deps.elementManagerResolver;
+    this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
+    this._verificationStore = deps.verificationStore;
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */
@@ -145,49 +166,31 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Configure the element manager resolver for element-agnostic activation
-   * This is called by the DI container during initialization
-   * Follows the same pattern as Memory.configureMemoryManagerResolver
-   *
-   * @param resolver Function that takes a manager name and returns the manager instance
+   * Issue #1948: Set element manager resolver on this instance.
+   * Primarily for tests that need to configure after construction.
    */
-  public static setElementManagerResolver(resolver: (managerName: string) => any): void {
-    AgentManager.elementManagerResolver = resolver;
+  setElementManagerResolver(resolver: (managerName: string) => ResolvedElementManager | null): void {
+    this._elementManagerResolver = resolver;
+  }
+
+  /** Issue #1948: Set DangerZoneEnforcer on this instance. */
+  setDangerZoneEnforcerInstance(enforcer: import('./types.js').DangerZoneBlocker): void {
+    this._dangerZoneEnforcer = enforcer;
+  }
+
+  /** Issue #1948: Set VerificationStore on this instance. */
+  setVerificationStoreInstance(store: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
+    this._verificationStore = store;
   }
 
   /**
-   * Issue #402: Set DangerZoneEnforcer resolver for DI injection.
-   * Called by the DI container during initialization.
+   * @deprecated Issue #1948: Static methods replaced by instance methods.
+   * These exist only for test backward compatibility and will be removed.
    */
-  public static setDangerZoneEnforcerResolver(resolver: () => import('./types.js').DangerZoneBlocker): void {
-    AgentManager.dangerZoneEnforcerResolver = resolver;
-  }
-
-  /**
-   * Issue #142: Set VerificationStore resolver for DI injection.
-   * Called by the DI container during initialization.
-   */
-  public static setVerificationStoreResolver(resolver: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
-    AgentManager.verificationStoreResolver = resolver;
-  }
-
-  /**
-   * Get the element manager resolver
-   * @private
-   */
-  private static getElementManagerResolver(): ((managerName: string) => any) | undefined {
-    return AgentManager.elementManagerResolver;
-  }
-
-  /**
-   * Reset static resolvers (for test cleanup)
-   * Call this in afterEach hooks to prevent test isolation issues
-   */
-  public static resetResolvers(): void {
-    AgentManager.elementManagerResolver = undefined;
-    AgentManager.dangerZoneEnforcerResolver = undefined;
-    AgentManager.verificationStoreResolver = undefined;
-  }
+  public static setElementManagerResolver(_resolver: (managerName: string) => ResolvedElementManager | null): void { /* no-op — use instance method */ }
+  public static setDangerZoneEnforcerResolver(_resolver: () => any): void { /* no-op — use instance method */ }
+  public static setVerificationStoreResolver(_resolver: () => any): void { /* no-op — use instance method */ }
+  public static resetResolvers(): void { /* no-op — use instance method */ }
 
   /**
    * Prepare directory structure for agents and state files.
@@ -1462,8 +1465,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementName: string,
     executionContext?: ExecutionContext
   ): Promise<string> {
-    // Get the static resolver
-    const resolver = AgentManager.getElementManagerResolver();
+    // Issue #1948: Use instance-injected resolver instead of static
+    const resolver = this._elementManagerResolver;
     if (!resolver) {
       logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
       return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
@@ -1511,7 +1514,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find((e: any) => e.metadata.name === elementName);
+      const element = elements.find(e => e.metadata.name === elementName);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
@@ -1526,7 +1529,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           return element.instructions || '';
 
         case 'memories': {
-          const entries = element.getEntries();
+          const entries = element.getEntries?.() ?? [];
           return `Memory '${elementName}' with ${entries.length} entries`;
         }
 
@@ -1541,7 +1544,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
 
         case 'agents': {
-          const instructions = element.extensions?.instructions || '';
+          const instructions = String(element.extensions?.instructions ?? '');
           return instructions;
         }
 
@@ -2635,8 +2638,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       currentStepOutcome: params.outcome,
       nextActionHint: params.nextActionHint,
       riskScore: params.riskScore,
-      dangerZoneEnforcer: AgentManager.dangerZoneEnforcerResolver?.(),
-      verificationStore: AgentManager.verificationStoreResolver?.(),
+      dangerZoneEnforcer: this._dangerZoneEnforcer,
+      verificationStore: this._verificationStore,
       goalDescription: activeGoal.description,
       goalId: activeGoal.id,
     });
