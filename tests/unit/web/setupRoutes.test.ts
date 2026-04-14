@@ -10,9 +10,10 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { readFileSync } from 'node:fs';
-import { readFile as readFileAsync } from 'node:fs/promises';
+import { mkdtemp, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..', '..', '..', 'src');
@@ -80,7 +81,7 @@ describe('Setup Routes — API Endpoints', () => {
       const validClients = [
         'claude', 'claude-code', 'cursor', 'vscode', 'cline',
         'roo-cline', 'windsurf', 'witsy', 'enconvo', 'gemini-cli',
-        'goose', 'zed', 'warp', 'codex',
+        'goose', 'zed', 'warp', 'codex', 'lmstudio',
       ];
 
       for (const client of validClients) {
@@ -269,7 +270,7 @@ describe('Setup Routes — API Endpoints', () => {
 
       expect(typeof res.body).toBe('object');
       // Should have entries for the detectable clients
-      const knownClients = ['claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
+      const knownClients = ['claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
       for (const client of knownClients) {
         expect(res.body[client]).toBeDefined();
         expect(res.body[client].name).toBeDefined();
@@ -337,8 +338,8 @@ describe('Setup Routes — API Endpoints', () => {
       // testing against the rejects-unsupported test above — if 'vscode' gets 400
       // but 'cursor' would not, validation is working.
       // The actual open behavior is tested manually.
-      const openableClients = ['claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
-      const nonOpenable = ['vscode', 'cline', 'roo-cline'];
+      const openableClients = ['claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
+      const nonOpenable = ['vscode', 'roo-cline'];
 
       // Verify non-openable get rejected
       for (const client of nonOpenable) {
@@ -348,18 +349,56 @@ describe('Setup Routes — API Endpoints', () => {
 
       // Verify openable clients are in the expected set (JS-level validation)
       // This confirms the OPENABLE_CLIENTS allowlist matches our expectations
-      expect(openableClients.length).toBe(7);
+      expect(openableClients.length).toBe(8);
     });
 
     it('rejects clients not in the openable set', () => {
-      // VS Code and Cline are not in OPENABLE_CLIENTS
-      const nonOpenable = ['vscode', 'cline', 'roo-cline', 'random'];
+      // VS Code is not in OPENABLE_CLIENTS
+      const nonOpenable = ['vscode', 'roo-cline', 'random'];
       return Promise.all(nonOpenable.map(async (client) => {
         const res = await request(app)
           .post('/api/setup/open-config')
           .send({ client });
         expect(res.status).toBe(400);
       }));
+    });
+  });
+});
+
+describe('Setup Routes — direct JSON MCP installs', () => {
+  it('writes LM Studio mcp.json directly when install-mcp is not available', async () => {
+    const { installJsonMcpClientConfig } = await import('../../../src/web/routes/setupRoutes.js');
+    const tempDir = await mkdtemp(join(tmpdir(), 'dollhouse-lmstudio-'));
+    const configPath = join(tempDir, 'mcp.json');
+
+    const message = await installJsonMcpClientConfig('lmstudio', 'beta', configPath);
+    const parsed = JSON.parse(await readFileAsync(configPath, 'utf-8'));
+
+    expect(message).toContain('lmstudio');
+    expect(parsed.mcpServers?.dollhousemcp).toEqual({
+      command: 'npx',
+      args: ['@dollhousemcp/mcp-server@beta'],
+    });
+  });
+
+  it('preserves existing JSON keys when directly writing LM Studio config', async () => {
+    const { installJsonMcpClientConfig } = await import('../../../src/web/routes/setupRoutes.js');
+    const tempDir = await mkdtemp(join(tmpdir(), 'dollhouse-lmstudio-existing-'));
+    const configPath = join(tempDir, 'mcp.json');
+
+    await writeFileAsync(configPath, JSON.stringify({
+      mcpServers: {
+        existing: { command: 'npx', args: ['existing-server'] },
+      },
+    }, null, 2) + '\n', 'utf-8');
+
+    await installJsonMcpClientConfig('lmstudio', undefined, configPath);
+    const parsed = JSON.parse(await readFileAsync(configPath, 'utf-8'));
+
+    expect(parsed.mcpServers?.existing).toBeDefined();
+    expect(parsed.mcpServers?.dollhousemcp).toEqual({
+      command: 'npx',
+      args: ['@dollhousemcp/mcp-server@latest'],
     });
   });
 });
@@ -439,15 +478,15 @@ describe('Setup Tab — HTML Content Integrity', () => {
 
   describe('Configure Now buttons (generated panels)', () => {
     it('JS PLATFORMS registry defines installClient for generated platforms', () => {
-      const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
+      const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline', 'lmstudio'];
       for (const client of generatedWithInstall) {
         expect(js).toContain(`installClient: '${client}'`);
       }
     });
 
-    it('LM Studio has no installClient in registry', () => {
+    it('LM Studio has installClient in registry', () => {
       const lmLine = /id:\s*'lmstudio'[^}]*/.exec(js);
-      expect(lmLine?.[0]).not.toContain('installClient');
+      expect(lmLine?.[0]).toContain("installClient: 'lmstudio'");
     });
   });
 
@@ -461,7 +500,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('JS PLATFORMS registry defines openClient for generated platforms', () => {
-      const openClients = ['cursor', 'codex', 'gemini-cli', 'windsurf', 'lmstudio'];
+      const openClients = ['cursor', 'cline', 'codex', 'gemini-cli', 'windsurf', 'lmstudio'];
       for (const client of openClients) {
         expect(js).toContain(`openClient: '${client}'`);
       }
@@ -1496,7 +1535,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
   });
 
   it('platforms with installClient have a Configure Now button', () => {
-    const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
+    const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline', 'lmstudio'];
     for (const p of withInstall) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-install-btn');
@@ -1505,14 +1544,15 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('LM Studio does not have a Configure Now button', () => {
+  it('LM Studio has a Configure Now button', () => {
     const panel = document.getElementById('setup-panel-lmstudio');
     const btn = panel?.querySelector('.setup-install-btn');
-    expect(btn).toBeNull();
+    expect(btn).not.toBeNull();
+    expect((btn as HTMLElement)?.dataset.installClient).toBe('lmstudio');
   });
 
   it('platforms with openClient have an Open config file button', () => {
-    const withOpen = ['cursor', 'codex', 'gemini', 'windsurf', 'lmstudio'];
+    const withOpen = ['cursor', 'cline', 'codex', 'gemini', 'windsurf', 'lmstudio'];
     for (const p of withOpen) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-open-btn');
@@ -1521,8 +1561,8 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('VS Code and Cline do not have Open config file buttons', () => {
-    for (const p of ['vscode', 'cline']) {
+  it('VS Code does not have an Open config file button', () => {
+    for (const p of ['vscode']) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-open-btn');
       expect(btn).toBeNull();
