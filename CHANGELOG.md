@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.15] - 2026-04-14
+
+### Fixes
+
+- Automate stable MCP bundle (.mcpb) release publishing
+- Keep manifest and package versions synchronized during releases
+- Harden release verification with signed publisher checks, checksum assets, and workflow attestations
+
 ## [2.0.14] - 2026-04-14
 
 ### Fixes
