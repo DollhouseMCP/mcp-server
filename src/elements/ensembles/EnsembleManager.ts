@@ -66,7 +66,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  private activeEnsembleNames: Set<string> = new Set();
+  private readonly _localActiveEnsembleNames: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {
     super(
@@ -78,6 +78,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -86,6 +88,11 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     this.metadataService = deps.metadataService;
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('ensembles', this._localActiveEnsembleNames);
   }
 
   protected override getElementLabel(): string {
@@ -785,7 +792,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
     // Apply ACTIVE status to ensembles in the activeEnsembleNames set
     for (const ensemble of ensembles) {
-      if (this.activeEnsembleNames.has(ensemble.metadata.name)) {
+      if (this.getActivationSet().has(ensemble.metadata.name)) {
         // Call activate() to set status to ACTIVE
         await ensemble.activate();
       }
@@ -824,7 +831,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // MEMORY LEAK FIX: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    this.activeEnsembleNames.add(ensemble.metadata.name);
+    this.getActivationSet().add(ensemble.metadata.name);
 
     // Set ensemble status to active
     await ensemble.activate();
@@ -872,7 +879,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       };
     }
 
-    this.activeEnsembleNames.delete(ensemble.metadata.name);
+    this.getActivationSet().delete(ensemble.metadata.name);
 
     // Set ensemble status to inactive
     await ensemble.deactivate();
@@ -899,7 +906,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   async getActiveEnsembles(): Promise<Ensemble[]> {
     const results: Ensemble[] = [];
-    for (const name of this.activeEnsembleNames) {
+    for (const name of this.getActivationSet()) {
       const ensemble = await this.findByName(name);
       if (ensemble) results.push(ensemble);
     }
@@ -915,12 +922,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('ensembles');
 
     // Below threshold — no action needed
-    if (this.activeEnsembleNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeEnsembleNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active ensembles limit reached (${max}). ` +
         `Consider deactivating unused ensembles or setting DOLLHOUSE_MAX_ACTIVE_ENSEMBLES to a higher value.`
@@ -930,7 +937,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'EnsembleManager.checkAndCleanupActiveSet',
-        details: `Active ensembles limit reached: ${this.activeEnsembleNames.size}/${max}`
+        details: `Active ensembles limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -945,19 +952,19 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   private async cleanupStaleActiveEnsembles(): Promise<void> {
     try {
-      const startSize = this.activeEnsembleNames.size;
+      const startSize = this.getActivationSet().size;
       const ensembles = await this.list();
       const existingEnsembleNames = new Set(ensembles.map(e => e.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeEnsembleNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingEnsembleNames.has(activeName)) {
-          this.activeEnsembleNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeEnsembleNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {

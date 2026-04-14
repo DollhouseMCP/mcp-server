@@ -31,7 +31,7 @@ import { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
-import { STDIO_DEFAULT_USER_ID } from '../context/StdioSession.js';
+// STDIO_DEFAULT_USER_ID guard removed in Phase 3 (Issue #1946) — SessionContext is now the identity authority
 import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
 
 /**
@@ -57,14 +57,10 @@ export interface PersonaManagerDeps extends ElementManagerDeps {
 }
 
 export class PersonaManager extends BaseElementManager<PersonaElement> {
-  /**
-   * Track active personas by filename (stable identifier)
-   * Issue #281: Changed from single active persona to Set for multiple active
-   */
-  private activePersonas: Set<string> = new Set();
-  // Phase 3: Replace with SessionContext as sole identity authority. Remove this field.
-  private currentUser: string | null = null;
-  private readonly contextTracker?: ContextTracker;
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActivePersonas: Set<string> = new Set();
+  // Fallback identity for when no registry is injected (tests)
+  private _localUserIdentity?: import('../state/SessionActivationState.js').SessionUserIdentity;
   private indicatorConfig: IndicatorConfig;
   protected override portfolioManager: PortfolioManager;
   protected override fileLockManager: FileLockManager;
@@ -87,6 +83,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -100,10 +98,41 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
-    this.contextTracker = deps.contextTracker;
     this.metadataService = deps.metadataService;
     this.serializationService = new SerializationService();
     this.initializePathValidator();
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('personas', this._localActivePersonas);
+  }
+
+  /**
+   * Get the full SessionActivationState for the current session.
+   * Used for identity override access (userIdentity field).
+   * Issue #1946: Per-session identity.
+   */
+  private getSessionActivationState(): import('../state/SessionActivationState.js').SessionActivationState | undefined {
+    if (!this.activationRegistry) return undefined;
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.activationRegistry.getDefaultSessionId();
+    return this.activationRegistry.getOrCreate(sessionId);
+  }
+
+  /** Get the current session's user identity override (with local fallback). */
+  private getSessionUserIdentity(): import('../state/SessionActivationState.js').SessionUserIdentity | undefined {
+    return this.getSessionActivationState()?.userIdentity ?? this._localUserIdentity;
+  }
+
+  /** Set the current session's user identity override (with local fallback). */
+  private setSessionUserIdentity(identity: import('../state/SessionActivationState.js').SessionUserIdentity | undefined): void {
+    const state = this.getSessionActivationState();
+    if (state) {
+      state.userIdentity = identity;
+    } else {
+      this._localUserIdentity = identity;
+    }
   }
 
   /**
@@ -133,10 +162,10 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     // Check if active personas still exist after reload
     // Issue #281: Support multiple active personas
-    for (const activeFilename of [...this.activePersonas]) {
+    for (const activeFilename of [...this.getActivationSet()]) {
       const stillExists = personas.some(p => this.deriveFilename(p) === activeFilename);
       if (!stillExists) {
-        this.activePersonas.delete(activeFilename);
+        this.getActivationSet().delete(activeFilename);
         this.notifyPersonaChange('persona-deactivated', activeFilename, null);
       }
     }
@@ -428,7 +457,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Add to set instead of replacing
-    const wasAlreadyActive = this.activePersonas.has(persona.filename);
+    const wasAlreadyActive = this.getActivationSet().has(persona.filename);
     if (wasAlreadyActive) {
       return {
         success: true,
@@ -440,7 +469,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Issue #83: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    this.activePersonas.add(persona.filename);
+    this.getActivationSet().add(persona.filename);
     this.notifyPersonaChange('persona-activated', null, persona.filename);
 
     // SECURITY: Phase 4.4 - Log persona activation event
@@ -450,7 +479,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       source: 'PersonaManager.activatePersona',
       details: `Persona activated: ${persona.metadata.name}`,
       additionalData: {
-        activeCount: this.activePersonas.size,
+        activeCount: this.getActivationSet().size,
         filename: persona.filename
       }
     });
@@ -479,7 +508,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   deactivatePersona(identifier?: string): { success: boolean; message: string } {
     // If no identifier provided, return error (breaking change from single-active)
     if (!identifier) {
-      if (this.activePersonas.size === 0) {
+      if (this.getActivationSet().size === 0) {
         return {
           success: false,
           message: "No persona is currently active"
@@ -500,15 +529,15 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Return success=true for idempotent behavior (persona already inactive)
-    if (!this.activePersonas.has(persona.filename)) {
+    if (!this.getActivationSet().has(persona.filename)) {
       return {
         success: true,
         message: `Persona '${persona.metadata.name}' is already inactive`
       };
     }
 
-    const deleted = this.activePersonas.delete(persona.filename);
-    logger.debug(`[PersonaManager.deactivatePersona] deleted: ${deleted}, new size: ${this.activePersonas.size}`);
+    const deleted = this.getActivationSet().delete(persona.filename);
+    logger.debug(`[PersonaManager.deactivatePersona] deleted: ${deleted}, new size: ${this.getActivationSet().size}`);
     this.notifyPersonaChange('persona-deactivated', persona.filename, null);
 
     // Emit deactivation event for subscribers
@@ -532,8 +561,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: With multiple active personas, returns the first one
    */
   getActivePersona(): PersonaElement | null {
-    if (this.activePersonas.size === 0) return null;
-    const firstActive = this.activePersonas.values().next().value;
+    if (this.getActivationSet().size === 0) return null;
+    const firstActive = this.getActivationSet().values().next().value;
     return firstActive ? this.findPersona(firstActive) || null : null;
   }
 
@@ -543,7 +572,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   getActivePersonas(): PersonaElement[] {
     const personas: PersonaElement[] = [];
-    for (const filename of this.activePersonas) {
+    for (const filename of this.getActivationSet()) {
       const persona = this.findPersona(filename);
       if (persona) {
         personas.push(persona);
@@ -557,8 +586,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: For backward compatibility, returns first active persona ID
    */
   getActivePersonaId(): string | null {
-    if (this.activePersonas.size === 0) return null;
-    return this.activePersonas.values().next().value ?? null;
+    if (this.getActivationSet().size === 0) return null;
+    return this.getActivationSet().values().next().value ?? null;
   }
 
   /**
@@ -566,7 +595,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: New method to get all active persona IDs
    */
   getActivePersonaIds(): string[] {
-    return [...this.activePersonas];
+    return [...this.getActivationSet()];
   }
 
   /**
@@ -576,7 +605,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   isPersonaActive(identifier: string): boolean {
     const persona = this.findPersona(identifier);
     if (!persona) return false;
-    return this.activePersonas.has(persona.filename);
+    return this.getActivationSet().has(persona.filename);
   }
   
   /**
@@ -584,10 +613,10 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: Now supports multiple active personas - concatenates all indicators
    */
   getPersonaIndicator(): string {
-    if (this.activePersonas.size === 0) return "";
+    if (this.getActivationSet().size === 0) return "";
 
     const indicators: string[] = [];
-    for (const filename of this.activePersonas) {
+    for (const filename of this.getActivationSet()) {
       const persona = this.findPersona(filename);
       if (persona) {
         const indicator = formatIndicator(this.indicatorConfig, {
@@ -1229,27 +1258,24 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
           throw new Error('Invalid email format');
         }
 
-        // Sanitize email
-        const validEmail = sanitizeInput(emailUnicode.normalizedContent, 100);
-        process.env.DOLLHOUSE_EMAIL = validEmail;
+        // Email validation passed — it will be stored in session state below
       }
 
-      const previous = this.currentUser;
-      this.currentUser = validUsername;
-      process.env.DOLLHOUSE_USER = validUsername;
-      this.metadataService.setCurrentUser(validUsername);  // Sync with MetadataService
+      // Issue #1946: Write identity to session-scoped state only (no singleton, no process.env)
+      const previous = this.getSessionUserIdentity()?.username ?? null;
+      this.setSessionUserIdentity({
+        username: validUsername,
+        ...(email ? { email: sanitizeInput(UnicodeValidator.normalize(email).normalizedContent, 100) } : {}),
+      });
 
       logger.info('User identity set', { username: validUsername });
-      this.notifyPersonaChange('user-changed', previous, this.currentUser);
+      this.notifyPersonaChange('user-changed', previous, validUsername);
     } else {
-      const previous = this.currentUser;
-      this.currentUser = null;
-      delete process.env.DOLLHOUSE_USER;
-      delete process.env.DOLLHOUSE_EMAIL;
-      this.metadataService.setCurrentUser(null);  // Sync with MetadataService
+      const previous = this.getSessionUserIdentity()?.username ?? null;
+      this.setSessionUserIdentity(undefined);
 
       logger.info('User identity cleared');
-      this.notifyPersonaChange('user-changed', previous, this.currentUser);
+      this.notifyPersonaChange('user-changed', previous, null);
     }
   }
   
@@ -1257,28 +1283,28 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Get current user identity
    */
   getUserIdentity(): { username: string | null; email: string | null } {
-    // Explicitly-set identity takes precedence over frozen session
-    if (this.currentUser) {
+    // Priority 1: Session-scoped identity override (from set_user_identity)
+    const userIdentity = this.getSessionUserIdentity();
+    if (userIdentity) {
       return {
-        username: this.currentUser,
-        email: process.env.DOLLHOUSE_EMAIL || null,
+        username: userIdentity.username,
+        email: userIdentity.email || null,
       };
     }
 
-    // Session-level identity (HTTP auth, DOLLHOUSE_USER at startup).
-    // Temporary check — Phase 3 removes the STDIO_DEFAULT_USER_ID guard.
+    // Priority 2: SessionContext identity (HTTP auth, DOLLHOUSE_USER at startup)
     const session = this.contextTracker?.getSessionContext();
-    if (session && session.userId !== STDIO_DEFAULT_USER_ID && session.userId !== SYSTEM_CONTEXT.userId) {
+    if (session && session.userId !== SYSTEM_CONTEXT.userId) {
       return {
         username: session.displayName || session.userId,
-        email: session.email || process.env.DOLLHOUSE_EMAIL || null,
+        email: session.email || null,
       };
     }
 
-    // Fall back to process.env (existing behavior)
+    // Priority 3: MetadataService fallback (OS username → anonymous ID)
     return {
-      username: process.env.DOLLHOUSE_USER || null,
-      email: process.env.DOLLHOUSE_EMAIL || null,
+      username: this.metadataService.getCurrentUser(),
+      email: null,
     };
   }
   
@@ -1308,22 +1334,19 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * REFACTORED: Now delegates to MetadataService for consistent user attribution
    */
   public getCurrentUserForAttribution(): string {
-    // Explicitly-set identity (via set_user_identity tool) takes precedence
-    // over frozen session identity, because it's more recent.
-    if (this.currentUser) {
-      this.metadataService.setCurrentUser(this.currentUser);
-      return this.metadataService.getCurrentUser();
+    // Priority 1: Session-scoped identity override (from set_user_identity)
+    const userIdentity = this.getSessionUserIdentity();
+    if (userIdentity) {
+      return userIdentity.username;
     }
 
-    // Session-level identity (HTTP auth, DOLLHOUSE_USER at startup).
-    // Temporary check — Phase 3 removes the STDIO_DEFAULT_USER_ID guard
-    // and makes SessionContext the sole identity authority.
+    // Priority 2: SessionContext identity (HTTP auth, DOLLHOUSE_USER at startup)
     const session = this.contextTracker?.getSessionContext();
-    if (session && session.userId !== STDIO_DEFAULT_USER_ID && session.userId !== SYSTEM_CONTEXT.userId) {
+    if (session && session.userId !== SYSTEM_CONTEXT.userId) {
       return session.displayName || session.userId;
     }
 
-    // MetadataService fallback chain (OS username → anonymous ID)
+    // Priority 3: MetadataService fallback chain (OS username → anonymous ID)
     return this.metadataService.getCurrentUser();
   }
   
@@ -1334,8 +1357,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   override dispose(): void {
     // Issue #281: Clear the active personas set
-    this.activePersonas.clear();
-    this.currentUser = null;
+    this.getActivationSet().clear();
 
     // CRITICAL: Clean up base class resources (file watchers, caches)
     super.dispose();
@@ -1350,12 +1372,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('personas');
 
     // Below threshold — no action needed
-    if (this.activePersonas.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activePersonas.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active personas limit reached (${max}). ` +
         `Consider deactivating unused personas or setting DOLLHOUSE_MAX_ACTIVE_PERSONAS to a higher value.`
@@ -1365,7 +1387,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'PersonaManager.checkAndCleanupActiveSet',
-        details: `Active personas limit reached: ${this.activePersonas.size}/${max}`
+        details: `Active personas limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -1380,17 +1402,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   private cleanupStaleActivePersonas(): void {
     try {
-      const startSize = this.activePersonas.size;
+      const startSize = this.getActivationSet().size;
       const staleFilenames: string[] = [];
 
-      for (const activeFilename of this.activePersonas) {
+      for (const activeFilename of this.getActivationSet()) {
         if (!this.findPersona(activeFilename)) {
-          this.activePersonas.delete(activeFilename);
+          this.getActivationSet().delete(activeFilename);
           staleFilenames.push(activeFilename);
         }
       }
 
-      const endSize = this.activePersonas.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {
@@ -1466,9 +1488,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   override async delete(filePath: string): Promise<void> {
     // Issue #281: Auto-deactivate before deletion
     // This allows deleting active personas without requiring explicit deactivation
-    const wasActive = this.activePersonas.has(filePath);
+    const wasActive = this.getActivationSet().has(filePath);
     if (wasActive) {
-      this.activePersonas.delete(filePath);
+      this.getActivationSet().delete(filePath);
     }
 
     await super.delete(filePath);
@@ -1751,7 +1773,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Check if persona is in the active set
-    if (this.activePersonas.has(element.filename)) {
+    if (this.getActivationSet().has(element.filename)) {
       return {
         allowed: false,
         reason: 'Cannot delete an active persona. Deactivate it first.'

@@ -97,8 +97,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private metadataService: MetadataService;
-  // Track active agents by name (stable identifier)
-  private activeAgentNames: Set<string> = new Set();
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActiveAgentNames: Set<string> = new Set();
 
   // Static resolver for element manager lookup (DI pattern)
   // This allows Agent instances to resolve managers without tight coupling
@@ -122,6 +122,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -131,6 +133,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('agents', this._localActiveAgentNames);
   }
 
   protected override getElementLabel(): string {
@@ -777,7 +784,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {
-      if (this.activeAgentNames.has(agent.metadata.name)) {
+      if (this.getActivationSet().has(agent.metadata.name)) {
         // Activate the agent to set status to ACTIVE
         await agent.activate();
       }
@@ -809,7 +816,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeAgentNames.add(agent.metadata.name);
+    this.getActivationSet().add(agent.metadata.name);
 
     // Update agent status in memory
     await agent.activate();
@@ -858,7 +865,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Remove from active set
-    this.activeAgentNames.delete(agent.metadata.name);
+    this.getActivationSet().delete(agent.metadata.name);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -890,7 +897,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async getActiveAgents(): Promise<Agent[]> {
     const agents = await this.list();
-    return agents.filter(a => this.activeAgentNames.has(a.metadata.name));
+    return agents.filter(a => this.getActivationSet().has(a.metadata.name));
   }
 
   /**
@@ -1556,12 +1563,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('agents');
 
     // Below threshold — no action needed
-    if (this.activeAgentNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeAgentNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active agents limit reached (${max}). ` +
         `Consider deactivating unused agents or setting DOLLHOUSE_MAX_ACTIVE_AGENTS to a higher value.`
@@ -1571,11 +1578,11 @@ export class AgentManager extends BaseElementManager<Agent> {
         type: 'AGENT_ACTIVATED',
         severity: 'MEDIUM',
         source: 'AgentManager.checkAndCleanupActiveSet',
-        details: `Active agents limit reached (${this.activeAgentNames.size}/${max})`,
+        details: `Active agents limit reached (${this.getActivationSet().size}/${max})`,
         additionalData: {
-          activeCount: this.activeAgentNames.size,
+          activeCount: this.getActivationSet().size,
           maxAllowed: max,
-          activeAgentNames: Array.from(this.activeAgentNames),
+          activeAgentNames: Array.from(this.getActivationSet()),
         }
       });
     }
@@ -1591,19 +1598,19 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async cleanupStaleActiveAgents(): Promise<void> {
     try {
-      const startSize = this.activeAgentNames.size;
+      const startSize = this.getActivationSet().size;
       const agents = await this.list();
       const existingAgentNames = new Set(agents.map(a => a.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeAgentNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingAgentNames.has(activeName)) {
-          this.activeAgentNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeAgentNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {

@@ -88,6 +88,7 @@ import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
 import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
+import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
@@ -361,6 +362,7 @@ export class DollhouseContainer {
       personaImporter: this.resolve('PersonaImporter'),
       notifier: this.resolve('StateChangeNotifier'),
       contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
       fileWatchService: this.resolve('FileWatchService'),
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
@@ -509,6 +511,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     this.register('TemplateManager', () => new TemplateManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -535,6 +539,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -547,6 +553,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     this.register('EnsembleManager', () => new EnsembleManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -559,6 +567,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
     // Issue #51: Configure retention policy resolver for Memory class
@@ -592,6 +602,11 @@ export class DollhouseContainer {
     ));
     // Shared stdio session — single source of truth for session identity
     this.register('StdioSession', () => createStdioSession());
+    // Issue #1946: Session activation registry — maps sessionId → SessionActivationState
+    this.register('SessionActivationRegistry', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new SessionActivationRegistry(session.sessionId);
+    });
     // Issue #1945: Typed state persistence stores
     this.register('ActivationStateStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
@@ -629,6 +644,11 @@ export class DollhouseContainer {
     ));
     this.register('PatternEncryptor', () => new PatternEncryptor());
     this.register('ContextTracker', () => new ContextTracker());
+    // Issue #1946: Make MetadataService session-aware for correct user attribution
+    this.resolve<MetadataService>('MetadataService').configureSessionAwareness(
+      this.resolve<ContextTracker>('ContextTracker'),
+      this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+    );
     this.register('PatternDecryptor', () => new PatternDecryptor(
       this.resolve('PatternEncryptor'),
       this.resolve('ContextTracker')
@@ -992,6 +1012,19 @@ export class DollhouseContainer {
 
   private async deferredActivationRestore(timer?: StartupTimer): Promise<void> {
     timer?.startPhase('activation_restore', false);
+
+    // Issue #1946: Pre-register the stdio session in the activation registry
+    // so managers resolve the correct session's Sets during restoration.
+    // Also attach the ActivationStore so ElementCRUDHandler persists to the right session.
+    try {
+      const registry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
+      const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const state = registry.getOrCreate(stdioSession.sessionId);
+      state.activationStore = this.resolve<ActivationStore>('ActivationStore');
+    } catch (error) {
+      logger.warn('[Container] Failed to pre-register stdio session in activation registry:', error);
+    }
+
     try {
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
       await activationStore.initialize();
@@ -1373,7 +1406,9 @@ export class DollhouseContainer {
       this.resolve('ValidationRegistry'),
       this.resolve('ActivationStore'),
       this.resolve('BackupService'),
-      this.resolve('PolicyExportService')
+      this.resolve('PolicyExportService'),
+      this.resolve('SessionActivationRegistry'),
+      this.resolve('ContextTracker'),
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);
@@ -1601,6 +1636,22 @@ export class DollhouseContainer {
     const bundle = this.httpHandlerBundle;
     const contextTracker = this.resolve<ContextTracker>('ContextTracker');
 
+    // Issue #1946: Pre-register HTTP session in activation registry with per-session persistence
+    const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
+    const httpSessionState = activationRegistry.getOrCreate(sessionContext.sessionId);
+    try {
+      const httpFileStore = new FileActivationStateStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        sessionContext.sessionId,
+      );
+      httpSessionState.activationStore = new ActivationStore(httpFileStore);
+    } catch (storeError) {
+      // Clean up orphaned registry entry if store construction fails
+      activationRegistry.dispose(sessionContext.sessionId);
+      throw storeError;
+    }
+
     // Per-session Server instance (SDK requires one Server per transport)
     const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
     try {
@@ -1636,7 +1687,9 @@ export class DollhouseContainer {
       server,
       dispose: async () => {
         // Server cleanup is handled by the SDK transport layer.
-        // Phase 3: dispose per-session ActivationStore here.
+
+        // Issue #1946: Dispose per-session activation state
+        activationRegistry.dispose(sessionContext.sessionId);
 
         // Clean up session-keyed state in the shared MCPAQLHandler
         // (executing agents, pending saves, frequency counters, aborted goals).

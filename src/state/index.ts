@@ -22,3 +22,7 @@ export { FileChallengeStore } from './FileChallengeStore.js';
 
 // In-memory implementations
 export { InMemoryChallengeStore } from './InMemoryChallengeStore.js';
+
+// Session activation state
+export type { SessionActivationState, SessionUserIdentity } from './SessionActivationState.js';
+export { createSessionActivationState, SessionActivationRegistry } from './SessionActivationState.js';

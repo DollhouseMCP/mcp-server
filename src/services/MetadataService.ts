@@ -12,7 +12,7 @@
  * - Date formatting (ISO 8601)
  *
  * Architecture:
- * - Pure service (no state except currentUser)
+ * - Session-aware identity resolution via ContextTracker + SessionActivationRegistry (Issue #1946)
  * - Type-safe with TypeScript strict mode
  * - Security-first (validates all inputs)
  * - Preserves exact current behavior from managers
@@ -32,6 +32,7 @@ import { userInfo } from 'node:os';
 import { ElementType } from '../portfolio/types.js';
 import { toSingularLabel } from '../utils/elementTypeNormalization.js';
 import { generateAnonymousId, generateUniqueId } from '../utils/filesystem.js';
+import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
 import { logger } from '../utils/logger.js';
 
@@ -103,6 +104,20 @@ export interface MetadataNormalizationOptions {
  */
 export class MetadataService {
   private currentUser: string | null = null;
+  private contextTracker?: import('../security/encryption/ContextTracker.js').ContextTracker;
+  private activationRegistry?: import('../state/SessionActivationState.js').SessionActivationRegistry;
+
+  /**
+   * Issue #1946: Configure session-aware identity resolution.
+   * Called by the DI container after construction (avoids circular deps).
+   */
+  configureSessionAwareness(
+    contextTracker: import('../security/encryption/ContextTracker.js').ContextTracker,
+    activationRegistry: import('../state/SessionActivationState.js').SessionActivationRegistry,
+  ): void {
+    this.contextTracker = contextTracker;
+    this.activationRegistry = activationRegistry;
+  }
 
   /**
    * Normalize metadata with type-specific defaults
@@ -282,18 +297,35 @@ export class MetadataService {
   /**
    * Get current user for attribution
    *
-   * Priority:
-   * 1. Service-level currentUser (set via setCurrentUser)
-   * 2. Environment variable DOLLHOUSE_USER
-   * 3. OS system username (os.userInfo().username)
-   * 4. Anonymous ID generation (last resort)
+   * Priority (Issue #1946):
+   * 1. Session-scoped identity override (from SessionActivationState.userIdentity)
+   * 2. SessionContext identity (HTTP auth, DOLLHOUSE_USER at startup)
+   * 3. Singleton fallback: DOLLHOUSE_USER env var → OS username → anonymous ID
    *
-   * The result is cached on first resolution so subsequent calls
-   * return the same value without re-resolving.
+   * Steps 1-2 resolve per-request via ContextTracker + SessionActivationRegistry.
+   * Step 3 is cached on first resolution for background/startup tasks.
    *
    * @returns Username or anonymous ID
    */
   getCurrentUser(): string {
+    // Issue #1946: Check session-scoped identity first
+    if (this.activationRegistry && this.contextTracker) {
+      const sessionId = this.contextTracker.getSessionContext()?.sessionId
+        ?? this.activationRegistry.getDefaultSessionId();
+      const state = this.activationRegistry.get(sessionId);
+      if (state?.userIdentity) {
+        return state.userIdentity.username;
+      }
+
+      // Check SessionContext identity (HTTP auth, stdio)
+      // Issue #1946: local-user is now a valid identity, not a sentinel to skip
+      const session = this.contextTracker.getSessionContext();
+      if (session && session.userId !== SYSTEM_CONTEXT.userId) {
+        return session.displayName || session.userId;
+      }
+    }
+
+    // Fallback: cached resolution from env/OS (singleton-safe for background tasks)
     if (!this.currentUser) {
       const envUser = process.env.DOLLHOUSE_USER;
       if (envUser) {
@@ -323,9 +355,13 @@ export class MetadataService {
    * metadataService.setCurrentUser('john');
    * metadataService.setCurrentUser(null); // Clear
    */
+  /**
+   * @deprecated Issue #1946: Identity is now session-scoped via SessionActivationState.userIdentity.
+   * This method only affects the singleton fallback chain. Use set_user_identity MCP tool instead.
+   */
   setCurrentUser(username: string | null): void {
     this.currentUser = username;
-    logger.debug('[MetadataService] Current user set', { username });
+    logger.debug('[MetadataService] Current user set (deprecated singleton path)', { username });
   }
 
   /**

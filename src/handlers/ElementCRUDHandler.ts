@@ -54,6 +54,8 @@ import { ValidationRegistry } from '../services/validation/ValidationRegistry.js
 import type { ActivationStore, PersistedActivation, PersistedActivationStateSnapshot } from '../services/ActivationStore.js';
 import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
+import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
 
@@ -76,7 +78,9 @@ export class ElementCRUDHandler {
     private readonly validationRegistry: ValidationRegistry,
     private readonly activationStore?: ActivationStore,
     private readonly backupService?: BackupService,
-    private readonly policyExportService?: PolicyExportService
+    private readonly policyExportService?: PolicyExportService,
+    private readonly activationRegistry?: SessionActivationRegistry,
+    private readonly contextTracker?: ContextTracker,
   ) {
     // Initialize strategy map with all element type strategies
     this.strategies = new Map<string, ElementActivationStrategy>([
@@ -95,6 +99,22 @@ export class ElementCRUDHandler {
         personaManager
       )]
     ]);
+  }
+
+  /**
+   * Resolve the current session's ActivationStore for persistence.
+   * Falls back to the singleton activationStore when no registry is available.
+   * Issue #1946: Per-session activation persistence.
+   */
+  private getSessionActivationStore(): ActivationStore | undefined {
+    if (this.activationRegistry && this.contextTracker) {
+      const sessionId = this.contextTracker.getSessionContext()?.sessionId
+        ?? this.activationRegistry.getDefaultSessionId();
+      const state = this.activationRegistry.get(sessionId);
+      if (state?.activationStore) return state.activationStore;
+    }
+    // Fallback: singleton store (backward compat for tests, stdio without registry)
+    return this.activationStore;
   }
 
   private async ensureInitialized(): Promise<void> {
@@ -295,12 +315,13 @@ export class ElementCRUDHandler {
 
       const result = await strategy.activate(name, context);
 
-      // Issue #598: Persist activation state for session restore
-      if (this.activationStore) {
+      // Issue #598, #1946: Persist activation state for session restore (per-session)
+      const sessionStore = this.getSessionActivationStore();
+      if (sessionStore) {
         const filename = normalizedType === ElementType.PERSONA
           ? this.personaManager.findPersona(name)?.filename
           : undefined;
-        this.activationStore.recordActivation(normalizedType, name, filename);
+        sessionStore.recordActivation(normalizedType, name, filename);
       }
 
       // Issue #762: Export policies to bridge after activation
@@ -606,9 +627,10 @@ export class ElementCRUDHandler {
 
       const result = await strategy.deactivate(name);
 
-      // Issue #598: Persist deactivation state for session restore
-      if (this.activationStore) {
-        this.activationStore.recordDeactivation(normalizedType, name);
+      // Issue #598, #1946: Persist deactivation state for session restore (per-session)
+      const sessionStore = this.getSessionActivationStore();
+      if (sessionStore) {
+        sessionStore.recordDeactivation(normalizedType, name);
       }
 
       // Issue #762: Export policies to bridge after deactivation
