@@ -135,6 +135,9 @@ Follow semantic versioning (MAJOR.MINOR.PATCH):
    gh release create v1.1.0 --title "v1.1.0 - CI/CD Reliability" \
      --notes "## Highlights\n- Fixed ARM64 Docker builds\n- Added MCP protocol tests\n\n## Full Changelog\n..."
    ```
+5. **Publishing happens from the release event**:
+   - pushing the `vX.Y.Z` tag triggers tag-based workflows like GitHub Packages
+   - publishing the GitHub release triggers npm Trusted Publishing, MCP Registry publication, and `.mcpb` bundle upload
 
 ## 👥 Collaboration Guidelines
 
