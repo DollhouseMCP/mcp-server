@@ -16,6 +16,9 @@ concurrency:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   publish-mcpb:
@@ -77,6 +80,13 @@ jobs:
         run: |
           sha256sum "$ASSET_PATH" > "${ASSET_PATH}.sha256"
           echo "checksum_path=${ASSET_PATH}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Attest MCP bundle provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            ${{ steps.release_meta.outputs.asset_path }}
+            ${{ steps.checksum.outputs.checksum_path }}
 
       - name: Upload MCP bundle to GitHub release
         shell: bash
