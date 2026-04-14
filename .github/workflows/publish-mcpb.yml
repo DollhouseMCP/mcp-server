@@ -10,6 +10,10 @@ on:
         required: true
         type: string
 
+concurrency:
+  group: release-publish-${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -44,6 +48,11 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Invalid tag format for MCP bundle publication: $TAG_NAME"
+            exit 1
+          fi
+
           VERSION=$(node -p "require('./package.json').version")
           EXPECTED_TAG="v${VERSION}"
 
@@ -60,6 +69,15 @@ jobs:
         shell: bash
         run: ./scripts/build-mcpb.sh
 
+      - name: Generate MCP bundle checksum
+        id: checksum
+        shell: bash
+        env:
+          ASSET_PATH: ${{ steps.release_meta.outputs.asset_path }}
+        run: |
+          sha256sum "$ASSET_PATH" > "${ASSET_PATH}.sha256"
+          echo "checksum_path=${ASSET_PATH}.sha256" >> "$GITHUB_OUTPUT"
+
       - name: Upload MCP bundle to GitHub release
         shell: bash
         env:
@@ -68,3 +86,4 @@ jobs:
           ASSET_PATH: ${{ steps.release_meta.outputs.asset_path }}
         run: |
           gh release upload "$TAG_NAME" "$ASSET_PATH" --clobber
+          gh release upload "$TAG_NAME" "${ASSET_PATH}.sha256" --clobber

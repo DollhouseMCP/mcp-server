@@ -11,6 +11,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-publish-${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write  # Required for OIDC authentication
   contents: read   # Required for checkout
