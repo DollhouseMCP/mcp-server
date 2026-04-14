@@ -867,58 +867,77 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
     }
   };
 
+  const PERMISSION_PLATFORM_LABELS = {
+    'claude-desktop': 'Claude Desktop',
+    'claude-code': 'Claude Code',
+    cursor: 'Cursor',
+    vscode: 'VS Code',
+    codex: 'Codex',
+    gemini: 'Gemini CLI',
+    windsurf: 'Windsurf',
+    cline: 'Cline',
+    lmstudio: 'LM Studio',
+  };
+
+  const getPermissionStatusCopy = (platformId, detected) => {
+    if (platformId === 'claude-code') {
+      if (detected?.hookInstalled) {
+        return {
+          tone: 'info',
+          titleText: 'Claude Code permission enforcement is enabled.',
+          messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
+        };
+      }
+
+      if (detected?.installed) {
+        return {
+          tone: 'warning',
+          titleText: 'Claude Code is connected for this client.',
+          messageText: 'DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the Claude Code permission hook.',
+        };
+      }
+
+      return {
+        tone: 'info',
+        titleText: 'Claude Code permissions are not configured yet.',
+        messageText: 'First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the Claude Code permission hook.',
+      };
+    }
+
+    const support = PLATFORMS.find((platform) => platform.id === platformId)?.hookSupport || 'unsupported';
+    if (support === 'manual') {
+      if (detected?.installed) {
+        return {
+          tone: 'warning',
+          titleText: 'DollhouseMCP is connected for this client.',
+          messageText: 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.',
+        };
+      }
+
+      return {
+        tone: 'info',
+        titleText: 'Manual permissions setup is available for this client.',
+        messageText: 'Use the steps below if you want to turn on permission enforcement for this client manually.',
+      };
+    }
+
+    const platformLabel = PERMISSION_PLATFORM_LABELS[platformId] || 'this client';
+    return {
+      tone: detected?.installed ? 'warning' : 'neutral',
+      titleText: `Permissions & security tools are unavailable for ${platformLabel} right now.`,
+      messageText: detected?.installed
+        ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
+        : 'This release does not include a supported permissions setup flow for this client yet.',
+    };
+  };
+
   const updatePermissionStatus = (panel, platformId, detected) => {
     const status = panel?.querySelector('.setup-permission-status');
     if (!status) return;
 
     const title = status.querySelector('.setup-permission-status-title');
     const message = status.querySelector('.setup-permission-status-msg');
-    const support = PLATFORMS.find((platform) => platform.id === platformId)?.hookSupport || 'unsupported';
-    const platformLabel = ({
-      'claude-desktop': 'Claude Desktop',
-      'claude-code': 'Claude Code',
-      cursor: 'Cursor',
-      vscode: 'VS Code',
-      codex: 'Codex',
-      gemini: 'Gemini CLI',
-      windsurf: 'Windsurf',
-      cline: 'Cline',
-      lmstudio: 'LM Studio',
-    })[platformId] || 'this client';
-
-    let tone = 'neutral';
-    let titleText = 'Permission hook setup is separate from MCP server setup.';
-    let messageText = 'This section only covers permission enforcement. Use Auto-updating or Pinned version to connect DollhouseMCP itself.';
-
-    if (platformId === 'claude-code') {
-      if (detected?.hookInstalled) {
-        tone = 'info';
-        titleText = 'Claude Code permission enforcement is enabled.';
-        messageText = 'No further changes are needed here unless you want to reinstall the hook settings.';
-      } else {
-        tone = detected?.installed ? 'warning' : 'info';
-        titleText = detected?.installed
-          ? 'Claude Code is connected for this client.'
-          : 'Claude Code permissions are not configured yet.';
-        messageText = detected?.installed
-          ? 'DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the Claude Code permission hook.'
-          : 'First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the Claude Code permission hook.';
-      }
-    } else if (support === 'manual') {
-      tone = detected?.installed ? 'warning' : 'info';
-      titleText = detected?.installed
-        ? 'DollhouseMCP is connected for this client.'
-        : 'Manual permissions setup is available for this client.';
-      messageText = detected?.installed
-        ? 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.'
-        : 'Use the steps below if you want to turn on permission enforcement for this client manually.';
-    } else {
-      tone = detected?.installed ? 'warning' : 'neutral';
-      titleText = `Permissions & security tools are unavailable for ${platformLabel} right now.`;
-      messageText = detected?.installed
-        ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
-        : 'This release does not include a supported permissions setup flow for this client yet.';
-    }
+    const { tone, titleText, messageText } = getPermissionStatusCopy(platformId, detected);
 
     status.dataset.state = tone;
     if (title) title.textContent = titleText;
