@@ -489,8 +489,13 @@ export class ElementCRUDHandler {
       });
     };
 
-    for (const activeElement of await this.getActiveElementsForPolicy()) {
-      addElement(activeElement, this.activationStore ? [this.activationStore.getSessionId()] : []);
+    const currentSessionId = this.activationStore?.getSessionId();
+    const includeCurrentSession = !sessionId || !currentSessionId || currentSessionId === sessionId;
+
+    if (includeCurrentSession) {
+      for (const activeElement of await this.getActiveElementsForPolicy()) {
+        addElement(activeElement, currentSessionId ? [currentSessionId] : []);
+      }
     }
 
     if (this.activationStore?.isEnabled()) {

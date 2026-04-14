@@ -46,12 +46,23 @@
   box-shadow: 0 0 6px rgba(239, 68, 68, 0.5);
 }
 
+.perm-status-dot[data-status="warning"] {
+  background: #f59e0b;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.45);
+}
+
 .perm-status-spacer {
   flex: 1;
 }
 
 .perm-status-updated {
   color: var(--ink-400, #64748b);
+}
+
+.perm-inline-advisory {
+  display: inline-block;
+  color: var(--signal-4-ink, #b45309);
+  margin-top: 0.35rem;
 }
 
 /* ── Dashboard Grid ────────────────────────────────────────── */

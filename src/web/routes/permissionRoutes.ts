@@ -10,6 +10,7 @@
 import express, { Router } from 'express';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
+import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 
@@ -19,6 +20,7 @@ import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.j
 interface PermissionDecision {
   id: string;
   timestamp: string;
+  session_id?: string;
   tool_name: string;
   command?: string;
   decision: string;
@@ -31,10 +33,12 @@ interface KnownPolicySession {
   source: 'policy';
 }
 
+const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
+const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
-  trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void;
+  trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void;
   getRecentDecisions(): PermissionDecision[];
 }
 
@@ -47,19 +51,44 @@ function extractString(obj: Record<string, unknown>, keys: string[], fallback: s
   return fallback;
 }
 
+function extractDecision(result: Record<string, unknown>): string {
+  const nested = result.hookSpecificOutput;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
+    if (typeof nestedDecision === 'string') return nestedDecision;
+  }
+
+  if (typeof result.permission === 'string') return result.permission;
+  if (typeof result.decision === 'string') return result.decision;
+  if (typeof result.behavior === 'string') return result.behavior;
+  if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
+  return 'unknown';
+}
+
+function extractReason(result: Record<string, unknown>): string {
+  const nested = result.hookSpecificOutput;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedReason = (nested as Record<string, unknown>).permissionDecisionReason;
+    if (typeof nestedReason === 'string') return nestedReason;
+  }
+
+  return extractString(result, ['reason', 'message'], '');
+}
+
 function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): PermissionDecisionTracker {
   const recentDecisions: PermissionDecision[] = [];
   let decisionCounter = 0;
 
   return {
-    trackDecision(toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
+    trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
+        ...(sessionId ? { session_id: sessionId } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-        decision: extractString(result, ['decision', 'behavior'], 'unknown'),
-        reason: extractString(result, ['reason', 'message'], ''),
+        decision: extractDecision(result),
+        reason: extractReason(result),
       };
       recentDecisions.unshift(entry);
       if (recentDecisions.length > bufferSize) {
@@ -70,6 +99,19 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
       return recentDecisions;
     },
   };
+}
+
+function normalizePolicyElements(elements: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return elements.map((element) => ({
+    ...element,
+    element_name: resolveElementName(element),
+  }));
+}
+
+function resolveElementName(element: Record<string, unknown>): string {
+  if (typeof element.element_name === 'string') return element.element_name;
+  if (typeof element.name === 'string') return element.name;
+  return '';
 }
 
 /** Helper to extract single result from MCP-AQL batch response */
@@ -113,26 +155,31 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
    * Routes through evaluate_permission MCP-AQL READ operation.
    * Fail-open: returns allow on any error to avoid blocking the user.
    */
-  const permissionLimiter = new SlidingWindowRateLimiter(120, 60_000);
+  const permissionLimiter = new SlidingWindowRateLimiter(
+    PERMISSION_ROUTE_RATE_LIMIT_REQUESTS,
+    PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS,
+  );
   router.post('/evaluate_permission', express.json(), async (req, res) => {
-    if (!permissionLimiter.tryAcquire()) {
-      res.json({ decision: 'allow' }); // fail open on rate limit
-      return;
-    }
-
     const body = req.body as {
       tool_name?: string;
       input?: Record<string, unknown>;
       platform?: string;
+      session_id?: string;
     };
+    const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
+
+    if (!permissionLimiter.tryAcquire()) {
+      res.json(formatPermissionResponse('allow', platform, {})); // fail open on rate limit
+      return;
+    }
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : undefined;
+    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
     const input = body.input;
 
     if (!tool_name) {
-      res.json({ decision: 'allow' }); // fail open on bad input
+      res.json(formatPermissionResponse('allow', platform, input || {})); // fail open on bad input
       return;
     }
 
@@ -143,28 +190,29 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         params: {
           tool_name,
           input: input || {},
-          platform: platform || 'claude_code',
+          platform,
+          ...(session_id ? { session_id } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;
 
       if (!opResult.success) {
         logger.warn(`[WebUI/Gateway] evaluate_permission failed (${elapsedMs}ms): ${opResult.error}`);
-        res.json({ decision: 'allow' }); // fail open
+        res.json(formatPermissionResponse('allow', platform, input || {})); // fail open
         return;
       }
 
-      const decision = ((opResult.data as { decision?: string })?.decision ?? 'unknown');
+      const decision = extractDecision(opResult.data as Record<string, unknown>);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(tool_name, input || {}, opResult.data as Record<string, unknown>);
+      decisionTracker.trackDecision(session_id, tool_name, input || {}, opResult.data as Record<string, unknown>);
 
       res.json(opResult.data);
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
       logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms):`, err);
-      res.json({ decision: 'allow' }); // fail open
+      res.json(formatPermissionResponse('allow', platform, input || {})); // fail open
     }
   });
 
@@ -193,9 +241,9 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       const data = opResult.data as Record<string, unknown>;
+      const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
       // Extract confirm patterns from elements
-      const elements = (data.elements || []) as Array<Record<string, unknown>>;
       const confirmPatterns: string[] = [];
       for (const el of elements) {
         const confirm = el.confirmPatterns as string[] | undefined;
@@ -214,6 +262,10 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         elements,
         knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
+        hookInstalled: data.hookInstalled,
+        hookHost: data.hookHost,
+        enforcementReady: data.enforcementReady,
+        advisory: data.advisory,
         recentDecisions: decisionTracker.getRecentDecisions(),
       });
     } catch (err) {

@@ -77,6 +77,10 @@
           <strong>Pinned version</strong>
           <span>Lock to a specific version, update when you choose</span>
         </button>
+        <button class="setup-method-btn" data-method="permissions" aria-pressed="false">
+          <strong>Permissions &amp; Security</strong>
+          <span>Manual hook assets and enforcement guidance</span>
+        </button>
       </fieldset>
 
       <fieldset class="setup-channel-toggle" id="setup-channel-toggle">
@@ -119,6 +123,8 @@ npm install @dollhousemcp/mcp-server</code></pre>
         </div>
       </div>
 
+      <div class="setup-permissions-intro" id="setup-permissions-intro" hidden></div>
+
       <div class="setup-platforms" id="setup-platforms" role="tablist" aria-label="Platform install instructions">
         <button class="setup-platform-tab is-active" role="tab" aria-selected="true"  aria-controls="setup-panel-claude-desktop" id="setup-tab-claude-desktop">Claude Desktop</button>
         <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-claude-code"    id="setup-tab-claude-code">Claude Code</button>
@@ -133,7 +139,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
       <!-- Claude Desktop -->
       <section class="setup-panel is-active" role="tabpanel" id="setup-panel-claude-desktop" aria-labelledby="setup-tab-claude-desktop">
-        <div class="setup-method setup-method-primary">
+        <div class="setup-method setup-method-primary" data-setup-modes="npx global">
           <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.</p>
           <div class="setup-install-row">
@@ -141,12 +147,12 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <span class="setup-install-status" data-install-status="claude"></span>
           </div>
         </div>
-        <div class="setup-method setup-mcpb-option" id="setup-mcpb-section" hidden>
+        <div class="setup-method setup-mcpb-option" id="setup-mcpb-section" data-setup-modes="global" hidden>
           <h3>Or install via Desktop Extension <span class="setup-badge">pinned version</span></h3>
           <p>Download the <code>.mcpb</code> bundle and double-click it to install. Claude Desktop handles everything automatically &mdash; no terminal, no config editing. This installs a pinned copy that won't auto-update.</p>
           <a class="setup-btn setup-btn-secondary" href="/api/setup/mcpb" id="pinned-mcpb-btn">Download .mcpb <span id="pinned-mcpb-version"></span></a>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or add manually
             <button class="setup-open-btn" type="button" data-open-client="claude">Open config file</button>
           </h3>
@@ -173,7 +179,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
       <!-- Claude Code -->
       <section class="setup-panel" role="tabpanel" id="setup-panel-claude-code" aria-labelledby="setup-tab-claude-code" hidden>
-        <div class="setup-method setup-method-primary">
+        <div class="setup-method setup-method-primary" data-setup-modes="npx global">
           <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.</p>
           <div class="setup-install-row">
@@ -181,7 +187,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <span class="setup-install-status" data-install-status="claude-code"></span>
           </div>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or run in your terminal</h3>
           <p>Start a new conversation and you're ready.</p>
           <div class="setup-code-block">
@@ -189,7 +195,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <pre><code>claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest</code></pre>
           </div>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or add manually
             <button class="setup-open-btn" type="button" data-open-client="claude-code">Open config file</button>
           </h3>

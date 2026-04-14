@@ -78,6 +78,7 @@ import type { PortfolioHandler } from '../PortfolioHandler.js';
 import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
 import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
+import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
 import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
@@ -654,9 +655,11 @@ export class MCPAQLHandler {
    * @returns Array of active elements with their gatekeeper policies, or empty
    *          array if gathering fails (fail-open: only route policies apply).
    */
-  private async getActiveElements(): Promise<ActiveElement[]> {
+  private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
-      const rawElements = await this.handlers.elementCRUD.getActiveElementsForPolicy();
+      const rawElements = sessionId
+        ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
+        : await this.handlers.elementCRUD.getActiveElementsForPolicy();
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,
@@ -668,22 +671,24 @@ export class MCPAQLHandler {
       }));
 
       // Issue #449: Include executing agents with gatekeeper policies
-      for (const [, agentEntry] of this.executingAgents) {
-        activeElements.push({
-          type: 'agent',
-          name: agentEntry.name,
-          metadata: {
+      if (!sessionId) {
+        for (const [, agentEntry] of this.executingAgents) {
+          activeElements.push({
+            type: 'agent',
             name: agentEntry.name,
-            gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
-          },
-        });
+            metadata: {
+              name: agentEntry.name,
+              gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
+            },
+          });
+        }
       }
 
       return activeElements;
     } catch (error) {
       // Fail open — if we can't gather active elements, enforce without them
       // This means only route validation and default policies will apply
-      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error });
+      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
       return [];
     }
   }
@@ -705,7 +710,7 @@ export class MCPAQLHandler {
       }));
     } catch (error) {
       logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
-      return this.getActiveElements();
+      return sessionId ? [] : this.getActiveElements();
     }
   }
 
@@ -2945,7 +2950,7 @@ export class MCPAQLHandler {
           permissionPromptLimiter: this.permissionPromptLimiter,
           classifyTool,
           evaluateCliToolPolicy,
-          getActiveElements: () => this.getActiveElements(),
+          getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId),
         });
       }
 
@@ -3006,11 +3011,18 @@ export class MCPAQLHandler {
 
         // 5. Fail-safe detection (Issue #625 Phase 4)
         const permissionPromptActive = this.gatekeeper.isPermissionPromptActive;
-        const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0;
-        const advisory = (hasRestrictions && !permissionPromptActive)
-          ? 'CLI restrictions are defined but permission_prompt has not been called yet. ' +
-            'Ensure the CLI client is launched with --permission-prompt-tool to enforce these restrictions.'
-          : undefined;
+        const hookStatus = getPermissionHookStatus();
+        const hookInstalled = hookStatus.installed;
+        const enforcementReady = permissionPromptActive || hookInstalled;
+        const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
+        let advisory: string | undefined;
+        if (hasRestrictions) {
+          if (!enforcementReady) {
+            advisory = 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.';
+          } else if (hookInstalled && !permissionPromptActive) {
+            advisory = `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`;
+          }
+        }
 
         return {
           activeElementCount: policyElements.length,
@@ -3021,6 +3033,9 @@ export class MCPAQLHandler {
           combinedDenyPatterns: combinedDeny,
           evaluation,
           permissionPromptActive,
+          hookInstalled,
+          enforcementReady,
+          hookHost: hookStatus.host,
           advisory,
         };
       }

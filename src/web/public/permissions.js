@@ -116,6 +116,7 @@
   function render(data, selectedData) {
     renderStatusBar(data);
     renderSummaryStats(data);
+    renderAdvisory(data);
     renderPolicySources(data, selectedData);
     renderSelectedSessionDetail(selectedData);
     renderDenyPatterns(data);
@@ -137,6 +138,7 @@
     const serverDot = document.getElementById('perm-dot-server');
     const ensembleDot = document.getElementById('perm-dot-ensemble');
     const hookDot = document.getElementById('perm-dot-hook');
+    const hookLabel = hookDot ? hookDot.parentElement.querySelector('.perm-status-label') : null;
     const updated = document.getElementById('perm-last-updated');
 
     if (serverDot) {
@@ -149,11 +151,23 @@
       ensembleDot.parentElement.querySelector('.perm-status-label').textContent =
         hasElements ? `${data.activeElementCount} elements` : 'No ensemble';
     }
-    if (hookDot) {
-      const hasPatterns = (data.denyPatterns?.length || 0) + (data.allowPatterns?.length || 0) > 0;
-      hookDot.dataset.status = hasPatterns ? 'active' : 'inactive';
-      hookDot.parentElement.querySelector('.perm-status-label').textContent =
-        hasPatterns ? 'Policies active' : 'No policies';
+    if (hookDot && hookLabel) {
+      const hasPatterns = (data.denyPatterns?.length || 0)
+        + (data.allowPatterns?.length || 0)
+        + (data.confirmPatterns?.length || 0) > 0;
+      if (!hasPatterns) {
+        hookDot.dataset.status = 'inactive';
+        hookLabel.textContent = 'No policies';
+      } else if (data.permissionPromptActive) {
+        hookDot.dataset.status = 'active';
+        hookLabel.textContent = 'Prompt tool active';
+      } else if (data.hookInstalled) {
+        hookDot.dataset.status = 'active';
+        hookLabel.textContent = data.hookHost ? `Hook installed (${data.hookHost})` : 'Hook installed';
+      } else {
+        hookDot.dataset.status = 'warning';
+        hookLabel.textContent = 'Policies loaded, not enforced';
+      }
     }
     if (updated) {
       updated.textContent = new Date().toLocaleTimeString();
@@ -176,6 +190,19 @@
     setText('perm-stat-asked', asked);
   }
 
+  function renderAdvisory(data) {
+    const advisory = document.getElementById('perm-all-sessions-advisory');
+    if (!advisory) return;
+
+    if (data && data.advisory) {
+      advisory.hidden = false;
+      advisory.textContent = ` ${data.advisory}`;
+    } else {
+      advisory.hidden = true;
+      advisory.textContent = '';
+    }
+  }
+
   function renderPolicySources(data, selectedData) {
     const list = document.getElementById('perm-source-list');
     if (!list) return;
@@ -190,7 +217,7 @@
     list.innerHTML = elements.map(el => `
       <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
         <span class="perm-source-type">${esc(el.type)}</span>
-        <span class="perm-source-name">${esc(el.element_name)}</span>
+        <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
         ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
       </li>
     `).join('');
@@ -239,7 +266,7 @@
       : elements.map(el => `
           <li class="perm-source-item perm-source-item--detail">
             <span class="perm-source-type">${esc(el.type)}</span>
-            <span class="perm-source-name">${esc(el.element_name)}</span>
+            <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
             ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
           </li>
         `).join('');
@@ -374,10 +401,10 @@
           <span class="perm-status-dot" id="perm-dot-ensemble" data-status="inactive"></span>
           <span class="perm-status-label">Ensemble</span>
         </div>
-        <div class="perm-status-indicator">
-          <span class="perm-status-dot" id="perm-dot-hook" data-status="inactive"></span>
-          <span class="perm-status-label">Policies</span>
-        </div>
+          <div class="perm-status-indicator">
+            <span class="perm-status-dot" id="perm-dot-hook" data-status="inactive"></span>
+            <span class="perm-status-label">Policies</span>
+          </div>
         <span class="perm-status-spacer"></span>
         <span class="perm-status-updated">Updated: <span id="perm-last-updated">--:--:--</span></span>
       </div>
@@ -504,7 +531,7 @@
             <div class="perm-selected-header perm-selected-header--compact">
               <div>
                 <div class="perm-selected-title">All Sessions</div>
-                <div class="perm-selected-subtitle">Aggregate policy state across all live and persisted sessions. The decision feed below is currently aggregate, not selection-scoped.</div>
+                <div class="perm-selected-subtitle">${esc('Aggregate policy state across all live and persisted sessions. The decision feed below is currently aggregate, not selection-scoped.')}${dataAdvisoryPlaceholder()}</div>
               </div>
             </div>
 
@@ -652,6 +679,10 @@
 
   function truncate(str, len) {
     return str.length > len ? str.slice(0, len) + '...' : str;
+  }
+
+  function dataAdvisoryPlaceholder() {
+    return '<span id="perm-all-sessions-advisory" class="perm-inline-advisory" hidden></span>';
   }
 
 })();
