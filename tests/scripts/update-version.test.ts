@@ -34,7 +34,8 @@ describe('update-version.mjs security validation', () => {
     expect(scriptContent).toMatch(/File too large/);
     
     // Check for file count limit
-    expect(scriptContent).toMatch(/files\.length > 1000/);
+    expect(scriptContent).toMatch(/MAX_FILES/);
+    expect(scriptContent).toMatch(/maxMatchedFiles/);
     expect(scriptContent).toMatch(/Too many files matched/);
     
     // Check for proper escaping function
@@ -84,6 +85,7 @@ describe('update-version.mjs functionality validation', () => {
     // Check for expected file patterns
     expect(scriptContent).toMatch(/package\.json/);
     expect(scriptContent).toMatch(/package-lock\.json/);
+    expect(scriptContent).toMatch(/manifest\.json/);
     expect(scriptContent).toMatch(/README\.md/);
     expect(scriptContent).toMatch(/CHANGELOG\.md/);
     expect(scriptContent).toMatch(/docs\/\*\*\/\*\.md/);

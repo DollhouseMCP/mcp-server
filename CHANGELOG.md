@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.0.15] - 2026-04-14
+
+### Fixes
+
+- Automate stable MCP bundle (.mcpb) release publishing
+- Keep manifest and package versions synchronized during releases
+- Harden release verification with signed publisher checks, checksum assets, and workflow attestations
+
+## [2.0.14] - 2026-04-14
+
+### Fixes
+
+- Permissions console reporting, audit feed routing, and session UX hardening
+- Permissions tab dark mode rendering fixes
+- Numeric YAML version deserialization fix for two-component versions like `1.1`
+
 ## [2.0.13] - 2026-04-13
 
 ### Security Fixes

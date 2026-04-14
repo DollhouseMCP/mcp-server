@@ -23,6 +23,10 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-publish-${{ github.workflow }}
+  cancel-in-progress: false
+
 permissions:
   id-token: write   # Required for OIDC/Trusted Publishing
   contents: read    # Required for checkout
