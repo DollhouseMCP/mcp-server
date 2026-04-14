@@ -21,7 +21,7 @@
     { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookSupport: 'verified', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
     // These panels are generated from this data by renderGeneratedPanels()
     { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects' },
-    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.' },
+    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-vscode.sh`, hookConfigPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> plus <code>chat.hookFilesLocations</code> in VS Code user settings' },
     { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>' },
     { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
     { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project' },
@@ -125,6 +125,28 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
         "matcher": ".*"
       }
     ]
+  }
+}`;
+
+  const VSCODE_HOOK_SETTINGS = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOKS_DIR}/pretooluse-vscode.sh"
+          }
+        ]
+      }
+    ]
+  }
+}`;
+
+  const VSCODE_HOOK_LOCATIONS_SETTINGS = `{
+  "chat.hookFilesLocations": {
+    "~/.copilot/hooks": true
   }
 }`;
 
@@ -982,6 +1004,17 @@ codex_hooks = true`;
       settingsBlock: CURSOR_HOOK_SETTINGS,
       limitation: 'Cursor exposes native hooks, but its permission handling still needs broader runtime verification across allow and ask decisions.',
     },
+    vscode: {
+      label: 'VS Code',
+      statusTag: 'native hooks',
+      configPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> and VS Code user settings',
+      scriptPath: `${HOOKS_DIR}/pretooluse-vscode.sh`,
+      settingsBlock: VSCODE_HOOK_SETTINGS,
+      featureBlock: VSCODE_HOOK_LOCATIONS_SETTINGS,
+      featureHeading: '2. Enable <code>~/.copilot/hooks</code> in VS Code user settings',
+      featureCopyLabel: 'Copy VS Code hookFilesLocations settings',
+      limitation: 'VS Code exposes native PreToolUse hooks, but it ignores matcher values and uses tool names that differ from Claude Code. This adapter normalizes the common built-in tools we know about.',
+    },
     windsurf: {
       label: 'Windsurf',
       statusTag: 'allow / deny',
@@ -1344,7 +1377,9 @@ codex_hooks = true`;
         </div>
         <p class="setup-hint">${p.id === 'codex'
           ? `${partial.limitation} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.`
-          : `${partial.limitation} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`}</p>
+          : p.id === 'vscode'
+            ? `${partial.limitation} This automatic path writes the shared hook bridge, creates <code>~/.copilot/hooks/dollhouse-permissions.json</code>, and enables <code>~/.copilot/hooks</code> in VS Code's <code>chat.hookFilesLocations</code> setting.`
+            : `${partial.limitation} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`}</p>
       </div>
       <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
         <details class="setup-manual-fallback">
@@ -1355,11 +1390,11 @@ codex_hooks = true`;
             <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
               <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
             </div>
-            ${p.id === 'codex' ? `<h4>2. Enable Codex hooks in <code>~/.codex/config.toml</code></h4>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="Copy Codex features config">Copy</button>
+            ${partial.featureBlock ? `<h4>${partial.featureHeading || (p.id === 'codex' ? '2. Enable Codex hooks in <code>~/.codex/config.toml</code>' : '2. Add the additional client settings')}</h4>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="${escapeAttr(partial.featureCopyLabel || `Copy ${partial.label} settings`)}">Copy</button>
               <pre><code>${escapeHtml(partial.featureBlock)}</code></pre>
             </div>` : ''}
-            <h4>${p.id === 'codex' ? '3' : '2'}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
+            <h4>${partial.featureBlock ? '3' : '2'}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
             <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
               <pre><code>${escapeHtml(partial.settingsBlock)}</code></pre>
             </div>
@@ -1406,7 +1441,7 @@ codex_hooks = true`;
 
     intro.innerHTML = `<div class="setup-permissions-note">
         <strong>Permissions &amp; Security</strong>
-        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release, and Gemini CLI, Cursor, Windsurf, plus Codex have native partial support. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
+        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release, and Gemini CLI, Cursor, VS Code, Windsurf, plus Codex have native partial support. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
       </div>`;
   };
 

@@ -1562,6 +1562,16 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(panel?.innerHTML).toContain('.cursor/hooks.json');
   });
 
+  it('VS Code permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-vscode');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('vscode');
+    expect(panel?.textContent).toContain('native hooks');
+    expect(panel?.textContent).toContain('ignores matcher values');
+    expect(panel?.innerHTML).toContain('.copilot/hooks/dollhouse-permissions.json');
+  });
+
   it('Windsurf permissions panel exposes a Configure Now button for native partial support', () => {
     const panel = document.getElementById('setup-panel-windsurf');
     const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
@@ -1899,6 +1909,7 @@ describe('Setup Tab — Package Inclusion', () => {
   it('files field includes manual permission hook wrapper scripts', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/pretooluse-vscode.sh');
     expect(files).toContain('scripts/pretooluse-cursor.sh');
     expect(files).toContain('scripts/pretooluse-windsurf.sh');
     expect(files).toContain('scripts/pretooluse-gemini.sh');

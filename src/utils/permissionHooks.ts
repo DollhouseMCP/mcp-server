@@ -127,6 +127,8 @@ function summarizeMarkerStatuses(markerPaths: Iterable<string>): PermissionHookS
 
 function getHookWrapperBasename(host: string): string | null {
   switch (normalizeHookHost(host)) {
+    case 'vscode':
+      return 'pretooluse-vscode.sh';
     case 'cursor':
       return 'pretooluse-cursor.sh';
     case 'windsurf':
@@ -160,6 +162,14 @@ export function getPermissionHookMarkerPath(homeDir = homedir(), host?: string):
 
 export function getClaudeHookSettingsPath(homeDir = homedir()): string {
   return join(homeDir, '.claude', 'settings.json');
+}
+
+export function getVsCodeHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.copilot', 'hooks', 'dollhouse-permissions.json');
+}
+
+export function getVsCodeUserSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
 }
 
 export function getGeminiHookSettingsPath(homeDir = homedir()): string {
@@ -284,6 +294,13 @@ function ensureCommandHook(
 }
 
 export function ensureClaudePreToolUseHook(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  return ensureCommandHook(parsed, 'PreToolUse', command, '*');
+}
+
+export function ensureVsCodePreToolUseHook(
   parsed: Record<string, unknown>,
   command: string,
 ): { changed: boolean; parsed: Record<string, unknown> } {
@@ -430,6 +447,47 @@ async function mergeClaudeSettings(settingsPath: string, command: string): Promi
   const backupPath = await writeBackupIfPresent(settingsPath, raw);
 
   await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeVsCodeHookSettings(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureVsCodePreToolUseHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeVsCodeUserSettings(settingsPath: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const current = parsed['chat.hookFilesLocations'];
+  const locations = (current && typeof current === 'object' && !Array.isArray(current))
+    ? { ...(current as Record<string, unknown>) }
+    : {};
+
+  if (locations['~/.copilot/hooks'] === true) {
+    return { changed: false };
+  }
+
+  locations['~/.copilot/hooks'] = true;
+  parsed['chat.hookFilesLocations'] = locations;
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+  await writeFile(settingsPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
   return { changed: true, backupPath };
 }
 
@@ -673,6 +731,42 @@ async function installClaudeCodePermissionHook(
   };
 }
 
+async function installVsCodePermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'vscode';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getVsCodeHookSettingsPath(homeDir);
+  const userSettingsPath = getVsCodeUserSettingsPath(homeDir);
+  const hookResult = await mergeVsCodeHookSettings(settingsPath, `bash ${scriptPath}`);
+  const userSettingsResult = await mergeVsCodeUserSettings(userSettingsPath);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [userSettingsPath],
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [userSettingsPath],
+    markerPath,
+    backupPath: hookResult.backupPath ?? userSettingsResult.backupPath,
+    message: 'Installed VS Code permission hook and enabled chat.hookFilesLocations for ~/.copilot/hooks.',
+  };
+}
+
 async function installGeminiCliPermissionHook(
   homeDir: string,
   installedAt: string,
@@ -843,6 +937,10 @@ export async function installPermissionHook(
 
   if (normalizedClient === 'claude-code') {
     return installClaudeCodePermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
+  if (normalizedClient === 'vscode') {
+    return installVsCodePermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (normalizedClient === 'gemini-cli') {

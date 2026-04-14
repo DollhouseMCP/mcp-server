@@ -8,6 +8,7 @@ import {
   ensureCodexPreToolUseHook,
   ensureCursorPreToolUseHook,
   ensureGeminiBeforeToolHook,
+  ensureVsCodePreToolUseHook,
   ensureWindsurfHooks,
   getCodexConfigPath,
   getCodexHookSettingsPath,
@@ -16,6 +17,8 @@ import {
   getPermissionHookMarkerPath,
   getPermissionHookScriptPath,
   getPermissionHookStatus,
+  getVsCodeHookSettingsPath,
+  getVsCodeUserSettingsPath,
   getWindsurfHookSettingsPath,
   installPermissionHook,
 } from '../../../src/utils/permissionHooks.js';
@@ -94,6 +97,31 @@ describe('permissionHooks', () => {
                 {
                   type: 'command',
                   command: 'bash ~/.dollhouse/hooks/pretooluse-gemini.sh',
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  describe('ensureVsCodePreToolUseHook', () => {
+    it('adds a PreToolUse command hook when missing', () => {
+      const parsed = { hooks: {} } as Record<string, unknown>;
+
+      const result = ensureVsCodePreToolUseHook(parsed, 'bash ~/.dollhouse/hooks/pretooluse-vscode.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: '*',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'bash ~/.dollhouse/hooks/pretooluse-vscode.sh',
                 },
               ],
             },
@@ -257,6 +285,55 @@ describe('permissionHooks', () => {
         host: 'gemini-cli',
         scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-gemini.sh'),
         settingsPath: getGeminiHookSettingsPath(tempHome),
+      });
+    });
+
+    it('installs VS Code hook settings and updates chat.hookFilesLocations', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('vscode', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+        now: new Date('2026-04-14T12:15:00.000Z'),
+      });
+
+      expect(result.supported).toBe(true);
+      expect(result.installed).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.assetsPrepared).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh'));
+      expect(result.settingsPath).toBe(getVsCodeHookSettingsPath(tempHome));
+      expect(result.additionalPaths).toEqual([getVsCodeUserSettingsPath(tempHome)]);
+
+      const hooksRaw = await readFile(getVsCodeHookSettingsPath(tempHome), 'utf-8');
+      const hooks = JSON.parse(hooksRaw);
+      expect(hooks.hooks.PreToolUse).toEqual([
+        {
+          matcher: '*',
+          hooks: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh')}`,
+            },
+          ],
+        },
+      ]);
+
+      const userSettingsRaw = await readFile(getVsCodeUserSettingsPath(tempHome), 'utf-8');
+      const userSettings = JSON.parse(userSettingsRaw);
+      expect(userSettings['chat.hookFilesLocations']).toEqual({
+        '~/.copilot/hooks': true,
+      });
+
+      expect(getPermissionHookStatus(tempHome, 'vscode')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'vscode',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh'),
+        settingsPath: getVsCodeHookSettingsPath(tempHome),
+        additionalPaths: [getVsCodeUserSettingsPath(tempHome)],
       });
     });
 

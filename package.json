@@ -134,6 +134,7 @@
     "dist/web/public/**",
     "dist/seed-elements/**",
     "scripts/pretooluse-dollhouse.sh",
+    "scripts/pretooluse-vscode.sh",
     "scripts/pretooluse-cursor.sh",
     "scripts/pretooluse-windsurf.sh",
     "scripts/pretooluse-gemini.sh",

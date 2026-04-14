@@ -85,6 +85,7 @@ const platformFormatters: Record<string, (decision: string, reason?: string) => 
   cursor: formatCursor,
   windsurf: formatWindsurf,
   codex: formatCodex,
+  vscode: formatClaudeCode,
   claude_code: formatClaudeCode,
 };
 
