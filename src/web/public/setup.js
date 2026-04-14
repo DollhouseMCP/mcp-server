@@ -20,11 +20,11 @@
     { id: 'claude-desktop', rootKey: 'mcpServers' },
     { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookSupport: 'verified', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
     // These panels are generated from this data by renderGeneratedPanels()
-    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects' },
+    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects' },
     { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.' },
     { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>' },
-    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookSupport: 'verified', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
-    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/mcp_config.json</code>' },
+    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
+    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project' },
     { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      configPath: '<code>cline_mcp_settings.json</code> via Cline\'s top nav &gt; Configure &gt; Advanced MCP Settings' },
     { id: 'lmstudio',  rootKey: 'mcpServers', openClient: 'lmstudio',     configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
@@ -110,6 +110,36 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
             "statusMessage": "Checking Bash permissions"
           }
         ]
+      }
+    ]
+  }
+}`;
+
+  const CURSOR_HOOK_SETTINGS = `{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-cursor.sh",
+        "matcher": ".*"
+      }
+    ]
+  }
+}`;
+
+  const WINDSURF_HOOK_SETTINGS = `{
+  "hooks": {
+    "pre_run_command": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-windsurf.sh"
+      }
+    ],
+    "pre_mcp_tool_use": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-windsurf.sh"
       }
     ]
   }
@@ -933,16 +963,33 @@ codex_hooks = true`;
       scriptPath: HOOK_BASE_SCRIPT_PATH,
       settingsBlock: CLAUDE_CODE_HOOK_SETTINGS,
     },
-    gemini: {
-      label: 'Gemini CLI',
-      statusTag: 'gemini cli',
-      configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project',
-      scriptPath: `${HOOKS_DIR}/pretooluse-gemini.sh`,
-      settingsBlock: GEMINI_HOOK_SETTINGS,
-    },
   };
 
   const PARTIAL_PERMISSION_PLATFORMS = {
+    gemini: {
+      label: 'Gemini CLI',
+      statusTag: 'allow / deny',
+      configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project',
+      scriptPath: `${HOOKS_DIR}/pretooluse-gemini.sh`,
+      settingsBlock: GEMINI_HOOK_SETTINGS,
+      limitation: 'Gemini CLI exposes native BeforeTool hooks, but it does not support an ask/confirm response path. Confirmation-style policies currently degrade to deny.',
+    },
+    cursor: {
+      label: 'Cursor',
+      statusTag: 'native hooks',
+      configPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects',
+      scriptPath: `${HOOKS_DIR}/pretooluse-cursor.sh`,
+      settingsBlock: CURSOR_HOOK_SETTINGS,
+      limitation: 'Cursor exposes native hooks, but its permission handling still needs broader runtime verification across allow and ask decisions.',
+    },
+    windsurf: {
+      label: 'Windsurf',
+      statusTag: 'allow / deny',
+      configPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project',
+      scriptPath: `${HOOKS_DIR}/pretooluse-windsurf.sh`,
+      settingsBlock: WINDSURF_HOOK_SETTINGS,
+      limitation: 'Windsurf exposes native pre-run and pre-MCP hooks, but they are binary allow-or-block hooks. Confirmation-style policies currently degrade to block.',
+    },
     codex: {
       label: 'Codex',
       statusTag: 'bash only',
@@ -979,10 +1026,11 @@ codex_hooks = true`;
   };
 
   const getPartialPermissionStatusCopy = (partial, detected) => {
+    const activationLabel = partial.label === 'Codex' ? 'Bash guardrails' : 'permission hooks';
     if (detected?.hookInstalled) {
       return {
         tone: 'info',
-        titleText: `${partial.label} Bash guardrails are enabled.`,
+        titleText: `${partial.label} ${activationLabel} are enabled.`,
         messageText: partial.limitation,
       };
     }
@@ -991,14 +1039,14 @@ codex_hooks = true`;
       return {
         tone: 'warning',
         titleText: `${partial.label} is connected for this client.`,
-        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${partial.label}'s native Bash hook support.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${partial.label}'s native ${activationLabel}.`,
       };
     }
 
     return {
       tone: 'info',
-      titleText: `${partial.label} Bash guardrails are not configured yet.`,
-      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install Codex's Bash-only hook support.`,
+      titleText: `${partial.label} ${activationLabel} are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install ${partial.label}'s native ${activationLabel}.`,
     };
   };
 
@@ -1294,7 +1342,9 @@ codex_hooks = true`;
           <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
           <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
         </div>
-        <p class="setup-hint">${partial.limitation} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.</p>
+        <p class="setup-hint">${p.id === 'codex'
+          ? `${partial.limitation} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.`
+          : `${partial.limitation} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`}</p>
       </div>
       <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
         <details class="setup-manual-fallback">
@@ -1305,12 +1355,12 @@ codex_hooks = true`;
             <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
               <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
             </div>
-            <h4>2. Enable Codex hooks in <code>~/.codex/config.toml</code></h4>
+            ${p.id === 'codex' ? `<h4>2. Enable Codex hooks in <code>~/.codex/config.toml</code></h4>
             <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="Copy Codex features config">Copy</button>
               <pre><code>${escapeHtml(partial.featureBlock)}</code></pre>
-            </div>
-            <h4>3. Add the Codex Bash hook in <code>~/.codex/hooks.json</code></h4>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy Codex hook settings">Copy</button>
+            </div>` : ''}
+            <h4>${p.id === 'codex' ? '3' : '2'}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
               <pre><code>${escapeHtml(partial.settingsBlock)}</code></pre>
             </div>
             <p class="setup-hint">Command hook target: <code>${partial.scriptPath}</code></p>
@@ -1356,7 +1406,7 @@ codex_hooks = true`;
 
     intro.innerHTML = `<div class="setup-permissions-note">
         <strong>Permissions &amp; Security</strong>
-        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code and Gemini CLI are fully guided in this release, and Codex has Bash-only native support. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
+        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release, and Gemini CLI, Cursor, Windsurf, plus Codex have native partial support. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
       </div>`;
   };
 

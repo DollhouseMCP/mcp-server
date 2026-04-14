@@ -1543,11 +1543,33 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(btn?.dataset.permissionInstallClient).toBe('claude-code');
   });
 
-  it('Gemini permissions panel exposes a Configure Now button', () => {
+  it('Gemini permissions panel exposes a Configure Now button for native partial support', () => {
     const panel = document.getElementById('setup-panel-gemini');
     const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
     expect(btn).not.toBeNull();
     expect(btn?.dataset.permissionInstallClient).toBe('gemini-cli');
+    expect(panel?.textContent).toContain('allow / deny');
+    expect(panel?.textContent).toContain('does not support an ask/confirm response path');
+  });
+
+  it('Cursor permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-cursor');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('cursor');
+    expect(panel?.textContent).toContain('native hooks');
+    expect(panel?.textContent).toContain('Cursor exposes native hooks');
+    expect(panel?.innerHTML).toContain('.cursor/hooks.json');
+  });
+
+  it('Windsurf permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-windsurf');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('windsurf');
+    expect(panel?.textContent).toContain('allow / deny');
+    expect(panel?.textContent).toContain('binary allow-or-block hooks');
+    expect(panel?.innerHTML).toContain('.codeium/windsurf/hooks.json');
   });
 
   it('Codex permissions panel exposes a Configure Now button for Bash-only support', () => {

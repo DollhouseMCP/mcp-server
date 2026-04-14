@@ -166,6 +166,14 @@ export function getGeminiHookSettingsPath(homeDir = homedir()): string {
   return join(homeDir, '.gemini', 'settings.json');
 }
 
+export function getCursorHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.cursor', 'hooks.json');
+}
+
+export function getWindsurfHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.codeium', 'windsurf', 'hooks.json');
+}
+
 export function getCodexHookSettingsPath(homeDir = homedir()): string {
   return join(homeDir, '.codex', 'hooks.json');
 }
@@ -298,6 +306,69 @@ export function ensureCodexPreToolUseHook(
   });
 }
 
+export function ensureCursorPreToolUseHook(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  if (parsed.version !== 1) {
+    parsed.version = 1;
+  }
+  const hooksRoot = normalizeHooksRoot(parsed);
+  const existingEntries: Array<Record<string, unknown>> = Array.isArray(hooksRoot.preToolUse)
+    ? hooksRoot.preToolUse.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+    : [];
+  hooksRoot.preToolUse = existingEntries;
+
+  const commandExists = existingEntries.some((entry) =>
+    entry.command === command
+    && (entry.type === 'command' || entry.type === undefined),
+  );
+  if (commandExists) {
+    return { changed: false, parsed };
+  }
+
+  existingEntries.push({
+    type: 'command',
+    command,
+    matcher: '.*',
+  });
+
+  return { changed: true, parsed };
+}
+
+export function ensureWindsurfHooks(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  const hooksRoot = normalizeHooksRoot(parsed);
+  let changed = false;
+
+  const ensureEventHook = (eventName: string) => {
+    const existingEntries: Array<Record<string, unknown>> = Array.isArray(hooksRoot[eventName])
+      ? hooksRoot[eventName].filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+      : [];
+    hooksRoot[eventName] = existingEntries;
+
+    const commandExists = existingEntries.some((entry) =>
+      entry.command === command && (entry.type === 'command' || entry.type === undefined),
+    );
+    if (commandExists) {
+      return;
+    }
+
+    existingEntries.push({
+      type: 'command',
+      command,
+    });
+    changed = true;
+  };
+
+  ensureEventHook('pre_run_command');
+  ensureEventHook('pre_mcp_tool_use');
+
+  return { changed, parsed };
+}
+
 async function copyHookAsset(sourcePath: string, targetPath: string): Promise<boolean> {
   await mkdir(dirname(targetPath), { recursive: true });
 
@@ -370,6 +441,42 @@ async function mergeGeminiSettings(settingsPath: string, command: string): Promi
   const indent = detectIndent(raw);
   const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
   const { changed, parsed: updated } = ensureGeminiBeforeToolHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeCursorHooks(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{\n  "version": 1,\n  "hooks": {}\n}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureCursorPreToolUseHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeWindsurfHooks(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{\n  "hooks": {}\n}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureWindsurfHooks(parsed, command);
   if (!changed) {
     return { changed: false };
   }
@@ -598,6 +705,70 @@ async function installGeminiCliPermissionHook(
   };
 }
 
+async function installCursorPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'cursor';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getCursorHookSettingsPath(homeDir);
+  const settingsResult = await mergeCursorHooks(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Cursor permission hook and updated hooks.json.',
+  };
+}
+
+async function installWindsurfPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'windsurf';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getWindsurfHookSettingsPath(homeDir);
+  const settingsResult = await mergeWindsurfHooks(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Windsurf permission hooks and updated hooks.json.',
+  };
+}
+
 async function installCodexPermissionHook(
   homeDir: string,
   installedAt: string,
@@ -676,6 +847,14 @@ export async function installPermissionHook(
 
   if (normalizedClient === 'gemini-cli') {
     return installGeminiCliPermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
+  if (normalizedClient === 'cursor') {
+    return installCursorPermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
+  if (normalizedClient === 'windsurf') {
+    return installWindsurfPermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (normalizedClient === 'codex') {
