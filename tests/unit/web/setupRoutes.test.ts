@@ -164,6 +164,13 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: async () => ({
+          supported: true,
+          installed: true,
+          configured: true,
+          host: 'claude-code',
+          message: 'Installed Claude Code permission hook and updated settings.json.',
+        }),
         _skipRateLimit: true,
       });
 
@@ -184,6 +191,41 @@ describe('Setup Routes — API Endpoints', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.client).toBe('claude');
       expect(res.body.version).toBeDefined();
+      expect(res.body).toHaveProperty('hookInstall');
+    });
+
+    it('includes hook install details after a successful install', async () => {
+      const installPermissionHookMock = async (client: string) => ({
+        supported: client === 'claude-code',
+        installed: client === 'claude-code',
+        configured: client === 'claude-code',
+        host: client,
+        message: client === 'claude-code'
+          ? 'Installed Claude Code permission hook and updated settings.json.'
+          : `Automatic permission hook wiring is not yet supported for ${client}.`,
+      });
+
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: installPermissionHookMock,
+        _skipRateLimit: true,
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude-code' })
+        .expect(200);
+
+      expect(res.body.hookInstall).toEqual(expect.objectContaining({
+        supported: true,
+        configured: true,
+        host: 'claude-code',
+      }));
     });
   });
 
@@ -526,6 +568,11 @@ describe('Setup Tab — HTML Content Integrity', () => {
 
     it('has global method button', () => {
       expect(html).toContain('data-method="global"');
+    });
+
+    it('has permissions method button', () => {
+      expect(html).toContain('data-method="permissions"');
+      expect(html).toContain('Permissions &amp; Security');
     });
 
     it('npx is active by default', () => {
@@ -950,6 +997,12 @@ describe('Setup Tab — Regressions', () => {
       expect(panel).toContain('~/.claude.json');
       expect(panel).toContain('Or add manually');
     });
+
+    it('Setup includes a permissions intro area for manual hook assets', () => {
+      expect(html).toContain('id="setup-permissions-intro"');
+      expect(js).toContain('renderPermissionsIntro');
+      expect(js).toContain('pretooluse-dollhouse.sh');
+    });
   });
 
   describe('All platforms have consistent structure', () => {
@@ -980,6 +1033,13 @@ describe('Setup Tab — Regressions', () => {
     it('generated panels include copy buttons and code blocks', () => {
       expect(js).toContain('setup-copy-btn');
       expect(js).toContain('setup-code-block');
+    });
+
+    it('generated panels include manual hook bridge assets for supported clients', () => {
+      expect(js).toContain('pretooluse-cursor.sh');
+      expect(js).toContain('pretooluse-codex.sh');
+      expect(js).toContain('pretooluse-gemini.sh');
+      expect(js).toContain('pretooluse-windsurf.sh');
     });
   });
 
@@ -1073,7 +1133,7 @@ describe('Setup Tab — Regressions', () => {
 
     it('channel selector hidden on init when pinned mode is active', () => {
       // The init sync line must apply hidden state without waiting for a click
-      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
+      expect(js).toContain("channelToggle.hidden = currentMethod !== 'npx'");
     });
 
     it('channel change re-evaluates detection state', () => {
@@ -1753,6 +1813,15 @@ describe('Setup Tab — Package Inclusion', () => {
   it('files field includes dist/seed-elements/** for seed memories', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('dist/seed-elements/**');
+  });
+
+  it('files field includes manual permission hook wrapper scripts', () => {
+    const files = packageJson.files as string[];
+    expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/pretooluse-cursor.sh');
+    expect(files).toContain('scripts/pretooluse-windsurf.sh');
+    expect(files).toContain('scripts/pretooluse-gemini.sh');
+    expect(files).toContain('scripts/pretooluse-codex.sh');
   });
 
   it('dist/web/public/index.html exists', () => {

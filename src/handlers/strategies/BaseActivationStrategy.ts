@@ -9,6 +9,7 @@
 import { findElementFlexibly as findHelper } from '../element-crud/helpers.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { MCPResponse } from './ElementActivationStrategy.js';
+import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 
 /**
  * Base class with shared utilities for activation strategies
@@ -91,7 +92,10 @@ export abstract class BaseActivationStrategy {
     const restrictions = gatekeeper?.externalRestrictions as Record<string, unknown> | undefined;
     if (!restrictions) return '';
 
-    const parts: string[] = ['\n---\n**CLI Restrictions Active:**'];
+    const hookStatus = getPermissionHookStatus();
+    const parts: string[] = [hookStatus.installed
+      ? '\n---\n**CLI Policies Loaded:**'
+      : '\n---\n**CLI Policies Loaded (Hook Not Detected):**'];
     if (restrictions.description) {
       parts.push(`> ${restrictions.description}`);
     }
@@ -111,7 +115,14 @@ export abstract class BaseActivationStrategy {
       parts.push(`> Requires approval for: ${requireApproval.join(', ')} risk tools`);
     }
     parts.push('> Use `get_effective_cli_policies` to see combined policy state.');
-    parts.push('> NOTE: These restrictions require the CLI client to be launched with `--permission-prompt-tool` to be enforced.');
+    if (hookStatus.installed) {
+      parts.push(`> Permission hook detected for ${hookStatus.host ?? 'this client'}. Enforcement depends on using that client configuration.`);
+    } else {
+      parts.push(
+        '> No permission hook detected. These policies are not automatically enforced unless the CLI is launched with `--permission-prompt-tool`.',
+        '> Run `open_setup` and reinstall to wire automatic enforcement.',
+      );
+    }
     return parts.join('\n');
   }
 }

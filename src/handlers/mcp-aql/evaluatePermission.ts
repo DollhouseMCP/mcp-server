@@ -41,7 +41,7 @@ export interface EvaluatePermissionDeps {
   permissionPromptLimiter: RateLimiter;
   classifyTool: (toolName: string, toolInput: Record<string, unknown>) => ToolClassificationResult;
   evaluateCliToolPolicy: (toolName: string, toolInput: Record<string, unknown>, elements: ActiveElement[]) => CliToolPolicyResult;
-  getActiveElements: () => Promise<ActiveElement[]>;
+  getActiveElements: (sessionId?: string) => Promise<ActiveElement[]>;
 }
 
 /** Optional reason field, only included when reason is provided */
@@ -69,11 +69,14 @@ function formatCodex(decision: string, reason?: string): Record<string, unknown>
   return { hookSpecificOutput: withReason({ permissionDecision: decision === 'ask' ? 'deny' : decision }, reason) };
 }
 
-/** Claude Code (default): uses 'decision' with 'message' for ask, 'reason' for deny */
+/** Claude Code (default): uses hookSpecificOutput.permissionDecision for PreToolUse */
 function formatClaudeCode(decision: string, reason?: string): Record<string, unknown> {
-  if (decision === 'allow') return { decision: 'allow' };
-  if (decision === 'ask') return withReason({ decision: 'ask' }, reason, 'message');
-  return withReason({ decision: 'deny' }, reason);
+  return {
+    hookSpecificOutput: withReason({
+      hookEventName: 'PreToolUse',
+      permissionDecision: decision,
+    }, reason, 'permissionDecisionReason'),
+  };
 }
 
 /** Platform formatter lookup */
@@ -87,6 +90,21 @@ const platformFormatters: Record<string, (decision: string, reason?: string) => 
 
 /** Known platform identifiers */
 export const SUPPORTED_PLATFORMS = Object.keys(platformFormatters);
+
+function warnOnUnknownPlatform(platform: string): void {
+  void import('../../utils/logger.js')
+    .then(({ logger }) => {
+      logger.warn(
+        `[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`,
+      );
+    })
+    .catch((error) => {
+      console.warn(
+        `[evaluatePermission] Failed to load logger while handling unknown platform "${platform}".`,
+        error,
+      );
+    });
+}
 
 /**
  * Format permission evaluation response for platform-specific hook scripts.
@@ -108,9 +126,7 @@ export function formatPermissionResponse(
     case 'claude_code': return formatClaudeCode(decision, reason);
     default:
       // Import lazily to avoid circular dependency at module load time
-      import('../../utils/logger.js').then(({ logger }) => {
-        logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
-      }).catch(() => { /* logger not available */ });
+      warnOnUnknownPlatform(platform);
       return formatClaudeCode(decision, reason);
   }
 }
@@ -123,7 +139,7 @@ export function formatPermissionResponse(
  * @returns Platform-formatted permission decision
  */
 export async function evaluatePermission(
-  params: { tool_name?: unknown; input?: unknown; platform?: unknown },
+  params: { tool_name?: unknown; input?: unknown; platform?: unknown; session_id?: unknown },
   deps: EvaluatePermissionDeps,
 ): Promise<Record<string, unknown>> {
   const toolName = typeof params.tool_name === 'string' ? params.tool_name : '';
@@ -132,6 +148,9 @@ export async function evaluatePermission(
     ? inputRaw as Record<string, unknown>
     : {};
   const platform = typeof params.platform === 'string' ? params.platform : 'claude_code';
+  const sessionId = typeof params.session_id === 'string' && params.session_id.trim() !== ''
+    ? params.session_id
+    : undefined;
 
   // Rate limit
   const rateStatus = deps.permissionPromptLimiter.checkLimit();
@@ -152,7 +171,7 @@ export async function evaluatePermission(
   // Stage 2: Element policy evaluation
   let elements: ActiveElement[];
   try {
-    elements = await deps.getActiveElements();
+    elements = await deps.getActiveElements(sessionId);
   } catch (err) {
     throw new PermissionEvaluationError(
       `Failed to fetch active elements for policy evaluation: ${err instanceof Error ? err.message : String(err)}`,

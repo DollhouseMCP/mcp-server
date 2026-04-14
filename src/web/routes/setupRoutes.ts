@@ -21,6 +21,7 @@ const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
+import { installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -212,7 +213,9 @@ function validateClient(
 
 // ── License verification ─────────────────────────────────────────────
 
-const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MS_PER_MINUTE = 60 * 1000;
+const VERIFICATION_CODE_TTL_MINUTES = 10;
+const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
 
 /** Generate a cryptographically random 6-digit verification code. */
@@ -365,6 +368,8 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
 export function createSetupRoutes(opts?: {
   /** Override install-mcp runner. For testing only — prefix signals test-only use. */
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
+  /** Override permission hook installer. For testing only. */
+  _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -379,6 +384,7 @@ export function createSetupRoutes(opts?: {
   resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
+  const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
   const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -485,12 +491,15 @@ export function createSetupRoutes(opts?: {
         nvmMitigationApplied = false;
       }
 
+      const hookInstall = await permissionHookInstaller(normalizedClient);
+
       res.json({
         success: true,
         output,
         client: normalizedClient,
         version: effectiveVersion || 'latest',
         nvmMitigationApplied,
+        hookInstall,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

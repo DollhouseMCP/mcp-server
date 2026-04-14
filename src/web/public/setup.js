@@ -11,21 +11,76 @@
   // ── Config builders ────────────────────────────────────────────────────
 
   const PKG = '@dollhousemcp/mcp-server';
+  const HOOKS_DIR = '~/.dollhouse/hooks';
+  const HOOK_BASE_SCRIPT_PATH = `${HOOKS_DIR}/pretooluse-dollhouse.sh`;
 
   /** Platform registry — drives config generation AND panel rendering */
   const PLATFORMS = [
     // Claude Desktop & Claude Code panels are handwritten in HTML (unique structure)
     { id: 'claude-desktop', rootKey: 'mcpServers' },
-    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude' },
+    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookSupport: 'verified', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
     // These panels are generated from this data by renderGeneratedPanels()
-    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.' },
+    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects' },
     { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.' },
-    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)' },
-    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
-    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.' },
+    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/config.toml</code>' },
+    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
+    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookSupport: 'manual', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/mcp_config.json</code>' },
     { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      configPath: '<code>cline_mcp_settings.json</code> via Cline\'s top nav &gt; Configure &gt; Advanced MCP Settings' },
     { id: 'lmstudio',  rootKey: 'mcpServers', openClient: 'lmstudio',     configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
+
+  const HOOK_BASE_SCRIPT = `#!/bin/bash
+# pretooluse-dollhouse.sh — shared hook bridge for DollhouseMCP
+
+PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+HOOK_PLATFORM="\${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
+
+[[ -f "$PORT_FILE" ]] || exit 0
+PORT=$(cat "$PORT_FILE" 2>/dev/null)
+[[ "$PORT" =~ ^[0-9]+$ ]] || exit 0
+
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
+TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2>/dev/null)
+[[ -n "$TOOL_NAME" ]] || exit 0
+
+PAYLOAD=$(jq -cn \\
+  --arg tool_name "$TOOL_NAME" \\
+  --arg platform "$HOOK_PLATFORM" \\
+  --arg session_id "\${DOLLHOUSE_SESSION_ID:-}" \\
+  --argjson input "$TOOL_INPUT" \\
+  '{ tool_name: $tool_name, input: $input, platform: $platform }
+   + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)')
+
+RESPONSE=$(curl -s --max-time 5 -X POST "http://127.0.0.1:$PORT/api/evaluate_permission" \\
+  -H "Content-Type: application/json" \\
+  -d "$PAYLOAD" 2>/dev/null)
+
+[[ -n "$RESPONSE" ]] && echo "$RESPONSE"
+exit 0`;
+
+  const buildHookWrapperScript = (platform) => `#!/bin/bash
+# pretooluse-${platform}.sh — manual hook wrapper for DollhouseMCP
+
+export DOLLHOUSE_HOOK_PLATFORM="${platform}"
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
+
+  const CLAUDE_CODE_HOOK_SETTINGS = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOK_BASE_SCRIPT_PATH}"
+          }
+        ]
+      }
+    ]
+  }
+}`;
 
   /** Build a JSON config block for a given npx command string */
   function jsonConfig(rootKey, npxCmd) {
@@ -140,10 +195,11 @@
 
       if (prereq) prereq.hidden = method !== 'global';
       if (mcpbSection) mcpbSection.hidden = method !== 'global';
-      if (channelToggle) channelToggle.hidden = method === 'global';
+      if (channelToggle) channelToggle.hidden = method !== 'npx';
 
-      updateAllConfigs(method);
+      updateAllConfigs(method === 'permissions' ? 'npx' : method);
       updateInstallButtonLabels();
+      updateSetupModeSections();
       updateDetectionState();
     };
 
@@ -154,7 +210,7 @@
     // Sync initial visibility — if the browser restored a non-default
     // active button (e.g. pinned was selected before reload), apply
     // the hidden state now without waiting for a click.
-    if (channelToggle) channelToggle.hidden = currentMethod === 'global';
+    if (channelToggle) channelToggle.hidden = currentMethod !== 'npx';
   };
 
   // ── Channel selector ──────────────────────────────────────────────────
@@ -218,6 +274,20 @@
       if (platformConfigs[tomlKey] && codeBlocks[blockIdx]) {
         updateCodeBlock(codeBlocks[blockIdx], platformConfigs[tomlKey]);
       }
+    }
+  };
+
+  const updateSetupModeSections = () => {
+    document.querySelectorAll('[data-setup-modes]').forEach((section) => {
+      const modes = (section.dataset.setupModes || '')
+        .split(/\s+/)
+        .filter(Boolean);
+      section.hidden = !modes.includes(currentMethod);
+    });
+
+    const permissionsIntro = document.getElementById('setup-permissions-intro');
+    if (permissionsIntro) {
+      permissionsIntro.hidden = currentMethod !== 'permissions';
     }
   };
 
@@ -830,6 +900,8 @@
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
 
+  const escapeAttr = (str) => escapeHtml(str).replaceAll("'", '&#39;');
+
   // ── Generate platform panels from registry ─────────────────────────────
 
   /** Build an Open config file button string, or empty if no openClient */
@@ -840,13 +912,13 @@
   const renderInstallSection = (p) => {
     let html = '';
     if (p.installClient) {
-      html += '<div class="setup-method setup-method-primary">';
+      html += '<div class="setup-method setup-method-primary" data-setup-modes="npx global">';
       html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Configure Now</button>`;
       html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
     }
     if (p.cli) {
       const cmd = `${p.cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`;
-      if (!p.installClient) html += '<div class="setup-method setup-method-primary">';
+      if (!p.installClient) html += '<div class="setup-method setup-method-primary" data-setup-modes="npx global">';
       html += '<h3>Or run in your terminal</h3><p>Run this in your terminal:</p>';
       html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${cmd}" aria-label="Copy command">Copy</button>`;
       html += `<pre><code>${cmd}</code></pre></div>`;
@@ -864,9 +936,9 @@
     let html = '';
 
     if (hasPrimaryBlock) {
-      html += `</div><div class="setup-method"><h3>Or add config manually${openBtnHtml(p.openClient)}</h3>`;
+      html += `</div><div class="setup-method" data-setup-modes="npx global"><h3>Or add config manually${openBtnHtml(p.openClient)}</h3>`;
     } else {
-      html += `<div class="setup-method setup-method-primary"><h3>Config${openBtnHtml(p.openClient)}</h3>`;
+      html += `<div class="setup-method setup-method-primary" data-setup-modes="npx global"><h3>Config${openBtnHtml(p.openClient)}</h3>`;
     }
     html += `<p>Add to ${p.configPath}:</p>`;
     html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${copyText}' aria-label="Copy config">Copy</button>`;
@@ -881,11 +953,79 @@
     if (!p.tomlPath) return '';
     const tomlConfig = configs[p.id]?.npxToml;
     const tomlCode = tomlConfig?.code || '';
-    let html = `<div class="setup-method"><h3>Or add to config${openBtnHtml(p.openClient)}</h3>`;
+    let html = `<div class="setup-method" data-setup-modes="npx global"><h3>Or add to config${openBtnHtml(p.openClient)}</h3>`;
     html += `<p>Add to ${p.tomlPath}:</p>`;
     html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${tomlCode}' aria-label="Copy config">Copy</button>`;
     html += `<pre><code>${tomlCode}</code></pre></div></div>`;
     return html;
+  };
+
+  const renderPermissionSection = (p) => {
+    const hookSupport = p.hookSupport || 'unsupported';
+    const configPath = p.hookConfigPath || p.configPath || p.tomlPath || 'this client’s user configuration';
+
+    if (hookSupport === 'verified' && p.id === 'claude-code') {
+      return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">verified</span></h3>
+        <p>Claude Code is the verified automatic path. If you want to wire the permission hook manually, save the shared hook bridge to <code>${HOOK_BASE_SCRIPT_PATH}</code>, then add this block to ${configPath}.</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(CLAUDE_CODE_HOOK_SETTINGS)}' aria-label="Copy Claude Code hook settings">Copy</button>
+          <pre><code>${escapeHtml(CLAUDE_CODE_HOOK_SETTINGS)}</code></pre>
+        </div>
+        <p class="setup-hint">Command hook target: <code>${HOOK_BASE_SCRIPT_PATH}</code></p>
+      </div>`;
+    }
+
+    if (hookSupport === 'manual') {
+      const platformName = p.id === 'gemini' ? 'gemini' : p.id;
+      const wrapperFilename = `pretooluse-${platformName}.sh`;
+      const wrapperScript = buildHookWrapperScript(platformName);
+      return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">manual bridge</span></h3>
+        <p>DollhouseMCP can format permission decisions for this client, but host-side hook registration is not yet auto-installed or fully verified. If your client exposes a pre-tool command hook, point it at:</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${escapeAttr(p.hookCommand)}" aria-label="Copy hook command">Copy</button>
+          <pre><code>${escapeHtml(p.hookCommand)}</code></pre>
+        </div>
+        <p>Save this wrapper alongside the shared base hook bridge in <code>${HOOKS_DIR}</code>:</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(wrapperScript)}' aria-label="Copy ${wrapperFilename}">Copy</button>
+          <pre><code>${escapeHtml(wrapperScript)}</code></pre>
+        </div>
+        <p class="setup-hint">Known config location to inspect: ${configPath}</p>
+      </div>`;
+    }
+
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--unsupported">research needed</span></h3>
+      <p>We do not yet have a verified pre-tool command hook path for this client. The Setup page remains accurate for MCP connection, but automatic permission enforcement instructions are not ready here yet.</p>
+      <p class="setup-hint">If you find a reliable hook/pre-command setting for this client, capture the config path and expected command shape so we can add it to the installer.</p>
+    </div>`;
+  };
+
+  const renderPermissionsIntro = () => {
+    const intro = document.getElementById('setup-permissions-intro');
+    if (!intro) return;
+
+    intro.innerHTML = `<div class="setup-method setup-method-primary">
+        <h3>Permissions &amp; Security</h3>
+        <p>Use this mode when you want to wire DollhouseMCP permission enforcement manually. Claude Code is verified. Cursor, Codex, Gemini CLI, and Windsurf expose manual bridge assets below while we finish validating their host-specific hook schemas.</p>
+      </div>
+      <div class="setup-method">
+        <h3>1. Save the shared hook bridge once</h3>
+        <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+          <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+        </div>
+      </div>`;
+  };
+
+  const injectStaticPermissionsSections = () => {
+    const claudeDesktopPanel = document.getElementById('setup-panel-claude-desktop');
+    const claudeCodePanel = document.getElementById('setup-panel-claude-code');
+    const claudeCodeConfig = PLATFORMS.find((p) => p.id === 'claude-code');
+
+    claudeDesktopPanel?.insertAdjacentHTML('beforeend', renderPermissionSection({ id: 'claude-desktop' }));
+    if (claudeCodePanel && claudeCodeConfig) {
+      claudeCodePanel.insertAdjacentHTML('beforeend', renderPermissionSection(claudeCodeConfig));
+    }
   };
 
   const renderGeneratedPanels = () => {
@@ -906,7 +1046,8 @@
       section.innerHTML =
         renderInstallSection(p) +
         renderJsonSection(p, hasPrimaryBlock) +
-        renderTomlSection(p);
+        renderTomlSection(p) +
+        renderPermissionSection(p);
 
       container.appendChild(section);
     }
@@ -1232,9 +1373,16 @@
         if (license.useCase) rows.push(['Use case', license.useCase]);
       }
 
-      licenseInfoTable.innerHTML = rows
-        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
-        .join('');
+      const rowNodes = rows.map(([label, value]) => {
+        const tr = document.createElement('tr');
+        const labelCell = document.createElement('td');
+        const valueCell = document.createElement('td');
+        labelCell.textContent = label;
+        valueCell.textContent = value;
+        tr.append(labelCell, valueCell);
+        return tr;
+      });
+      licenseInfoTable.replaceChildren(...rowNodes);
       licenseDetailsPanel.hidden = false;
     }
 
@@ -1350,7 +1498,9 @@
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
+  renderPermissionsIntro();
   renderGeneratedPanels();
+  injectStaticPermissionsSections();
   highlightOSPaths(os);
   initMethodToggle();
   initChannelSelector();
@@ -1361,4 +1511,5 @@
   fetchVersion();
   fetchDetection();
   initLicense();
+  updateSetupModeSections();
 })();
