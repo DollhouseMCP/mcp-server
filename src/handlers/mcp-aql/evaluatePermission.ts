@@ -91,6 +91,21 @@ const platformFormatters: Record<string, (decision: string, reason?: string) => 
 /** Known platform identifiers */
 export const SUPPORTED_PLATFORMS = Object.keys(platformFormatters);
 
+function warnOnUnknownPlatform(platform: string): void {
+  void import('../../utils/logger.js')
+    .then(({ logger }) => {
+      logger.warn(
+        `[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`,
+      );
+    })
+    .catch((error) => {
+      console.warn(
+        `[evaluatePermission] Failed to load logger while handling unknown platform "${platform}".`,
+        error,
+      );
+    });
+}
+
 /**
  * Format permission evaluation response for platform-specific hook scripts.
  * Each platform expects a different JSON shape from its hook response.
@@ -111,9 +126,7 @@ export function formatPermissionResponse(
     case 'claude_code': return formatClaudeCode(decision, reason);
     default:
       // Import lazily to avoid circular dependency at module load time
-      import('../../utils/logger.js').then(({ logger }) => {
-        logger.warn(`[evaluatePermission] Unknown platform "${platform}", defaulting to claude_code format. Supported: ${SUPPORTED_PLATFORMS.join(', ')}`);
-      }).catch(() => { /* logger not available */ });
+      warnOnUnknownPlatform(platform);
       return formatClaudeCode(decision, reason);
   }
 }

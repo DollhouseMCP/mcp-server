@@ -33,6 +33,8 @@ interface KnownPolicySession {
   source: 'policy';
 }
 
+const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
+const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
@@ -151,7 +153,10 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
    * Routes through evaluate_permission MCP-AQL READ operation.
    * Fail-open: returns allow on any error to avoid blocking the user.
    */
-  const permissionLimiter = new SlidingWindowRateLimiter(120, 60_000);
+  const permissionLimiter = new SlidingWindowRateLimiter(
+    PERMISSION_ROUTE_RATE_LIMIT_REQUESTS,
+    PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS,
+  );
   router.post('/evaluate_permission', express.json(), async (req, res) => {
     const body = req.body as {
       tool_name?: string;

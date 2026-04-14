@@ -42,6 +42,15 @@ function repoRootFromModule(): string {
   return dirname(dirname(dirname(currentFile)));
 }
 
+function isMissingFileError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOENT',
+  );
+}
+
 function detectIndent(raw: string): number | string {
   for (const line of raw.split('\n')) {
     if (line.length === 0 || line.startsWith('{') || line.startsWith('}')) continue;
@@ -146,16 +155,17 @@ export function ensureClaudePreToolUseHook(
 async function copyHookScript(sourcePath: string, targetPath: string): Promise<boolean> {
   await mkdir(dirname(targetPath), { recursive: true });
 
-  let changed = true;
+  const sourceRaw = await readFile(sourcePath, 'utf-8');
+
+  let targetRaw: string | undefined;
   try {
-    const [sourceRaw, targetRaw] = await Promise.all([
-      readFile(sourcePath, 'utf-8'),
-      readFile(targetPath, 'utf-8'),
-    ]);
-    changed = sourceRaw !== targetRaw;
-  } catch {
-    changed = true;
+    targetRaw = await readFile(targetPath, 'utf-8');
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
   }
+  const changed = targetRaw === undefined || sourceRaw !== targetRaw;
 
   if (changed) {
     copyFileSync(sourcePath, targetPath);

@@ -213,7 +213,9 @@ function validateClient(
 
 // ── License verification ─────────────────────────────────────────────
 
-const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MS_PER_MINUTE = 60 * 1000;
+const VERIFICATION_CODE_TTL_MINUTES = 10;
+const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
 
 /** Generate a cryptographically random 6-digit verification code. */
