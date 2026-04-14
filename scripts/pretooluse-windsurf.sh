@@ -48,24 +48,23 @@ case "$EVENT_NAME" in
   pre_run_command)
     TOOL_NAME='Bash'
     TOOL_INPUT=$(echo "$INPUT" | jq -c '
-      {
+      . as $root
+      | {
         command: (
-          .tool_info.command_line
-          // .toolInfo.commandLine
-          // .command_line
-          // .commandLine
-          // .command
-          // .input.command
-          // .tool_input.command
+          $root.tool_info.command_line
+          // $root.toolInfo.commandLine
+          // $root.command_line
+          // $root.commandLine
+          // $root.command
+          // $root.input.command
+          // $root.tool_input.command
           // ""
         )
       }
-      + (
-        if (.cwd // .working_directory // .workingDirectory // .tool_info.cwd // .toolInfo.cwd // empty) != empty
-          then { cwd: (.cwd // .working_directory // .workingDirectory // .tool_info.cwd // .toolInfo.cwd) }
-          else {}
+      | if ($root.cwd // $root.working_directory // $root.workingDirectory // $root.tool_info.cwd // $root.toolInfo.cwd) != null
+          then . + { cwd: ($root.cwd // $root.working_directory // $root.workingDirectory // $root.tool_info.cwd // $root.toolInfo.cwd) }
+          else .
         end
-      )
     ' 2>/dev/null)
     ;;
   pre_mcp_tool_use)
@@ -80,21 +79,20 @@ case "$EVENT_NAME" in
       // empty
     ' 2>/dev/null)
     TOOL_INPUT=$(echo "$INPUT" | jq -c '
-      (
-        .tool_arguments
-        // .toolArgs
-        // .input.arguments
-        // .arguments
-        // .tool_input
-        // .input
-        // {}
-      )
-      + (
-        if (.server_name // .serverName // .mcp_server_name // empty) != empty
-          then { server_name: (.server_name // .serverName // .mcp_server_name) }
-          else {}
+      . as $root
+      | (
+          $root.tool_arguments
+          // $root.toolArgs
+          // $root.input.arguments
+          // $root.arguments
+          // $root.tool_input
+          // $root.input
+          // {}
+        )
+      | if ($root.server_name // $root.serverName // $root.mcp_server_name) != null
+          then . + { server_name: ($root.server_name // $root.serverName // $root.mcp_server_name) }
+          else .
         end
-      )
     ' 2>/dev/null)
     ;;
   *)
