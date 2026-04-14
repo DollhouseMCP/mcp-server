@@ -63,14 +63,16 @@
 }
 
 #tab-permissions {
-  padding-inline: clamp(0.25rem, 0.5vw, 0.5rem);
+  padding-inline: clamp(0.5rem, 1vw, 1rem);
+  padding-bottom: calc(var(--site-footer-height, 4.5rem) + 1.5rem);
 }
 
 @media (max-width: 900px) {
   .perm-dashboard { grid-template-columns: 1fr; }
 
   #tab-permissions {
-    padding-inline: 0;
+    padding-inline: 0.375rem;
+    padding-bottom: calc(var(--site-footer-height, 4.5rem) + 1.25rem);
   }
 }
 
@@ -330,8 +332,9 @@
 /* ── Live Feed ─────────────────────────────────────────────── */
 
 .perm-feed {
-  max-height: 20rem;
-  min-height: 8rem;
+  height: 15rem;
+  max-height: 15rem;
+  min-height: 15rem;
   overflow-y: scroll;
   overflow-x: auto;
   overscroll-behavior: contain;
@@ -340,17 +343,10 @@
   font-size: 0.8125rem;
 }
 
-.perm-card--audit .perm-feed {
-  height: clamp(16rem, 36vh, 24rem);
-  max-height: clamp(16rem, 36vh, 24rem);
-}
-
-.perm-card--audit .perm-selected-header--compact {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  background: var(--paper-strong, #fff);
-  padding-bottom: 0.5rem;
+.perm-feed--modal {
+  height: calc(100vh - 11rem);
+  max-height: none;
+  min-height: 0;
 }
 
 .perm-feed-empty {
@@ -407,6 +403,10 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 200px;
+}
+
+.perm-audit-modal-dialog {
+  width: min(82rem, 100%);
 }
 
 /* ── Source Elements ───────────────────────────────────────── */
