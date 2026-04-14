@@ -45,10 +45,10 @@ export interface PersistedActivationStateSnapshot {
 }
 
 /**
- * Persistence-only contract for activation state.
+ * Contract for activation state persistence.
  *
- * Business logic (normalization, deduplication, security logging) lives
- * in the ActivationStore service layer. This interface handles storage.
+ * Implementations are responsible for normalization, deduplication,
+ * persistence, and security event logging for element activations.
  */
 export interface IActivationStateStore {
   /**

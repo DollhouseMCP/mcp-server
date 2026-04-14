@@ -51,7 +51,7 @@ import {
 } from './strategies/index.js';
 import { ElementQueryService } from '../services/query/ElementQueryService.js';
 import { ValidationRegistry } from '../services/validation/ValidationRegistry.js';
-import type { ActivationStore, PersistedActivation, PersistedActivationStateSnapshot } from '../services/ActivationStore.js';
+import type { IActivationStateStore, PersistedActivation, PersistedActivationStateSnapshot } from '../state/IActivationStateStore.js';
 import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
@@ -76,7 +76,7 @@ export class ElementCRUDHandler {
     private readonly fileOperations: IFileOperationsService,
     private readonly elementQueryService: ElementQueryService,
     private readonly validationRegistry: ValidationRegistry,
-    private readonly activationStore?: ActivationStore,
+    private readonly activationStore?: IActivationStateStore,
     private readonly backupService?: BackupService,
     private readonly policyExportService?: PolicyExportService,
     private readonly activationRegistry?: SessionActivationRegistry,
@@ -106,7 +106,7 @@ export class ElementCRUDHandler {
    * Falls back to the singleton activationStore when no registry is available.
    * Issue #1946: Per-session activation persistence.
    */
-  private getSessionActivationStore(): ActivationStore | undefined {
+  private getSessionActivationStore(): IActivationStateStore | undefined {
     if (this.activationRegistry && this.contextTracker) {
       const sessionId = this.contextTracker.getSessionContext()?.sessionId
         ?? this.activationRegistry.getDefaultSessionId();

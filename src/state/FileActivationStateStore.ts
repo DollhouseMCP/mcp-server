@@ -4,9 +4,8 @@
  * Persists per-session element activation state to JSON files.
  * Each session gets its own file: ~/.dollhouse/state/activations-{sessionId}.json
  *
- * Extracted from ActivationStore to separate persistence from business logic.
- * The ActivationStore service layer handles normalization, deduplication,
- * and security logging; this class handles file I/O.
+ * Handles normalization, deduplication, security event logging,
+ * and file I/O for activation state persistence.
  *
  * @since v2.1.0 — Issue #1945
  */
@@ -231,6 +230,14 @@ export class FileActivationStateStore implements IActivationStateStore {
       activatedAt: new Date().toISOString(),
     });
 
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_ACTIVATED',
+      severity: 'LOW',
+      source: 'FileActivationStateStore.recordActivation',
+      details: `Activation recorded: ${type}/${normalizedName}`,
+      additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+    });
+
     this.persistAsync();
   }
 
@@ -249,6 +256,14 @@ export class FileActivationStateStore implements IActivationStateStore {
     this.state.activations[type] = activations.filter(a => a.name !== normalizedName);
 
     if (this.state.activations[type]!.length !== initialLength) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'ELEMENT_DEACTIVATED',
+        severity: 'LOW',
+        source: 'FileActivationStateStore.recordDeactivation',
+        details: `Deactivation recorded: ${type}/${normalizedName}`,
+        additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+      });
+
       this.persistAsync();
     }
   }

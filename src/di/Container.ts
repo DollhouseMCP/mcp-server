@@ -83,7 +83,7 @@ import { ValidationService } from "../services/validation/ValidationService.js";
 import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
 import { AnthropicToDollhouseConverter, DollhouseToAnthropicConverter } from "../converters/index.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
-import { ActivationStore } from "../services/ActivationStore.js";
+import type { IActivationStateStore } from "../state/IActivationStateStore.js";
 import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
@@ -623,20 +623,13 @@ export class DollhouseContainer {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       return new SessionActivationRegistry(session.sessionId);
     });
-    // Issue #1945: Typed state persistence stores
-    this.register('ActivationStateStore', () => {
+    // Issue #598, #1945: Per-session activation persistence (file-backed)
+    this.register('ActivationStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       return new FileActivationStateStore(
         this.resolve('FileOperationsService'),
         undefined,
         session.sessionId
-      );
-    });
-    // Issue #598: ActivationStore for per-session activation persistence
-    // Issue #1945: Now delegates persistence to IActivationStateStore
-    this.register('ActivationStore', () => {
-      return new ActivationStore(
-        this.resolve('ActivationStateStore')
       );
     });
     // Issue #1945: ConfirmationStore for Gatekeeper state persistence
@@ -1045,13 +1038,13 @@ export class DollhouseContainer {
       const registry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
       const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       const state = registry.getOrCreate(stdioSession.sessionId);
-      state.activationStore = this.resolve<ActivationStore>('ActivationStore');
+      state.activationStore = this.resolve<IActivationStateStore>('ActivationStore');
     } catch (error) {
       logger.warn('[Container] Failed to pre-register stdio session in activation registry:', error);
     }
 
     try {
-      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const activationStore = this.resolve<IActivationStateStore>('ActivationStore');
       await activationStore.initialize();
 
       if (activationStore.isEnabled()) {
@@ -1137,7 +1130,7 @@ export class DollhouseContainer {
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return null;
 
-      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const activationStore = this.resolve<IActivationStateStore>('ActivationStore');
       const sessionId = activationStore.getSessionId();
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
       const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
@@ -1248,14 +1241,14 @@ export class DollhouseContainer {
   }
 
   /**
-   * Restore per-session activation state from the ActivationStore.
+   * Restore per-session activation state from the activation store.
    * Called during preparePortfolio() after auto-load memories.
    *
    * Issue #598: Each element type is restored independently.
    * Missing elements (deleted since last session) are skipped and pruned.
    * Auto-loaded memories are deduplicated (not activated twice).
    */
-  private async restoreActivations(store: ActivationStore): Promise<void> {
+  private async restoreActivations(store: IActivationStateStore): Promise<void> {
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
     const skillManager = this.resolve<SkillManager>('SkillManager');
     const agentManager = this.resolve<AgentManager>('AgentManager');
@@ -1274,12 +1267,12 @@ export class DollhouseContainer {
         if (result.success) {
           restoredCount++;
         } else {
-          logger.debug(`[ActivationStore] Pruning missing persona '${activation.name}'`);
+          logger.debug(`[Container] Pruning missing persona '${activation.name}'`);
           store.removeStaleActivation('persona', activation.name);
           skippedCount++;
         }
       } catch {
-        logger.debug(`[ActivationStore] Skipping failed persona '${activation.name}'`);
+        logger.debug(`[Container] Skipping failed persona '${activation.name}'`);
         store.removeStaleActivation('persona', activation.name);
         skippedCount++;
       }
@@ -1293,12 +1286,12 @@ export class DollhouseContainer {
         if (result.success) {
           restoredCount++;
         } else {
-          logger.debug(`[ActivationStore] Pruning missing skill '${activation.name}'`);
+          logger.debug(`[Container] Pruning missing skill '${activation.name}'`);
           store.removeStaleActivation('skill', activation.name);
           skippedCount++;
         }
       } catch {
-        logger.debug(`[ActivationStore] Skipping failed skill '${activation.name}'`);
+        logger.debug(`[Container] Skipping failed skill '${activation.name}'`);
         store.removeStaleActivation('skill', activation.name);
         skippedCount++;
       }
@@ -1311,12 +1304,12 @@ export class DollhouseContainer {
         if (result.success) {
           restoredCount++;
         } else {
-          logger.debug(`[ActivationStore] Pruning missing agent '${activation.name}'`);
+          logger.debug(`[Container] Pruning missing agent '${activation.name}'`);
           store.removeStaleActivation('agent', activation.name);
           skippedCount++;
         }
       } catch {
-        logger.debug(`[ActivationStore] Skipping failed agent '${activation.name}'`);
+        logger.debug(`[Container] Skipping failed agent '${activation.name}'`);
         store.removeStaleActivation('agent', activation.name);
         skippedCount++;
       }
@@ -1327,7 +1320,7 @@ export class DollhouseContainer {
     const activeMemoryNames = new Set(activeMemories.map(m => m.metadata.name));
     for (const activation of store.getActivations('memory')) {
       if (activeMemoryNames.has(activation.name)) {
-        logger.debug(`[ActivationStore] Memory '${activation.name}' already active (auto-loaded), skipping`);
+        logger.debug(`[Container] Memory '${activation.name}' already active (auto-loaded), skipping`);
         continue;
       }
       try {
@@ -1335,12 +1328,12 @@ export class DollhouseContainer {
         if (result.success) {
           restoredCount++;
         } else {
-          logger.debug(`[ActivationStore] Pruning missing memory '${activation.name}'`);
+          logger.debug(`[Container] Pruning missing memory '${activation.name}'`);
           store.removeStaleActivation('memory', activation.name);
           skippedCount++;
         }
       } catch {
-        logger.debug(`[ActivationStore] Skipping failed memory '${activation.name}'`);
+        logger.debug(`[Container] Skipping failed memory '${activation.name}'`);
         store.removeStaleActivation('memory', activation.name);
         skippedCount++;
       }
@@ -1353,12 +1346,12 @@ export class DollhouseContainer {
         if (result.success) {
           restoredCount++;
         } else {
-          logger.debug(`[ActivationStore] Pruning missing ensemble '${activation.name}'`);
+          logger.debug(`[Container] Pruning missing ensemble '${activation.name}'`);
           store.removeStaleActivation('ensemble', activation.name);
           skippedCount++;
         }
       } catch {
-        logger.debug(`[ActivationStore] Skipping failed ensemble '${activation.name}'`);
+        logger.debug(`[Container] Skipping failed ensemble '${activation.name}'`);
         store.removeStaleActivation('ensemble', activation.name);
         skippedCount++;
       }
@@ -1366,7 +1359,7 @@ export class DollhouseContainer {
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(
-        `[ActivationStore] Restored ${restoredCount} element(s), skipped ${skippedCount} stale for session '${store.getSessionId()}'`
+        `[Container] Restored ${restoredCount} element(s), skipped ${skippedCount} stale for session '${store.getSessionId()}'`
       );
     }
   }
@@ -1435,7 +1428,7 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       this.resolve('ElementQueryService'),
       this.resolve('ValidationRegistry'),
-      this.resolve('ActivationStore'),
+      this.resolve<IActivationStateStore>('ActivationStore'),
       this.resolve('BackupService'),
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
@@ -1671,20 +1664,20 @@ export class DollhouseContainer {
     // Issue #1948: Create a child container for this session's scoped services
     const child = new SessionContainer(this, sid);
 
-    // Register per-session persistence stores
-    child.register('ActivationStateStore', () =>
-      new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
+    // Register per-session persistence stores.
+    // HTTP sessions are ephemeral — ActivationStore.initialize() is intentionally
+    // NOT called here (unlike stdio). Activation state starts fresh per connection.
     child.register('ActivationStore', () =>
-      new ActivationStore(child.resolve('ActivationStateStore')));
+      new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
     child.register('ConfirmationStore', () =>
       new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
     child.register('GatekeeperSession', () =>
       new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
 
-    // Bridge: attach per-session ActivationStore to the activation registry
+    // Bridge: attach per-session activation store to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
     const httpSessionState = activationRegistry.getOrCreate(sid);
-    httpSessionState.activationStore = child.resolve<ActivationStore>('ActivationStore');
+    httpSessionState.activationStore = child.resolve<IActivationStateStore>('ActivationStore');
 
     // Bridge: register per-session GatekeeperSession with the shared Gatekeeper
     const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');

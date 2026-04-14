@@ -51,7 +51,7 @@ export interface SessionActivationState {
    * Used by ElementCRUDHandler to persist activation changes
    * to the correct session's file.
    */
-  activationStore?: import('../services/ActivationStore.js').ActivationStore;
+  activationStore?: import('./IActivationStateStore.js').IActivationStateStore;
 }
 
 /**

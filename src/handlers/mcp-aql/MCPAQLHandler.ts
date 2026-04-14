@@ -222,9 +222,14 @@ function validateLogQueryParams(params: Record<string, unknown>): LogQueryOption
   if (typeof params.correlationId === 'string') {
     options.correlationId = params.correlationId;
   }
+  // userId filter is not session-scoped — within a single session, all log
+  // entries share the same userId. The sessionId guard in dispatchLogging()
+  // restricts results to the caller's session, which implicitly scopes userId.
   if (typeof params.userId === 'string') {
     options.userId = params.userId;
   }
+  // sessionId is validated but may be overridden by dispatchLogging()'s
+  // session enforcement — callers cannot query other sessions' logs.
   if (typeof params.sessionId === 'string') {
     options.sessionId = params.sessionId;
   }
@@ -3242,14 +3247,16 @@ export class MCPAQLHandler {
     switch (method) {
       case 'query': {
         const options = validateLogQueryParams(params);
-        // Auto-scope to the calling session when no explicit sessionId is provided.
-        // Follows the same pattern as activation state resolution: the current
-        // session's context is the default scope for all per-session queries.
-        if (!options.sessionId) {
-          const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
-          if (callerSessionId) {
-            options.sessionId = callerSessionId;
+        // Session-scoped log filtering: auto-inject the calling session's ID
+        // when no explicit sessionId is provided, and reject cross-session
+        // queries when a session context is active.
+        const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+        if (callerSessionId) {
+          // Enforce session boundary — callers cannot read other sessions' logs
+          if (options.sessionId && options.sessionId !== callerSessionId) {
+            throw new Error('Cannot query logs for a different session');
           }
+          options.sessionId = callerSessionId;
         }
         const result = this.handlers.memorySink.query(options);
         return { _type: 'LogQueryResult', ...result };
@@ -3264,6 +3271,10 @@ export class MCPAQLHandler {
    *
    * Routes query_metrics through the unified CRUDE pipeline, providing
    * operation routing, gatekeeper policy enforcement, and structured response format.
+   *
+   * Note: Metrics are server-global (CPU, memory, cache hit rates, operation
+   * counts) and are not session-scoped. All sessions can view all metrics.
+   * This is intentional for operational monitoring in single-operator deployments.
    */
   private dispatchMetrics(
     method: string,

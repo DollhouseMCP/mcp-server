@@ -15,6 +15,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseContainer } from '../../src/di/Container.js';
+import type { IActivationStateStore } from '../../src/state/IActivationStateStore.js';
 import { createIsolatedContainer, type IsolatedContainer } from '../helpers/integration-container.js';
 
 describe('Container Startup - Behavior (Non-Flaky)', () => {
@@ -202,7 +203,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
     it('should prune stale skill activations when activateSkill returns failure', async () => {
       // Resolve managers and activation store
       const skillManager = container.resolve<any>('SkillManager');
-      const activationStore = container.resolve<any>('ActivationStore');
+      const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
       // Setup: ActivationStore has stale skill entries
       const mockActivations = [
@@ -217,7 +218,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
         if (type === 'skill') return [...mockActivations];
         return [];
       });
-      const removeStalespy = jest.spyOn(activationStore, 'removeStaleActivation')
+      const removeStaleSpy = jest.spyOn(activationStore, 'removeStaleActivation')
         .mockImplementation(() => {});
 
       // Mock activateSkill: real-skill succeeds, others fail
@@ -232,15 +233,15 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.completeDeferredSetup();
 
       // Verify stale entries were pruned
-      expect(removeStalespy).toHaveBeenCalledWith('skill', 'stale-test-artifact');
-      expect(removeStalespy).toHaveBeenCalledWith('skill', 'another-stale');
+      expect(removeStaleSpy).toHaveBeenCalledWith('skill', 'stale-test-artifact');
+      expect(removeStaleSpy).toHaveBeenCalledWith('skill', 'another-stale');
       // Real skill should NOT be pruned
-      expect(removeStalespy).not.toHaveBeenCalledWith('skill', 'real-skill');
+      expect(removeStaleSpy).not.toHaveBeenCalledWith('skill', 'real-skill');
     });
 
     it('should prune stale agent activations when activateAgent returns failure', async () => {
       const agentManager = container.resolve<any>('AgentManager');
-      const activationStore = container.resolve<any>('ActivationStore');
+      const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
       jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
       jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
@@ -264,7 +265,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
 
     it('should prune stale persona activations when activatePersona returns failure', async () => {
       const personaManager = container.resolve<any>('PersonaManager');
-      const activationStore = container.resolve<any>('ActivationStore');
+      const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
       jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
       jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
@@ -288,7 +289,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
 
     it('should still prune on thrown exceptions (defensive)', async () => {
       const skillManager = container.resolve<any>('SkillManager');
-      const activationStore = container.resolve<any>('ActivationStore');
+      const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
 
       jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
       jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
