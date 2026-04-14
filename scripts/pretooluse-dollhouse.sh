@@ -5,17 +5,21 @@
 # The DollhouseMCP web server runs alongside the MCP stdio server on a dynamic port.
 # Port discovery via ~/.dollhouse/run/permission-server.port
 #
-# Input:  JSON on stdin { tool_name, tool_input }
-# Output: JSON on stdout { decision: "allow"|"deny"|"ask", reason? }
+# Input:  JSON on stdin. Claude Code uses { tool_name, tool_input }.
+#         Other clients may expose { toolName, toolInput } or { tool, input }.
+# Output: JSON on stdout (platform-specific hook response; Claude Code expects
+# hookSpecificOutput.permissionDecision for PreToolUse)
 #
 # Fail-open: if the server is unreachable or returns an error, the hook allows
 # the action rather than blocking the user.
 #
 # Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
+# Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
 PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
+HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {
@@ -47,8 +51,8 @@ debug "Endpoint: $ENDPOINT"
 INPUT=$(cat)
 
 # Extract tool_name and tool_input from the hook payload
-TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)
-TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // {}' 2>/dev/null)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
+TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2>/dev/null)
 
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
@@ -57,6 +61,22 @@ if [[ -z "$TOOL_NAME" ]]; then
 fi
 
 debug "Evaluating: $TOOL_NAME"
+debug "Platform: $HOOK_PLATFORM"
+
+if [[ -n "${DOLLHOUSE_SESSION_ID:-}" ]]; then
+  debug "Using DOLLHOUSE_SESSION_ID=${DOLLHOUSE_SESSION_ID}"
+fi
+
+PAYLOAD=$(jq -cn \
+  --arg tool_name "$TOOL_NAME" \
+  --arg platform "$HOOK_PLATFORM" \
+  --arg session_id "${DOLLHOUSE_SESSION_ID:-}" \
+  --argjson input "$TOOL_INPUT" \
+  '{
+    tool_name: $tool_name,
+    input: $input,
+    platform: $platform
+  } + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)')
 
 # Call the DollhouseMCP permission evaluation endpoint with exponential backoff.
 # Retry on transient failures (connection refused, timeout) but not on HTTP errors.
@@ -66,7 +86,7 @@ TIMEOUT=$INITIAL_TIMEOUT
 while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   RESPONSE=$(curl -s --max-time "$TIMEOUT" -X POST "$ENDPOINT" \
     -H "Content-Type: application/json" \
-    -d "{\"tool_name\": \"$TOOL_NAME\", \"input\": $TOOL_INPUT, \"platform\": \"claude_code\"}" \
+    -d "$PAYLOAD" \
     2>/dev/null)
   CURL_EXIT=$?
 

@@ -33,17 +33,34 @@ describe('evaluatePermission', () => {
 
     it('should format claude_code allow response', () => {
       expect(formatPermissionResponse('allow', 'claude_code', input))
-        .toEqual({ decision: 'allow' });
+        .toEqual({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+          },
+        });
     });
 
     it('should format claude_code deny response with reason', () => {
       expect(formatPermissionResponse('deny', 'claude_code', input, 'Blocked by policy'))
-        .toEqual({ decision: 'deny', reason: 'Blocked by policy' });
+        .toEqual({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'Blocked by policy',
+          },
+        });
     });
 
     it('should format claude_code ask response with message', () => {
       expect(formatPermissionResponse('ask', 'claude_code', input, 'Needs approval'))
-        .toEqual({ decision: 'ask', message: 'Needs approval' });
+        .toEqual({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'ask',
+            permissionDecisionReason: 'Needs approval',
+          },
+        });
     });
 
     it('should format gemini response (maps ask to deny)', () => {
@@ -83,7 +100,12 @@ describe('evaluatePermission', () => {
 
     it('should default to claude_code format for unknown platform', () => {
       expect(formatPermissionResponse('allow', 'unknown_platform', input))
-        .toEqual({ decision: 'allow' });
+        .toEqual({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+          },
+        });
     });
 
     it('should omit reason when not provided', () => {
@@ -106,7 +128,13 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'deny', reason: 'Rate limit exceeded' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Rate limit exceeded',
+        },
+      });
     });
 
     it('should allow when static classification allows', async () => {
@@ -119,7 +147,12 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'allow' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
 
     it('should deny when static classification denies', async () => {
@@ -132,7 +165,13 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'deny', reason: 'Blocked tool' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked tool',
+        },
+      });
     });
 
     it('should deny when element policy denies', async () => {
@@ -148,7 +187,13 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'deny', reason: 'Element policy deny: Bash:git push --force*' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Element policy deny: Bash:git push --force*',
+        },
+      });
     });
 
     it('should map confirm to ask for hook platforms', async () => {
@@ -164,7 +209,13 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'ask', message: 'Requires human approval' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'ask',
+          permissionDecisionReason: 'Requires human approval',
+        },
+      });
     });
 
     it('should allow when element policy allows', async () => {
@@ -177,7 +228,12 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toEqual({ decision: 'allow' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
 
     it('should default platform to claude_code', async () => {
@@ -191,7 +247,13 @@ describe('evaluatePermission', () => {
       );
 
       // claude_code format
-      expect(result).toEqual({ decision: 'deny', reason: 'No' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'No',
+        },
+      });
     });
 
     it('should handle missing input gracefully', async () => {
@@ -202,7 +264,7 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toHaveProperty('decision');
+      expect(result).toHaveProperty('hookSpecificOutput.permissionDecision', 'allow');
     });
 
     it('should handle non-object input gracefully', async () => {
@@ -213,7 +275,7 @@ describe('evaluatePermission', () => {
         deps,
       );
 
-      expect(result).toHaveProperty('decision');
+      expect(result).toHaveProperty('hookSpecificOutput.permissionDecision', 'allow');
     });
 
     it('should consume rate limit token on successful check', async () => {
@@ -262,6 +324,23 @@ describe('evaluatePermission', () => {
         expect((err as PermissionEvaluationError).toolName).toBe('Bash');
       }
     });
+
+    it('passes session_id through to the active-element lookup', async () => {
+      const getActiveElements = jest.fn().mockResolvedValue([]);
+      const deps = createMockDeps({ getActiveElements });
+
+      await evaluatePermission(
+        {
+          tool_name: 'Bash',
+          input: { command: 'git status' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+        },
+        deps,
+      );
+
+      expect(getActiveElements).toHaveBeenCalledWith('session-follower-1');
+    });
   });
 
   describe('platform support', () => {
@@ -276,7 +355,12 @@ describe('evaluatePermission', () => {
 
     it('should default to claude_code format for unknown platform', () => {
       const result = formatPermissionResponse('allow', 'unknown_platform', {});
-      expect(result).toEqual({ decision: 'allow' });
+      expect(result).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
   });
 });
