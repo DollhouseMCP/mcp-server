@@ -3,6 +3,7 @@ import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface PermissionHookMarker {
   host: string;
@@ -79,7 +80,48 @@ function getPermissionHookRunDir(homeDir = homedir()): string {
 }
 
 function normalizeHookHost(host: string): string {
-  return host.normalize('NFC').trim().toLowerCase();
+  return UnicodeValidator.normalize(host).normalizedContent.trim().toLowerCase();
+}
+
+function isHookMarkerFilename(entry: string): boolean {
+  return entry.startsWith('hook-installed-') && entry.endsWith('.json');
+}
+
+function readHostSpecificHookStatus(homeDir: string, host: string): PermissionHookStatus {
+  const normalized = normalizeHookHost(host);
+  const status = readMarkerStatus(getPermissionHookMarkerPath(homeDir, normalized));
+  if (status.installed || status.assetsPrepared) {
+    return status;
+  }
+  if (normalized === 'claude-code') {
+    return readMarkerStatus(getPermissionHookMarkerPath(homeDir));
+  }
+  return { installed: false };
+}
+
+function collectHookMarkerPaths(homeDir: string): Set<string> {
+  const markerPaths = new Set<string>([getPermissionHookMarkerPath(homeDir)]);
+  const runDir = getPermissionHookRunDir(homeDir);
+  try {
+    for (const entry of readdirSync(runDir)) {
+      if (isHookMarkerFilename(entry)) {
+        markerPaths.add(join(runDir, entry));
+      }
+    }
+  } catch {
+    // No run dir yet — fall through to default false.
+  }
+  return markerPaths;
+}
+
+function summarizeMarkerStatuses(markerPaths: Iterable<string>): PermissionHookStatus {
+  let fallback: PermissionHookStatus = { installed: false };
+  for (const markerPath of markerPaths) {
+    const status = readMarkerStatus(markerPath);
+    if (status.installed) return status;
+    if (!fallback.assetsPrepared && status.assetsPrepared) fallback = status;
+  }
+  return fallback;
 }
 
 function getHookWrapperBasename(host: string): string | null {
@@ -167,36 +209,10 @@ function readMarkerStatus(markerPath: string): PermissionHookStatus {
 
 export function getPermissionHookStatus(homeDir = homedir(), host?: string): PermissionHookStatus {
   if (host) {
-    const normalized = normalizeHookHost(host);
-    const status = readMarkerStatus(getPermissionHookMarkerPath(homeDir, normalized));
-    if (status.installed || status.assetsPrepared) {
-      return status;
-    }
-    if (normalized === 'claude-code') {
-      return readMarkerStatus(getPermissionHookMarkerPath(homeDir));
-    }
-    return { installed: false };
+    return readHostSpecificHookStatus(homeDir, host);
   }
 
-  const runDir = getPermissionHookRunDir(homeDir);
-  const markerPaths = new Set<string>([getPermissionHookMarkerPath(homeDir)]);
-  try {
-    for (const entry of readdirSync(runDir)) {
-      if (entry.startsWith('hook-installed-') && entry.endsWith('.json')) {
-        markerPaths.add(join(runDir, entry));
-      }
-    }
-  } catch {
-    // No run dir yet — fall through to default false.
-  }
-
-  let fallback: PermissionHookStatus = { installed: false };
-  for (const markerPath of markerPaths) {
-    const status = readMarkerStatus(markerPath);
-    if (status.installed) return status;
-    if (!fallback.assetsPrepared && status.assetsPrepared) fallback = status;
-  }
-  return fallback;
+  return summarizeMarkerStatuses(collectHookMarkerPaths(homeDir));
 }
 
 function normalizeHooksRoot(parsed: Record<string, unknown>): Record<string, unknown[]> {
@@ -384,33 +400,58 @@ async function mergeCodexHooks(hooksPath: string, command: string): Promise<{ ch
   return { changed: true, backupPath };
 }
 
+function getTomlLineContent(line: string): string {
+  const commentIndex = line.indexOf('#');
+  return (commentIndex >= 0 ? line.slice(0, commentIndex) : line).trim();
+}
+
+function isTomlSectionLine(line: string, section: string): boolean {
+  return getTomlLineContent(line) === `[${section}]`;
+}
+
+function parseTomlBooleanAssignment(line: string, key: string): boolean | null {
+  const content = getTomlLineContent(line);
+  if (!content.startsWith(`${key} = `)) {
+    return null;
+  }
+  const value = content.slice(`${key} = `.length).trim();
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  return null;
+}
+
+function updateTomlBooleanAssignment(line: string, key: string, nextValue: boolean): string {
+  const commentIndex = line.indexOf('#');
+  const commentSuffix = commentIndex >= 0 ? line.slice(commentIndex) : '';
+  const prefixMatch = line.match(/^\s*/);
+  const prefix = prefixMatch ? prefixMatch[0] : '';
+  return `${prefix}${key} = ${nextValue ? 'true' : 'false'}${commentSuffix ? ` ${commentSuffix.trimStart()}` : ''}`.trimEnd();
+}
+
 function ensureCodexHooksEnabled(raw: string): { changed: boolean; content: string } {
   const lines = raw.length > 0 ? raw.split('\n') : [];
-  const dottedKeyPattern = /^\s*features\.codex_hooks\s*=\s*(true|false)(\s*(?:#.*)?)?$/;
-  const dottedIndex = lines.findIndex((line) => dottedKeyPattern.test(line));
+  const dottedIndex = lines.findIndex((line) => parseTomlBooleanAssignment(line, 'features.codex_hooks') !== null);
   if (dottedIndex >= 0) {
-    if (/=\s*true\b/.test(lines[dottedIndex])) {
+    if (parseTomlBooleanAssignment(lines[dottedIndex], 'features.codex_hooks') === true) {
       return { changed: false, content: raw };
     }
     const updatedLines = [...lines];
-    updatedLines[dottedIndex] = updatedLines[dottedIndex].replace(/=\s*false\b/, '= true');
+    updatedLines[dottedIndex] = updateTomlBooleanAssignment(updatedLines[dottedIndex], 'features.codex_hooks', true);
     return { changed: true, content: `${updatedLines.join('\n').replace(/\n*$/, '')}\n` };
   }
 
-  const sectionPattern = /^\[features\]\s*$/;
-  const sectionIndex = lines.findIndex((line) => sectionPattern.test(line));
+  const sectionIndex = lines.findIndex((line) => isTomlSectionLine(line, 'features'));
   if (sectionIndex >= 0) {
-    const nextSectionIndex = lines.findIndex((line, index) => index > sectionIndex && /^\[[^\]]+\]\s*$/.test(line));
+    const nextSectionIndex = lines.findIndex((line, index) => index > sectionIndex && getTomlLineContent(line).startsWith('[') && getTomlLineContent(line).endsWith(']'));
     const sectionEnd = nextSectionIndex >= 0 ? nextSectionIndex : lines.length;
-    const keyPattern = /^\s*codex_hooks\s*=\s*(true|false)(\s*(?:#.*)?)?$/;
-    const keyIndex = lines.findIndex((line, index) => index > sectionIndex && index < sectionEnd && keyPattern.test(line));
+    const keyIndex = lines.findIndex((line, index) => index > sectionIndex && index < sectionEnd && parseTomlBooleanAssignment(line, 'codex_hooks') !== null);
 
     if (keyIndex >= 0) {
-      if (/=\s*true\b/.test(lines[keyIndex])) {
+      if (parseTomlBooleanAssignment(lines[keyIndex], 'codex_hooks') === true) {
         return { changed: false, content: raw };
       }
       const updatedLines = [...lines];
-      updatedLines[keyIndex] = updatedLines[keyIndex].replace(/=\s*false\b/, '= true');
+      updatedLines[keyIndex] = updateTomlBooleanAssignment(updatedLines[keyIndex], 'codex_hooks', true);
       return { changed: true, content: `${updatedLines.join('\n').replace(/\n*$/, '')}\n` };
     }
 

@@ -495,6 +495,32 @@ codex_hooks = true`;
       : `${msg}. Try the manual config below.`;
   };
 
+  const buildInstallPayload = (client) => {
+    const payload = { client };
+    if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
+      payload.version = pinnedVersion;
+    } else if (currentChannel !== 'latest') {
+      payload.channel = currentChannel;
+    }
+    return payload;
+  };
+
+  const applyInstallSuccessState = (btn, status, data, verified) => {
+    btn.textContent = 'Installed';
+    btn.classList.remove('is-loading');
+    btn.classList.add('is-success');
+    if (!status) return;
+
+    if (data.hookInstall?.supported && !data.hookInstall?.configured && data.hookInstall?.assetsPrepared) {
+      status.textContent = 'Configured MCP server. Dollhouse hook assets were also prepared; finish manual permission setup in Permissions & Security.';
+    } else {
+      status.textContent = verified
+        ? 'Verified — config written. Restart the application to activate.'
+        : 'Restart the application to activate.';
+    }
+    status.classList.add('is-success');
+  };
+
   /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
     const client = btn.dataset.installClient;
@@ -512,17 +538,10 @@ codex_hooks = true`;
     }
 
     try {
-      const payload = { client };
-      if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
-        payload.version = pinnedVersion;
-      } else if (currentChannel !== 'latest') {
-        payload.channel = currentChannel;
-      }
-
       const res = await DollhouseAuth.apiFetch('/api/setup/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildInstallPayload(client)),
       });
 
       const data = await res.json();
@@ -536,20 +555,7 @@ codex_hooks = true`;
       await fetchDetection();
       updateDetectionState();
       const verified = detectedConfigs[clientToPlatformReverse[client]]?.installed;
-
-      btn.textContent = 'Installed';
-      btn.classList.remove('is-loading');
-      btn.classList.add('is-success');
-      if (status) {
-        if (data.hookInstall?.supported && !data.hookInstall?.configured && data.hookInstall?.assetsPrepared) {
-          status.textContent = 'Configured MCP server. Dollhouse hook assets were also prepared; finish manual permission setup in Permissions & Security.';
-        } else {
-          status.textContent = verified
-            ? 'Verified — config written. Restart the application to activate.'
-            : 'Restart the application to activate.';
-        }
-        status.classList.add('is-success');
-      }
+      applyInstallSuccessState(btn, status, data, verified);
 
       // Show the completion banner after any successful install
       showCompletionBanner(client);
@@ -948,89 +954,103 @@ codex_hooks = true`;
     },
   };
 
+  const getVerifiedPermissionStatusCopy = (verified, detected) => {
+    if (detected?.hookInstalled) {
+      return {
+        tone: 'info',
+        titleText: `${verified.label} permission enforcement is enabled.`,
+        messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
+      };
+    }
+
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${verified.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the ${verified.label} permission hook.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${verified.label} permissions are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the ${verified.label} permission hook.`,
+    };
+  };
+
+  const getPartialPermissionStatusCopy = (partial, detected) => {
+    if (detected?.hookInstalled) {
+      return {
+        tone: 'info',
+        titleText: `${partial.label} Bash guardrails are enabled.`,
+        messageText: partial.limitation,
+      };
+    }
+
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${partial.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${partial.label}'s native Bash hook support.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${partial.label} Bash guardrails are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install Codex's Bash-only hook support.`,
+    };
+  };
+
+  const getManualPermissionStatusCopy = (detected) => {
+    if (detected?.hookAssetsPrepared) {
+      return {
+        tone: 'info',
+        titleText: 'Hook bridge files are already prepared for this client.',
+        messageText: 'Finish the client-specific hook registration below to turn on permission enforcement.',
+      };
+    }
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: 'DollhouseMCP is connected for this client.',
+        messageText: 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.',
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: 'Manual permissions setup is available for this client.',
+      messageText: 'Use the steps below if you want to turn on permission enforcement for this client manually.',
+    };
+  };
+
+  const getUnsupportedPermissionStatusCopy = (platformLabel, detected) => ({
+    tone: detected?.installed ? 'warning' : 'neutral',
+    titleText: `Permissions & security tools are unavailable for ${platformLabel} right now.`,
+    messageText: detected?.installed
+      ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
+      : 'This release does not include a supported permissions setup flow for this client yet.',
+  });
+
   const getPermissionStatusCopy = (platformId, detected) => {
     const verified = VERIFIED_PERMISSION_PLATFORMS[platformId];
     if (verified) {
-      if (detected?.hookInstalled) {
-        return {
-          tone: 'info',
-          titleText: `${verified.label} permission enforcement is enabled.`,
-          messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
-        };
-      }
-
-      if (detected?.installed) {
-        return {
-          tone: 'warning',
-          titleText: `${verified.label} is connected for this client.`,
-          messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the ${verified.label} permission hook.`,
-        };
-      }
-
-      return {
-        tone: 'info',
-        titleText: `${verified.label} permissions are not configured yet.`,
-        messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the ${verified.label} permission hook.`,
-      };
+      return getVerifiedPermissionStatusCopy(verified, detected);
     }
 
     const partial = PARTIAL_PERMISSION_PLATFORMS[platformId];
     if (partial) {
-      if (detected?.hookInstalled) {
-        return {
-          tone: 'info',
-          titleText: `${partial.label} Bash guardrails are enabled.`,
-          messageText: partial.limitation,
-        };
-      }
-
-      if (detected?.installed) {
-        return {
-          tone: 'warning',
-          titleText: `${partial.label} is connected for this client.`,
-          messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${partial.label}'s native Bash hook support.`,
-        };
-      }
-
-      return {
-        tone: 'info',
-        titleText: `${partial.label} Bash guardrails are not configured yet.`,
-        messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install Codex's Bash-only hook support.`,
-      };
+      return getPartialPermissionStatusCopy(partial, detected);
     }
 
     const support = PLATFORMS.find((platform) => platform.id === platformId)?.hookSupport || 'unsupported';
     if (support === 'manual') {
-      if (detected?.hookAssetsPrepared) {
-        return {
-          tone: 'info',
-          titleText: 'Hook bridge files are already prepared for this client.',
-          messageText: 'Finish the client-specific hook registration below to turn on permission enforcement.',
-        };
-      }
-      if (detected?.installed) {
-        return {
-          tone: 'warning',
-          titleText: 'DollhouseMCP is connected for this client.',
-          messageText: 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.',
-        };
-      }
-
-      return {
-        tone: 'info',
-        titleText: 'Manual permissions setup is available for this client.',
-        messageText: 'Use the steps below if you want to turn on permission enforcement for this client manually.',
-      };
+      return getManualPermissionStatusCopy(detected);
     }
 
     const platformLabel = PERMISSION_PLATFORM_LABELS[platformId] || 'this client';
-    return {
-      tone: detected?.installed ? 'warning' : 'neutral',
-      titleText: `Permissions & security tools are unavailable for ${platformLabel} right now.`,
-      messageText: detected?.installed
-        ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
-        : 'This release does not include a supported permissions setup flow for this client yet.',
-    };
+    return getUnsupportedPermissionStatusCopy(platformLabel, detected);
   };
 
   const updatePermissionStatus = (panel, platformId, detected) => {
