@@ -154,6 +154,48 @@ describe('GitHub Workflow Validation', () => {
       });
     });
   });
+
+  describe('Publish to MCP Registry Workflow', () => {
+    let workflow: Workflow;
+    let workflowContent: string;
+
+    beforeAll(() => {
+      const workflowPath = path.join(workflowDir, 'publish-mcp-registry.yml');
+      workflowContent = fs.readFileSync(workflowPath, 'utf8');
+      workflow = yaml.load(workflowContent) as Workflow;
+    });
+
+    it('should allow workflow_dispatch reruns against an explicit release ref', () => {
+      const dispatchInputs = workflow.on?.workflow_dispatch?.inputs;
+
+      expect(dispatchInputs?.release_ref).toBeDefined();
+      expect(dispatchInputs?.release_ref.type).toBe('string');
+      expect(dispatchInputs?.dry_run).toBeDefined();
+    });
+
+    it('should validate and normalize release refs before checkout', () => {
+      const publishJob = workflow.jobs.publish;
+      const resolveStep = publishJob.steps.find(step => step.name === 'Resolve and validate source ref');
+      const checkoutStep = publishJob.steps.find(step => step.name === 'Checkout code');
+
+      expect(resolveStep?.run).toContain("Unsupported release ref");
+      expect(resolveStep?.run).toContain("refs/tags/");
+      expect(resolveStep?.run).toContain("refs/heads/");
+      expect(checkoutStep?.with?.ref).toBe('${{ steps.source-ref.outputs.ref }}');
+    });
+
+    it('should verify publisher downloads with explicit certificate and signature checks', () => {
+      const publishJob = workflow.jobs.publish;
+      const downloadStep = publishJob.steps.find(step => step.name === 'Download mcp-publisher CLI');
+
+      expect(downloadStep?.run).toContain('set -euo pipefail');
+      expect(downloadStep?.run).toContain('SHA256 verification failed');
+      expect(downloadStep?.run).toContain('openssl x509 -in "$CERT_PEM" -noout >/dev/null');
+      expect(downloadStep?.run).toContain('EXPECTED_ISSUER');
+      expect(downloadStep?.run).toContain('subjectAltName');
+      expect(downloadStep?.run).toContain('Signature verification failed');
+    });
+  });
 });
 
 // Helper functions
