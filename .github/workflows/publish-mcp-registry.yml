@@ -42,7 +42,7 @@ jobs:
         run: npm run build
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
 
       - name: Download mcp-publisher CLI
         shell: bash
