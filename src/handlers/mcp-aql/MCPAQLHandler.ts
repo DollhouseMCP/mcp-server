@@ -3242,6 +3242,15 @@ export class MCPAQLHandler {
     switch (method) {
       case 'query': {
         const options = validateLogQueryParams(params);
+        // Auto-scope to the calling session when no explicit sessionId is provided.
+        // Follows the same pattern as activation state resolution: the current
+        // session's context is the default scope for all per-session queries.
+        if (!options.sessionId) {
+          const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+          if (callerSessionId) {
+            options.sessionId = callerSessionId;
+          }
+        }
         const result = this.handlers.memorySink.query(options);
         return { _type: 'LogQueryResult', ...result };
       }
