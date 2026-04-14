@@ -280,11 +280,16 @@
 
   function renderLiveFeed(data) {
     const feed = document.getElementById('perm-feed');
+    const modalFeed = document.getElementById('perm-audit-modal-feed');
+    const modalCount = document.getElementById('perm-audit-modal-count');
     if (!feed) return;
 
     const decisions = data.recentDecisions || [];
     if (decisions.length === 0) {
-      feed.innerHTML = '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+      const empty = '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+      feed.innerHTML = empty;
+      if (modalFeed) modalFeed.innerHTML = empty;
+      if (modalCount) modalCount.textContent = '0 captured entries';
       return;
     }
 
@@ -293,7 +298,7 @@
     if (latestId === lastDecisionId) return; // no change
     lastDecisionId = latestId;
 
-    feed.innerHTML = decisions.map(d => {
+    const html = decisions.map(d => {
       const time = new Date(d.timestamp).toLocaleTimeString();
       const toolDisplay = d.tool_name === 'Bash'
         ? `Bash: ${esc(truncate(d.command || '', 60))}`
@@ -308,6 +313,12 @@
         </div>
       `;
     }).join('');
+
+    feed.innerHTML = html;
+    if (modalFeed) modalFeed.innerHTML = html;
+    if (modalCount) {
+      modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
+    }
   }
 
   function deriveSelectedSessionData(aggregateData, sessionId) {
@@ -382,16 +393,16 @@
           <div class="perm-card-body">
             <div class="perm-selected-header perm-selected-header--compact">
               <div>
-                <div class="perm-selected-subtitle">Most recent first. This is the aggregate audit stream across all sessions.</div>
+                <div class="perm-selected-subtitle">Aggregate audit stream across all sessions. Newest decisions appear first.</div>
               </div>
               <button
                 type="button"
                 class="perm-panel-action"
                 id="perm-feed-expand-btn"
-                aria-expanded="false"
-                aria-controls="perm-feed"
+                aria-haspopup="dialog"
+                aria-controls="perm-audit-modal"
               >
-                Expand Audit View
+                Open Audit View
               </button>
             </div>
             <div class="perm-feed" id="perm-feed" role="log" aria-live="polite" aria-label="Permission decisions across all sessions">
@@ -401,7 +412,7 @@
         </div>
 
         <!-- Summary Stats -->
-        <div class="perm-card perm-card--full" data-collapsed="false">
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-autonomy-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Autonomy Overview</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
@@ -484,7 +495,7 @@
           </div>
         </div>
 
-        <div class="perm-card perm-card--full" data-collapsed="false">
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-all-detail-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">All Sessions Detail</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
@@ -527,6 +538,28 @@
         </div>
 
       </div>
+
+      <dialog class="modal perm-audit-modal" id="perm-audit-modal" aria-labelledby="perm-audit-modal-title">
+        <div class="modal-overlay" data-close-audit-modal></div>
+        <div class="modal-dialog perm-audit-modal-dialog" role="document">
+          <header class="modal-header">
+            <div class="modal-heading">
+              <h2 class="modal-title" id="perm-audit-modal-title">All Sessions Audit View</h2>
+              <span class="modal-type">Permissions</span>
+            </div>
+            <div class="modal-meta">
+              <span>Aggregate decision log across all sessions</span>
+              <span id="perm-audit-modal-count">0 captured entries</span>
+            </div>
+            <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+          </header>
+          <div class="modal-body">
+            <div class="perm-feed perm-feed--modal" id="perm-audit-modal-feed" role="log" aria-live="polite" aria-label="Full permission decision audit feed">
+              <div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>
+            </div>
+          </div>
+        </div>
+      </dialog>
     `;
   }
 
@@ -547,15 +580,54 @@
     });
 
     const expandBtn = document.getElementById('perm-feed-expand-btn');
-    const feedCard = document.getElementById('perm-all-feed-card');
-    if (expandBtn && feedCard) {
+    const auditModal = document.getElementById('perm-audit-modal');
+    const closeBtn = document.getElementById('perm-audit-modal-close');
+    if (expandBtn && auditModal) {
       expandBtn.addEventListener('click', function (e) {
         e.stopPropagation();
-        const expanded = feedCard.classList.toggle('perm-card--audit');
-        expandBtn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        expandBtn.textContent = expanded ? 'Compact Audit View' : 'Expand Audit View';
+        openAuditModal();
       });
     }
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', closeAuditModal);
+    }
+
+    if (auditModal) {
+      auditModal.addEventListener('click', function (e) {
+        if (e.target === auditModal || e.target.hasAttribute('data-close-audit-modal')) {
+          closeAuditModal();
+        }
+      });
+      auditModal.addEventListener('close', function () {
+        document.body.classList.remove('modal-open');
+      });
+      auditModal.addEventListener('cancel', function () {
+        document.body.classList.remove('modal-open');
+      });
+    }
+  }
+
+  function openAuditModal() {
+    const auditModal = document.getElementById('perm-audit-modal');
+    if (!auditModal) return;
+    if (typeof auditModal.showModal === 'function') {
+      auditModal.showModal();
+    } else {
+      auditModal.setAttribute('open', '');
+    }
+    document.body.classList.add('modal-open');
+  }
+
+  function closeAuditModal() {
+    const auditModal = document.getElementById('perm-audit-modal');
+    if (!auditModal) return;
+    if (typeof auditModal.close === 'function') {
+      auditModal.close();
+    } else {
+      auditModal.removeAttribute('open');
+    }
+    document.body.classList.remove('modal-open');
   }
 
   function setText(id, value) {
