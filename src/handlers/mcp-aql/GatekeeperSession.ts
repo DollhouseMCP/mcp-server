@@ -103,12 +103,14 @@ export class GatekeeperSession {
     maxConfirmations: number = 100,
     maxCliApprovals: number = DEFAULT_MAX_CLI_APPROVALS,
     confirmationStore?: IConfirmationStore,
+    /** Issue #1947: Use caller-provided sessionId instead of generating a random one. */
+    sessionId?: string,
   ) {
     this.maxConfirmations = maxConfirmations;
     this.maxCliApprovals = maxCliApprovals;
     this.confirmationStore = confirmationStore;
     this.state = {
-      sessionId: randomUUID(),
+      sessionId: sessionId ?? randomUUID(),
       clientInfo,
       createdAt: new Date().toISOString(),
       lastActivity: new Date().toISOString(),
@@ -117,6 +119,53 @@ export class GatekeeperSession {
       cliSessionApprovals: new Map(),
       permissionPromptActive: false,
     };
+  }
+
+  /**
+   * Issue #1947: Restore persisted state from the backing store.
+   * Populates in-memory Maps from disk so confirmations survive restarts.
+   * Must be called after construction if persistence is desired.
+   */
+  async initialize(): Promise<void> {
+    if (!this.confirmationStore) return;
+
+    try {
+      await this.confirmationStore.initialize();
+
+      // Restore confirmations
+      for (const record of this.confirmationStore.getAllConfirmations()) {
+        const key = record.elementType
+          ? `${record.operation}:${record.elementType}`
+          : record.operation;
+        this.state.confirmations.set(key, record);
+      }
+
+      // Restore CLI approvals
+      for (const record of this.confirmationStore.getAllCliApprovals()) {
+        this.state.cliApprovals.set(record.requestId, record);
+      }
+
+      // Restore session-scoped CLI approvals (tool_session promoted approvals)
+      for (const record of this.confirmationStore.getAllCliSessionApprovals()) {
+        this.state.cliSessionApprovals.set(record.toolName, record);
+      }
+
+      // Restore permission prompt state
+      if (this.confirmationStore.getPermissionPromptActive()) {
+        this.state.permissionPromptActive = true;
+      }
+
+      const totalRestored = this.state.confirmations.size +
+        this.state.cliApprovals.size +
+        this.state.cliSessionApprovals.size;
+      if (totalRestored > 0) {
+        logger.info(
+          `[GatekeeperSession] Restored ${totalRestored} record(s) for session '${this.state.sessionId}'`
+        );
+      }
+    } catch (error) {
+      logger.warn('[GatekeeperSession] Failed to restore persisted state, starting fresh', { error });
+    }
   }
 
   /**

@@ -28,6 +28,7 @@ import { EnhancedIndexManager } from "../portfolio/EnhancedIndexManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
 import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
+import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import { SkillManager } from "../elements/skills/index.js";
 import { TemplateManager } from "../elements/templates/TemplateManager.js";
 import { TemplateRenderer } from "../utils/TemplateRenderer.js";
@@ -1036,12 +1037,16 @@ export class DollhouseContainer {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
 
-    // Issue #1945: Initialize ConfirmationStore for Gatekeeper state persistence
+    // Issue #1947: Register per-session GatekeeperSession for stdio with persistence
     try {
       const cStore = this.resolve<IConfirmationStore>('ConfirmationStore');
-      await cStore.initialize();
+      const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
+      const stdioSess = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const stdioGkSession = new GatekeeperSession(undefined, 100, undefined, cStore, stdioSess.sessionId);
+      await stdioGkSession.initialize(); // Restores persisted confirmations from disk
+      gatekeeper.registerSession(stdioSess.sessionId, stdioGkSession);
     } catch (error) {
-      logger.warn('[Container] Confirmation state restoration failed:', error);
+      logger.warn('[Container] Gatekeeper session registration failed:', error);
     }
 
     timer?.endPhase('activation_restore');
@@ -1492,13 +1497,13 @@ export class DollhouseContainer {
 
     // Issue #452: Create Gatekeeper policy engine instance
     // Issue #679: allowElementPolicyOverrides wired from env (DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES)
-    // Issue #1945: Pass ConfirmationStore for write-through persistence
-    const confirmationStore = this.resolve<IConfirmationStore>('ConfirmationStore');
+    // Issue #1947: Gatekeeper with per-session resolution via ContextTracker
+    const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
     const gatekeeper = new Gatekeeper(undefined, {
       enableAuditLogging: true,
       requireDangerZoneVerification: true,
       allowElementPolicyOverrides: env.DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES,
-    }, confirmationStore);
+    }, this.resolve<ContextTracker>('ContextTracker'), stdioSession.sessionId);
 
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
@@ -1623,10 +1628,10 @@ export class DollhouseContainer {
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
    * @returns Per-session Server instance plus a dispose callback
    */
-  public createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): {
+  public async createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): Promise<{
     server: Server;
     dispose: () => Promise<void>;
-  } {
+  }> {
     if (!this.httpHandlerBundle) {
       throw new Error(
         'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
@@ -1650,6 +1655,23 @@ export class DollhouseContainer {
       // Clean up orphaned registry entry if store construction fails
       activationRegistry.dispose(sessionContext.sessionId);
       throw storeError;
+    }
+
+    // Issue #1947: Register per-session GatekeeperSession with per-session FileConfirmationStore
+    const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
+    try {
+      const httpConfirmStore = new FileConfirmationStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        sessionContext.sessionId,
+      );
+      const httpGkSession = new GatekeeperSession(undefined, 100, undefined, httpConfirmStore, sessionContext.sessionId);
+      await httpGkSession.initialize();
+      gatekeeper.registerSession(sessionContext.sessionId, httpGkSession);
+    } catch (gkError) {
+      logger.warn('[HTTP Session] Failed to create per-session Gatekeeper — using in-memory fallback', {
+        error: gkError instanceof Error ? gkError.message : String(gkError),
+      });
     }
 
     // Per-session Server instance (SDK requires one Server per transport)
@@ -1690,6 +1712,9 @@ export class DollhouseContainer {
 
         // Issue #1946: Dispose per-session activation state
         activationRegistry.dispose(sessionContext.sessionId);
+
+        // Issue #1947: Dispose per-session Gatekeeper state
+        gatekeeper.disposeSession(sessionContext.sessionId);
 
         // Clean up session-keyed state in the shared MCPAQLHandler
         // (executing agents, pending saves, frequency counters, aborted goals).
@@ -1937,8 +1962,17 @@ export class DollhouseContainer {
     for (const [name, service] of this.services) {
       if (!service.instance) continue;
       const instance = service.instance as any;
+      // Priority: dispose > close > destroy > cleanup
+      // dispose: standard DI lifecycle
+      // close: stream-like objects (LogManager, MetricsManager)
+      // destroy: timer-bearing objects (VerificationStore, ChallengeStore)
+      // cleanup: sweep operations (non-destructive)
       if (typeof instance.dispose === 'function') {
         promises.push({ name, promise: Promise.resolve().then(() => instance.dispose()) });
+      } else if (typeof instance.close === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.close()) });
+      } else if (typeof instance.destroy === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.destroy()) });
       } else if (typeof instance.cleanup === 'function') {
         promises.push({ name, promise: Promise.resolve().then(() => instance.cleanup()) });
       }

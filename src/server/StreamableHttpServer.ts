@@ -186,6 +186,10 @@ export function getStreamableHttpRuntimeOptions(): StreamableHttpRuntimeOptions 
 }
 
 async function closeHttpServer(httpServer: HttpServer): Promise<void> {
+  // Destroy all active sockets so keep-alive connections don't prevent shutdown.
+  // httpServer.close() only stops accepting new connections — existing sockets
+  // stay alive until their keep-alive timeout expires.
+  httpServer.closeAllConnections?.();
   await new Promise<void>((resolve, reject) => {
     httpServer.close((error) => {
       if (error) {

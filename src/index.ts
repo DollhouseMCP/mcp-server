@@ -975,7 +975,7 @@ async function startStreamableHttpServer(
 
   return createStreamableHttpRuntime(async (transport) => {
     const sessionContext = createHttpSession();
-    const { server, dispose: disposeServer } = container.createServerForHttpSession(sessionContext);
+    const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);
 
     logger.info('[HTTP] Session connected', {

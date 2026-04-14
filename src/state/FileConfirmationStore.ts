@@ -186,6 +186,10 @@ export class FileConfirmationStore implements IConfirmationStore {
     return this.cliSessionApprovals.get(toolName);
   }
 
+  getAllCliSessionApprovals(): CliApprovalRecord[] {
+    return Array.from(this.cliSessionApprovals.values());
+  }
+
   // ── Permission Prompt Tracking ────────────────────────────────────
 
   savePermissionPromptActive(active: boolean): void {

@@ -41,6 +41,8 @@ interface BlockedContext {
   blockedAt: Date;
   /** Optional verification ID if verification was requested */
   verificationId?: string;
+  /** Issue #1947: Session that created this block. Undefined = globally verifiable (backward compat). */
+  sessionId?: string;
 }
 
 /**
@@ -53,6 +55,7 @@ interface PersistedBlocks {
     triggeredPatterns: string[];
     blockedAt: string;
     verificationId?: string;
+    sessionId?: string;
   }>;
 }
 
@@ -86,6 +89,8 @@ export interface BlockCheckResult {
   resolution?: string;
   /** Verification ID if verification is required */
   verificationId?: string;
+  /** Issue #1947: Session that created this block (undefined = globally verifiable) */
+  sessionId?: string;
 }
 
 /**
@@ -186,6 +191,7 @@ export class DangerZoneEnforcer {
             triggeredPatterns: block.triggeredPatterns ?? [],
             blockedAt: new Date(block.blockedAt),
             verificationId: block.verificationId,
+            sessionId: block.sessionId,
           });
         }
 
@@ -242,7 +248,8 @@ export class DangerZoneEnforcer {
     reason: string,
     triggeredPatterns: string[],
     verificationId?: string,
-    auditContext?: DangerZoneAuditContext
+    auditContext?: DangerZoneAuditContext,
+    sessionId?: string,
   ): void {
     validateAgentName(agentName, 'block');
 
@@ -253,6 +260,7 @@ export class DangerZoneEnforcer {
       triggeredPatterns,
       blockedAt: new Date(),
       verificationId,
+      sessionId,
     };
 
     this.blockedContexts.set(trimmed, context);
@@ -310,7 +318,7 @@ export class DangerZoneEnforcer {
    * enforcer.unblock('code-reviewer', 'verify-abc'); // true  — success
    * ```
    */
-  unblock(agentName: string, verificationId?: string): boolean {
+  unblock(agentName: string, verificationId?: string, sessionId?: string): boolean {
     validateAgentName(agentName, 'unblock');
 
     const normalizedName = agentName.trim();
@@ -322,6 +330,27 @@ export class DangerZoneEnforcer {
         { agentName: normalizedName }
       );
       return true; // Not blocked, so "successfully" unblocked
+    }
+
+    // Issue #1947: If the block has a sessionId, only the same session can unblock it.
+    // If the block has a sessionId but the caller doesn't provide one, reject (prevents bypass).
+    if (context.sessionId && context.sessionId !== sessionId) {
+      logger.warn(
+        `Unblock denied for agent '${normalizedName}': session mismatch (block session: ${context.sessionId}, caller: ${sessionId})`,
+      );
+      SecurityMonitor.logSecurityEvent({
+        type: 'VERIFICATION_FAILED',
+        severity: 'HIGH',
+        source: 'DangerZoneEnforcer.unblock',
+        details: `Unblock denied for agent '${normalizedName}': cross-session unblock attempt`,
+        additionalData: {
+          agentName: normalizedName,
+          blockSessionId: context.sessionId,
+          callerSessionId: sessionId,
+          reason: 'session_mismatch',
+        },
+      });
+      return false;
     }
 
     // If verification was required, check that it matches
@@ -413,6 +442,7 @@ export class DangerZoneEnforcer {
         ? `Use verify_challenge with params { challenge_id: "${context.verificationId}", code: "<code from screen>" } to unblock this agent.`
         : 'Contact administrator to enable danger zone operations',
       verificationId: context.verificationId,
+      sessionId: context.sessionId,
     };
   }
 
@@ -584,6 +614,7 @@ export class DangerZoneEnforcer {
         triggeredPatterns: ctx.triggeredPatterns,
         blockedAt: ctx.blockedAt.toISOString(),
         verificationId: ctx.verificationId,
+        sessionId: ctx.sessionId,
       };
     }
 

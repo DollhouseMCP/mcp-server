@@ -534,7 +534,9 @@ export interface DangerZoneBlocker {
       goalDescription?: string;
       goalId?: string;
       safetyFactors?: string[];
-    }
+    },
+    /** Issue #1947: Session that created this block. */
+    sessionId?: string,
   ): void;
 }
 

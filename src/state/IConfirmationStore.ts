@@ -108,6 +108,12 @@ export interface IConfirmationStore {
    */
   getCliSessionApproval(toolName: string): CliApprovalRecord | undefined;
 
+  /**
+   * Get all session-scoped CLI approvals.
+   * Used by GatekeeperSession.initialize() to restore promoted approvals.
+   */
+  getAllCliSessionApprovals(): CliApprovalRecord[];
+
   // ── Permission Prompt Tracking ────────────────────────────────────
 
   /**

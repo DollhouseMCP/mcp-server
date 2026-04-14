@@ -22,6 +22,16 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { ActivationStore } from '../../../src/services/ActivationStore.js';
+import { FileActivationStateStore } from '../../../src/state/FileActivationStateStore.js';
+
+/**
+ * Helper: create an ActivationStore with the old (fileOps, stateDir, sessionId) pattern.
+ * Issue #1945: ActivationStore now takes IActivationStateStore directly.
+ */
+function createActivationStore(fileOps: any, stateDir?: string, sessionId?: string) {
+  const backingStore = new FileActivationStateStore(fileOps, stateDir, sessionId);
+  return new ActivationStore(backingStore);
+}
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import type { OperationResult } from '../../../src/handlers/mcp-aql/types.js';
 
@@ -245,7 +255,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
       try {
         // Create a store with known state dir
         const fileOps = container.resolve<any>('FileOperationsService');
-        const store1 = new ActivationStore(fileOps, stateDir);
+        const store1 = createActivationStore(fileOps, stateDir);
         await store1.initialize();
 
         // Record some activations
@@ -261,7 +271,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         expect(files.some(f => f.startsWith('activations-'))).toBe(true);
 
         // Create a NEW store instance and load from the same directory
-        const store2 = new ActivationStore(fileOps, stateDir);
+        const store2 = createActivationStore(fileOps, stateDir);
         await store2.initialize();
 
         // Verify round-trip
@@ -293,7 +303,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         const fileOps = container.resolve<any>('FileOperationsService');
 
         // Store 1: activate two skills, deactivate one
-        const store1 = new ActivationStore(fileOps, stateDir);
+        const store1 = createActivationStore(fileOps, stateDir);
         await store1.initialize();
         store1.recordActivation('skill', 'keep-me');
         store1.recordActivation('skill', 'remove-me');
@@ -303,7 +313,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         await new Promise(resolve => setTimeout(resolve, 200));
 
         // Store 2: load and verify
-        const store2 = new ActivationStore(fileOps, stateDir);
+        const store2 = createActivationStore(fileOps, stateDir);
         await store2.initialize();
 
         const skills = store2.getActivations('skill');
@@ -324,14 +334,14 @@ describe('Activation Persistence Integration (Issue #598)', () => {
 
         // Session A: activate skill-a
         process.env.DOLLHOUSE_SESSION_ID = 'session-alpha';
-        const storeA = new ActivationStore(fileOps, stateDir);
+        const storeA = createActivationStore(fileOps, stateDir);
         await storeA.initialize();
         storeA.recordActivation('skill', 'skill-a');
         await new Promise(resolve => setTimeout(resolve, 200));
 
         // Session B: activate skill-b (different skill)
         process.env.DOLLHOUSE_SESSION_ID = 'session-beta';
-        const storeB = new ActivationStore(fileOps, stateDir);
+        const storeB = createActivationStore(fileOps, stateDir);
         await storeB.initialize();
         storeB.recordActivation('skill', 'skill-b');
         await new Promise(resolve => setTimeout(resolve, 200));
@@ -343,13 +353,13 @@ describe('Activation Persistence Integration (Issue #598)', () => {
 
         // Verify data isolation — reload each
         process.env.DOLLHOUSE_SESSION_ID = 'session-alpha';
-        const reloadA = new ActivationStore(fileOps, stateDir);
+        const reloadA = createActivationStore(fileOps, stateDir);
         await reloadA.initialize();
         expect(reloadA.getActivations('skill').some(a => a.name === 'skill-a')).toBe(true);
         expect(reloadA.getActivations('skill').some(a => a.name === 'skill-b')).toBe(false);
 
         process.env.DOLLHOUSE_SESSION_ID = 'session-beta';
-        const reloadB = new ActivationStore(fileOps, stateDir);
+        const reloadB = createActivationStore(fileOps, stateDir);
         await reloadB.initialize();
         expect(reloadB.getActivations('skill').some(a => a.name === 'skill-b')).toBe(true);
         expect(reloadB.getActivations('skill').some(a => a.name === 'skill-a')).toBe(false);
@@ -387,7 +397,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         );
 
         // Load the store — should succeed (loads in-memory)
-        const store = new ActivationStore(fileOps, stateDir);
+        const store = createActivationStore(fileOps, stateDir);
         await store.initialize();
 
         // The store should have the activation loaded
@@ -413,7 +423,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
           'NOT_VALID_JSON{{{corrupted'
         );
 
-        const store = new ActivationStore(fileOps, stateDir);
+        const store = createActivationStore(fileOps, stateDir);
         await store.initialize(); // Should not throw
 
         // Should start with empty activations
@@ -445,7 +455,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
           JSON.stringify(futureState, null, 2)
         );
 
-        const store = new ActivationStore(fileOps, stateDir);
+        const store = createActivationStore(fileOps, stateDir);
         await store.initialize();
 
         // Version mismatch should cause it to start fresh
@@ -464,7 +474,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
 
       try {
         const fileOps = container.resolve<any>('FileOperationsService');
-        const store = new ActivationStore(fileOps, stateDir);
+        const store = createActivationStore(fileOps, stateDir);
         await store.initialize();
 
         expect(store.isEnabled()).toBe(false);
@@ -491,7 +501,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
 
       try {
         const fileOps = container.resolve<any>('FileOperationsService');
-        const store = new ActivationStore(fileOps, stateDir);
+        const store = createActivationStore(fileOps, stateDir);
         await store.initialize();
 
         store.recordActivation('skill', 'clear-test-skill');
@@ -510,7 +520,7 @@ describe('Activation Persistence Integration (Issue #598)', () => {
         expect(store.getActivations('memory')).toHaveLength(0);
 
         // Reload from disk — should be empty
-        const store2 = new ActivationStore(fileOps, stateDir);
+        const store2 = createActivationStore(fileOps, stateDir);
         await store2.initialize();
         expect(store2.getActivations('skill')).toHaveLength(0);
         expect(store2.getActivations('memory')).toHaveLength(0);

@@ -248,10 +248,14 @@ describe('Gatekeeper', () => {
     });
 
     describe('constructor and session management', () => {
-      it('should create a unique session ID', () => {
-        const gk1 = new Gatekeeper();
-        const gk2 = new Gatekeeper();
-        expect(gk1.sessionId).not.toBe(gk2.sessionId);
+      it('should create unique sessions via registry for different session IDs', () => {
+        // Issue #1947: Session uniqueness comes from the registry, not the constructor.
+        // Without ContextTracker, both resolve to the default session.
+        const gk = new Gatekeeper(undefined, undefined, undefined, 'session-a');
+        gk.registerSession('session-a', new GatekeeperSession(undefined, 100, undefined, undefined, 'session-a'));
+        gk.registerSession('session-b', new GatekeeperSession(undefined, 100, undefined, undefined, 'session-b'));
+        // Default session resolves to 'session-a'
+        expect(gk.sessionId).toBe('session-a');
       });
 
       it('should include client info in session summary', () => {

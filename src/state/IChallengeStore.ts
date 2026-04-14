@@ -23,6 +23,12 @@ import type { StoredChallenge } from '@dollhousemcp/safety';
  */
 export interface IChallengeStore {
   /**
+   * Load persisted challenges from the backing store.
+   * No-op for in-memory implementations.
+   */
+  initialize?(): Promise<void>;
+
+  /**
    * Store a verification challenge.
    * @param challengeId - Unique challenge identifier (UUID v4)
    * @param challenge - The challenge to store

@@ -99,7 +99,7 @@ export async function createHttpTestEnvironment(
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
       const sessionContext = createHttpSession();
-      const { server, dispose } = container.createServerForHttpSession(sessionContext);
+      const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
     },
@@ -121,6 +121,7 @@ export async function createHttpTestEnvironment(
     testDir,
     cleanup: async () => {
       await runtime.close();
+      await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
       setHttpModeActive(false);
       // Restore env vars
@@ -178,7 +179,7 @@ export async function createHttpTestEnvironmentWithConsole(
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
       const sessionContext = createHttpSession();
-      const { server, dispose } = container.createServerForHttpSession(sessionContext);
+      const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
     },
@@ -207,6 +208,7 @@ export async function createHttpTestEnvironmentWithConsole(
     ingestRoutes,
     cleanup: async () => {
       await runtime.close();
+      await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
       setHttpModeActive(false);
       for (const [key, value] of Object.entries(savedEnv)) {
