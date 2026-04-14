@@ -152,12 +152,18 @@
         hasElements ? `${data.activeElementCount} elements` : 'No ensemble';
     }
     if (hookDot && hookLabel) {
-      const hasPatterns = (data.denyPatterns?.length || 0)
+      const hasExternalRules = (data.denyPatterns?.length || 0)
         + (data.allowPatterns?.length || 0)
         + (data.confirmPatterns?.length || 0) > 0;
-      if (!hasPatterns) {
+      const hasAnyRules = (data.denyRules?.length || 0)
+        + (data.allowRules?.length || 0)
+        + (data.confirmRules?.length || 0) > 0;
+      if (!hasAnyRules) {
         hookDot.dataset.status = 'inactive';
         hookLabel.textContent = 'No policies';
+      } else if (!hasExternalRules) {
+        hookDot.dataset.status = 'active';
+        hookLabel.textContent = 'MCP-AQL policies active';
       } else if (data.permissionPromptActive) {
         hookDot.dataset.status = 'active';
         hookLabel.textContent = 'Prompt tool active';
@@ -175,9 +181,9 @@
   }
 
   function renderSummaryStats(data) {
-    setText('perm-stat-deny-count', getAggregatePatterns(data, 'denyPatterns').length);
-    setText('perm-stat-allow-count', getAggregatePatterns(data, 'allowPatterns').length);
-    setText('perm-stat-confirm-count', getAggregatePatterns(data, 'confirmPatterns').length);
+    setText('perm-stat-deny-count', getAggregateRules(data, 'denyRules').length);
+    setText('perm-stat-allow-count', getAggregateRules(data, 'allowRules').length);
+    setText('perm-stat-confirm-count', getAggregateRules(data, 'confirmRules').length);
     setText('perm-stat-decisions', data.recentDecisions?.length || 0);
 
     // Decision breakdown
@@ -271,21 +277,21 @@
           </li>
         `).join('');
 
-    renderPatternList('perm-selected-deny-list', selectedData.denyPatterns || [], 'deny');
-    renderPatternList('perm-selected-allow-list', selectedData.allowPatterns || [], 'allow');
-    renderPatternList('perm-selected-confirm-list', selectedData.confirmPatterns || [], 'confirm');
+    renderPatternList('perm-selected-deny-list', selectedData.denyRules || [], 'deny');
+    renderPatternList('perm-selected-allow-list', selectedData.allowRules || [], 'allow');
+    renderPatternList('perm-selected-confirm-list', selectedData.confirmRules || [], 'confirm');
   }
 
   function renderDenyPatterns(data) {
-    renderPatternList('perm-deny-list', getAggregatePatterns(data, 'denyPatterns'), 'deny');
+    renderPatternList('perm-deny-list', getAggregateRules(data, 'denyRules'), 'deny');
   }
 
   function renderAllowPatterns(data) {
-    renderPatternList('perm-allow-list', getAggregatePatterns(data, 'allowPatterns'), 'allow');
+    renderPatternList('perm-allow-list', getAggregateRules(data, 'allowRules'), 'allow');
   }
 
   function renderConfirmPatterns(data) {
-    renderPatternList('perm-confirm-list', getAggregatePatterns(data, 'confirmPatterns'), 'confirm');
+    renderPatternList('perm-confirm-list', getAggregateRules(data, 'confirmRules'), 'confirm');
   }
 
   function renderPatternList(elementId, patterns, type) {
@@ -293,7 +299,7 @@
     if (!list) return;
 
     if (patterns.length === 0) {
-      list.innerHTML = `<li class="perm-pattern-empty">No ${type} patterns active</li>`;
+      list.innerHTML = `<li class="perm-pattern-empty">No ${type} rules active</li>`;
       return;
     }
 
@@ -359,11 +365,11 @@
       sessionId: sessionId,
       activeElementCount: elements.length,
       hasAllowlist: elements.some(function (element) {
-        return Array.isArray(element.allowPatterns) && element.allowPatterns.length > 0;
+        return Array.isArray(element.allowRules) && element.allowRules.length > 0;
       }),
-      denyPatterns: flattenElementPatterns(elements, 'denyPatterns'),
-      allowPatterns: flattenElementPatterns(elements, 'allowPatterns'),
-      confirmPatterns: flattenElementPatterns(elements, 'confirmPatterns'),
+      denyRules: flattenElementPatterns(elements, 'denyRules'),
+      allowRules: flattenElementPatterns(elements, 'allowRules'),
+      confirmRules: flattenElementPatterns(elements, 'confirmRules'),
       elements: elements.map(function (element) {
         return {
           type: element.type,
@@ -383,6 +389,12 @@
   }
 
   function getAggregatePatterns(data, key) {
+    const combined = Array.isArray(data && data[key]) ? data[key] : [];
+    const perElement = flattenElementPatterns((data && data.elements) || [], key);
+    return Array.from(new Set(combined.concat(perElement)));
+  }
+
+  function getAggregateRules(data, key) {
     const combined = Array.isArray(data && data[key]) ? data[key] : [];
     const perElement = flattenElementPatterns((data && data.elements) || [], key);
     return Array.from(new Set(combined.concat(perElement)));
@@ -448,15 +460,15 @@
             <div class="perm-stat-grid">
               <div class="perm-stat">
                 <div class="perm-stat-value perm-stat-value--deny" id="perm-stat-deny-count">0</div>
-                <div class="perm-stat-label">Deny Patterns</div>
+                <div class="perm-stat-label">Deny Rules</div>
               </div>
               <div class="perm-stat">
                 <div class="perm-stat-value perm-stat-value--allow" id="perm-stat-allow-count">0</div>
-                <div class="perm-stat-label">Allow Patterns</div>
+                <div class="perm-stat-label">Allow Rules</div>
               </div>
               <div class="perm-stat">
                 <div class="perm-stat-value perm-stat-value--ask" id="perm-stat-confirm-count">0</div>
-                <div class="perm-stat-label">Confirm Patterns</div>
+                <div class="perm-stat-label">Confirm Rules</div>
               </div>
               <div class="perm-stat">
                 <div class="perm-stat-value" id="perm-stat-decisions">0</div>
@@ -501,19 +513,19 @@
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Deny Patterns</h4>
+                <h4 class="perm-selected-panel-title">Deny Rules</h4>
                 <ul class="perm-pattern-list" id="perm-selected-deny-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Allow Patterns</h4>
+                <h4 class="perm-selected-panel-title">Allow Rules</h4>
                 <ul class="perm-pattern-list" id="perm-selected-allow-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Confirm Patterns</h4>
+                <h4 class="perm-selected-panel-title">Confirm Rules</h4>
                 <ul class="perm-pattern-list" id="perm-selected-confirm-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>
@@ -531,7 +543,7 @@
             <div class="perm-selected-header perm-selected-header--compact">
               <div>
                 <div class="perm-selected-title">All Sessions</div>
-                <div class="perm-selected-subtitle">${esc('Aggregate policy state across all live and persisted sessions. The decision feed below is currently aggregate, not selection-scoped.')}${dataAdvisoryPlaceholder()}</div>
+                <div class="perm-selected-subtitle">${esc('Aggregate policy state across all live and persisted sessions. Rules shown here include both Dollhouse operation policies and external tool restrictions.')}${dataAdvisoryPlaceholder()}</div>
               </div>
             </div>
 
@@ -543,19 +555,19 @@
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Deny Patterns</h4>
+                <h4 class="perm-selected-panel-title">Deny Rules</h4>
                 <ul class="perm-pattern-list" id="perm-deny-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Allow Patterns</h4>
+                <h4 class="perm-selected-panel-title">Allow Rules</h4>
                 <ul class="perm-pattern-list" id="perm-allow-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>
               </div>
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Confirm Patterns</h4>
+                <h4 class="perm-selected-panel-title">Confirm Rules</h4>
                 <ul class="perm-pattern-list" id="perm-confirm-list">
                   <li class="perm-pattern-empty">Loading...</li>
                 </ul>

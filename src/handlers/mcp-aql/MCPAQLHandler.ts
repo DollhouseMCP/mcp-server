@@ -2973,6 +2973,9 @@ export class MCPAQLHandler {
           allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
           confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
           denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
+          allowOperations: el.metadata?.gatekeeper?.allow ?? [],
+          confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
+          denyOperations: el.metadata?.gatekeeper?.deny ?? [],
           description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
           sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
         }));
@@ -2981,7 +2984,10 @@ export class MCPAQLHandler {
         const combinedAllow = elementPolicies.flatMap(p => p.allowPatterns);
         const combinedConfirm = elementPolicies.flatMap(p => p.confirmPatterns);
         const combinedDeny = elementPolicies.flatMap(p => p.denyPatterns);
-        const hasAllowlist = combinedAllow.length > 0;
+        const combinedAllowOperations = elementPolicies.flatMap(p => p.allowOperations);
+        const combinedConfirmOperations = elementPolicies.flatMap(p => p.confirmOperations);
+        const combinedDenyOperations = elementPolicies.flatMap(p => p.denyOperations);
+        const hasAllowlist = combinedAllow.length > 0 || combinedAllowOperations.length > 0;
 
         // 4. If tool_name provided, evaluate it against current policies
         let evaluation: Record<string, unknown> | undefined = undefined;
@@ -3014,14 +3020,19 @@ export class MCPAQLHandler {
         const hookStatus = getPermissionHookStatus();
         const hookInstalled = hookStatus.installed;
         const enforcementReady = permissionPromptActive || hookInstalled;
-        const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
+        const hasCliRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
+        const hasOperationRestrictions = combinedAllowOperations.length > 0
+          || combinedDenyOperations.length > 0
+          || combinedConfirmOperations.length > 0;
         let advisory: string | undefined;
-        if (hasRestrictions) {
+        if (hasCliRestrictions) {
           if (!enforcementReady) {
             advisory = 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.';
           } else if (hookInstalled && !permissionPromptActive) {
             advisory = `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`;
           }
+        } else if (hasOperationRestrictions) {
+          advisory = 'MCP-AQL operation policies are active for Dollhouse actions in this session.';
         }
 
         return {
@@ -3031,6 +3042,9 @@ export class MCPAQLHandler {
           combinedAllowPatterns: combinedAllow,
           combinedConfirmPatterns: combinedConfirm,
           combinedDenyPatterns: combinedDeny,
+          combinedAllowOperations,
+          combinedConfirmOperations,
+          combinedDenyOperations,
           evaluation,
           permissionPromptActive,
           hookInstalled,

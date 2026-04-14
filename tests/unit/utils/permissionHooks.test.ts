@@ -1,10 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   ensureClaudePreToolUseHook,
+  ensureCodexPreToolUseHook,
+  ensureGeminiBeforeToolHook,
+  getCodexConfigPath,
+  getCodexHookSettingsPath,
+  getGeminiHookSettingsPath,
   getPermissionHookMarkerPath,
   getPermissionHookScriptPath,
   getPermissionHookStatus,
@@ -69,6 +74,57 @@ describe('permissionHooks', () => {
     });
   });
 
+  describe('ensureGeminiBeforeToolHook', () => {
+    it('adds a BeforeTool command hook when missing', () => {
+      const parsed = { hooks: {} } as Record<string, unknown>;
+
+      const result = ensureGeminiBeforeToolHook(parsed, 'bash ~/.dollhouse/hooks/pretooluse-gemini.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        hooks: {
+          BeforeTool: [
+            {
+              matcher: '.*',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'bash ~/.dollhouse/hooks/pretooluse-gemini.sh',
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  describe('ensureCodexPreToolUseHook', () => {
+    it('adds a Bash-only PreToolUse command hook when missing', () => {
+      const parsed = { hooks: {} } as Record<string, unknown>;
+
+      const result = ensureCodexPreToolUseHook(parsed, 'bash ~/.dollhouse/hooks/pretooluse-codex.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: 'Bash',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'bash ~/.dollhouse/hooks/pretooluse-codex.sh',
+                  statusMessage: 'Checking Bash permissions',
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+  });
+
   describe('installPermissionHook', () => {
     it('installs the Claude Code hook script, updates settings, and writes a marker', async () => {
       const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
@@ -99,11 +155,13 @@ describe('permissionHooks', () => {
         },
       ]);
 
-      const markerRaw = await readFile(getPermissionHookMarkerPath(tempHome), 'utf-8');
+      const markerRaw = await readFile(getPermissionHookMarkerPath(tempHome, 'claude-code'), 'utf-8');
       expect(JSON.parse(markerRaw)).toEqual({
         host: 'claude-code',
         scriptPath: getPermissionHookScriptPath(tempHome),
         settingsPath: join(tempHome, '.claude', 'settings.json'),
+        configured: true,
+        assetsPrepared: true,
         installedAt: '2026-04-14T12:00:00.000Z',
       });
 
@@ -111,11 +169,102 @@ describe('permissionHooks', () => {
       expect(scriptStats.isFile()).toBe(true);
     });
 
-    it('returns unsupported for clients without validated auto-hook wiring', async () => {
-      const result = await installPermissionHook('codex', { homeDir: tempHome });
+    it('installs Gemini CLI hook settings and writes a host-specific marker', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
 
-      expect(result.supported).toBe(false);
-      expect(result.configured).toBe(false);
+      const result = await installPermissionHook('gemini-cli', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+        now: new Date('2026-04-14T12:30:00.000Z'),
+      });
+
+      expect(result.supported).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-gemini.sh'));
+      expect(result.settingsPath).toBe(getGeminiHookSettingsPath(tempHome));
+
+      const settingsRaw = await readFile(getGeminiHookSettingsPath(tempHome), 'utf-8');
+      const settings = JSON.parse(settingsRaw);
+      expect(settings.hooks.BeforeTool).toEqual([
+        {
+          matcher: '.*',
+          hooks: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-gemini.sh')}`,
+            },
+          ],
+        },
+      ]);
+
+      expect(getPermissionHookStatus(tempHome, 'gemini-cli')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'gemini-cli',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-gemini.sh'),
+        settingsPath: getGeminiHookSettingsPath(tempHome),
+      });
+    });
+
+    it('installs the Codex Bash hook, writes hooks.json, and enables codex_hooks', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('codex', { homeDir: tempHome, sourceScriptPath: sourceScript });
+
+      expect(result.supported).toBe(true);
+      expect(result.installed).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.assetsPrepared).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-codex.sh'));
+      expect(result.settingsPath).toBe(getCodexHookSettingsPath(tempHome));
+      expect(result.additionalPaths).toEqual([getCodexConfigPath(tempHome)]);
+
+      const hooksRaw = await readFile(getCodexHookSettingsPath(tempHome), 'utf-8');
+      const hooks = JSON.parse(hooksRaw);
+      expect(hooks.hooks.PreToolUse).toEqual([
+        {
+          matcher: 'Bash',
+          hooks: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-codex.sh')}`,
+              statusMessage: 'Checking Bash permissions',
+            },
+          ],
+        },
+      ]);
+
+      const configRaw = await readFile(getCodexConfigPath(tempHome), 'utf-8');
+      expect(configRaw).toContain('[features]');
+      expect(configRaw).toContain('codex_hooks = true');
+
+      expect(getPermissionHookStatus(tempHome, 'codex')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'codex',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-codex.sh'),
+        settingsPath: getCodexHookSettingsPath(tempHome),
+        additionalPaths: [getCodexConfigPath(tempHome)],
+      });
+    });
+
+    it('updates an existing Codex features block without duplicating it', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+      await mkdir(join(tempHome, '.codex'), { recursive: true });
+      await writeFile(getCodexConfigPath(tempHome), '[model]\nname = "gpt-5-codex"\n\n[features]\ncodex_hooks = false\n', 'utf-8');
+
+      await installPermissionHook('codex', { homeDir: tempHome, sourceScriptPath: sourceScript });
+      await installPermissionHook('codex', { homeDir: tempHome, sourceScriptPath: sourceScript });
+
+      const configRaw = await readFile(getCodexConfigPath(tempHome), 'utf-8');
+      expect((configRaw.match(/\[features\]/g) || [])).toHaveLength(1);
+      expect(configRaw).toContain('codex_hooks = true');
+      expect(configRaw).toContain('[model]');
     });
 
     it('reports hook installation status from the marker file', async () => {
@@ -125,6 +274,8 @@ describe('permissionHooks', () => {
 
       expect(getPermissionHookStatus(tempHome)).toEqual({
         installed: true,
+        configured: true,
+        assetsPrepared: true,
         host: 'claude-code',
         scriptPath: getPermissionHookScriptPath(tempHome),
         settingsPath: join(tempHome, '.claude', 'settings.json'),

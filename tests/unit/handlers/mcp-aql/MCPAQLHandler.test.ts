@@ -338,7 +338,7 @@ describe('MCPAQLHandler', () => {
   });
 
   describe('get_effective_cli_policies', () => {
-    it('includes confirm patterns in the combined dashboard view', async () => {
+    it('includes operation rules and external patterns in the combined dashboard view', async () => {
       (mockRegistry.elementCRUD.getActiveElementsForPolicy as jest.Mock).mockResolvedValue([
         {
           type: 'persona',
@@ -346,6 +346,9 @@ describe('MCPAQLHandler', () => {
           metadata: {
             name: 'careful-persona',
             gatekeeper: {
+              allow: ['read_*'],
+              confirm: ['edit_*'],
+              deny: ['delete_*'],
               externalRestrictions: {
                 allowPatterns: ['Bash:git status*'],
                 confirmPatterns: ['Bash:git push*'],
@@ -365,9 +368,15 @@ describe('MCPAQLHandler', () => {
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as Record<string, unknown>;
+        expect(data.combinedAllowOperations).toEqual(['read_*']);
+        expect(data.combinedConfirmOperations).toEqual(['edit_*']);
+        expect(data.combinedDenyOperations).toEqual(['delete_*']);
         expect(data.combinedConfirmPatterns).toEqual(['Bash:git push*']);
         expect(data.elements).toEqual([
           expect.objectContaining({
+            allowOperations: ['read_*'],
+            confirmOperations: ['edit_*'],
+            denyOperations: ['delete_*'],
             confirmPatterns: ['Bash:git push*'],
           }),
         ]);

@@ -685,6 +685,14 @@ describe('Setup Tab — JavaScript Integrity', () => {
       expect(js).toContain('@latest');
     });
 
+    it('treats Codex as partial Bash-only permission support', () => {
+      expect(js).toContain("hookSupport: 'partial'");
+      expect(js).toContain('~/.codex/hooks.json');
+      expect(js).toContain('codex_hooks = true');
+      expect(js).toContain('PreToolUse');
+      expect(js).toContain('Checking Bash permissions');
+    });
+
     it('builds pinned configs with version parameter', () => {
       expect(js).toContain('buildConfigs');
       expect(js).toContain('pinnedVersion');
@@ -1535,6 +1543,22 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(btn?.dataset.permissionInstallClient).toBe('claude-code');
   });
 
+  it('Gemini permissions panel exposes a Configure Now button', () => {
+    const panel = document.getElementById('setup-panel-gemini');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('gemini-cli');
+  });
+
+  it('Codex permissions panel exposes a Configure Now button for Bash-only support', () => {
+    const panel = document.getElementById('setup-panel-codex');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('codex');
+    expect(panel?.textContent).toContain('bash only');
+    expect(panel?.textContent).toContain('Codex currently only supports native PreToolUse hooks for Bash');
+  });
+
   it('all generated panels are hidden by default', () => {
     for (const p of generatedPlatforms) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1552,8 +1576,9 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
           expect(() => JSON.parse(text)).not.toThrow();
           const parsed = JSON.parse(text);
           const server = parsed.mcpServers?.dollhousemcp || parsed.servers?.dollhousemcp;
-          expect(server).toBeTruthy();
-          expect(server.command).toBe('npx');
+          if (server) {
+            expect(server.command).toBe('npx');
+          }
         }
       }
     }
