@@ -101,10 +101,26 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
   };
 }
 
+function mergeRuleArrays(...sources: unknown[]): string[] {
+  const merged = new Set<string>();
+  for (const source of sources) {
+    if (!Array.isArray(source)) continue;
+    for (const entry of source) {
+      if (typeof entry === 'string' && entry !== '') {
+        merged.add(entry);
+      }
+    }
+  }
+  return Array.from(merged);
+}
+
 function normalizePolicyElements(elements: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return elements.map((element) => ({
     ...element,
     element_name: resolveElementName(element),
+    allowRules: mergeRuleArrays(element.allowPatterns, element.allowOperations),
+    confirmRules: mergeRuleArrays(element.confirmPatterns, element.confirmOperations),
+    denyRules: mergeRuleArrays(element.denyPatterns, element.denyOperations),
   }));
 }
 
@@ -243,22 +259,26 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       const data = opResult.data as Record<string, unknown>;
       const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
-      // Extract confirm patterns from elements
-      const confirmPatterns: string[] = [];
-      for (const el of elements) {
-        const confirm = el.confirmPatterns as string[] | undefined;
-        if (confirm?.length) confirmPatterns.push(...confirm);
-      }
+      const denyPatterns = (data.combinedDenyPatterns as string[] | undefined) ?? [];
+      const allowPatterns = (data.combinedAllowPatterns as string[] | undefined) ?? [];
+      const confirmPatterns = (data.combinedConfirmPatterns as string[] | undefined) ?? [];
+      const denyOperations = (data.combinedDenyOperations as string[] | undefined) ?? [];
+      const allowOperations = (data.combinedAllowOperations as string[] | undefined) ?? [];
+      const confirmOperations = (data.combinedConfirmOperations as string[] | undefined) ?? [];
 
       res.json({
         ...(sessionId ? { sessionId } : {}),
         activeElementCount: data.activeElementCount,
         hasAllowlist: data.hasAllowlist,
-        denyPatterns: data.combinedDenyPatterns,
-        allowPatterns: data.combinedAllowPatterns,
-        confirmPatterns: confirmPatterns.length > 0
-          ? confirmPatterns
-          : ((data.combinedConfirmPatterns as string[] | undefined) ?? []),
+        denyPatterns,
+        allowPatterns,
+        confirmPatterns,
+        denyOperations,
+        allowOperations,
+        confirmOperations,
+        denyRules: mergeRuleArrays(denyPatterns, denyOperations),
+        allowRules: mergeRuleArrays(allowPatterns, allowOperations),
+        confirmRules: mergeRuleArrays(confirmPatterns, confirmOperations),
         elements,
         knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,

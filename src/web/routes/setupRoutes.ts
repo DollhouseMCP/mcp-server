@@ -403,9 +403,10 @@ export function createSetupRoutes(opts?: {
       const detection = await detectClient(id);
       if (detection) {
         const result: Record<string, unknown> = { name, ...detection };
-        if (id === 'claude-code') {
-          const hookStatus = getPermissionHookStatus();
-          result.hookInstalled = hookStatus.installed && hookStatus.host === 'claude-code';
+        if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+          const hookStatus = getPermissionHookStatus(undefined, id);
+          result.hookInstalled = hookStatus.installed;
+          result.hookAssetsPrepared = hookStatus.assetsPrepared;
         }
         results[id] = result;
       }

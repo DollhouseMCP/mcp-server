@@ -165,8 +165,15 @@ describe('permissionRoutes', () => {
             hasAllowlist: true,
             combinedDenyPatterns: ['Bash:git push --force*'],
             combinedAllowPatterns: ['Bash:git *'],
+            combinedDenyOperations: ['delete_*'],
+            combinedAllowOperations: ['read_*'],
+            combinedConfirmOperations: ['edit_*'],
             elements: [
-              { name: 'test', confirmPatterns: ['Bash:git merge*'] },
+              {
+                name: 'test',
+                confirmPatterns: ['Bash:git merge*'],
+                confirmOperations: ['edit_*'],
+              },
             ],
             permissionPromptActive: false,
             hookInstalled: false,
@@ -184,9 +191,19 @@ describe('permissionRoutes', () => {
       expect(res.body.hasAllowlist).toBe(true);
       expect(res.body.denyPatterns).toEqual(['Bash:git push --force*']);
       expect(res.body.allowPatterns).toEqual(['Bash:git *']);
-      expect(res.body.confirmPatterns).toEqual(['Bash:git merge*']);
+      expect(res.body.confirmPatterns).toEqual([]);
+      expect(res.body.denyOperations).toEqual(['delete_*']);
+      expect(res.body.allowOperations).toEqual(['read_*']);
+      expect(res.body.confirmOperations).toEqual(['edit_*']);
+      expect(res.body.denyRules).toEqual(['Bash:git push --force*', 'delete_*']);
+      expect(res.body.allowRules).toEqual(['Bash:git *', 'read_*']);
+      expect(res.body.confirmRules).toEqual(['edit_*']);
       expect(res.body.elements).toEqual([
-        expect.objectContaining({ name: 'test', element_name: 'test' }),
+        expect.objectContaining({
+          name: 'test',
+          element_name: 'test',
+          confirmRules: ['Bash:git merge*', 'edit_*'],
+        }),
       ]);
       expect(res.body.hookInstalled).toBe(false);
       expect(res.body.enforcementReady).toBe(false);
@@ -229,6 +246,52 @@ describe('permissionRoutes', () => {
           session_id: 'session-abc',
         },
       });
+    });
+
+    it('should surface top-level gatekeeper rules even when no external tool patterns exist', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 1,
+            hasAllowlist: true,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            combinedDenyOperations: ['delete_*'],
+            combinedAllowOperations: ['read_*'],
+            combinedConfirmOperations: ['edit_*'],
+            elements: [
+              {
+                name: 'perm-read-only',
+                allowOperations: ['read_*'],
+                denyOperations: ['delete_*'],
+                confirmOperations: ['edit_*'],
+              },
+            ],
+            permissionPromptActive: false,
+            hookInstalled: false,
+            enforcementReady: false,
+            advisory: 'MCP-AQL operation policies are active for Dollhouse actions in this session.',
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.allowRules).toEqual(['read_*']);
+      expect(res.body.confirmRules).toEqual(['edit_*']);
+      expect(res.body.denyRules).toEqual(['delete_*']);
+      expect(res.body.elements).toEqual([
+        expect.objectContaining({
+          name: 'perm-read-only',
+          allowRules: ['read_*'],
+          confirmRules: ['edit_*'],
+          denyRules: ['delete_*'],
+        }),
+      ]);
     });
 
     it('should expose known persisted policy sessions for the session picker', async () => {
