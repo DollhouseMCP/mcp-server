@@ -688,6 +688,27 @@ export class MCPAQLHandler {
     }
   }
 
+  private async getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]> {
+    try {
+      const rawElements = await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId);
+      return rawElements.map((el) => ({
+        type: el.type,
+        name: el.name,
+        metadata: {
+          name: el.name,
+          description: (el.metadata.description as string) ?? undefined,
+          gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...(Array.isArray((el as { sessionIds?: string[] }).sessionIds)
+            ? { sessionIds: (el as { sessionIds?: string[] }).sessionIds }
+            : {}),
+        },
+      }));
+    } catch (error) {
+      logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
+      return this.getActiveElements();
+    }
+  }
+
   /**
    * Handle CREATE operations (additive, non-destructive)
    *
@@ -2932,21 +2953,28 @@ export class MCPAQLHandler {
         // Issue #625 Phase 2: Get effective CLI permission policies
         const toolName = params.tool_name as string | undefined;
         const toolInput = (params.tool_input as Record<string, unknown>) ?? {};
+        const reportSessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+        const reportingScope = params.reporting_scope === 'dashboard';
 
         // 1. Get all active elements
-        const policyElements = await this.getActiveElements();
+        const policyElements = reportingScope && !toolName
+          ? await this.getPolicyReportElements(reportSessionId)
+          : await this.getActiveElements();
 
         // 2. Extract externalRestrictions from each element
         const elementPolicies = policyElements.map(el => ({
           type: el.type,
           name: el.name,
           allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
+          confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
           denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
           description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+          sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
         }));
 
         // 3. Build combined view
         const combinedAllow = elementPolicies.flatMap(p => p.allowPatterns);
+        const combinedConfirm = elementPolicies.flatMap(p => p.confirmPatterns);
         const combinedDeny = elementPolicies.flatMap(p => p.denyPatterns);
         const hasAllowlist = combinedAllow.length > 0;
 
@@ -2989,6 +3017,7 @@ export class MCPAQLHandler {
           hasAllowlist,
           elements: elementPolicies,
           combinedAllowPatterns: combinedAllow,
+          combinedConfirmPatterns: combinedConfirm,
           combinedDenyPatterns: combinedDeny,
           evaluation,
           permissionPromptActive,

@@ -13,7 +13,7 @@
  * 6. Audit logging for all operations
  */
 
-import { BaseElement } from '../BaseElement.js';
+import { BaseElement, normalizeVersion } from '../BaseElement.js';
 import { IElement, ElementValidationResult, ValidationError } from '../../types/elements/index.js';
 import { ElementType } from '../../portfolio/types.js';
 import { IElementMetadata } from '../../types/elements/IElement.js';
@@ -938,7 +938,7 @@ export class Memory extends BaseElement implements IElement {
 
       // Update properties
       this.id = parsed.id;
-      this.version = parsed.version || '1.0.0';
+      this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata || {};
       this.extensions = parsed.extensions || {};
 

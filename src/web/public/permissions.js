@@ -15,6 +15,16 @@
   const POLL_INTERVAL_MS = 3000;
   let initialized = false;
   let lastDecisionId = null;
+  let latestAggregateData = null;
+  let latestSelectedData = null;
+  let latestPollRequestId = 0;
+
+  async function fetchPermissionStatus(sessionId) {
+    const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
+    const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
 
   // ── Public API ─────────────────────────────────────────────
 
@@ -23,6 +33,7 @@
     init: initPermissions,
     destroy: destroyPermissions,
     refresh: function () { poll(); },
+    onSessionChange: function () { renderFromCache(); },
   };
 
   // Hook into tab switching — Todd's app.js lazyInitTab only knows logs/metrics,
@@ -69,22 +80,44 @@
   // ── Polling ────────────────────────────────────────────────
 
   async function poll() {
+    const requestId = ++latestPollRequestId;
     try {
-      const res = await DollhouseAuth.apiFetch('/api/permissions/status');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      render(data);
+      const aggregateData = await fetchPermissionStatus('');
+      if (requestId !== latestPollRequestId) {
+        return;
+      }
+
+      const currentSessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
+      const selectedData = deriveSelectedSessionData(aggregateData, currentSessionId);
+
+      latestAggregateData = aggregateData;
+      latestSelectedData = selectedData;
+      window.DollhouseSessions?.setPolicySessions?.(aggregateData.knownSessions || []);
+      render(aggregateData, selectedData);
     } catch (err) {
       renderError(err.message);
     }
   }
 
+  function renderFromCache() {
+    if (!latestAggregateData) {
+      poll();
+      return;
+    }
+
+    const sessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
+    latestSelectedData = deriveSelectedSessionData(latestAggregateData, sessionId);
+    renderPolicySources(latestAggregateData, latestSelectedData);
+    renderSelectedSessionDetail(latestSelectedData);
+  }
+
   // ── Rendering ──────────────────────────────────────────────
 
-  function render(data) {
+  function render(data, selectedData) {
     renderStatusBar(data);
     renderSummaryStats(data);
-    renderPolicySources(data);
+    renderPolicySources(data, selectedData);
+    renderSelectedSessionDetail(selectedData);
     renderDenyPatterns(data);
     renderAllowPatterns(data);
     renderConfirmPatterns(data);
@@ -128,9 +161,9 @@
   }
 
   function renderSummaryStats(data) {
-    setText('perm-stat-deny-count', data.denyPatterns?.length || 0);
-    setText('perm-stat-allow-count', data.allowPatterns?.length || 0);
-    setText('perm-stat-confirm-count', data.confirmPatterns?.length || 0);
+    setText('perm-stat-deny-count', getAggregatePatterns(data, 'denyPatterns').length);
+    setText('perm-stat-allow-count', getAggregatePatterns(data, 'allowPatterns').length);
+    setText('perm-stat-confirm-count', getAggregatePatterns(data, 'confirmPatterns').length);
     setText('perm-stat-decisions', data.recentDecisions?.length || 0);
 
     // Decision breakdown
@@ -143,18 +176,19 @@
     setText('perm-stat-asked', asked);
   }
 
-  function renderPolicySources(data) {
+  function renderPolicySources(data, selectedData) {
     const list = document.getElementById('perm-source-list');
     if (!list) return;
 
     const elements = data.elements || [];
+    const selectedSessionId = selectedData?.sessionId;
     if (elements.length === 0) {
       list.innerHTML = '<li class="perm-pattern-empty">No active elements with policies</li>';
       return;
     }
 
     list.innerHTML = elements.map(el => `
-      <li class="perm-source-item">
+      <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
         <span class="perm-source-type">${esc(el.type)}</span>
         <span class="perm-source-name">${esc(el.element_name)}</span>
         ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
@@ -162,16 +196,69 @@
     `).join('');
   }
 
+  function renderSelectedSessionDetail(selectedData) {
+    const card = document.getElementById('perm-selected-card');
+    const title = document.getElementById('perm-selected-title');
+    const subtitle = document.getElementById('perm-selected-subtitle');
+    const badge = document.getElementById('perm-selected-badge');
+    const sourceList = document.getElementById('perm-selected-source-list');
+    const denyList = document.getElementById('perm-selected-deny-list');
+    const allowList = document.getElementById('perm-selected-allow-list');
+    const confirmList = document.getElementById('perm-selected-confirm-list');
+
+    if (!card || !title || !subtitle || !badge || !sourceList || !denyList || !allowList || !confirmList) {
+      return;
+    }
+
+    if (!selectedData?.sessionId) {
+      card.hidden = true;
+      return;
+    }
+
+    card.hidden = false;
+
+    const sessionInfo = window.DollhouseSessions?.getSelectableSessions?.()
+      ?.find(session => session.sessionId === selectedData.sessionId);
+    const sessionLabel = window.DollhouseSessions?.displayName?.(sessionInfo || selectedData.sessionId)
+      || selectedData.sessionId;
+    const policyOnly = !!sessionInfo?.isPolicyOnly;
+
+    title.textContent = `Selected Session: ${sessionLabel}`;
+    subtitle.textContent = policyOnly
+      ? `${selectedData.sessionId} is showing saved policy state from disk. This is not a live attached client.`
+      : `${selectedData.sessionId} is the current live policy view for this session. Decision activity is still shown in the All Sessions section below.`;
+
+    badge.hidden = !policyOnly;
+    if (policyOnly) {
+      badge.textContent = 'Persisted Policy State (Debug Info)';
+    }
+
+    const elements = selectedData.elements || [];
+    sourceList.innerHTML = elements.length === 0
+      ? '<li class="perm-pattern-empty">No policy-bearing elements found for this session</li>'
+      : elements.map(el => `
+          <li class="perm-source-item perm-source-item--detail">
+            <span class="perm-source-type">${esc(el.type)}</span>
+            <span class="perm-source-name">${esc(el.element_name)}</span>
+            ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
+          </li>
+        `).join('');
+
+    renderPatternList('perm-selected-deny-list', selectedData.denyPatterns || [], 'deny');
+    renderPatternList('perm-selected-allow-list', selectedData.allowPatterns || [], 'allow');
+    renderPatternList('perm-selected-confirm-list', selectedData.confirmPatterns || [], 'confirm');
+  }
+
   function renderDenyPatterns(data) {
-    renderPatternList('perm-deny-list', data.denyPatterns || [], 'deny');
+    renderPatternList('perm-deny-list', getAggregatePatterns(data, 'denyPatterns'), 'deny');
   }
 
   function renderAllowPatterns(data) {
-    renderPatternList('perm-allow-list', data.allowPatterns || [], 'allow');
+    renderPatternList('perm-allow-list', getAggregatePatterns(data, 'allowPatterns'), 'allow');
   }
 
   function renderConfirmPatterns(data) {
-    renderPatternList('perm-confirm-list', data.confirmPatterns || [], 'confirm');
+    renderPatternList('perm-confirm-list', getAggregatePatterns(data, 'confirmPatterns'), 'confirm');
   }
 
   function renderPatternList(elementId, patterns, type) {
@@ -193,11 +280,16 @@
 
   function renderLiveFeed(data) {
     const feed = document.getElementById('perm-feed');
+    const modalFeed = document.getElementById('perm-audit-modal-feed');
+    const modalCount = document.getElementById('perm-audit-modal-count');
     if (!feed) return;
 
     const decisions = data.recentDecisions || [];
     if (decisions.length === 0) {
-      feed.innerHTML = '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+      const empty = '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+      feed.innerHTML = empty;
+      if (modalFeed) modalFeed.innerHTML = empty;
+      if (modalCount) modalCount.textContent = '0 captured entries';
       return;
     }
 
@@ -206,7 +298,7 @@
     if (latestId === lastDecisionId) return; // no change
     lastDecisionId = latestId;
 
-    feed.innerHTML = decisions.map(d => {
+    const html = decisions.map(d => {
       const time = new Date(d.timestamp).toLocaleTimeString();
       const toolDisplay = d.tool_name === 'Bash'
         ? `Bash: ${esc(truncate(d.command || '', 60))}`
@@ -221,6 +313,52 @@
         </div>
       `;
     }).join('');
+
+    feed.innerHTML = html;
+    if (modalFeed) modalFeed.innerHTML = html;
+    if (modalCount) {
+      modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
+    }
+  }
+
+  function deriveSelectedSessionData(aggregateData, sessionId) {
+    if (!sessionId) return null;
+
+    const elements = (aggregateData?.elements || []).filter(function (element) {
+      return Array.isArray(element.sessionIds) && element.sessionIds.indexOf(sessionId) !== -1;
+    });
+
+    return {
+      sessionId: sessionId,
+      activeElementCount: elements.length,
+      hasAllowlist: elements.some(function (element) {
+        return Array.isArray(element.allowPatterns) && element.allowPatterns.length > 0;
+      }),
+      denyPatterns: flattenElementPatterns(elements, 'denyPatterns'),
+      allowPatterns: flattenElementPatterns(elements, 'allowPatterns'),
+      confirmPatterns: flattenElementPatterns(elements, 'confirmPatterns'),
+      elements: elements.map(function (element) {
+        return {
+          type: element.type,
+          element_name: element.element_name,
+          description: element.description,
+        };
+      }),
+      permissionPromptActive: !!aggregateData?.permissionPromptActive,
+      recentDecisions: aggregateData?.recentDecisions || [],
+    };
+  }
+
+  function flattenElementPatterns(elements, key) {
+    return elements.flatMap(function (element) {
+      return Array.isArray(element[key]) ? element[key] : [];
+    });
+  }
+
+  function getAggregatePatterns(data, key) {
+    const combined = Array.isArray(data && data[key]) ? data[key] : [];
+    const perElement = flattenElementPatterns((data && data.elements) || [], key);
+    return Array.from(new Set(combined.concat(perElement)));
   }
 
   // ── Dashboard HTML ─────────────────────────────────────────
@@ -246,8 +384,35 @@
 
       <div class="perm-dashboard">
 
+        <!-- All Sessions Live Decision Feed -->
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-all-feed-card">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
+            <h3 class="perm-card-title">All Sessions Live Decision Feed</h3>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
+          </div>
+          <div class="perm-card-body">
+            <div class="perm-selected-header perm-selected-header--compact">
+              <div>
+                <div class="perm-selected-subtitle">Aggregate audit stream across all sessions. Newest decisions appear first.</div>
+              </div>
+              <button
+                type="button"
+                class="perm-panel-action"
+                id="perm-feed-expand-btn"
+                aria-haspopup="dialog"
+                aria-controls="perm-audit-modal"
+              >
+                Open Audit View
+              </button>
+            </div>
+            <div class="perm-feed" id="perm-feed" role="log" aria-live="polite" aria-label="Permission decisions across all sessions">
+              <div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Summary Stats -->
-        <div class="perm-card perm-card--full" data-collapsed="false">
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-autonomy-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
             <h3 class="perm-card-title">Autonomy Overview</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
@@ -286,72 +451,115 @@
           </div>
         </div>
 
-        <!-- Policy Sources -->
-        <div class="perm-card" data-collapsed="false">
+        <!-- Selected Session Detail -->
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-selected-card" hidden>
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Policy Sources</h3>
+            <h3 class="perm-card-title">Selected Session Detail</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
-            <ul class="perm-source-list" id="perm-source-list">
-              <li class="perm-pattern-empty">Loading...</li>
-            </ul>
+            <div class="perm-selected-header">
+              <div>
+                <div class="perm-selected-title" id="perm-selected-title">Selected Session</div>
+                <div class="perm-selected-subtitle" id="perm-selected-subtitle"></div>
+              </div>
+              <span class="perm-selected-badge" id="perm-selected-badge" hidden>Persisted Policy State (Debug Info)</span>
+            </div>
+
+            <div class="perm-selected-grid">
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Policy Sources</h4>
+                <ul class="perm-source-list" id="perm-selected-source-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Deny Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-deny-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Allow Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-allow-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Confirm Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-selected-confirm-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
 
-        <!-- Deny Patterns -->
-        <div class="perm-card" data-collapsed="false">
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-all-detail-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Deny Patterns</h3>
+            <h3 class="perm-card-title">All Sessions Detail</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
-            <ul class="perm-pattern-list" id="perm-deny-list">
-              <li class="perm-pattern-empty">Loading...</li>
-            </ul>
-          </div>
-        </div>
+            <div class="perm-selected-header perm-selected-header--compact">
+              <div>
+                <div class="perm-selected-title">All Sessions</div>
+                <div class="perm-selected-subtitle">Aggregate policy state across all live and persisted sessions. The decision feed below is currently aggregate, not selection-scoped.</div>
+              </div>
+            </div>
 
-        <!-- Allow Patterns -->
-        <div class="perm-card" data-collapsed="true">
-          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Allow Patterns</h3>
-            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
-          </div>
-          <div class="perm-card-body">
-            <ul class="perm-pattern-list" id="perm-allow-list">
-              <li class="perm-pattern-empty">Loading...</li>
-            </ul>
-          </div>
-        </div>
-
-        <!-- Confirm Patterns -->
-        <div class="perm-card" data-collapsed="false">
-          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Confirm Patterns (Requires Approval)</h3>
-            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
-          </div>
-          <div class="perm-card-body">
-            <ul class="perm-pattern-list" id="perm-confirm-list">
-              <li class="perm-pattern-empty">Loading...</li>
-            </ul>
-          </div>
-        </div>
-
-        <!-- Live Decision Feed -->
-        <div class="perm-card perm-card--full" data-collapsed="false">
-          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Live Decision Feed</h3>
-            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
-          </div>
-          <div class="perm-card-body">
-            <div class="perm-feed" id="perm-feed" role="log" aria-live="polite" aria-label="Permission decisions">
-              <div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>
+            <div class="perm-selected-grid">
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Policy Sources</h4>
+                <ul class="perm-source-list" id="perm-source-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Deny Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-deny-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Allow Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-allow-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Confirm Patterns</h4>
+                <ul class="perm-pattern-list" id="perm-confirm-list">
+                  <li class="perm-pattern-empty">Loading...</li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>
 
       </div>
+
+      <dialog class="modal perm-audit-modal" id="perm-audit-modal" aria-labelledby="perm-audit-modal-title">
+        <div class="modal-overlay" data-close-audit-modal></div>
+        <div class="modal-dialog perm-audit-modal-dialog" role="document">
+          <header class="modal-header">
+            <div class="modal-heading">
+              <h2 class="modal-title" id="perm-audit-modal-title">All Sessions Audit View</h2>
+              <span class="modal-type">Permissions</span>
+            </div>
+            <div class="modal-meta">
+              <span>Aggregate decision log across all sessions</span>
+              <span id="perm-audit-modal-count">0 captured entries</span>
+            </div>
+            <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+          </header>
+          <div class="modal-body">
+            <div class="perm-feed perm-feed--modal" id="perm-audit-modal-feed" role="log" aria-live="polite" aria-label="Full permission decision audit feed">
+              <div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>
+            </div>
+          </div>
+        </div>
+      </dialog>
     `;
   }
 
@@ -370,11 +578,66 @@
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
       });
     });
+
+    const expandBtn = document.getElementById('perm-feed-expand-btn');
+    const auditModal = document.getElementById('perm-audit-modal');
+    const closeBtn = document.getElementById('perm-audit-modal-close');
+    if (expandBtn && auditModal) {
+      expandBtn.addEventListener('click', function (e) {
+        e.stopPropagation();
+        openAuditModal();
+      });
+    }
+
+    if (closeBtn) {
+      closeBtn.addEventListener('click', closeAuditModal);
+    }
+
+    if (auditModal) {
+      auditModal.addEventListener('click', function (e) {
+        if (e.target === auditModal || e.target.hasAttribute('data-close-audit-modal')) {
+          closeAuditModal();
+        }
+      });
+      auditModal.addEventListener('close', function () {
+        document.body.classList.remove('modal-open');
+      });
+      auditModal.addEventListener('cancel', function () {
+        document.body.classList.remove('modal-open');
+      });
+    }
+  }
+
+  function openAuditModal() {
+    const auditModal = document.getElementById('perm-audit-modal');
+    if (!auditModal) return;
+    if (typeof auditModal.showModal === 'function') {
+      auditModal.showModal();
+    } else {
+      auditModal.setAttribute('open', '');
+    }
+    document.body.classList.add('modal-open');
+  }
+
+  function closeAuditModal() {
+    const auditModal = document.getElementById('perm-audit-modal');
+    if (!auditModal) return;
+    if (typeof auditModal.close === 'function') {
+      auditModal.close();
+    } else {
+      auditModal.removeAttribute('open');
+    }
+    document.body.classList.remove('modal-open');
   }
 
   function setText(id, value) {
     const el = document.getElementById(id);
     if (el) el.textContent = String(value);
+  }
+
+  function elementMatchesSelected(element, sessionId) {
+    if (!sessionId || !Array.isArray(element?.sessionIds)) return false;
+    return element.sessionIds.includes(sessionId);
   }
 
   // dmcp-sec[DMCP-SEC-004] — Client-side JS: UnicodeValidator unavailable in browser.

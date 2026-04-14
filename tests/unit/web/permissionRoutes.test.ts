@@ -144,6 +144,73 @@ describe('permissionRoutes', () => {
       expect(res.body.allowPatterns).toEqual(['Bash:git *']);
       expect(res.body.confirmPatterns).toEqual(['Bash:git merge*']);
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+        },
+      });
+    });
+
+    it('should pass session selection through to the dashboard policy query', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 1,
+            hasAllowlist: false,
+            combinedDenyPatterns: ['Bash:rm*'],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: ['Bash:git push*'],
+            elements: [],
+            permissionPromptActive: false,
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status?sessionId=session-abc');
+
+      expect(res.status).toBe(200);
+      expect(res.body.sessionId).toBe('session-abc');
+      expect(res.body.confirmPatterns).toEqual(['Bash:git push*']);
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+          session_id: 'session-abc',
+        },
+      });
+    });
+
+    it('should expose known persisted policy sessions for the session picker', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 2,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [
+              { name: 'guard-a', sessionIds: ['session-b', 'session-a'] },
+              { name: 'guard-b', sessionIds: ['session-a'] },
+              { name: 'guard-c' },
+            ],
+            permissionPromptActive: false,
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.knownSessions).toEqual([
+        { sessionId: 'session-a', displayName: 'session-a', source: 'policy' },
+        { sessionId: 'session-b', displayName: 'session-b', source: 'policy' },
+      ]);
     });
 
     it('should return 500 when handler fails', async () => {
@@ -163,27 +230,93 @@ describe('permissionRoutes', () => {
   });
 
   describe('decision tracking', () => {
-    it('should track decisions in recent decisions feed', async () => {
-      const handler = createMockHandler([{
-        success: true,
-        data: { decision: 'deny', reason: 'Blocked' },
-      }]);
+    it('should accumulate recent decisions newest-first within one app instance', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{ success: true, data: { decision: 'allow', reason: 'Safe read' } }])
+          .mockResolvedValueOnce([{ success: true, data: { decision: 'deny', reason: 'Blocked delete' } }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
       const app = createApp(handler);
 
-      // Make a permission evaluation
       await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Read', input: { file_path: './README.md' } });
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash', input: { command: 'rm -rf /tmp/demo' } });
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.recentDecisions).toHaveLength(2);
+      expect(res.body.recentDecisions.map((entry: any) => entry.tool_name)).toEqual(['Bash', 'Read']);
+      expect(res.body.recentDecisions.map((entry: any) => entry.decision)).toEqual(['deny', 'allow']);
+      expect(res.body.recentDecisions[0].command).toBe('rm -rf /tmp/demo');
+    });
+
+    it('should isolate recent decisions between separate router instances', async () => {
+      const firstHandler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{ success: true, data: { decision: 'deny', reason: 'Blocked' } }])
+          .mockResolvedValue([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const secondHandler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 0,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [],
+            permissionPromptActive: false,
+          },
+        }]),
+      } as any;
+
+      const firstApp = createApp(firstHandler);
+      const secondApp = createApp(secondHandler);
+
+      await request(firstApp)
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'rm -rf /' } });
 
-      // The decision tracking is module-scoped, so it persists across requests
-      const res = await request(app).get('/api/permissions/status');
+      const firstStatus = await request(firstApp).get('/api/permissions/status');
+      const secondStatus = await request(secondApp).get('/api/permissions/status');
 
-      // recentDecisions should have the tracked entry
-      if (res.status === 200 && res.body.recentDecisions) {
-        expect(res.body.recentDecisions.length).toBeGreaterThanOrEqual(1);
-        expect(res.body.recentDecisions[0].tool_name).toBe('Bash');
-        expect(res.body.recentDecisions[0].decision).toBe('deny');
-      }
+      expect(firstStatus.status).toBe(200);
+      expect(firstStatus.body.recentDecisions).toHaveLength(1);
+      expect(firstStatus.body.recentDecisions[0].tool_name).toBe('Bash');
+
+      expect(secondStatus.status).toBe(200);
+      expect(secondStatus.body.recentDecisions).toEqual([]);
     });
   });
 });

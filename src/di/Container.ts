@@ -99,6 +99,7 @@ import { TriggerMetricsTracker } from "../portfolio/enhanced-index/TriggerMetric
 import { SemanticRelationshipService } from "../portfolio/enhanced-index/SemanticRelationshipService.js";
 import { ElementEventDispatcher } from '../events/ElementEventDispatcher.js';
 import { TokenManager } from "../security/tokenManager.js";
+import type { UnifiedConsoleResult } from "../web/console/UnifiedConsole.js";
 import {
   PaginationService,
   FilterService,
@@ -901,8 +902,8 @@ export class DollhouseContainer {
       await sweepStalePortFiles();
     } catch { /* sweep failure is non-fatal */ }
 
-    await this.deferredWebConsole(timer);
-    await this.deferredPermissionServer(timer);
+    const consoleResult = await this.deferredWebConsole(timer);
+    await this.deferredPermissionServer(consoleResult, timer);
   }
 
   private async deferredMemoryAutoload(timer?: StartupTimer): Promise<void> {
@@ -1006,10 +1007,10 @@ export class DollhouseContainer {
     }
   }
 
-  private async deferredWebConsole(timer?: StartupTimer): Promise<void> {
+  private async deferredWebConsole(timer?: StartupTimer): Promise<UnifiedConsoleResult | null> {
     timer?.startPhase('web_console', false);
     try {
-      if (!env.DOLLHOUSE_WEB_CONSOLE) return;
+      if (!env.DOLLHOUSE_WEB_CONSOLE) return null;
 
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
       const sessionId = activationStore.getSessionId();
@@ -1036,13 +1037,16 @@ export class DollhouseContainer {
       });
 
       logger.info(`[Container] Web console started as ${result.role}`);
+      return result;
     } catch (error) {
       logger.warn('[Container] Web console startup failed:', error);
+      return null;
+    } finally {
+      timer?.endPhase('web_console');
     }
-    timer?.endPhase('web_console');
   }
 
-  private async deferredPermissionServer(timer?: StartupTimer): Promise<void> {
+  private async deferredPermissionServer(consoleResult: UnifiedConsoleResult | null, timer?: StartupTimer): Promise<void> {
     timer?.startPhase('permission_server', false);
     try {
       if (!env.DOLLHOUSE_PERMISSION_SERVER) {
@@ -1056,9 +1060,17 @@ export class DollhouseContainer {
       }
 
       // Permission routes are already mounted on the unified web console.
-      // We just need to write the port file so the PreToolUse hook script
-      // can discover it. No separate server — use the existing console port.
-      const port = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+      // We just need to write the active leader port so the PreToolUse hook
+      // script reaches the same console instance that owns the live audit feed.
+      const port = consoleResult?.role === 'leader'
+        ? consoleResult.port
+        : consoleResult?.election.leaderInfo.port;
+
+      if (!port) {
+        logger.debug('[Container] Permission server skipped — no active web console port available');
+        return;
+      }
+
       const startMs = Date.now();
 
       const { writePortFile, registerPortCleanup } = await import('../auto-dollhouse/portDiscovery.js');
