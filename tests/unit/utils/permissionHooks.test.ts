@@ -320,5 +320,12 @@ describe('permissionHooks', () => {
         settingsPath: join(tempHome, '.claude', 'settings.json'),
       });
     });
+
+    it('treats malformed hook markers as uninstalled', async () => {
+      await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+      await writeFile(getPermissionHookMarkerPath(tempHome, 'codex'), '{bad-json}\n', 'utf-8');
+
+      expect(getPermissionHookStatus(tempHome, 'codex')).toEqual({ installed: false });
+    });
   });
 });

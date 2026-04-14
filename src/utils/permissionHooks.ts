@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { logger } from './logger.js';
 
 export interface PermissionHookMarker {
   host: string;
@@ -202,7 +203,10 @@ function readMarkerStatus(markerPath: string): PermissionHookStatus {
   try {
     const raw = readFileSync(markerPath, 'utf-8');
     return toPermissionHookStatus(JSON.parse(raw) as PermissionHookMarker);
-  } catch {
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      logger.warn(`[Permissions] Failed to read hook marker at ${markerPath}: ${String(error)}`);
+    }
     return { installed: false };
   }
 }
