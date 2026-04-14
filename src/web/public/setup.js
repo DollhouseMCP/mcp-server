@@ -1373,9 +1373,16 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
         if (license.useCase) rows.push(['Use case', license.useCase]);
       }
 
-      licenseInfoTable.innerHTML = rows
-        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
-        .join('');
+      const rowNodes = rows.map(([label, value]) => {
+        const tr = document.createElement('tr');
+        const labelCell = document.createElement('td');
+        const valueCell = document.createElement('td');
+        labelCell.textContent = label;
+        valueCell.textContent = value;
+        tr.append(labelCell, valueCell);
+        return tr;
+      });
+      licenseInfoTable.replaceChildren(...rowNodes);
       licenseDetailsPanel.hidden = false;
     }
 
