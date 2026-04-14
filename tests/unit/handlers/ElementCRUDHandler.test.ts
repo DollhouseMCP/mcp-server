@@ -300,5 +300,82 @@ describe('ElementCRUDHandler (DI)', () => {
       ]);
       expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
     });
+
+    it('does not leak the current session in-memory policies into another session report', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([
+          {
+            sessionId: 'session-other',
+            lastUpdated: new Date().toISOString(),
+            activations: {
+              skill: [{ name: 'audit-trace-demo', activatedAt: new Date().toISOString() }],
+            },
+          },
+        ]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.getActiveSkills = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'leader-only-skill',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+      skillManager.list = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+        } as any,
+        {
+          metadata: {
+            name: 'leader-only-skill',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          name: 'audit-trace-demo',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+    });
   });
 });

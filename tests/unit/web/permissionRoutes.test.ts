@@ -47,6 +47,30 @@ describe('permissionRoutes', () => {
       });
     });
 
+    it('should pass session_id through to evaluate_permission when provided', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'rm -rf /tmp/demo' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+        });
+
+      expect(handler.handleRead).toHaveBeenCalledWith({
+        operation: 'evaluate_permission',
+        params: {
+          tool_name: 'Bash',
+          input: { command: 'rm -rf /tmp/demo' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+        },
+      });
+    });
+
     it('should fail open when tool_name is missing', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);
@@ -56,7 +80,12 @@ describe('permissionRoutes', () => {
         .send({ input: { command: 'test' } });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ decision: 'allow' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
       expect(handler.handleRead).not.toHaveBeenCalled();
     });
 
@@ -69,7 +98,12 @@ describe('permissionRoutes', () => {
         .send({ tool_name: 'Bash', input: { command: 'test' } });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ decision: 'allow' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
 
     it('should fail open when handler throws', async () => {
@@ -83,7 +117,12 @@ describe('permissionRoutes', () => {
         .send({ tool_name: 'Bash', input: { command: 'test' } });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ decision: 'allow' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
 
     it('should default platform to claude_code', async () => {
@@ -130,6 +169,9 @@ describe('permissionRoutes', () => {
               { name: 'test', confirmPatterns: ['Bash:git merge*'] },
             ],
             permissionPromptActive: false,
+            hookInstalled: false,
+            enforcementReady: false,
+            advisory: 'Policies are loaded but NOT enforced.',
           },
         }]),
       } as any;
@@ -143,6 +185,12 @@ describe('permissionRoutes', () => {
       expect(res.body.denyPatterns).toEqual(['Bash:git push --force*']);
       expect(res.body.allowPatterns).toEqual(['Bash:git *']);
       expect(res.body.confirmPatterns).toEqual(['Bash:git merge*']);
+      expect(res.body.elements).toEqual([
+        expect.objectContaining({ name: 'test', element_name: 'test' }),
+      ]);
+      expect(res.body.hookInstalled).toBe(false);
+      expect(res.body.enforcementReady).toBe(false);
+      expect(res.body.advisory).toContain('NOT enforced');
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);
       expect(handler.handleRead).toHaveBeenCalledWith({
         operation: 'get_effective_cli_policies',
@@ -317,6 +365,54 @@ describe('permissionRoutes', () => {
 
       expect(secondStatus.status).toBe(200);
       expect(secondStatus.body.recentDecisions).toEqual([]);
+    });
+
+    it('should track platform-specific hook responses with their real decision', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'deny',
+                permissionDecisionReason: 'Blocked by policy',
+              },
+            },
+          }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'rm -rf /tmp/demo' },
+          platform: 'claude_code',
+          session_id: 'session-a',
+        });
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions).toEqual([
+        expect.objectContaining({
+          session_id: 'session-a',
+          decision: 'deny',
+          reason: 'Blocked by policy',
+        }),
+      ]);
     });
   });
 });

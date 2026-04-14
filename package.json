@@ -133,6 +133,7 @@
     "dist/**/*.d.ts.map",
     "dist/web/public/**",
     "dist/seed-elements/**",
+    "scripts/pretooluse-dollhouse.sh",
     "data/personas/**/*.md",
     "data/skills/**/*.md",
     "data/templates/**/*.md",

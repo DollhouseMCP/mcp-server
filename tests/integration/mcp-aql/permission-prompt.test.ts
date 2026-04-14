@@ -1183,7 +1183,8 @@ describe('permission_prompt Integration', () => {
       expect(activateResult.success).toBe(true);
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
-        expect(text).toContain('CLI Restrictions Active');
+        expect(text).toContain('CLI Policies Loaded');
+        expect(text).toContain('Hook Not Detected');
         expect(text).toContain('Only git commands allowed');
       }
     });
@@ -1220,7 +1221,8 @@ describe('permission_prompt Integration', () => {
       expect(activateResult.success).toBe(true);
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
-        expect(text).toContain('CLI Restrictions Active');
+        expect(text).toContain('CLI Policies Loaded');
+        expect(text).toContain('Hook Not Detected');
         expect(text).toContain('No network access');
       }
     });
@@ -1257,7 +1259,8 @@ describe('permission_prompt Integration', () => {
       expect(activateResult.success).toBe(true);
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
-        expect(text).toContain('CLI Restrictions Active');
+        expect(text).toContain('CLI Policies Loaded');
+        expect(text).toContain('Hook Not Detected');
         expect(text).toContain('approval');
         expect(text).toContain('moderate');
       }
@@ -1287,7 +1290,7 @@ describe('permission_prompt Integration', () => {
       expect(activateResult.success).toBe(true);
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
-        expect(text).not.toContain('CLI Restrictions Active');
+        expect(text).not.toContain('CLI Policies Loaded');
       }
     });
   });

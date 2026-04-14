@@ -410,6 +410,39 @@ describe('MCPAQLHandler', () => {
     });
   });
 
+  describe('evaluate_permission', () => {
+    it('uses session-scoped reportable policy elements when session_id is provided', async () => {
+      (mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue([
+        {
+          type: 'skill',
+          name: 'audit-trace-demo',
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+          sessionIds: ['session-follower-1'],
+        },
+      ]);
+
+      const result = await handler.handleRead({
+        operation: 'evaluate_permission',
+        params: {
+          tool_name: 'ToolX',
+          input: { action: 'demo' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith('session-follower-1');
+    });
+  });
+
   describe('handleRead()', () => {
     describe('list_elements operation', () => {
       it('should successfully list elements', async () => {

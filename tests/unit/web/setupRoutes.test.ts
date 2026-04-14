@@ -164,6 +164,13 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: async () => ({
+          supported: true,
+          installed: true,
+          configured: true,
+          host: 'claude-code',
+          message: 'Installed Claude Code permission hook and updated settings.json.',
+        }),
         _skipRateLimit: true,
       });
 
@@ -184,6 +191,41 @@ describe('Setup Routes — API Endpoints', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.client).toBe('claude');
       expect(res.body.version).toBeDefined();
+      expect(res.body).toHaveProperty('hookInstall');
+    });
+
+    it('includes hook install details after a successful install', async () => {
+      const installPermissionHookMock = async (client: string) => ({
+        supported: client === 'claude-code',
+        installed: client === 'claude-code',
+        configured: client === 'claude-code',
+        host: client,
+        message: client === 'claude-code'
+          ? 'Installed Claude Code permission hook and updated settings.json.'
+          : `Automatic permission hook wiring is not yet supported for ${client}.`,
+      });
+
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: installPermissionHookMock,
+        _skipRateLimit: true,
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude-code' })
+        .expect(200);
+
+      expect(res.body.hookInstall).toEqual(expect.objectContaining({
+        supported: true,
+        configured: true,
+        host: 'claude-code',
+      }));
     });
   });
 
