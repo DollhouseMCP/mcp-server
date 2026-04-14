@@ -423,9 +423,20 @@ function parseTomlBooleanAssignment(line: string, key: string): boolean | null {
 function updateTomlBooleanAssignment(line: string, key: string, nextValue: boolean): string {
   const commentIndex = line.indexOf('#');
   const commentSuffix = commentIndex >= 0 ? line.slice(commentIndex) : '';
-  const prefixMatch = line.match(/^\s*/);
-  const prefix = prefixMatch ? prefixMatch[0] : '';
+  let prefixLength = 0;
+  while (prefixLength < line.length && /\s/.test(line.charAt(prefixLength))) {
+    prefixLength += 1;
+  }
+  const prefix = line.slice(0, prefixLength);
   return `${prefix}${key} = ${nextValue ? 'true' : 'false'}${commentSuffix ? ` ${commentSuffix.trimStart()}` : ''}`.trimEnd();
+}
+
+function stripTrailingNewlines(value: string): string {
+  let end = value.length;
+  while (end > 0 && value.charAt(end - 1) === '\n') {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 function ensureCodexHooksEnabled(raw: string): { changed: boolean; content: string } {
@@ -437,7 +448,7 @@ function ensureCodexHooksEnabled(raw: string): { changed: boolean; content: stri
     }
     const updatedLines = [...lines];
     updatedLines[dottedIndex] = updateTomlBooleanAssignment(updatedLines[dottedIndex], 'features.codex_hooks', true);
-    return { changed: true, content: `${updatedLines.join('\n').replace(/\n*$/, '')}\n` };
+    return { changed: true, content: `${stripTrailingNewlines(updatedLines.join('\n'))}\n` };
   }
 
   const sectionIndex = lines.findIndex((line) => isTomlSectionLine(line, 'features'));
@@ -452,15 +463,15 @@ function ensureCodexHooksEnabled(raw: string): { changed: boolean; content: stri
       }
       const updatedLines = [...lines];
       updatedLines[keyIndex] = updateTomlBooleanAssignment(updatedLines[keyIndex], 'codex_hooks', true);
-      return { changed: true, content: `${updatedLines.join('\n').replace(/\n*$/, '')}\n` };
+      return { changed: true, content: `${stripTrailingNewlines(updatedLines.join('\n'))}\n` };
     }
 
     const updatedLines = [...lines];
     updatedLines.splice(sectionIndex + 1, 0, 'codex_hooks = true');
-    return { changed: true, content: `${updatedLines.join('\n').replace(/\n*$/, '')}\n` };
+    return { changed: true, content: `${stripTrailingNewlines(updatedLines.join('\n'))}\n` };
   }
 
-  const prefix = raw.trim().length > 0 ? `${raw.replace(/\n*$/, '')}\n\n` : '';
+  const prefix = raw.trim().length > 0 ? `${stripTrailingNewlines(raw)}\n\n` : '';
   return {
     changed: true,
     content: `${prefix}[features]\ncodex_hooks = true\n`,
