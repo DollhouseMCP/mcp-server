@@ -570,6 +570,11 @@ describe('Setup Tab — HTML Content Integrity', () => {
       expect(html).toContain('data-method="global"');
     });
 
+    it('has permissions method button', () => {
+      expect(html).toContain('data-method="permissions"');
+      expect(html).toContain('Permissions &amp; Security');
+    });
+
     it('npx is active by default', () => {
       // The button with data-method="npx" should have is-active class
       const npxBtn = /class="[^"]*is-active[^"]*"[^>]*data-method="npx"/.exec(html);
@@ -992,6 +997,12 @@ describe('Setup Tab — Regressions', () => {
       expect(panel).toContain('~/.claude.json');
       expect(panel).toContain('Or add manually');
     });
+
+    it('Setup includes a permissions intro area for manual hook assets', () => {
+      expect(html).toContain('id="setup-permissions-intro"');
+      expect(js).toContain('renderPermissionsIntro');
+      expect(js).toContain('pretooluse-dollhouse.sh');
+    });
   });
 
   describe('All platforms have consistent structure', () => {
@@ -1022,6 +1033,13 @@ describe('Setup Tab — Regressions', () => {
     it('generated panels include copy buttons and code blocks', () => {
       expect(js).toContain('setup-copy-btn');
       expect(js).toContain('setup-code-block');
+    });
+
+    it('generated panels include manual hook bridge assets for supported clients', () => {
+      expect(js).toContain('pretooluse-cursor.sh');
+      expect(js).toContain('pretooluse-codex.sh');
+      expect(js).toContain('pretooluse-gemini.sh');
+      expect(js).toContain('pretooluse-windsurf.sh');
     });
   });
 
@@ -1115,7 +1133,7 @@ describe('Setup Tab — Regressions', () => {
 
     it('channel selector hidden on init when pinned mode is active', () => {
       // The init sync line must apply hidden state without waiting for a click
-      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
+      expect(js).toContain("channelToggle.hidden = currentMethod !== 'npx'");
     });
 
     it('channel change re-evaluates detection state', () => {
@@ -1795,6 +1813,15 @@ describe('Setup Tab — Package Inclusion', () => {
   it('files field includes dist/seed-elements/** for seed memories', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('dist/seed-elements/**');
+  });
+
+  it('files field includes manual permission hook wrapper scripts', () => {
+    const files = packageJson.files as string[];
+    expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/pretooluse-cursor.sh');
+    expect(files).toContain('scripts/pretooluse-windsurf.sh');
+    expect(files).toContain('scripts/pretooluse-gemini.sh');
+    expect(files).toContain('scripts/pretooluse-codex.sh');
   });
 
   it('dist/web/public/index.html exists', () => {

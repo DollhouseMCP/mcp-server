@@ -70,7 +70,7 @@
 
 .setup-method-toggle {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.5rem;
   border: none;
   padding: 0;
@@ -159,6 +159,12 @@
 }
 
 .setup-pinned-prereq {
+  margin-bottom: 1.2rem;
+}
+
+.setup-permissions-intro {
+  display: grid;
+  gap: 1.2rem;
   margin-bottom: 1.2rem;
 }
 
@@ -257,6 +263,49 @@
 
 .setup-method p:last-child {
   margin-bottom: 0;
+}
+
+.setup-security-mode code {
+  word-break: break-word;
+}
+
+.setup-support-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 0.45rem;
+  padding: 0.18rem 0.5rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.setup-support-badge--verified {
+  background: color-mix(in srgb, #22c55e 18%, var(--surface-2));
+  color: #15803d;
+  border: 1px solid color-mix(in srgb, #22c55e 45%, var(--line));
+}
+
+.setup-support-badge--manual {
+  background: color-mix(in srgb, #f59e0b 14%, var(--surface-2));
+  color: #b45309;
+  border: 1px solid color-mix(in srgb, #f59e0b 40%, var(--line));
+}
+
+.setup-support-badge--unsupported {
+  background: color-mix(in srgb, #64748b 14%, var(--surface-2));
+  color: var(--ink-600);
+  border: 1px solid color-mix(in srgb, #64748b 35%, var(--line));
+}
+
+[data-theme="dark"] .setup-support-badge--verified {
+  color: #4ade80;
+}
+
+[data-theme="dark"] .setup-support-badge--manual {
+  color: #fbbf24;
 }
 
 .setup-paths {
@@ -665,6 +714,10 @@
 @media (max-width: 640px) {
   .setup-page {
     padding: 1rem;
+  }
+
+  .setup-method-toggle {
+    grid-template-columns: 1fr;
   }
 
   .setup-platforms {
