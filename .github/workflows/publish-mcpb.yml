@@ -1,0 +1,70 @@
+name: Publish MCP Bundle
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to upload the bundle to (e.g., v2.0.15)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish-mcpb:
+    name: Build and upload .mcpb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+        run: |
+          TAG_NAME="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$TAG_NAME" ]; then
+            echo "❌ No tag name available for MCP bundle publication"
+            exit 1
+          fi
+
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VERSION}"
+
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "❌ Tag/version mismatch: release tag is $TAG_NAME but package.json is $EXPECTED_TAG"
+            exit 1
+          fi
+
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset_path=dollhousemcp-${VERSION}.mcpb" >> "$GITHUB_OUTPUT"
+
+      - name: Build MCP bundle
+        shell: bash
+        run: ./scripts/build-mcpb.sh
+
+      - name: Upload MCP bundle to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release_meta.outputs.tag_name }}
+          ASSET_PATH: ${{ steps.release_meta.outputs.asset_path }}
+        run: |
+          gh release upload "$TAG_NAME" "$ASSET_PATH" --clobber

@@ -18,8 +18,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 STAGING_DIR="$PROJECT_DIR/.mcpb-staging"
 VERSION=$(node -e "console.log(require('$PROJECT_DIR/package.json').version)")
+MANIFEST_VERSION=$(node -e "console.log(require('$PROJECT_DIR/manifest.json').version)")
 
 cd "$PROJECT_DIR"
+
+if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+    echo "Error: package.json version ($VERSION) does not match manifest.json version ($MANIFEST_VERSION)"
+    echo "Update manifest.json before building the .mcpb bundle."
+    exit 1
+fi
 
 # Verify mcpb is installed
 if ! command -v mcpb &> /dev/null && ! npx @anthropic-ai/mcpb --version &> /dev/null; then

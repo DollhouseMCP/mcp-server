@@ -84,6 +84,7 @@ describe('update-version.mjs functionality validation', () => {
     // Check for expected file patterns
     expect(scriptContent).toMatch(/package\.json/);
     expect(scriptContent).toMatch(/package-lock\.json/);
+    expect(scriptContent).toMatch(/manifest\.json/);
     expect(scriptContent).toMatch(/README\.md/);
     expect(scriptContent).toMatch(/CHANGELOG\.md/);
     expect(scriptContent).toMatch(/docs\/\*\*\/\*\.md/);

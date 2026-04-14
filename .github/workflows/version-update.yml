@@ -117,6 +117,7 @@ jobs:
             ### Files Updated
             - package.json
             - package-lock.json
+            - manifest.json
             - README.md
             - CHANGELOG.md
             - Documentation files

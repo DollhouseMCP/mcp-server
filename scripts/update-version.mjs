@@ -160,6 +160,16 @@ const updateConfigs = [
     required: true
   },
   {
+    name: 'manifest.json',
+    updates: [
+      {
+        pattern: /"version":\s*"[\d.]+(-[\w.]+)?"/,
+        replacement: `"version": "${newVersion}"`
+      }
+    ],
+    required: true
+  },
+  {
     name: 'Dockerfile',
     updates: [
       {
