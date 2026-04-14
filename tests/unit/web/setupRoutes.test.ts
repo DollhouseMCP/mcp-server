@@ -823,6 +823,11 @@ describe('Setup Tab — CSS Integrity', () => {
     expect(css).toContain('.setup-channel-toggle[hidden]');
     expect(css).toContain('display: none');
   });
+
+  it('permissions intro has hidden attribute override to prevent display:grid conflict', () => {
+    expect(css).toContain('.setup-permissions-intro[hidden]');
+    expect(css).toContain('display: none');
+  });
 });
 
 // ── Regression tests ──────────────────────────────────────────────────
@@ -1523,6 +1528,13 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(codeBlocks?.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('Claude Code permissions panel exposes a Configure Now button', () => {
+    const panel = document.getElementById('setup-panel-claude-code');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('claude-code');
+  });
+
   it('all generated panels are hidden by default', () => {
     for (const p of generatedPlatforms) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1661,6 +1673,11 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     select.dispatchEvent(new window.Event('change'));
   }
 
+  function switchMethod(method: 'npx' | 'global' | 'permissions') {
+    const btn = document.querySelector(`.setup-method-btn[data-method="${method}"]`) as HTMLButtonElement | null;
+    btn?.click();
+  }
+
   describe('Initial state with @latest config', () => {
     it('channel selector defaults to Stable', () => {
       const select = getChannelSelect();
@@ -1789,6 +1806,23 @@ describe('Setup Tab — Channel Selector Interactions', () => {
       if (code?.textContent) {
         expect(code.textContent).toContain('DOLLHOUSE_DEBUG');
       }
+    });
+  });
+
+  describe('Permissions mode separates enforcement from MCP install state', () => {
+    beforeAll(() => switchMethod('permissions'));
+
+    it('hides the generic installed notice in permissions mode', () => {
+      const notice = getNotice();
+      expect(notice ?? null).toBeNull();
+    });
+
+    it('shows a permissions-specific status message instead of generic config copy', () => {
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const status = panel?.querySelector('.setup-permission-status');
+      expect(status).not.toBeNull();
+      expect(status?.textContent).toContain('Permissions & security tools are unavailable for Claude Desktop right now.');
+      expect(status?.textContent).not.toContain('already configured for this client');
     });
   });
 });

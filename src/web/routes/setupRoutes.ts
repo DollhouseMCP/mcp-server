@@ -21,7 +21,7 @@ const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
-import { installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
+import { getPermissionHookStatus, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -402,7 +402,12 @@ export function createSetupRoutes(opts?: {
     await Promise.all(clients.map(async ({ id, name }) => {
       const detection = await detectClient(id);
       if (detection) {
-        results[id] = { name, ...detection };
+        const result: Record<string, unknown> = { name, ...detection };
+        if (id === 'claude-code') {
+          const hookStatus = getPermissionHookStatus();
+          result.hookInstalled = hookStatus.installed && hookStatus.host === 'claude-code';
+        }
+        results[id] = result;
       }
     }));
 
