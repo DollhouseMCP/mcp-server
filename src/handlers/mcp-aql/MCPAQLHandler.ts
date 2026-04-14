@@ -3015,13 +3015,14 @@ export class MCPAQLHandler {
         const hookInstalled = hookStatus.installed;
         const enforcementReady = permissionPromptActive || hookInstalled;
         const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
-        const advisory = hasRestrictions
-          ? (!enforcementReady
-              ? 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.'
-              : (hookInstalled && !permissionPromptActive
-                  ? `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`
-                  : undefined))
-          : undefined;
+        let advisory: string | undefined;
+        if (hasRestrictions) {
+          if (!enforcementReady) {
+            advisory = 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.';
+          } else if (hookInstalled && !permissionPromptActive) {
+            advisory = `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`;
+          }
+        }
 
         return {
           activeElementCount: policyElements.length,

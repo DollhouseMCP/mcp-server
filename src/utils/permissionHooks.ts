@@ -1,6 +1,5 @@
-import { accessSync, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { accessSync, constants as fsConstants, copyFileSync, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { constants as fsConstants } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -116,7 +115,9 @@ export function ensureClaudePreToolUseHook(
   command: string,
 ): { changed: boolean; parsed: Record<string, unknown> } {
   const hooksRoot = normalizeHooksRoot(parsed);
-  const existingEntries = Array.isArray(hooksRoot.PreToolUse) ? hooksRoot.PreToolUse as Array<Record<string, unknown>> : [];
+  const existingEntries: Array<Record<string, unknown>> = Array.isArray(hooksRoot.PreToolUse)
+    ? hooksRoot.PreToolUse.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+    : [];
   hooksRoot.PreToolUse = existingEntries;
 
   const commandExists = existingEntries.some((entry) => {
@@ -127,9 +128,9 @@ export function ensureClaudePreToolUseHook(
     return { changed: false, parsed };
   }
 
-  const wildcardEntry = existingEntries.find((entry) =>
+  const wildcardEntry = existingEntries.find((entry): entry is Record<string, unknown> =>
     (entry?.matcher === '*' || entry?.matcher === undefined) && Array.isArray(entry?.hooks),
-  ) as Record<string, unknown> | undefined;
+  );
 
   if (wildcardEntry) {
     const hooks = wildcardEntry.hooks as Array<Record<string, unknown>>;

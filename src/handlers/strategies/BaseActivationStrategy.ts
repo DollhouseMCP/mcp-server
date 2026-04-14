@@ -118,8 +118,10 @@ export abstract class BaseActivationStrategy {
     if (hookStatus.installed) {
       parts.push(`> Permission hook detected for ${hookStatus.host ?? 'this client'}. Enforcement depends on using that client configuration.`);
     } else {
-      parts.push('> No permission hook detected. These policies are not automatically enforced unless the CLI is launched with `--permission-prompt-tool`.');
-      parts.push('> Run `open_setup` and reinstall to wire automatic enforcement.');
+      parts.push(
+        '> No permission hook detected. These policies are not automatically enforced unless the CLI is launched with `--permission-prompt-tool`.',
+        '> Run `open_setup` and reinstall to wire automatic enforcement.',
+      );
     }
     return parts.join('\n');
   }

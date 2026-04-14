@@ -104,12 +104,14 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
 function normalizePolicyElements(elements: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return elements.map((element) => ({
     ...element,
-    element_name: typeof element.element_name === 'string'
-      ? element.element_name
-      : typeof element.name === 'string'
-        ? element.name
-        : '',
+    element_name: resolveElementName(element),
   }));
+}
+
+function resolveElementName(element: Record<string, unknown>): string {
+  if (typeof element.element_name === 'string') return element.element_name;
+  if (typeof element.name === 'string') return element.name;
+  return '';
 }
 
 /** Helper to extract single result from MCP-AQL batch response */
