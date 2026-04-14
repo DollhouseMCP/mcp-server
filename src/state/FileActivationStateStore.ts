@@ -16,6 +16,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
@@ -31,11 +32,8 @@ import type {
 /** Session ID validation: must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars */
 const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
-/** Maximum number of retry attempts for transient disk failures */
-const PERSIST_MAX_RETRIES = 2;
-
-/** Delay between retry attempts in milliseconds */
-const PERSIST_RETRY_DELAY_MS = 100;
+/** Store name for logging and security events. */
+const STORE_NAME = 'FileActivationStateStore';
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -188,19 +186,7 @@ export class FileActivationStateStore implements IActivationStateStore {
         }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.debug(`[FileActivationStateStore] No activation file found for session '${this.sessionId}', starting fresh`);
-      } else {
-        logger.warn(`[FileActivationStateStore] Failed to load activation file for session '${this.sessionId}', starting fresh`, { error });
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'OPERATION_FAILED',
-          severity: 'MEDIUM',
-          source: 'FileActivationStateStore.initialize',
-          details: `Failed to load activation file for session '${this.sessionId}' — starting fresh (possible data corruption)`,
-          additionalData: { error: String(error), sessionId: this.sessionId },
-        });
-      }
+      handleInitializeError(error, STORE_NAME, 'activation', this.sessionId);
     }
   }
 
@@ -388,29 +374,7 @@ export class FileActivationStateStore implements IActivationStateStore {
   // ── Private persistence methods ───────────────────────────────────
 
   private persistAsync(): void {
-    this.persistWithRetry(0).catch(error => {
-      logger.warn('[FileActivationStateStore] Failed to persist activation state after retries', { error });
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_FAILED',
-        severity: 'MEDIUM',
-        source: 'FileActivationStateStore.persistAsync',
-        details: `Failed to persist activation state for session '${this.sessionId}' after ${PERSIST_MAX_RETRIES + 1} attempts — state continues in-memory only`,
-        additionalData: { error: String(error), sessionId: this.sessionId },
-      });
-    });
-  }
-
-  private async persistWithRetry(attempt: number): Promise<void> {
-    try {
-      await this.persist();
-    } catch (error) {
-      if (attempt < PERSIST_MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
-        return this.persistWithRetry(attempt + 1);
-      }
-      throw error;
-    }
+    fireAndForgetPersist(() => this.persist(), STORE_NAME, 'activation state', this.sessionId);
   }
 
   private async persist(): Promise<void> {

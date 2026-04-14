@@ -16,19 +16,15 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { ConfirmationRecord, CliApprovalRecord } from '../handlers/mcp-aql/GatekeeperTypes.js';
 import type { IConfirmationStore } from './IConfirmationStore.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
+import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
-/** Maximum number of retry attempts for transient disk failures */
-const PERSIST_MAX_RETRIES = 2;
-
-/** Delay between retry attempts in milliseconds */
-const PERSIST_RETRY_DELAY_MS = 100;
+const STORE_NAME = 'FileConfirmationStore';
 
 // ── Persisted File Format ───────────────────────────────────────────
 
@@ -116,19 +112,7 @@ export class FileConfirmationStore implements IConfirmationStore {
         }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.debug(`[FileConfirmationStore] No confirmation file found for session '${this.sessionId}', starting fresh`);
-      } else {
-        logger.warn(`[FileConfirmationStore] Failed to load confirmation file for session '${this.sessionId}', starting fresh`, { error });
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'OPERATION_FAILED',
-          severity: 'MEDIUM',
-          source: 'FileConfirmationStore.initialize',
-          details: `Failed to load confirmation file for session '${this.sessionId}' — starting fresh (possible data corruption)`,
-          additionalData: { error: String(error), sessionId: this.sessionId },
-        });
-      }
+      handleInitializeError(error, STORE_NAME, 'confirmation', this.sessionId);
     }
   }
 
@@ -209,29 +193,7 @@ export class FileConfirmationStore implements IConfirmationStore {
   // ── Private persistence methods ───────────────────────────────────
 
   private persistAsync(): void {
-    this.persistWithRetry(0).catch(error => {
-      logger.warn('[FileConfirmationStore] Failed to persist confirmation state after retries', { error });
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_FAILED',
-        severity: 'MEDIUM',
-        source: 'FileConfirmationStore.persistAsync',
-        details: `Failed to persist confirmation state for session '${this.sessionId}' after ${PERSIST_MAX_RETRIES + 1} attempts`,
-        additionalData: { error: String(error), sessionId: this.sessionId },
-      });
-    });
-  }
-
-  private async persistWithRetry(attempt: number): Promise<void> {
-    try {
-      await this.persistToDisk();
-    } catch (error) {
-      if (attempt < PERSIST_MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
-        return this.persistWithRetry(attempt + 1);
-      }
-      throw error;
-    }
+    fireAndForgetPersist(() => this.persistToDisk(), STORE_NAME, 'confirmation state', this.sessionId);
   }
 
   private async persistToDisk(): Promise<void> {

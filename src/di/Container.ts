@@ -1258,11 +1258,37 @@ export class DollhouseContainer {
     let restoredCount = 0;
     let skippedCount = 0;
 
-    // Restore personas (uses filename if available, falls back to name)
-    // Issue #843: activatePersona() is now async — uses disk fallback for cache misses
+    const restoreType = async (
+      elementType: string,
+      activateFn: (name: string) => Promise<{ success: boolean }>,
+      skip?: Set<string>,
+    ): Promise<void> => {
+      for (const activation of store.getActivations(elementType)) {
+        if (skip?.has(activation.name)) {
+          logger.debug(`[Container] ${elementType} '${activation.name}' already active (auto-loaded), skipping`);
+          continue;
+        }
+        try {
+          const result = await activateFn(activation.name);
+          if (result.success) {
+            restoredCount++;
+          } else {
+            logger.debug(`[Container] Pruning missing ${elementType} '${activation.name}'`);
+            store.removeStaleActivation(elementType, activation.name);
+            skippedCount++;
+          }
+        } catch {
+          logger.debug(`[Container] Skipping failed ${elementType} '${activation.name}'`);
+          store.removeStaleActivation(elementType, activation.name);
+          skippedCount++;
+        }
+      }
+    };
+
+    // Personas use filename if available (Issue #843)
     for (const activation of store.getActivations('persona')) {
+      const identifier = activation.filename || activation.name;
       try {
-        const identifier = activation.filename || activation.name;
         const result = await personaManager.activatePersona(identifier);
         if (result.success) {
           restoredCount++;
@@ -1278,84 +1304,15 @@ export class DollhouseContainer {
       }
     }
 
-    // Restore skills
-    // NOTE: activateSkill() returns {success, message} — it never throws on not-found.
-    for (const activation of store.getActivations('skill')) {
-      try {
-        const result = await skillManager.activateSkill(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[Container] Pruning missing skill '${activation.name}'`);
-          store.removeStaleActivation('skill', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[Container] Skipping failed skill '${activation.name}'`);
-        store.removeStaleActivation('skill', activation.name);
-        skippedCount++;
-      }
-    }
+    await restoreType('skill', (name) => skillManager.activateSkill(name));
+    await restoreType('agent', (name) => agentManager.activateAgent(name));
 
-    // Restore agents
-    for (const activation of store.getActivations('agent')) {
-      try {
-        const result = await agentManager.activateAgent(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[Container] Pruning missing agent '${activation.name}'`);
-          store.removeStaleActivation('agent', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[Container] Skipping failed agent '${activation.name}'`);
-        store.removeStaleActivation('agent', activation.name);
-        skippedCount++;
-      }
-    }
-
-    // Restore memories (dedup against auto-loaded ones)
+    // Memories: dedup against auto-loaded ones
     const activeMemories = await memoryManager.getActiveMemories();
     const activeMemoryNames = new Set(activeMemories.map(m => m.metadata.name));
-    for (const activation of store.getActivations('memory')) {
-      if (activeMemoryNames.has(activation.name)) {
-        logger.debug(`[Container] Memory '${activation.name}' already active (auto-loaded), skipping`);
-        continue;
-      }
-      try {
-        const result = await memoryManager.activateMemory(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[Container] Pruning missing memory '${activation.name}'`);
-          store.removeStaleActivation('memory', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[Container] Skipping failed memory '${activation.name}'`);
-        store.removeStaleActivation('memory', activation.name);
-        skippedCount++;
-      }
-    }
+    await restoreType('memory', (name) => memoryManager.activateMemory(name), activeMemoryNames);
 
-    // Restore ensembles
-    for (const activation of store.getActivations('ensemble')) {
-      try {
-        const result = await ensembleManager.activateEnsemble(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[Container] Pruning missing ensemble '${activation.name}'`);
-          store.removeStaleActivation('ensemble', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[Container] Skipping failed ensemble '${activation.name}'`);
-        store.removeStaleActivation('ensemble', activation.name);
-        skippedCount++;
-      }
-    }
+    await restoreType('ensemble', (name) => ensembleManager.activateEnsemble(name));
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(

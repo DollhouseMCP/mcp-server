@@ -510,34 +510,15 @@ export class Gatekeeper {
    * @deprecated Use instance method validateRoute() or enforce() instead
    */
   static validate(operation: string, calledEndpoint: CRUDEndpoint): void {
+    // Lightweight route validation without session-scoped audit logging.
+    // For full enforcement with audit events, use the instance method enforce().
     const route = getRoute(operation);
-
     if (!route) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'UPDATE_SECURITY_VIOLATION',
-        severity: 'MEDIUM',
-        source: 'Gatekeeper.validate',
-        details: `Unknown operation: "${operation}"`,
-        additionalData: { operation, calledEndpoint },
-      });
       throw new Error(
         `Unknown operation: "${operation}". See tool descriptions for available operations on each endpoint.`
       );
     }
-
     if (route.endpoint !== calledEndpoint) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'UPDATE_SECURITY_VIOLATION',
-        severity: 'HIGH',
-        source: 'Gatekeeper.validate',
-        details: `Security violation: Operation "${operation}" called via wrong endpoint`,
-        additionalData: {
-          operation,
-          expectedEndpoint: route.endpoint,
-          actualEndpoint: calledEndpoint,
-          permissionReason: Gatekeeper.getPermissionReasonStatic(route.endpoint),
-        },
-      });
       throw new Error(
         `Security violation: Operation "${operation}" must be called via mcp_aql_${route.endpoint.toLowerCase()} endpoint, ` +
           `not mcp_aql_${calledEndpoint.toLowerCase()}. ` +

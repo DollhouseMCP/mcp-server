@@ -646,41 +646,46 @@ export class MCPAQLHandler {
     return `${sessionId}:${name}`;
   }
 
-  /** Issue #1947: Resolve per-session verification rate limiter. */
+  /**
+   * Resolve a per-session instance from a Map, creating on first access.
+   * Issue #1947: All per-session rate limiters use this pattern.
+   */
+  private resolveSessionScoped<T>(map: Map<string, T>, factory: () => T): T {
+    const key = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
+    let instance = map.get(key);
+    if (!instance) {
+      instance = factory();
+      map.set(key, instance);
+    }
+    return instance;
+  }
+
   private resolveVerificationRateLimiter(): VerificationRateLimiter {
-    const key = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
-    let limiter = this.verificationRateLimiters.get(key);
-    if (!limiter) {
-      limiter = new VerificationRateLimiter();
-      this.verificationRateLimiters.set(key, limiter);
-    }
-    return limiter;
+    return this.resolveSessionScoped(this.verificationRateLimiters, () => new VerificationRateLimiter());
   }
 
-  /** Issue #1947: Resolve per-session permission prompt rate limiter. */
   private resolvePermissionPromptLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
-    const key = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
-    let limiter = this.permissionPromptLimiters.get(key);
-    if (!limiter) {
-      limiter = RateLimiterFactory.createPermissionPromptLimiter(
+    return this.resolveSessionScoped(this.permissionPromptLimiters, () =>
+      RateLimiterFactory.createPermissionPromptLimiter(
         env.DOLLHOUSE_PERMISSION_PROMPT_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
-      );
-      this.permissionPromptLimiters.set(key, limiter);
-    }
-    return limiter;
+      ));
   }
 
-  /** Issue #1947: Resolve per-session CLI approval rate limiter. */
   private resolveCliApprovalLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
-    const key = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
-    let limiter = this.cliApprovalLimiters.get(key);
-    if (!limiter) {
-      limiter = RateLimiterFactory.createCliApprovalLimiter(
+    return this.resolveSessionScoped(this.cliApprovalLimiters, () =>
+      RateLimiterFactory.createCliApprovalLimiter(
         env.DOLLHOUSE_CLI_APPROVAL_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
-      );
-      this.cliApprovalLimiters.set(key, limiter);
+      ));
+  }
+
+  /** Delete all entries from a Map or Set whose keys start with the given prefix. */
+  private deleteByPrefix(collection: Map<string, unknown> | Set<string>, prefix: string): void {
+    const keys = collection instanceof Set ? collection : collection.keys();
+    for (const key of keys) {
+      if (key.startsWith(prefix)) {
+        collection.delete(key);
+      }
     }
-    return limiter;
   }
 
   /**
@@ -704,26 +709,10 @@ export class MCPAQLHandler {
       }
     }
 
-    // Remove executing agent tracking
-    for (const key of this.executingAgents.keys()) {
-      if (key.startsWith(prefix)) {
-        this.executingAgents.delete(key);
-      }
-    }
-
-    // Remove save frequency counters
-    for (const key of this.saveFrequencyCounters.keys()) {
-      if (key.startsWith(prefix)) {
-        this.saveFrequencyCounters.delete(key);
-      }
-    }
-
-    // Remove aborted goals
-    for (const goal of this.abortedGoals) {
-      if (goal.startsWith(prefix)) {
-        this.abortedGoals.delete(goal);
-      }
-    }
+    // Remove session-keyed entries from tracking collections
+    this.deleteByPrefix(this.executingAgents, prefix);
+    this.deleteByPrefix(this.saveFrequencyCounters, prefix);
+    this.deleteByPrefix(this.abortedGoals, prefix);
 
     // Issue #1947: Remove per-session rate limiters
     this.verificationRateLimiters.delete(sessionId);

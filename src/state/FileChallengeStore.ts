@@ -14,19 +14,15 @@ import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
 import { logger } from '../utils/logger.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { StoredChallenge } from '@dollhousemcp/safety';
 import type { IChallengeStore } from './IChallengeStore.js';
 import { validateExternalSessionId } from './FileActivationStateStore.js';
+import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
-/** Maximum number of retry attempts for transient disk failures */
-const PERSIST_MAX_RETRIES = 2;
-
-/** Delay between retry attempts in milliseconds */
-const PERSIST_RETRY_DELAY_MS = 100;
+const STORE_NAME = 'FileChallengeStore';
 
 // ── Persisted File Format ───────────────────────────────────────────
 
@@ -97,19 +93,7 @@ export class FileChallengeStore implements IChallengeStore {
         }
       }
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        logger.debug(`[FileChallengeStore] No challenge file found for session '${this.sessionId}', starting fresh`);
-      } else {
-        logger.warn(`[FileChallengeStore] Failed to load challenge file for session '${this.sessionId}', starting fresh`, { error });
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'OPERATION_FAILED',
-          severity: 'MEDIUM',
-          source: 'FileChallengeStore.initialize',
-          details: `Failed to load challenge file for session '${this.sessionId}' — starting fresh`,
-          additionalData: { error: String(error), sessionId: this.sessionId },
-        });
-      }
+      handleInitializeError(error, STORE_NAME, 'challenge', this.sessionId);
     }
   }
 
@@ -177,29 +161,7 @@ export class FileChallengeStore implements IChallengeStore {
   // ── Private persistence methods ───────────────────────────────────
 
   private persistAsync(): void {
-    this.persistWithRetry(0).catch(error => {
-      logger.warn('[FileChallengeStore] Failed to persist challenge state after retries', { error });
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'OPERATION_FAILED',
-        severity: 'MEDIUM',
-        source: 'FileChallengeStore.persistAsync',
-        details: `Failed to persist challenge state for session '${this.sessionId}' after ${PERSIST_MAX_RETRIES + 1} attempts`,
-        additionalData: { error: String(error), sessionId: this.sessionId },
-      });
-    });
-  }
-
-  private async persistWithRetry(attempt: number): Promise<void> {
-    try {
-      await this.persistToDisk();
-    } catch (error) {
-      if (attempt < PERSIST_MAX_RETRIES) {
-        await new Promise(resolve => setTimeout(resolve, PERSIST_RETRY_DELAY_MS));
-        return this.persistWithRetry(attempt + 1);
-      }
-      throw error;
-    }
+    fireAndForgetPersist(() => this.persistToDisk(), STORE_NAME, 'challenge state', this.sessionId);
   }
 
   private async persistToDisk(): Promise<void> {
