@@ -267,6 +267,45 @@ describe('permissionHooks', () => {
       expect(configRaw).toContain('[model]');
     });
 
+    it('normalizes Unicode client names before installing hook assets', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('Co\u0064e\u0078', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+      });
+
+      expect(result.host).toBe('codex');
+      expect(result.settingsPath).toBe(getCodexHookSettingsPath(tempHome));
+      expect(getPermissionHookStatus(tempHome, 'codex').configured).toBe(true);
+    });
+
+    it('rejects malformed existing Codex hooks configuration files', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+      await mkdir(join(tempHome, '.codex'), { recursive: true });
+      await writeFile(getCodexHookSettingsPath(tempHome), '{not-json}\n', 'utf-8');
+
+      await expect(
+        installPermissionHook('codex', { homeDir: tempHome, sourceScriptPath: sourceScript }),
+      ).rejects.toThrow();
+    });
+
+    it('rejects malformed existing Claude settings files instead of silently overwriting them', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+      await mkdir(join(tempHome, '.claude'), { recursive: true });
+      await writeFile(join(tempHome, '.claude', 'settings.json'), '{not-json}\n', 'utf-8');
+
+      await expect(
+        installPermissionHook('claude-code', {
+          homeDir: tempHome,
+          sourceScriptPath: sourceScript,
+        }),
+      ).rejects.toThrow();
+    });
+
     it('reports hook installation status from the marker file', async () => {
       const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
       await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');

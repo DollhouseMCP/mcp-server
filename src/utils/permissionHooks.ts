@@ -1,5 +1,5 @@
-import { accessSync, constants as fsConstants, copyFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { access, chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -310,24 +310,40 @@ async function copyHookAsset(sourcePath: string, targetPath: string): Promise<bo
   const changed = targetRaw === undefined || sourceRaw !== targetRaw;
 
   if (changed) {
-    copyFileSync(sourcePath, targetPath);
+    await copyFile(sourcePath, targetPath);
   } else {
-    accessSync(targetPath, fsConstants.F_OK);
+    await access(targetPath);
   }
 
   await chmod(targetPath, 0o755);
   return changed;
 }
 
+async function readOptionalUtf8(filePath: string, fallback: string): Promise<string> {
+  try {
+    return await readFile(filePath, 'utf-8');
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return fallback;
+    }
+    throw error;
+  }
+}
+
+async function writeBackupIfPresent(filePath: string, raw: string): Promise<string | undefined> {
+  if (!existsSync(filePath)) {
+    return undefined;
+  }
+
+  const backupPath = `${filePath}.dollhouse.bak`;
+  await writeFile(backupPath, raw, 'utf-8');
+  return backupPath;
+}
+
 async function mergeClaudeSettings(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
   await mkdir(dirname(settingsPath), { recursive: true });
 
-  let raw = '{}\n';
-  try {
-    raw = await readFile(settingsPath, 'utf-8');
-  } catch {
-    raw = '{}\n';
-  }
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
 
   const indent = detectIndent(raw);
   const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
@@ -336,11 +352,7 @@ async function mergeClaudeSettings(settingsPath: string, command: string): Promi
     return { changed: false };
   }
 
-  let backupPath: string | undefined;
-  if (existsSync(settingsPath)) {
-    backupPath = `${settingsPath}.dollhouse.bak`;
-    writeFileSync(backupPath, raw, 'utf-8');
-  }
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
 
   await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
   return { changed: true, backupPath };
@@ -349,12 +361,7 @@ async function mergeClaudeSettings(settingsPath: string, command: string): Promi
 async function mergeGeminiSettings(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
   await mkdir(dirname(settingsPath), { recursive: true });
 
-  let raw = '{}\n';
-  try {
-    raw = await readFile(settingsPath, 'utf-8');
-  } catch {
-    raw = '{}\n';
-  }
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
 
   const indent = detectIndent(raw);
   const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
@@ -363,11 +370,7 @@ async function mergeGeminiSettings(settingsPath: string, command: string): Promi
     return { changed: false };
   }
 
-  let backupPath: string | undefined;
-  if (existsSync(settingsPath)) {
-    backupPath = `${settingsPath}.dollhouse.bak`;
-    writeFileSync(backupPath, raw, 'utf-8');
-  }
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
 
   await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
   return { changed: true, backupPath };
@@ -376,12 +379,7 @@ async function mergeGeminiSettings(settingsPath: string, command: string): Promi
 async function mergeCodexHooks(hooksPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
   await mkdir(dirname(hooksPath), { recursive: true });
 
-  let raw = '{}\n';
-  try {
-    raw = await readFile(hooksPath, 'utf-8');
-  } catch {
-    raw = '{}\n';
-  }
+  const raw = await readOptionalUtf8(hooksPath, '{}\n');
 
   const indent = detectIndent(raw);
   const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
@@ -390,11 +388,7 @@ async function mergeCodexHooks(hooksPath: string, command: string): Promise<{ ch
     return { changed: false };
   }
 
-  let backupPath: string | undefined;
-  if (existsSync(hooksPath)) {
-    backupPath = `${hooksPath}.dollhouse.bak`;
-    writeFileSync(backupPath, raw, 'utf-8');
-  }
+  const backupPath = await writeBackupIfPresent(hooksPath, raw);
 
   await writeFile(hooksPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
   return { changed: true, backupPath };
@@ -428,7 +422,10 @@ function updateTomlBooleanAssignment(line: string, key: string, nextValue: boole
     prefixLength += 1;
   }
   const prefix = line.slice(0, prefixLength);
-  return `${prefix}${key} = ${nextValue ? 'true' : 'false'}${commentSuffix ? ` ${commentSuffix.trimStart()}` : ''}`.trimEnd();
+  const assignment = `${prefix}${key} = ${nextValue ? 'true' : 'false'}`;
+  const trimmedCommentSuffix = commentSuffix.trimStart();
+  const suffix = trimmedCommentSuffix.length > 0 ? ` ${trimmedCommentSuffix}` : '';
+  return `${assignment}${suffix}`.trimEnd();
 }
 
 function stripTrailingNewlines(value: string): string {
@@ -481,23 +478,14 @@ function ensureCodexHooksEnabled(raw: string): { changed: boolean; content: stri
 async function mergeCodexConfig(configPath: string): Promise<{ changed: boolean; backupPath?: string }> {
   await mkdir(dirname(configPath), { recursive: true });
 
-  let raw = '';
-  try {
-    raw = await readFile(configPath, 'utf-8');
-  } catch {
-    raw = '';
-  }
+  const raw = await readOptionalUtf8(configPath, '');
 
   const { changed, content } = ensureCodexHooksEnabled(raw);
   if (!changed) {
     return { changed: false };
   }
 
-  let backupPath: string | undefined;
-  if (existsSync(configPath)) {
-    backupPath = `${configPath}.dollhouse.bak`;
-    writeFileSync(backupPath, raw, 'utf-8');
-  }
+  const backupPath = await writeBackupIfPresent(configPath, raw);
 
   await writeFile(configPath, content, 'utf-8');
   return { changed: true, backupPath };
@@ -542,120 +530,156 @@ async function installHookAssetsForHost(
   return { scriptPath: wrapperTargetPath };
 }
 
+async function installClaudeCodePermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'claude-code';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getClaudeHookSettingsPath(homeDir);
+  const settingsResult = await mergeClaudeSettings(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Claude Code permission hook and updated settings.json.',
+  };
+}
+
+async function installGeminiCliPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'gemini-cli';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getGeminiHookSettingsPath(homeDir);
+  const settingsResult = await mergeGeminiSettings(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Gemini CLI permission hook and updated settings.json.',
+  };
+}
+
+async function installCodexPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'codex';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getCodexHookSettingsPath(homeDir);
+  const configPath = getCodexConfigPath(homeDir);
+  const hooksResult = await mergeCodexHooks(settingsPath, `bash ${scriptPath}`);
+  const configResult = await mergeCodexConfig(configPath);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [configPath],
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [configPath],
+    markerPath,
+    backupPath: hooksResult.backupPath ?? configResult.backupPath,
+    message: 'Installed Codex Bash permission hook, created hooks.json, and enabled features.codex_hooks in config.toml.',
+  };
+}
+
+async function installManualPermissionHookAssets(
+  normalizedClient: string,
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const { scriptPath } = await installHookAssetsForHost(normalizedClient, homeDir, sourceScriptPath);
+  const markerPath = await writeHookMarker(homeDir, {
+    host: normalizedClient,
+    scriptPath,
+    settingsPath: undefined,
+    configured: false,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: false,
+    assetsPrepared: true,
+    host: normalizedClient,
+    scriptPath,
+    markerPath,
+    message: `Installed Dollhouse permission hook assets for ${normalizedClient}. Finish the client-specific hook registration manually.`,
+  };
+}
+
 export async function installPermissionHook(
   client: string,
   options: InstallPermissionHookOptions = {},
 ): Promise<InstallPermissionHookResult> {
-  const normalizedClient = client.normalize('NFC').trim().toLowerCase();
+  const normalizedClient = normalizeHookHost(client);
   const homeDir = options.homeDir ?? homedir();
   const installedAt = (options.now ?? new Date()).toISOString();
 
   if (normalizedClient === 'claude-code') {
-    const { scriptPath } = await installHookAssetsForHost(normalizedClient, homeDir, options.sourceScriptPath);
-    const settingsPath = getClaudeHookSettingsPath(homeDir);
-    const settingsResult = await mergeClaudeSettings(settingsPath, `bash ${scriptPath}`);
-    const markerPath = await writeHookMarker(homeDir, {
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      configured: true,
-      assetsPrepared: true,
-      installedAt,
-    });
-
-    return {
-      supported: true,
-      installed: true,
-      configured: true,
-      assetsPrepared: true,
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      markerPath,
-      backupPath: settingsResult.backupPath,
-      message: 'Installed Claude Code permission hook and updated settings.json.',
-    };
+    return installClaudeCodePermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (normalizedClient === 'gemini-cli') {
-    const { scriptPath } = await installHookAssetsForHost(normalizedClient, homeDir, options.sourceScriptPath);
-    const settingsPath = getGeminiHookSettingsPath(homeDir);
-    const settingsResult = await mergeGeminiSettings(settingsPath, `bash ${scriptPath}`);
-    const markerPath = await writeHookMarker(homeDir, {
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      configured: true,
-      assetsPrepared: true,
-      installedAt,
-    });
-
-    return {
-      supported: true,
-      installed: true,
-      configured: true,
-      assetsPrepared: true,
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      markerPath,
-      backupPath: settingsResult.backupPath,
-      message: 'Installed Gemini CLI permission hook and updated settings.json.',
-    };
+    return installGeminiCliPermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (normalizedClient === 'codex') {
-    const { scriptPath } = await installHookAssetsForHost(normalizedClient, homeDir, options.sourceScriptPath);
-    const settingsPath = getCodexHookSettingsPath(homeDir);
-    const configPath = getCodexConfigPath(homeDir);
-    const hooksResult = await mergeCodexHooks(settingsPath, `bash ${scriptPath}`);
-    const configResult = await mergeCodexConfig(configPath);
-    const markerPath = await writeHookMarker(homeDir, {
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      additionalPaths: [configPath],
-      configured: true,
-      assetsPrepared: true,
-      installedAt,
-    });
-
-    return {
-      supported: true,
-      installed: true,
-      configured: true,
-      assetsPrepared: true,
-      host: normalizedClient,
-      scriptPath,
-      settingsPath,
-      additionalPaths: [configPath],
-      markerPath,
-      backupPath: hooksResult.backupPath ?? configResult.backupPath,
-      message: 'Installed Codex Bash permission hook, created hooks.json, and enabled features.codex_hooks in config.toml.',
-    };
+    return installCodexPermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (getHookWrapperBasename(normalizedClient)) {
-    const { scriptPath } = await installHookAssetsForHost(normalizedClient, homeDir, options.sourceScriptPath);
-    const markerPath = await writeHookMarker(homeDir, {
-      host: normalizedClient,
-      scriptPath,
-      settingsPath: undefined,
-      configured: false,
-      assetsPrepared: true,
-      installedAt,
-    });
-
-    return {
-      supported: true,
-      installed: true,
-      configured: false,
-      assetsPrepared: true,
-      host: normalizedClient,
-      scriptPath,
-      markerPath,
-      message: `Installed Dollhouse permission hook assets for ${normalizedClient}. Finish the client-specific hook registration manually.`,
-    };
+    return installManualPermissionHookAssets(normalizedClient, homeDir, installedAt, options.sourceScriptPath);
   }
 
   return {

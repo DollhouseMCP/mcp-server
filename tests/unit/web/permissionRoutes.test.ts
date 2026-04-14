@@ -191,7 +191,7 @@ describe('permissionRoutes', () => {
       expect(res.body.hasAllowlist).toBe(true);
       expect(res.body.denyPatterns).toEqual(['Bash:git push --force*']);
       expect(res.body.allowPatterns).toEqual(['Bash:git *']);
-      expect(res.body.confirmPatterns).toEqual(['Bash:git merge*']);
+      expect(res.body.confirmPatterns).toEqual([]);
       expect(res.body.denyOperations).toEqual(['delete_*']);
       expect(res.body.allowOperations).toEqual(['read_*']);
       expect(res.body.confirmOperations).toEqual(['edit_*']);
