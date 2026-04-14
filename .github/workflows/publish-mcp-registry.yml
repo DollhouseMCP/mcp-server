@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
     inputs:
+      release_ref:
+        description: 'Optional git ref to publish (for example refs/tags/v2.0.15)'
+        required: false
+        type: string
       dry_run:
         description: 'Run in dry-run mode (test without publishing)'
         required: false
@@ -24,10 +28,36 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve and validate source ref
+        id: source-ref
+        shell: bash
+        run: |
+          RAW_REF=""
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && -n "${{ github.event.inputs.release_ref }}" ]]; then
+            RAW_REF="${{ github.event.inputs.release_ref }}"
+          elif [[ "${{ github.event_name }}" == "release" ]]; then
+            RAW_REF="refs/tags/${{ github.event.release.tag_name }}"
+          else
+            RAW_REF="${{ github.ref }}"
+          fi
+
+          if [[ "$RAW_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9._-]+)?$ ]]; then
+            RAW_REF="refs/tags/${RAW_REF}"
+          fi
+
+          if [[ ! "$RAW_REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9._-]+)?$ && ! "$RAW_REF" =~ ^refs/heads/[A-Za-z0-9._/-]+$ ]]; then
+            echo "::error::Unsupported release ref '$RAW_REF'. Use refs/tags/vX.Y.Z, vX.Y.Z, or a refs/heads/* branch."
+            exit 1
+          fi
+
+          echo "ref=$RAW_REF" >> "$GITHUB_OUTPUT"
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ steps.source-ref.outputs.ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,26 +71,71 @@ jobs:
       - name: Build package
         run: npm run build
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@cad07c2e89fa2edd6e2d7bab4c1aa38e53f76003 # v4.1.1
-
       - name: Download mcp-publisher CLI
         shell: bash
         run: |
+          set -euo pipefail
+
           # Pinned to v1.3.3 for reproducibility
           VERSION="v1.3.3"
           ARCHIVE="mcp-publisher_linux_amd64.tar.gz"
+          EXPECTED_SHA256="1113b9d6bf59b000966c4f17752cf87b51db03dcc5482721421fd843ce3bf048"
+          CERT_B64="/tmp/mcp-publisher.cert.b64"
+          CERT_PEM="/tmp/mcp-publisher.cert.pem"
+          PUBKEY_FILE="/tmp/mcp-publisher.pub"
+          SIG_B64="/tmp/mcp-publisher.tar.gz.sig.b64"
+          SIG_FILE="/tmp/mcp-publisher.tar.gz.sig"
+          ARCHIVE_FILE="/tmp/mcp-publisher.tar.gz"
+          EXPECTED_ISSUER="sigstore-intermediate"
+          EXPECTED_SAN_URI="https://github.com/modelcontextprotocol/registry/.github/workflows/release.yml@refs/tags/${VERSION}"
 
-          # Download archive and signature material
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}" -o /tmp/mcp-publisher.tar.gz
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}.sig" -o /tmp/mcp-publisher.tar.gz.sig
-          curl -L "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/mcp-publisher_linux_amd64.pem" -o /tmp/mcp-publisher.pem
+          # Download archive and signature material.
+          curl --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}" -o "$ARCHIVE_FILE"
+          curl --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}.sig" -o "$SIG_B64"
+          curl --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/mcp-publisher_linux_amd64.pem" -o "$CERT_B64"
 
-          # Verify signature using the release-provided public key
-          cosign verify-blob \
-            --key /tmp/mcp-publisher.pem \
-            --signature /tmp/mcp-publisher.tar.gz.sig \
-            /tmp/mcp-publisher.tar.gz
+          # Verify the pinned archive digest first for deterministic release inputs.
+          if ! echo "${EXPECTED_SHA256}  ${ARCHIVE_FILE}" | sha256sum --check --status; then
+            echo "::error::SHA256 verification failed for ${ARCHIVE}"
+            exit 1
+          fi
+
+          # The upstream release assets (.pem and .sig) are base64-encoded; decode them for OpenSSL verification.
+          if ! base64 -d "$CERT_B64" > "$CERT_PEM"; then
+            echo "::error::Failed to decode upstream certificate asset"
+            exit 1
+          fi
+          if ! base64 -d "$SIG_B64" > "$SIG_FILE"; then
+            echo "::error::Failed to decode upstream signature asset"
+            exit 1
+          fi
+
+          # Confirm the signing certificate parses cleanly and is tied to the expected upstream workflow.
+          if ! openssl x509 -in "$CERT_PEM" -noout >/dev/null; then
+            echo "::error::Upstream signing certificate could not be parsed"
+            exit 1
+          fi
+          if ! openssl x509 -in "$CERT_PEM" -noout -issuer | grep -F "$EXPECTED_ISSUER" >/dev/null; then
+            echo "::error::Upstream signing certificate issuer did not contain ${EXPECTED_ISSUER}"
+            exit 1
+          fi
+          if ! openssl x509 -in "$CERT_PEM" -noout -ext subjectAltName | grep -F "$EXPECTED_SAN_URI" >/dev/null; then
+            echo "::error::Upstream signing certificate SAN does not match ${EXPECTED_SAN_URI}"
+            exit 1
+          fi
+
+          # Verify the archive signature using the public key embedded in the release certificate.
+          if ! openssl x509 -in "$CERT_PEM" -pubkey -noout > "$PUBKEY_FILE"; then
+            echo "::error::Failed to extract public key from upstream signing certificate"
+            exit 1
+          fi
+          if ! openssl dgst -sha256 \
+            -verify "$PUBKEY_FILE" \
+            -signature "$SIG_FILE" \
+            "$ARCHIVE_FILE"; then
+            echo "::error::Signature verification failed for ${ARCHIVE}"
+            exit 1
+          fi
 
           # Extract and install
           cd /tmp
