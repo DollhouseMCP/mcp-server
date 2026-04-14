@@ -289,6 +289,10 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
     if (permissionsIntro) {
       permissionsIntro.hidden = currentMethod !== 'permissions';
     }
+
+    document.querySelectorAll('.setup-installed-notice').forEach((notice) => {
+      notice.hidden = currentMethod === 'permissions';
+    });
   };
 
   /** Update a single code block's displayed code and copy button */
@@ -520,6 +524,68 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
     }
   };
 
+  const updatePermissionInstallButton = (btn, detected) => {
+    if (!btn || btn.classList.contains('is-success')) return;
+
+    if (detected?.hookInstalled) {
+      btn.textContent = 'Permissions enabled';
+      btn.disabled = true;
+      btn.classList.add('is-match');
+      return;
+    }
+
+    btn.textContent = 'Configure Now';
+    btn.disabled = false;
+    btn.classList.remove('is-match');
+  };
+
+  const handlePermissionInstallClick = async (btn) => {
+    const client = btn.dataset.permissionInstallClient;
+    if (!client) return;
+
+    const status = document.querySelector(`[data-permission-install-status="${client}"]`);
+    const originalText = btn.textContent;
+
+    btn.disabled = true;
+    btn.textContent = 'Configuring...';
+    btn.classList.add('is-loading');
+    if (status) {
+      status.textContent = '';
+      status.className = 'setup-install-status';
+    }
+
+    try {
+      const res = await DollhouseAuth.apiFetch('/api/setup/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client }),
+      });
+
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Installation failed');
+
+      await fetchDetection();
+      updateDetectionState();
+
+      btn.textContent = 'Permissions enabled';
+      btn.classList.remove('is-loading');
+      btn.classList.add('is-success');
+
+      if (status) {
+        status.textContent = 'Claude Code permissions are enabled. Restart Claude Code if it is already running.';
+        status.classList.add('is-success');
+      }
+    } catch (err) {
+      btn.textContent = originalText;
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      if (status) {
+        status.textContent = formatInstallError(err);
+        status.classList.add('is-error');
+      }
+    }
+  };
+
   // ── Completion banner ────────────────────────────────────────────────
 
   /** Friendly display names for install clients */
@@ -615,6 +681,19 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
       const status = document.querySelector(`[data-install-status="${client}"]`);
       if (status) {
         const statusId = `install-status-${client}`;
+        status.id = statusId;
+        btn.setAttribute('aria-describedby', statusId);
+      }
+    });
+  };
+
+  const initPermissionInstallButtons = () => {
+    document.querySelectorAll('.setup-permission-install-btn').forEach((btn) => {
+      btn.addEventListener('click', () => handlePermissionInstallClick(btn));
+      const client = btn.dataset.permissionInstallClient;
+      const status = document.querySelector(`[data-permission-install-status="${client}"]`);
+      if (status) {
+        const statusId = `permission-install-status-${client}`;
         status.id = statusId;
         btn.setAttribute('aria-describedby', statusId);
       }
@@ -782,23 +861,104 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
    * Called on init and whenever the method toggle changes.
    */
   const updateDetectionState = () => {
-    for (const platformId of Object.values(clientToPlatform)) {
+    const platformIds = new Set(['claude-desktop', ...PLATFORMS.map((platform) => platform.id)]);
+    for (const platformId of platformIds) {
       updatePlatformDetectionState(platformId);
     }
+  };
+
+  const PERMISSION_PLATFORM_LABELS = {
+    'claude-desktop': 'Claude Desktop',
+    'claude-code': 'Claude Code',
+    cursor: 'Cursor',
+    vscode: 'VS Code',
+    codex: 'Codex',
+    gemini: 'Gemini CLI',
+    windsurf: 'Windsurf',
+    cline: 'Cline',
+    lmstudio: 'LM Studio',
+  };
+
+  const getPermissionStatusCopy = (platformId, detected) => {
+    if (platformId === 'claude-code') {
+      if (detected?.hookInstalled) {
+        return {
+          tone: 'info',
+          titleText: 'Claude Code permission enforcement is enabled.',
+          messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
+        };
+      }
+
+      if (detected?.installed) {
+        return {
+          tone: 'warning',
+          titleText: 'Claude Code is connected for this client.',
+          messageText: 'DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the Claude Code permission hook.',
+        };
+      }
+
+      return {
+        tone: 'info',
+        titleText: 'Claude Code permissions are not configured yet.',
+        messageText: 'First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the Claude Code permission hook.',
+      };
+    }
+
+    const support = PLATFORMS.find((platform) => platform.id === platformId)?.hookSupport || 'unsupported';
+    if (support === 'manual') {
+      if (detected?.installed) {
+        return {
+          tone: 'warning',
+          titleText: 'DollhouseMCP is connected for this client.',
+          messageText: 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.',
+        };
+      }
+
+      return {
+        tone: 'info',
+        titleText: 'Manual permissions setup is available for this client.',
+        messageText: 'Use the steps below if you want to turn on permission enforcement for this client manually.',
+      };
+    }
+
+    const platformLabel = PERMISSION_PLATFORM_LABELS[platformId] || 'this client';
+    return {
+      tone: detected?.installed ? 'warning' : 'neutral',
+      titleText: `Permissions & security tools are unavailable for ${platformLabel} right now.`,
+      messageText: detected?.installed
+        ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
+        : 'This release does not include a supported permissions setup flow for this client yet.',
+    };
+  };
+
+  const updatePermissionStatus = (panel, platformId, detected) => {
+    const status = panel?.querySelector('.setup-permission-status');
+    if (!status) return;
+
+    const title = status.querySelector('.setup-permission-status-title');
+    const message = status.querySelector('.setup-permission-status-msg');
+    const { tone, titleText, messageText } = getPermissionStatusCopy(platformId, detected);
+
+    status.dataset.state = tone;
+    if (title) title.textContent = titleText;
+    if (message) message.textContent = messageText;
   };
 
   /** Update notice, badge, button, AND current config display for a single platform */
   const updatePlatformDetectionState = (platformId) => {
     const detected = detectedConfigs[platformId];
+    const panel = document.getElementById('setup-panel-' + platformId);
+    const tabBtn = document.getElementById('setup-tab-' + platformId);
+    updatePermissionStatus(panel, platformId, detected);
+
     if (!detected?.installed) return;
 
     const matches = configsMatch(platformId, currentMethod);
-    const panel = document.getElementById('setup-panel-' + platformId);
-    const tabBtn = document.getElementById('setup-tab-' + platformId);
 
     updateDetectionNotice(panel?.querySelector('.setup-installed-notice'), matches);
     updateDetectionBadge(tabBtn?.querySelector('.setup-tab-badge'), matches);
     updateDetectionButton(panel?.querySelector('.setup-install-btn'), matches);
+    updatePermissionInstallButton(panel?.querySelector('.setup-permission-install-btn'), detected);
 
     // Refresh the "Current config" code block with the latest detected config
     if (detected.currentConfig && panel) {
@@ -966,12 +1126,34 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
 
     if (hookSupport === 'verified' && p.id === 'claude-code') {
       return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">verified</span></h3>
-        <p>Claude Code is the verified automatic path. If you want to wire the permission hook manually, save the shared hook bridge to <code>${HOOK_BASE_SCRIPT_PATH}</code>, then add this block to ${configPath}.</p>
-        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(CLAUDE_CODE_HOOK_SETTINGS)}' aria-label="Copy Claude Code hook settings">Copy</button>
-          <pre><code>${escapeHtml(CLAUDE_CODE_HOOK_SETTINGS)}</code></pre>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">claude code</span></h3>
+        <div class="setup-permission-status" data-state="info">
+          <strong class="setup-permission-status-title"></strong>
+          <p class="setup-permission-status-msg"></p>
         </div>
-        <p class="setup-hint">Command hook target: <code>${HOOK_BASE_SCRIPT_PATH}</code></p>
+        <div class="setup-install-row">
+          <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="claude-code">Configure Now</button>
+          <span class="setup-install-status" data-permission-install-status="claude-code"></span>
+        </div>
+        <p class="setup-hint">This writes the shared hook bridge to <code>${HOOK_BASE_SCRIPT_PATH}</code> and updates ${configPath} automatically.</p>
+      </div>
+      <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+        <details class="setup-manual-fallback">
+          <summary>Manual fallback</summary>
+          <div class="setup-manual-fallback-body">
+            <h4>1. Save the shared hook bridge once</h4>
+            <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+              <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+            </div>
+            <h4>2. Add the Claude Code hook settings</h4>
+            <p>Add this block to ${configPath} so Claude Code can call the hook bridge before tool use.</p>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(CLAUDE_CODE_HOOK_SETTINGS)}' aria-label="Copy Claude Code hook settings">Copy</button>
+              <pre><code>${escapeHtml(CLAUDE_CODE_HOOK_SETTINGS)}</code></pre>
+            </div>
+            <p class="setup-hint">Command hook target: <code>${HOOK_BASE_SCRIPT_PATH}</code></p>
+          </div>
+        </details>
       </div>`;
     }
 
@@ -980,23 +1162,29 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
       const wrapperFilename = `pretooluse-${platformName}.sh`;
       const wrapperScript = buildHookWrapperScript(platformName);
       return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">manual bridge</span></h3>
-        <p>DollhouseMCP can format permission decisions for this client, but host-side hook registration is not yet auto-installed or fully verified. If your client exposes a pre-tool command hook, point it at:</p>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">manual setup</span></h3>
+        <div class="setup-permission-status" data-state="info">
+          <strong class="setup-permission-status-title"></strong>
+          <p class="setup-permission-status-msg"></p>
+        </div>
+        <p>To turn on permission enforcement for this client manually, add this command anywhere the client supports a pre-tool or pre-command hook:</p>
         <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${escapeAttr(p.hookCommand)}" aria-label="Copy hook command">Copy</button>
           <pre><code>${escapeHtml(p.hookCommand)}</code></pre>
         </div>
-        <p>Save this wrapper alongside the shared base hook bridge in <code>${HOOKS_DIR}</code>:</p>
+        <p>Save this wrapper in <code>${HOOKS_DIR}</code> alongside the shared Dollhouse hook bridge:</p>
         <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(wrapperScript)}' aria-label="Copy ${wrapperFilename}">Copy</button>
           <pre><code>${escapeHtml(wrapperScript)}</code></pre>
         </div>
-        <p class="setup-hint">Known config location to inspect: ${configPath}</p>
+        <p class="setup-hint">Known config location for this client: ${configPath}</p>
       </div>`;
     }
 
     return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--unsupported">research needed</span></h3>
-      <p>We do not yet have a verified pre-tool command hook path for this client. The Setup page remains accurate for MCP connection, but automatic permission enforcement instructions are not ready here yet.</p>
-      <p class="setup-hint">If you find a reliable hook/pre-command setting for this client, capture the config path and expected command shape so we can add it to the installer.</p>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--unsupported">coming soon</span></h3>
+      <div class="setup-permission-status" data-state="neutral">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
     </div>`;
   };
 
@@ -1004,16 +1192,9 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
     const intro = document.getElementById('setup-permissions-intro');
     if (!intro) return;
 
-    intro.innerHTML = `<div class="setup-method setup-method-primary">
-        <h3>Permissions &amp; Security</h3>
-        <p>Use this mode when you want to wire DollhouseMCP permission enforcement manually. Claude Code is verified. Cursor, Codex, Gemini CLI, and Windsurf expose manual bridge assets below while we finish validating their host-specific hook schemas.</p>
-      </div>
-      <div class="setup-method">
-        <h3>1. Save the shared hook bridge once</h3>
-        <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
-        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
-          <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
-        </div>
+    intro.innerHTML = `<div class="setup-permissions-note">
+        <strong>Permissions &amp; Security</strong>
+        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
       </div>`;
   };
 
@@ -1507,6 +1688,7 @@ exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
   initPlatformTabs();
   initCopyButtons();
   initInstallButtons();
+  initPermissionInstallButtons();
   initOpenButtons();
   fetchVersion();
   fetchDetection();
