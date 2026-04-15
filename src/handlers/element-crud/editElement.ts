@@ -25,7 +25,9 @@ import {
   KNOWN_METADATA_PROPERTIES,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
-  formatElementResolutionWarnings
+  formatElementResolutionWarnings,
+  collectGatekeeperAuthoringErrors,
+  formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
 
@@ -602,6 +604,11 @@ export async function editElement(
   const typeErrors = validateFieldTypes(input, normalizedType);
   if (typeErrors.length > 0) {
     return error(`Field type validation failed:\n${typeErrors.map(e => `  • ${e}`).join('\n')}`);
+  }
+
+  const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
+  if (gatekeeperErrors.length > 0) {
+    return error(formatGatekeeperValidationMessage(gatekeeperErrors));
   }
 
   // Validate string field values using injected validator
