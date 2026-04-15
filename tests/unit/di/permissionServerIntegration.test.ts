@@ -75,7 +75,13 @@ describe('Permission Server Integration', () => {
               ? `Tool "${parsed.tool_name}" denied by policy`
               : undefined;
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ decision, ...(reason && { reason }) }));
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: decision,
+                ...(reason && { permissionDecisionReason: reason }),
+              },
+            }));
           });
         } else {
           res.writeHead(404);
@@ -91,7 +97,7 @@ describe('Permission Server Integration', () => {
         input: {},
         platform: 'claude_code',
       });
-      expect(allowResponse.decision).toBe('allow');
+      expect(allowResponse.hookSpecificOutput.permissionDecision).toBe('allow');
 
       // Test dangerous tool
       const denyResponse = await httpPost(testPort, {
@@ -99,8 +105,8 @@ describe('Permission Server Integration', () => {
         input: { command: 'rm -rf /' },
         platform: 'claude_code',
       });
-      expect(denyResponse.decision).toBe('deny');
-      expect(denyResponse.reason).toContain('denied');
+      expect(denyResponse.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(denyResponse.hookSpecificOutput.permissionDecisionReason).toContain('denied');
     });
   });
 
@@ -233,6 +239,104 @@ describe('Permission Server Integration', () => {
         expect(response.hookSpecificOutput.permissionDecision).toBe('allow');
       }
     });
+
+    itBash('hook script should translate legacy flat Claude responses', async () => {
+      const testPort = 49361;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            decision: 'deny',
+            reason: 'Blocked by policy',
+          }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { stdout } = await runHookScript({
+        tool_name: 'Bash',
+        tool_input: { command: 'git push --force' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
+    });
+
+    itBash('hook script should pass through already-wrapped Claude responses unchanged', async () => {
+      const testPort = 49362;
+      const wrappedResponse = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'ask',
+          permissionDecisionReason: 'Needs approval',
+        },
+      };
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(wrappedResponse));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { stdout } = await runHookScript({
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/index.ts' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
+    });
+
+    itBash('hook script should fail open silently on malformed Claude responses', async () => {
+      const testPort = 49363;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ nope: true }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript({
+        tool_name: 'Read',
+        tool_input: { file_path: './test-fixture.txt' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+    });
   });
 
   describe('error recovery', () => {
@@ -299,5 +403,24 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
     req.write(data);
     req.end();
+  });
+}
+
+function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
+  return new Promise(async (resolve) => {
+    const { spawn } = await import('node:child_process');
+    const hookProc = spawn('bash', [HOOK_SCRIPT], {
+      env: {
+        HOME: os.homedir(),
+        PATH: '/usr/local/bin:/usr/bin:/bin',
+        DOLLHOUSE_SESSION_ID: 'session-hook-test',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '';
+    hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+    hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+    hookProc.stdin.write(JSON.stringify(payload));
+    hookProc.stdin.end();
   });
 }

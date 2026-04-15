@@ -29,6 +29,33 @@ debug() {
   return 0
 }
 
+normalize_response() {
+  local response="$1"
+
+  case "$HOOK_PLATFORM" in
+    claude_code)
+      echo "$response" | jq -c '
+        if (.hookSpecificOutput.permissionDecision? | type) == "string" then
+          .
+        elif (.decision? | type) == "string" and (.decision | IN("allow", "deny", "ask")) then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: .decision,
+              permissionDecisionReason: (.reason // .message // "")
+            }
+          }
+        else
+          empty
+        end
+      ' 2>/dev/null
+      ;;
+    *)
+      echo "$response"
+      ;;
+  esac
+}
+
 # Discover the port from the port file
 if [[ -f "$PORT_FILE" ]]; then
   PORT=$(cat "$PORT_FILE" 2>/dev/null)
@@ -92,7 +119,12 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 
   if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
     debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
-    echo "$RESPONSE"
+    NORMALIZED_RESPONSE=$(normalize_response "$RESPONSE")
+    if [[ -n "$NORMALIZED_RESPONSE" ]]; then
+      echo "$NORMALIZED_RESPONSE"
+    else
+      debug "Malformed response for platform $HOOK_PLATFORM — fail open"
+    fi
     exit 0
   fi
 
