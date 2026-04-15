@@ -1058,7 +1058,6 @@ codex_hooks = true`;
     if (detected?.support) {
       return {
         ...PERMISSION_SUPPORT_MATRIX[platformId],
-        ...detected.support,
         supportLevel: detected.support.level || PERMISSION_SUPPORT_MATRIX[platformId]?.supportLevel,
       };
     }

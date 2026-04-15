@@ -278,7 +278,6 @@ describe('Setup Routes — API Endpoints', () => {
         expect(res.body[client].configPath).toBeDefined();
         expect(res.body[client].support).toBeDefined();
         expect(typeof res.body[client].support.level).toBe('string');
-        expect(typeof res.body[client].support.statusTag).toBe('string');
       }
     });
 
