@@ -54,6 +54,8 @@ normalize_response() {
       echo "$response"
       ;;
   esac
+
+  return 0
 }
 
 # Discover the port from the port file

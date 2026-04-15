@@ -11,7 +11,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 
 const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
@@ -407,8 +407,7 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
 }
 
 function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
-  return new Promise(async (resolve) => {
-    const { spawn } = await import('node:child_process');
+  return new Promise((resolve) => {
     const hookProc = spawn('bash', [HOOK_SCRIPT], {
       env: {
         HOME: os.homedir(),
