@@ -25,10 +25,11 @@ import {
   KNOWN_METADATA_PROPERTIES,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
-  formatElementResolutionWarnings
+  formatElementResolutionWarnings,
+  collectGatekeeperAuthoringErrors,
+  formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
-import { getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   save(element: T, filePath: string): Promise<void>;
@@ -605,20 +606,9 @@ export async function editElement(
     return error(`Field type validation failed:\n${typeErrors.map(e => `  • ${e}`).join('\n')}`);
   }
 
-  const metadataInput = input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
-    ? input.metadata as Record<string, unknown>
-    : undefined;
-  const gatekeeperErrors = [
-    ...getGatekeeperAuthoringErrors(input),
-    ...getGatekeeperAuthoringErrors(metadataInput),
-  ];
+  const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
   if (gatekeeperErrors.length > 0) {
-    const uniqueErrors = [...new Set(gatekeeperErrors)];
-    const gatekeeperValidationMessage = [
-      'Gatekeeper policy validation failed:',
-      ...uniqueErrors.map(err => `  • ${err}`),
-    ].join('\n');
-    return error(gatekeeperValidationMessage);
+    return error(formatGatekeeperValidationMessage(gatekeeperErrors));
   }
 
   // Validate string field values using injected validator

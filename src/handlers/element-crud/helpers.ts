@@ -14,7 +14,7 @@ import {
   ALL_ELEMENT_TYPES,
   formatElementTypesList as sharedFormatElementTypesList,
 } from '../../utils/elementTypeNormalization.js';
-import { parseElementPolicy, analyzePatternSyntax } from '../mcp-aql/policies/ElementPolicies.js';
+import { parseElementPolicy, analyzePatternSyntax, getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 import { findPatternConflicts } from '../../utils/patternMatcher.js';
 
 export function findElementFlexibly<T extends { metadata?: { name?: string } }>(
@@ -85,6 +85,32 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
   return sanitized;
 }
 
+function asMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+export function collectGatekeeperAuthoringErrors(
+  input: Record<string, unknown> | undefined,
+  metadata?: unknown
+): string[] {
+  const normalizeGatekeeperError = (error: string): string =>
+    error.replace(/^Invalid gatekeeper policy:\s*/, '').trim();
+
+  return [...new Set([
+    ...getGatekeeperAuthoringErrors(input),
+    ...getGatekeeperAuthoringErrors(asMetadataRecord(metadata)),
+  ].map(normalizeGatekeeperError))];
+}
+
+export function formatGatekeeperValidationMessage(errors: string[]): string {
+  const uniqueErrors = [...new Set(errors)];
+  return [
+    'Gatekeeper policy validation failed:',
+    ...uniqueErrors.map(error => `  • ${error}`),
+  ].join('\n');
+}
 // Delegate to shared normalization utility (Issue #433)
 const ELEMENT_TYPE_ALIASES = ELEMENT_TYPE_MAP;
 

@@ -14,12 +14,13 @@ import {
   formatValidElementTypesList,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
-  formatElementResolutionWarnings
+  formatElementResolutionWarnings,
+  collectGatekeeperAuthoringErrors,
+  formatGatekeeperValidationMessage,
 } from './helpers.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
 import { ElementCrudContext } from './types.js';
 import { logger } from '../../utils/logger.js';
-import { getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 // FIX: Issue #281 - SecurityMonitor import removed, persona logging now in PersonaManager.create()
 import {
   formatSimpleErrorResponse,
@@ -201,19 +202,9 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     // metadata by the dispatcher (MCPAQLHandler). createElement just sanitizes and delegates.
     const sanitized = sanitizeMetadata(metadata);
 
-    const topLevelGatekeeperErrors = getGatekeeperAuthoringErrors({ ...args });
-    const metadataGatekeeperErrors = getGatekeeperAuthoringErrors(metadata as Record<string, unknown> | undefined);
-    const gatekeeperErrors = [
-      ...topLevelGatekeeperErrors,
-      ...metadataGatekeeperErrors,
-    ];
+    const gatekeeperErrors = collectGatekeeperAuthoringErrors({ ...args }, sanitized);
     if (gatekeeperErrors.length > 0) {
-      const uniqueErrors = [...new Set(gatekeeperErrors)];
-      const gatekeeperValidationMessage = [
-        'Gatekeeper policy validation failed:',
-        ...uniqueErrors.map(err => `  • ${err}`),
-      ].join('\n');
-      return formatSimpleErrorResponse(gatekeeperValidationMessage);
+      return formatSimpleErrorResponse(formatGatekeeperValidationMessage(gatekeeperErrors));
     }
 
     // Issue #621: Validate category format for element types that support it
