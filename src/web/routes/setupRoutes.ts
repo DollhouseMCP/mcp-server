@@ -22,7 +22,7 @@ const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
-import { getPermissionHookStatus, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
+import { getPermissionHookStatusAsync, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -67,6 +67,16 @@ const ALLOWED_CLIENTS = new Set([
   'lmstudio',
 ]);
 
+type ConfigPathClient =
+  | 'claude'
+  | 'claude-code'
+  | 'cursor'
+  | 'windsurf'
+  | 'cline'
+  | 'lmstudio'
+  | 'gemini-cli'
+  | 'codex';
+
 /** Allowed release channels for the install endpoint. */
 const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
 
@@ -81,7 +91,7 @@ function getConfigPath(client: string): string | null {
   const home = homedir();
   const plat = platform();
 
-  const paths: Record<string, () => string | null> = {
+  const paths: Record<ConfigPathClient, () => string | null> = {
     'claude': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
       if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
@@ -100,7 +110,7 @@ function getConfigPath(client: string): string | null {
     'codex': () => join(home, '.codex', 'config.toml'),
   };
 
-  const resolver = paths[client];
+  const resolver = paths[client as ConfigPathClient];
   return resolver ? resolver() : null;
 }
 
@@ -451,7 +461,7 @@ export function createSetupRoutes(opts?: {
       if (detection) {
         const result: Record<string, unknown> = { name, ...detection };
         if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
-          const hookStatus = getPermissionHookStatus(undefined, id);
+          const hookStatus = await getPermissionHookStatusAsync(undefined, id);
           result.hookInstalled = hookStatus.installed;
           result.hookAssetsPrepared = hookStatus.assetsPrepared;
         }

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { access, chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
@@ -105,6 +105,21 @@ function collectHookMarkerPaths(homeDir: string): Set<string> {
   const runDir = getPermissionHookRunDir(homeDir);
   try {
     for (const entry of readdirSync(runDir)) {
+      if (isHookMarkerFilename(entry)) {
+        markerPaths.add(join(runDir, entry));
+      }
+    }
+  } catch {
+    // No run dir yet — fall through to default false.
+  }
+  return markerPaths;
+}
+
+async function collectHookMarkerPathsAsync(homeDir: string): Promise<Set<string>> {
+  const markerPaths = new Set<string>([getPermissionHookMarkerPath(homeDir)]);
+  const runDir = getPermissionHookRunDir(homeDir);
+  try {
+    for (const entry of await readdir(runDir)) {
       if (isHookMarkerFilename(entry)) {
         markerPaths.add(join(runDir, entry));
       }
@@ -235,6 +250,14 @@ export function getPermissionHookStatus(homeDir = homedir(), host?: string): Per
   }
 
   return summarizeMarkerStatuses(collectHookMarkerPaths(homeDir));
+}
+
+export async function getPermissionHookStatusAsync(homeDir = homedir(), host?: string): Promise<PermissionHookStatus> {
+  if (host) {
+    return readHostSpecificHookStatus(homeDir, host);
+  }
+
+  return summarizeMarkerStatuses(await collectHookMarkerPathsAsync(homeDir));
 }
 
 function normalizeHooksRoot(parsed: Record<string, unknown>): Record<string, unknown[]> {

@@ -114,7 +114,41 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   CURL_EXIT=$?
 
   if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
-    echo "$RESPONSE"
+    HOOK_RESPONSE=$(echo "$RESPONSE" | jq -c '
+      def decision_from_response:
+        if (.hookSpecificOutput.permissionDecision? | type) == "string" then .hookSpecificOutput.permissionDecision
+        elif (.decision? | type) == "string" then .decision
+        elif (.allowed? == true) then "allow"
+        elif (.allowed? == false) then "deny"
+        else empty
+        end;
+      def reason_from_response:
+        .hookSpecificOutput.permissionDecisionReason
+        // .reason
+        // .hookSpecificOutput.reason
+        // empty;
+
+      (decision_from_response) as $decision
+      | if ($decision | type) == "string" and ($decision | length) > 0 then
+          {
+            hookSpecificOutput:
+              ({
+                hookEventName: "PreToolUse",
+                permissionDecision: $decision
+              } + (if (reason_from_response | type) == "string" and (reason_from_response | length) > 0
+                    then { permissionDecisionReason: reason_from_response }
+                    else {}
+                    end))
+          }
+        else empty
+        end
+    ' 2>/dev/null)
+
+    if [[ -n "$HOOK_RESPONSE" ]]; then
+      echo "$HOOK_RESPONSE"
+    else
+      debug "Permission evaluation returned an unrecognized response — fail open"
+    fi
     exit 0
   fi
 
