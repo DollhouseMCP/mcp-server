@@ -6,9 +6,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
-import os from 'os';
-import path from 'path';
-import { promises as fs } from 'fs';
+import os from 'node:os';
+import path from 'node:path';
+import { promises as fs } from 'node:fs';
 
 jest.unstable_mockModule('../../../../src/utils/logger.js', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },

@@ -162,7 +162,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     // Check if active personas still exist after reload
     // Issue #281: Support multiple active personas
-    for (const activeFilename of [...this.getActivationSet()]) {
+    for (const activeFilename of [...this.getActivationSet()]) { // NOSONAR — spread required: loop body calls .delete() on the Set
       const stillExists = personas.some(p => this.deriveFilename(p) === activeFilename);
       if (!stillExists) {
         this.getActivationSet().delete(activeFilename);

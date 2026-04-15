@@ -12,9 +12,9 @@
  * @since v2.1.0 — Issue #1945
  */
 
-import os from 'os';
-import path from 'path';
-import fs from 'fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { ConfirmationRecord, CliApprovalRecord } from '../handlers/mcp-aql/GatekeeperTypes.js';
@@ -46,9 +46,9 @@ export class FileConfirmationStore implements IConfirmationStore {
   private readonly sessionId: string;
   private readonly persistPath: string;
 
-  private confirmations = new Map<string, ConfirmationRecord>();
-  private cliApprovals = new Map<string, CliApprovalRecord>();
-  private cliSessionApprovals = new Map<string, CliApprovalRecord>();
+  private readonly confirmations = new Map<string, ConfirmationRecord>();
+  private readonly cliApprovals = new Map<string, CliApprovalRecord>();
+  private readonly cliSessionApprovals = new Map<string, CliApprovalRecord>();
   private permissionPromptActive = false;
 
   constructor(fileOps: FileOperationsService, stateDir?: string, sessionId?: string) {
@@ -64,55 +64,52 @@ export class FileConfirmationStore implements IConfirmationStore {
     try {
       const content = await this.fileOps.readFile(this.persistPath);
       const data = JSON.parse(content) as PersistedConfirmationState;
+      if (data.version !== 1) return;
 
-      if (data.version === 1) {
-        // Restore confirmations
-        if (Array.isArray(data.confirmations)) {
-          for (const [key, record] of data.confirmations) {
-            if (key && record && typeof record.operation === 'string') {
-              this.confirmations.set(key, record);
-            }
-          }
-        }
+      this.restoreConfirmations(data.confirmations);
+      this.restoreCliApprovals(data.cliApprovals);
+      this.restoreCliSessionApprovals(data.cliSessionApprovals);
 
-        // Restore CLI approvals — drop expired records
-        const now = Date.now();
-        if (Array.isArray(data.cliApprovals)) {
-          for (const [requestId, record] of data.cliApprovals) {
-            if (!requestId || !record) continue;
-            // Drop expired pending or consumed single-use approvals
-            const age = now - new Date(record.requestedAt).getTime();
-            const ttl = record.ttlMs ?? 300_000; // Default 5 minutes
-            if (age > ttl && (!record.approvedAt || record.consumed)) {
-              continue;
-            }
-            this.cliApprovals.set(requestId, record);
-          }
-        }
+      if (typeof data.permissionPromptActive === 'boolean') {
+        this.permissionPromptActive = data.permissionPromptActive;
+      }
 
-        // Restore session-scoped CLI approvals
-        if (Array.isArray(data.cliSessionApprovals)) {
-          for (const [toolName, record] of data.cliSessionApprovals) {
-            if (toolName && record) {
-              this.cliSessionApprovals.set(toolName, record);
-            }
-          }
-        }
-
-        // Restore permission prompt state
-        if (typeof data.permissionPromptActive === 'boolean') {
-          this.permissionPromptActive = data.permissionPromptActive;
-        }
-
-        const totalCount = this.confirmations.size + this.cliApprovals.size + this.cliSessionApprovals.size;
-        if (totalCount > 0) {
-          logger.info(
-            `[FileConfirmationStore] Restored ${totalCount} record(s) for session '${this.sessionId}'`
-          );
-        }
+      const totalCount = this.confirmations.size + this.cliApprovals.size + this.cliSessionApprovals.size;
+      if (totalCount > 0) {
+        logger.info(`[${STORE_NAME}] Restored ${totalCount} record(s) for session '${this.sessionId}'`);
       }
     } catch (error) {
       handleInitializeError(error, STORE_NAME, 'confirmation', this.sessionId);
+    }
+  }
+
+  private restoreConfirmations(entries: Array<[string, ConfirmationRecord]> | undefined): void {
+    if (!Array.isArray(entries)) return;
+    for (const [key, record] of entries) {
+      if (key && record && typeof record.operation === 'string') {
+        this.confirmations.set(key, record);
+      }
+    }
+  }
+
+  private restoreCliApprovals(entries: Array<[string, CliApprovalRecord]> | undefined): void {
+    if (!Array.isArray(entries)) return;
+    const now = Date.now();
+    for (const [requestId, record] of entries) {
+      if (!requestId || !record) continue;
+      const age = now - new Date(record.requestedAt).getTime();
+      const ttl = record.ttlMs ?? 300_000;
+      if (age > ttl && (!record.approvedAt || record.consumed)) continue;
+      this.cliApprovals.set(requestId, record);
+    }
+  }
+
+  private restoreCliSessionApprovals(entries: Array<[string, CliApprovalRecord]> | undefined): void {
+    if (!Array.isArray(entries)) return;
+    for (const [toolName, record] of entries) {
+      if (toolName && record) {
+        this.cliSessionApprovals.set(toolName, record);
+      }
     }
   }
 

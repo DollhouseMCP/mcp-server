@@ -309,41 +309,50 @@ export class MetadataService {
    */
   getCurrentUser(): string {
     // Issue #1946: Check session-scoped identity first
-    if (this.activationRegistry && this.contextTracker) {
-      const sessionId = this.contextTracker.getSessionContext()?.sessionId
-        ?? this.activationRegistry.getDefaultSessionId();
-      const state = this.activationRegistry.get(sessionId);
-      if (state?.userIdentity) {
-        return state.userIdentity.username;
-      }
-
-      // Check SessionContext identity (HTTP auth, stdio)
-      // Issue #1946: local-user is now a valid identity, not a sentinel to skip
-      const session = this.contextTracker.getSessionContext();
-      if (session && session.userId !== SYSTEM_CONTEXT.userId) {
-        return session.displayName || session.userId;
-      }
-    }
+    const sessionUser = this.resolveSessionUser();
+    if (sessionUser) return sessionUser;
 
     // Fallback: cached resolution from env/OS (singleton-safe for background tasks)
     if (!this.currentUser) {
-      const envUser = process.env.DOLLHOUSE_USER;
-      if (envUser) {
-        this.currentUser = envUser;
-        logger.debug('[MetadataService] User resolved from DOLLHOUSE_USER env var', { user: envUser });
-      } else {
-        let osUser: string | null = null;
-        try { osUser = userInfo().username || null; } catch { /* platform unsupported */ }
-        if (osUser) {
-          this.currentUser = osUser;
-          logger.debug('[MetadataService] User resolved from OS username', { user: osUser });
-        } else {
-          this.currentUser = generateAnonymousId();
-          logger.debug('[MetadataService] User resolved as anonymous (no env var or OS username available)', { user: this.currentUser });
-        }
-      }
+      this.currentUser = this.resolveSystemUser();
     }
     return this.currentUser;
+  }
+
+  /** Resolve user identity from the current session context. */
+  private resolveSessionUser(): string | null {
+    if (!this.activationRegistry || !this.contextTracker) return null;
+
+    const sessionId = this.contextTracker.getSessionContext()?.sessionId
+      ?? this.activationRegistry.getDefaultSessionId();
+    const state = this.activationRegistry.get(sessionId);
+    if (state?.userIdentity) return state.userIdentity.username;
+
+    const session = this.contextTracker.getSessionContext();
+    if (session && session.userId !== SYSTEM_CONTEXT.userId) {
+      return session.displayName || session.userId;
+    }
+    return null;
+  }
+
+  /** Resolve user from environment variable or OS username. */
+  private resolveSystemUser(): string {
+    const envUser = process.env.DOLLHOUSE_USER;
+    if (envUser) {
+      logger.debug('[MetadataService] User resolved from DOLLHOUSE_USER env var', { user: envUser });
+      return envUser;
+    }
+
+    let osUser: string | null = null;
+    try { osUser = userInfo().username || null; } catch { /* platform unsupported */ }
+    if (osUser) {
+      logger.debug('[MetadataService] User resolved from OS username', { user: osUser });
+      return osUser;
+    }
+
+    const anonId = generateAnonymousId();
+    logger.debug('[MetadataService] User resolved as anonymous', { user: anonId });
+    return anonId;
   }
 
   /**

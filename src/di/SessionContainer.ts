@@ -101,17 +101,19 @@ export class SessionContainer {
    * DOES NOT dispose parent container services.
    */
   async dispose(): Promise<void> {
-    // 1. Dispose session-scoped service instances
+    await this.disposeSessionServices();
+    this.cleanupSharedState();
+    logger.debug(`[SessionContainer] Disposed session '${this.sessionId}'`);
+  }
+
+  /** Dispose all session-scoped service instances that have a cleanup method. */
+  private async disposeSessionServices(): Promise<void> {
     const disposalPromises: Array<{ name: string; promise: Promise<void> }> = [];
     for (const [name, service] of this.services) {
       if (!service.instance) continue;
-      const instance = service.instance as Record<string, unknown>;
-      if (typeof instance.dispose === 'function') {
-        disposalPromises.push({ name, promise: Promise.resolve().then(() => (instance.dispose as () => Promise<void>)()) });
-      } else if (typeof instance.close === 'function') {
-        disposalPromises.push({ name, promise: Promise.resolve().then(() => (instance.close as () => Promise<void>)()) });
-      } else if (typeof instance.destroy === 'function') {
-        disposalPromises.push({ name, promise: Promise.resolve().then(() => (instance.destroy as () => Promise<void>)()) });
+      const teardown = this.findTeardownMethod(service.instance);
+      if (teardown) {
+        disposalPromises.push({ name, promise: Promise.resolve().then(teardown) });
       }
     }
 
@@ -124,38 +126,33 @@ export class SessionContainer {
         });
       }
     }
+  }
 
-    // 2. Cleanup session-keyed state on shared root services
+  /** Find a dispose/close/destroy method on a service instance. */
+  private findTeardownMethod(instance: unknown): (() => Promise<void>) | null {
+    const obj = instance as Record<string, unknown>;
+    if (typeof obj.dispose === 'function') return () => (obj.dispose as () => Promise<void>)();
+    if (typeof obj.close === 'function') return () => (obj.close as () => Promise<void>)();
+    if (typeof obj.destroy === 'function') return () => (obj.destroy as () => Promise<void>)();
+    return null;
+  }
+
+  /** Clean up session-keyed state on shared root services. */
+  private cleanupSharedState(): void {
+    this.safeCleanup('SessionActivationRegistry', (svc: SessionActivationRegistry) => svc.dispose(this.sessionId));
+    this.safeCleanup('gatekeeper', (svc: { disposeSession(id: string): void }) => svc.disposeSession(this.sessionId));
+    this.safeCleanup('mcpAqlHandler', (svc: { cleanupSession(id: string): void }) => svc.cleanupSession(this.sessionId));
+  }
+
+  /** Resolve a parent service and run cleanup, logging on failure. */
+  private safeCleanup<T>(serviceName: string, cleanup: (svc: T) => void): void {
     try {
-      const activationRegistry = this.parent.resolve<SessionActivationRegistry>('SessionActivationRegistry');
-      activationRegistry.dispose(this.sessionId);
+      cleanup(this.parent.resolve<T>(serviceName));
     } catch (error) {
-      logger.warn('[SessionContainer] Failed to clean up activation registry', {
+      logger.warn(`[SessionContainer] Failed to clean up ${serviceName}`, {
         sessionId: this.sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
-
-    try {
-      const gatekeeper = this.parent.resolve<{ disposeSession(id: string): void }>('gatekeeper');
-      gatekeeper.disposeSession(this.sessionId);
-    } catch (error) {
-      logger.warn('[SessionContainer] Failed to clean up Gatekeeper session', {
-        sessionId: this.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    try {
-      const mcpAqlHandler = this.parent.resolve<{ cleanupSession(id: string): void }>('mcpAqlHandler');
-      mcpAqlHandler.cleanupSession(this.sessionId);
-    } catch (error) {
-      logger.warn('[SessionContainer] Failed to clean up MCPAQLHandler session', {
-        sessionId: this.sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
-
-    logger.debug(`[SessionContainer] Disposed session '${this.sessionId}'`);
   }
 }

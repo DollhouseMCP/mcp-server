@@ -183,14 +183,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     this._verificationStore = store;
   }
 
-  /**
-   * @deprecated Issue #1948: Static methods replaced by instance methods.
-   * These exist only for test backward compatibility and will be removed.
-   */
-  public static setElementManagerResolver(_resolver: (managerName: string) => ResolvedElementManager | null): void { /* no-op — use instance method */ }
-  public static setDangerZoneEnforcerResolver(_resolver: () => any): void { /* no-op — use instance method */ }
-  public static setVerificationStoreResolver(_resolver: () => any): void { /* no-op — use instance method */ }
-  public static resetResolvers(): void { /* no-op — use instance method */ }
+  /** @deprecated Issue #1948: Static resolvers removed. Use constructor injection. */
+  public static resetResolvers(): void { /* no-op */ }
 
   /**
    * Prepare directory structure for agents and state files.
@@ -1544,8 +1538,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
 
         case 'agents': {
-          const instructions = String(element.extensions?.instructions ?? '');
-          return instructions;
+          const raw = element.extensions?.instructions;
+          return typeof raw === 'string' ? raw : '';
         }
 
         default:

@@ -11,9 +11,9 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import os from 'os';
-import path from 'path';
-import fs from 'fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
@@ -206,7 +206,7 @@ export class FileActivationStateStore implements IActivationStateStore {
     }
 
     // Deduplicate — don't add if already present
-    const existing = this.state.activations[type]!;
+    const existing = this.state.activations[type];
     const alreadyActive = existing.some(a => a.name === normalizedName);
     if (alreadyActive) return;
 
@@ -241,7 +241,7 @@ export class FileActivationStateStore implements IActivationStateStore {
     const initialLength = activations.length;
     this.state.activations[type] = activations.filter(a => a.name !== normalizedName);
 
-    if (this.state.activations[type]!.length !== initialLength) {
+    if (this.state.activations[type].length !== initialLength) {
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_DEACTIVATED',
         severity: 'LOW',
@@ -261,7 +261,7 @@ export class FileActivationStateStore implements IActivationStateStore {
   getActivations(elementType: string): PersistedActivation[] {
     const type = normalizeType(elementType);
     if (!type) return [];
-    return this.state.activations[type] ? [...this.state.activations[type]!] : [];
+    return this.state.activations[type] ? [...this.state.activations[type]] : [];
   }
 
   getSessionId(): string {

@@ -36,16 +36,20 @@ function createMockFileOps(options?: {
   readFileResult?: string;
   readFileError?: Error;
 }) {
+  let readFileMock: jest.Mock<() => Promise<string>>;
+  if (options?.readFileError) {
+    readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
+  } else if (options?.readFileResult !== undefined) {
+    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
+  } else {
+    readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    );
+  }
   return {
-    readFile: options?.readFileError
-      ? jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError)
-      : options?.readFileResult !== undefined
-        ? jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult)
-        : jest.fn<() => Promise<string>>().mockRejectedValue(
-            Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-          ),
+    readFile: readFileMock,
     writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-  } as any;
+  } as ReturnType<typeof createMockFileOps>;
 }
 
 describe('FileConfirmationStore', () => {

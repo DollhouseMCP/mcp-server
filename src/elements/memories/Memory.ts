@@ -175,8 +175,8 @@ export class Memory extends BaseElement implements IElement {
   private static readonly MAX_CREATED_MEMORY_NAMES = 10_000;
   // Issue #1948: Instance-injected service refs (replaces static resolvers).
   // Set via constructor params when MemoryManager creates Memory instances.
-  private _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
-  private _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
+  private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
+  private readonly _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   /**
    * @deprecated Issue #1948: Use constructor injection instead.
@@ -242,7 +242,7 @@ export class Memory extends BaseElement implements IElement {
   private static readonly MAX_SANITIZATION_CACHE_MEMORY_MB = 5;
   
   constructor(
-    metadata: Partial<MemoryMetadata> = {},
+    metadata: Partial<MemoryMetadata>,
     metadataService: MetadataService,
     /** Issue #1948: MemoryManager ref for self-save operations. */
     memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> },

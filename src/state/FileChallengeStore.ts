@@ -10,9 +10,9 @@
  * @since v2.1.0 — Issue #1945
  */
 
-import os from 'os';
-import path from 'path';
-import fs from 'fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs/promises';
 import { logger } from '../utils/logger.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { StoredChallenge } from '@dollhousemcp/safety';
@@ -41,7 +41,7 @@ export class FileChallengeStore implements IChallengeStore {
   private readonly sessionId: string;
   private readonly persistPath: string;
 
-  private challenges = new Map<string, StoredChallenge>();
+  private readonly challenges = new Map<string, StoredChallenge>();
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(

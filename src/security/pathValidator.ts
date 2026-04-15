@@ -234,7 +234,6 @@ export class PathValidator {
     if (!absolutePath || typeof absolutePath !== 'string') {
       throw new Error('Path must be a non-empty string');
     }
-
     if (!allowedDir || typeof allowedDir !== 'string') {
       throw new Error('allowedDir must be a non-empty string');
     }
@@ -242,52 +241,58 @@ export class PathValidator {
     // eslint-disable-next-line no-control-regex -- Intentionally removing null bytes for security
     const cleanPath = absolutePath.replaceAll(/\u0000/g, ''); // NOSONAR
     const normalizedPath = path.normalize(cleanPath);
-    if (normalizedPath.includes('..') || cleanPath.includes('..')) {
-      logger.warn('Path traversal attempt detected', { userPath: absolutePath });
-      throw new Error('Path traversal detected');
-    }
+    PathValidator.assertNoTraversal(normalizedPath, cleanPath, absolutePath);
 
     const normalizedAllowedDir = path.normalize(allowedDir);
+    PathValidator.assertWithinDirectory(normalizedPath, normalizedAllowedDir, absolutePath);
+    await PathValidator.assertSymlinkWithinDirectory(normalizedPath, normalizedAllowedDir, absolutePath);
+    PathValidator.validateFilenameExtension(normalizedPath);
+  }
+
+  private static assertNoTraversal(normalizedPath: string, cleanPath: string, userPath: string): void {
+    if (normalizedPath.includes('..') || cleanPath.includes('..')) {
+      logger.warn('Path traversal attempt detected', { userPath });
+      throw new Error('Path traversal detected');
+    }
+  }
+
+  private static assertWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string): void {
     const pathWithSep = normalizedPath + path.sep;
     const allowedDirWithSep = normalizedAllowedDir + path.sep;
-
     if (!pathWithSep.startsWith(allowedDirWithSep) && normalizedPath !== normalizedAllowedDir) {
-      logger.error('Path access denied', { path: absolutePath, allowedDir: normalizedAllowedDir });
+      logger.error('Path access denied', { path: userPath, allowedDir: normalizedAllowedDir });
       throw new Error('Path access denied');
     }
+  }
 
+  private static async assertSymlinkWithinDirectory(normalizedPath: string, normalizedAllowedDir: string, userPath: string): Promise<void> {
     try {
       const stats = await fs.lstat(normalizedPath);
-      if (stats.isSymbolicLink()) {
-        const realPath = await fs.realpath(normalizedPath);
-        const realPathWithSep = realPath + path.sep;
+      if (!stats.isSymbolicLink()) return;
 
-        if (!realPathWithSep.startsWith(allowedDirWithSep) && realPath !== normalizedAllowedDir) {
-          logger.error('Symlink target outside allowed directory', {
-            path: absolutePath,
-            realPath,
-            allowedDir: normalizedAllowedDir
-          });
-          throw new Error('Path access denied');
-        }
+      const realPath = await fs.realpath(normalizedPath);
+      const realPathWithSep = realPath + path.sep;
+      const allowedDirWithSep = normalizedAllowedDir + path.sep;
+
+      if (!realPathWithSep.startsWith(allowedDirWithSep) && realPath !== normalizedAllowedDir) {
+        logger.error('Symlink target outside allowed directory', { path: userPath, realPath, allowedDir: normalizedAllowedDir });
+        throw new Error('Path access denied');
       }
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw err;
-      }
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
+  }
 
-    // Use root instance for filename validation if available, otherwise use static defaults
+  private static validateFilenameExtension(normalizedPath: string): void {
     const instance = PathValidator._rootInstance;
     if (instance) {
       instance.validateFilename(normalizedPath);
-    } else {
-      // Fallback for tests/code paths without DI
-      const ext = path.extname(path.basename(normalizedPath)).toLowerCase();
-      const defaultExtensions = ['.md', '.markdown', '.txt', '.yml', '.yaml'];
-      if (ext && !defaultExtensions.includes(ext)) {
-        throw new Error(`File extension not allowed: ${ext}`);
-      }
+      return;
+    }
+    const ext = path.extname(path.basename(normalizedPath)).toLowerCase();
+    const defaultExtensions = ['.md', '.markdown', '.txt', '.yml', '.yaml'];
+    if (ext && !defaultExtensions.includes(ext)) {
+      throw new Error(`File extension not allowed: ${ext}`);
     }
   }
 
