@@ -368,6 +368,17 @@
   font-style: italic;
 }
 
+.perm-feed-preview-note {
+  margin: 0.85rem 0.85rem 0.35rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--signal-2, #3b82f6) 20%, white);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--signal-2, #3b82f6) 7%, white);
+  color: var(--ink-700, #334155);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
 .perm-feed-row {
   display: grid;
   grid-template-columns: 80px 60px 1fr auto;
@@ -397,6 +408,10 @@
 
 @media (max-width: 900px) {
   .perm-selected-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .perm-audit-modal .modal-header {
     grid-template-columns: 1fr;
   }
 
@@ -431,8 +446,24 @@
   width: min(82rem, 100%);
 }
 
+.perm-audit-modal .modal-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: start;
+  gap: 0.85rem;
+}
+
+#perm-audit-export-btn {
+  grid-column: 2;
+}
+
+#perm-audit-modal-close {
+  grid-column: 3;
+}
+
 .perm-audit-modal .modal-body {
   display: flex;
+  width: 100%;
   min-height: 0;
   padding: 0;
 }
@@ -442,10 +473,22 @@
 }
 
 .perm-audit-modal .perm-feed--modal {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   padding: 0.875rem 1rem 1rem;
+  box-sizing: border-box;
 }
 
 .perm-audit-entry {
+  display: block;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--ink-100, #e2e8f0);
   border-radius: 0.75rem;
   background: var(--paper-strong, #fff);
@@ -457,13 +500,19 @@
   margin-bottom: 0;
 }
 
+.perm-feed-preview-note {
+  width: 100%;
+  box-sizing: border-box;
+  align-self: stretch;
+}
+
 .perm-audit-entry[open] {
   box-shadow: 0 10px 24px color-mix(in srgb, var(--ink-900, #0f172a) 10%, transparent);
 }
 
 .perm-audit-summary-row {
   display: grid;
-  grid-template-columns: minmax(6rem, auto) auto minmax(9rem, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(7.5rem, 9rem) minmax(4.5rem, 6rem) minmax(7rem, 9rem) minmax(0, 1fr);
   gap: 0.75rem;
   align-items: center;
   padding: 0.875rem 1rem;
@@ -681,6 +730,12 @@
 [data-theme="dark"] .perm-feed-empty,
 [data-theme="dark"] .perm-card-toggle {
   color: var(--ink-500, #7b93a7);
+}
+
+[data-theme="dark"] .perm-feed-preview-note {
+  background: color-mix(in srgb, var(--signal-2) 14%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--signal-2) 38%, var(--line));
+  color: var(--ink-300, #cbd5e1);
 }
 
 [data-theme="dark"] .perm-stat-label,

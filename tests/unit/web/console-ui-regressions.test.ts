@@ -585,6 +585,332 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('shows clearly labeled preview audit entries when the live feed is empty', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const feed = win.document.getElementById('perm-feed');
+    expect(feed?.textContent).toContain('Preview example entries are shown until live tool calls arrive.');
+    expect(feed?.textContent).toContain('git status --short');
+    expect(feed?.textContent).toContain('rm -rf /opt/dollhouse/archive');
+    expect(feed?.textContent).toContain('WebSearch');
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const modalFeed = win.document.getElementById('perm-audit-modal-feed');
+    expect(modalFeed?.textContent).toContain('Preview example entries are shown until live tool calls arrive.');
+    expect(modalFeed?.textContent).toContain('confirm-writes-profile');
+    expect(modalFeed?.textContent).toContain('windsurf');
+    expect(modalFeed?.textContent).toContain('gemini_cli');
+    expect(modalFeed?.textContent).toContain('current vulnerability advisories');
+    expect(win.document.getElementById('perm-audit-modal-count')?.textContent).toContain('preview entries');
+
+    cleanup();
+  });
+
+  it('keeps preview audit accordions open across refreshes while the live feed is empty', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const previewDetails = win.document.querySelector('#perm-audit-modal-feed details[data-decision-id="preview-allow-bash"]') as HTMLDetailsElement | null;
+    expect(previewDetails).not.toBeNull();
+    previewDetails?.setAttribute('open', '');
+    expect(previewDetails?.open).toBe(true);
+
+    win.DollhouseConsole.permissions.refresh();
+    await wait(DEFAULT_WAIT_MS);
+
+    const refreshedPreviewDetails = win.document.querySelector('#perm-audit-modal-feed details[data-decision-id="preview-allow-bash"]') as HTMLDetailsElement | null;
+    expect(refreshedPreviewDetails).not.toBeNull();
+    expect(refreshedPreviewDetails?.open).toBe(true);
+
+    cleanup();
+  });
+
+  it('preserves open audit entries when new decisions arrive', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    let recentDecisions = [
+      {
+        id: 'd-1',
+        timestamp: '2026-04-15T20:10:11.000Z',
+        tool_name: 'Edit',
+        decision: 'ask',
+        reason: 'Needs confirmation before editing a protected file.',
+        platform: 'cursor',
+        target: '/opt/dollhouse/important.txt',
+        targetLabel: 'File',
+        details: [
+          { label: 'Platform', value: 'cursor', monospace: true },
+          { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
+          { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+        ],
+      },
+    ];
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions,
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const originalDetails = win.document.querySelector('#perm-audit-modal-feed details[data-decision-id="d-1"]') as HTMLDetailsElement | null;
+    expect(originalDetails).not.toBeNull();
+    originalDetails?.setAttribute('open', '');
+    expect(originalDetails?.open).toBe(true);
+
+    recentDecisions = [
+      {
+        id: 'd-2',
+        timestamp: '2026-04-15T20:10:19.000Z',
+        tool_name: 'Bash',
+        command: 'git diff --stat',
+        decision: 'allow',
+        reason: 'Read-only shell command is allowed.',
+        platform: 'claude_code',
+        target: '/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server',
+        targetLabel: 'Path',
+        details: [
+          { label: 'Platform', value: 'claude_code', monospace: true },
+          { label: 'Command', value: 'git diff --stat', monospace: true },
+        ],
+      },
+      ...recentDecisions,
+    ];
+
+    win.DollhouseConsole.permissions.refresh();
+    await wait(DEFAULT_WAIT_MS);
+
+    const persistedDetails = win.document.querySelector('#perm-audit-modal-feed details[data-decision-id="d-1"]') as HTMLDetailsElement | null;
+    expect(persistedDetails).not.toBeNull();
+    expect(persistedDetails?.open).toBe(true);
+    expect(win.document.getElementById('perm-audit-modal-feed')?.textContent).toContain('git diff --stat');
+
+    cleanup();
+  });
+
+  it('copies the audit view to the clipboard as structured markdown', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(win.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const exportButton = win.document.getElementById('perm-audit-export-btn') as HTMLButtonElement | null;
+    expect(exportButton).not.toBeNull();
+    exportButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const markdown = writeText.mock.calls[0]?.[0] as string;
+    expect(markdown).toContain('# All Sessions Audit View');
+    expect(markdown).toContain('Preview example entries shown because no live tool calls have been captured yet.');
+    expect(markdown).toContain('## ALLOW · Bash');
+    expect(markdown).toContain('- Platform: `claude_code`');
+    expect(markdown).toContain('- Command: `git status --short`');
+    expect(markdown).toContain('### Details');
+    expect(markdown).toContain('- Policy Source: `deny-destructive-shell`');
+    expect(exportButton?.textContent).toBe('Copied');
+
+    cleanup();
+  });
+
   it('shows a visible logs banner when the SSE stream disconnects', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="tab-logs"></div>

@@ -18,6 +18,111 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
+  let latestAuditDecisions = [];
+  let latestAuditIsPreview = false;
+  const PREVIEW_DECISION_SENTINEL = '__preview__';
+  const AUDIT_PREVIEW_DECISIONS = [
+    {
+      id: 'preview-allow-bash',
+      timestamp: '2026-04-15T21:12:04.000Z',
+      tool_name: 'Bash',
+      command: 'git status --short',
+      decision: 'allow',
+      reason: 'Allowed by the team-safe Git read pattern.',
+      platform: 'claude_code',
+      target: '/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server',
+      targetLabel: 'Path',
+      details: [
+        { label: 'Platform', value: 'claude_code', monospace: true },
+        { label: 'Command', value: 'git status --short', monospace: true },
+        { label: 'Path', value: '/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server', monospace: true },
+        { label: 'Matched Pattern', value: 'Bash:git status*', monospace: true },
+        { label: 'Policy Source', value: 'team-safe-git', monospace: true },
+      ],
+    },
+    {
+      id: 'preview-ask-edit',
+      timestamp: '2026-04-15T21:14:27.000Z',
+      tool_name: 'Edit',
+      decision: 'ask',
+      reason: 'Needs confirmation before editing a protected file.',
+      platform: 'cursor',
+      target: '/opt/dollhouse/important.txt',
+      targetLabel: 'File',
+      details: [
+        { label: 'Platform', value: 'cursor', monospace: true },
+        { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
+        { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+        { label: 'Policy Source', value: 'confirm-writes-profile', monospace: true },
+      ],
+    },
+    {
+      id: 'preview-deny-bash',
+      timestamp: '2026-04-15T21:16:52.000Z',
+      tool_name: 'Bash',
+      command: 'rm -rf /opt/dollhouse/archive',
+      decision: 'deny',
+      reason: 'Blocked because destructive delete commands are denied outright.',
+      platform: 'codex',
+      target: '/opt/dollhouse/archive',
+      targetLabel: 'Path',
+      details: [
+        { label: 'Platform', value: 'codex', monospace: true },
+        { label: 'Command', value: 'rm -rf /opt/dollhouse/archive', monospace: true },
+        { label: 'Path', value: '/opt/dollhouse/archive', monospace: true },
+        { label: 'Matched Pattern', value: 'Bash:rm *', monospace: true },
+        { label: 'Policy Source', value: 'deny-destructive-shell', monospace: true },
+      ],
+    },
+    {
+      id: 'preview-allow-read',
+      timestamp: '2026-04-15T21:19:08.000Z',
+      tool_name: 'Read',
+      decision: 'allow',
+      reason: 'Documentation read access is fully allowed for this session.',
+      platform: 'vscode',
+      target: '/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/README.md',
+      targetLabel: 'File',
+      details: [
+        { label: 'Platform', value: 'vscode', monospace: true },
+        { label: 'File', value: '/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/README.md', monospace: true },
+        { label: 'Matched Pattern', value: 'Read:*', monospace: true },
+        { label: 'Policy Source', value: 'docs-reader-profile', monospace: true },
+      ],
+    },
+    {
+      id: 'preview-ask-write',
+      timestamp: '2026-04-15T21:21:33.000Z',
+      tool_name: 'Write',
+      decision: 'ask',
+      reason: 'Creating deployment files requires explicit confirmation.',
+      platform: 'windsurf',
+      target: '/opt/dollhouse/release-notes.md',
+      targetLabel: 'File',
+      details: [
+        { label: 'Platform', value: 'windsurf', monospace: true },
+        { label: 'File', value: '/opt/dollhouse/release-notes.md', monospace: true },
+        { label: 'Matched Pattern', value: 'Write:*', monospace: true },
+        { label: 'Policy Source', value: 'confirm-generated-files', monospace: true },
+      ],
+    },
+    {
+      id: 'preview-deny-websearch',
+      timestamp: '2026-04-15T21:23:41.000Z',
+      tool_name: 'WebSearch',
+      decision: 'deny',
+      reason: 'External browsing is disabled for this local-only workflow.',
+      platform: 'gemini_cli',
+      target: 'current vulnerability advisories',
+      targetLabel: 'Query',
+      details: [
+        { label: 'Platform', value: 'gemini_cli', monospace: true },
+        { label: 'Query', value: 'current vulnerability advisories', monospace: true },
+        { label: 'Matched Pattern', value: 'WebSearch:*', monospace: true },
+        { label: 'Policy Source', value: 'local-only-research', monospace: true },
+      ],
+    },
+  ];
 
   async function fetchPermissionStatus(sessionId) {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
@@ -311,11 +416,22 @@
     if (!feed) return;
 
     const decisions = data.recentDecisions || [];
+    const openAuditEntryIds = modalFeed ? collectOpenAuditEntryIds(modalFeed) : new Set();
     if (decisions.length === 0) {
-      const empty = '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
-      feed.innerHTML = empty;
-      if (modalFeed) modalFeed.innerHTML = empty;
-      if (modalCount) modalCount.textContent = '0 captured entries';
+      if (lastDecisionId === PREVIEW_DECISION_SENTINEL) return;
+      lastDecisionId = PREVIEW_DECISION_SENTINEL;
+      latestAuditDecisions = AUDIT_PREVIEW_DECISIONS;
+      latestAuditIsPreview = true;
+      const previewNote = `
+        <div class="perm-feed-preview-note">
+          Preview example entries are shown until live tool calls arrive.
+        </div>
+      `;
+      feed.innerHTML = previewNote + AUDIT_PREVIEW_DECISIONS.map(renderCompactDecisionRow).join('');
+      if (modalFeed) {
+        modalFeed.innerHTML = previewNote + renderAuditModal(AUDIT_PREVIEW_DECISIONS, openAuditEntryIds);
+      }
+      if (modalCount) modalCount.textContent = `${AUDIT_PREVIEW_DECISIONS.length} preview entries`;
       return;
     }
 
@@ -323,11 +439,13 @@
     const latestId = decisions[0]?.id;
     if (latestId === lastDecisionId) return; // no change
     lastDecisionId = latestId;
+    latestAuditDecisions = decisions;
+    latestAuditIsPreview = false;
 
     const html = decisions.map(renderCompactDecisionRow).join('');
 
     feed.innerHTML = html;
-    if (modalFeed) modalFeed.innerHTML = renderAuditModal(decisions);
+    if (modalFeed) modalFeed.innerHTML = renderAuditModal(decisions, openAuditEntryIds);
     if (modalCount) {
       modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
     }
@@ -348,17 +466,71 @@
     `;
   }
 
-  function renderAuditModal(decisions) {
+  function buildAuditMarkdown(decisions, options = {}) {
+    const heading = options.preview
+      ? '# All Sessions Audit View\n\nPreview example entries shown because no live tool calls have been captured yet.'
+      : '# All Sessions Audit View\n\nAggregate decision log across all sessions.';
+    const body = (decisions || []).map((decision) => {
+      const toolLine = `## ${getDecisionLabel(decision.decision)} · ${decision.tool_name} · ${formatExactTimestamp(decision.timestamp)}`;
+      const summaryLines = [
+        `- Platform: \`${decision.platform || 'unknown'}\``,
+      ];
+
+      if (decision.command) summaryLines.push(`- Command: \`${decision.command}\``);
+      if (decision.target) summaryLines.push(`- ${decision.targetLabel || 'Target'}: \`${decision.target}\``);
+      if (decision.reason) summaryLines.push(`- Reason: ${decision.reason}`);
+
+      const details = Array.isArray(decision.details) ? decision.details : [];
+      const detailLines = details.length > 0
+        ? `\n### Details\n${details.map(detail => `- ${detail.label}: ${detail.monospace ? `\`${detail.value}\`` : detail.value}`).join('\n')}`
+        : '';
+
+      return `${toolLine}\n${summaryLines.join('\n')}${detailLines}`;
+    }).join('\n\n');
+
+    return `${heading}\n\n${body}`.trim();
+  }
+
+  async function copyTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const fallback = document.createElement('textarea');
+    fallback.value = text;
+    fallback.setAttribute('readonly', '');
+    fallback.style.position = 'absolute';
+    fallback.style.left = '-9999px';
+    document.body.appendChild(fallback);
+    fallback.select();
+    try {
+      document.execCommand('copy');
+    } finally {
+      document.body.removeChild(fallback);
+    }
+  }
+
+  function collectOpenAuditEntryIds(container) {
+    const openEntries = container.querySelectorAll('.perm-audit-entry[open][data-decision-id]');
+    return new Set(Array.from(openEntries)
+      .map(entry => entry.getAttribute('data-decision-id'))
+      .filter((id) => typeof id === 'string' && id.length > 0));
+  }
+
+  function renderAuditModal(decisions, openAuditEntryIds = new Set()) {
     if (!decisions || decisions.length === 0) {
       return '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
     }
 
-    return decisions.map(renderAuditDecisionEntry).join('');
+    return decisions.map(decision => renderAuditDecisionEntry(decision, openAuditEntryIds)).join('');
   }
 
-  function renderAuditDecisionEntry(decision) {
+  function renderAuditDecisionEntry(decision, openAuditEntryIds) {
     const compactContext = getCompactContext(decision);
     const detailRows = Array.isArray(decision.details) ? decision.details : [];
+    const decisionId = String(decision.id || `${decision.tool_name || 'decision'}-${decision.timestamp || ''}`);
+    const isOpen = openAuditEntryIds.has(decisionId);
     const reasonBlock = decision.reason
       ? `
         <div class="perm-audit-reason-block">
@@ -392,7 +564,7 @@
       `;
 
     return `
-      <details class="perm-audit-entry">
+      <details class="perm-audit-entry" data-decision-id="${esc(decisionId)}"${isOpen ? ' open' : ''}>
         <summary class="perm-audit-summary-row">
           <span class="perm-audit-time-group">
             <span class="perm-audit-time">${esc(formatShortTime(decision.timestamp))}</span>
@@ -711,6 +883,9 @@
               <span id="perm-audit-modal-count">0 captured entries</span>
             </div>
             <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+            <button type="button" class="perm-panel-action" id="perm-audit-export-btn">
+              Copy Markdown
+            </button>
           </header>
           <div class="modal-body">
             <div class="perm-feed perm-feed--modal" id="perm-audit-modal-feed" role="log" aria-live="polite" aria-label="Full permission decision audit feed">
@@ -741,6 +916,7 @@
     const expandBtn = document.getElementById('perm-feed-expand-btn');
     const auditModal = document.getElementById('perm-audit-modal');
     const closeBtn = document.getElementById('perm-audit-modal-close');
+    const exportBtn = document.getElementById('perm-audit-export-btn');
     if (expandBtn && auditModal) {
       expandBtn.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -750,6 +926,22 @@
 
     if (closeBtn) {
       closeBtn.addEventListener('click', closeAuditModal);
+    }
+
+    if (exportBtn) {
+      exportBtn.addEventListener('click', async function () {
+        const originalText = exportBtn.textContent;
+        try {
+          await copyTextToClipboard(buildAuditMarkdown(latestAuditDecisions, { preview: latestAuditIsPreview }));
+          exportBtn.textContent = 'Copied';
+        } catch (_error) {
+          exportBtn.textContent = 'Copy failed';
+        }
+
+        window.setTimeout(function () {
+          exportBtn.textContent = originalText;
+        }, 1400);
+      });
     }
 
     if (auditModal) {
