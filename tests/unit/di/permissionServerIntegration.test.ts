@@ -410,7 +410,7 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
 
 function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    const hookProc = spawn('bash', [HOOK_SCRIPT], {
+    const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
       env: {
         HOME: os.homedir(),
         PATH: SAFE_TEST_PATH,

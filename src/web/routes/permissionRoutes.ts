@@ -44,6 +44,7 @@ interface PermissionDecisionTracker {
 
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
 const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
+type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
 
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
@@ -101,7 +102,12 @@ function normalizePermissionResponseForPlatform(
 
   const decision = extractDecision(result);
   if (NORMALIZABLE_PERMISSION_DECISIONS.has(decision)) {
-    return formatPermissionResponse(decision, platform, input, extractReason(result));
+    return formatPermissionResponse(
+      decision as NormalizablePermissionDecision,
+      platform,
+      input,
+      extractReason(result),
+    );
   }
 
   return formatPermissionResponse('allow', platform, input);
