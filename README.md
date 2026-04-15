@@ -198,6 +198,10 @@ Every MCP-AQL operation passes through the Gatekeeper — a server-side permissi
 
 **This works even if the MCP client has "Always Allow" enabled.** The Gatekeeper runs server-side — after the client approves the tool call, the Gatekeeper still enforces the active element's policies. A deny from any active element cannot be overridden by the LLM or the client.
 
+Use the two gatekeeper surfaces differently:
+- `allow` / `confirm` / `deny` are for MCP-AQL operation patterns like `read_*`, `edit_*`, `delete_element`, and `execute_agent`
+- `externalRestrictions` is for external tool and hook patterns like `Read:*`, `Edit:*`, `Bash:git status*`, and `Bash:rm *`
+
 ### How Policy Resolution Works
 
 ```
