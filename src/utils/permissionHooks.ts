@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import { access, chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from './logger.js';
 
@@ -115,6 +115,21 @@ function collectHookMarkerPaths(homeDir: string): Set<string> {
   return markerPaths;
 }
 
+async function collectHookMarkerPathsAsync(homeDir: string): Promise<Set<string>> {
+  const markerPaths = new Set<string>([getPermissionHookMarkerPath(homeDir)]);
+  const runDir = getPermissionHookRunDir(homeDir);
+  try {
+    for (const entry of await readdir(runDir)) {
+      if (isHookMarkerFilename(entry)) {
+        markerPaths.add(join(runDir, entry));
+      }
+    }
+  } catch {
+    // No run dir yet — fall through to default false.
+  }
+  return markerPaths;
+}
+
 function summarizeMarkerStatuses(markerPaths: Iterable<string>): PermissionHookStatus {
   let fallback: PermissionHookStatus = { installed: false };
   for (const markerPath of markerPaths) {
@@ -127,6 +142,8 @@ function summarizeMarkerStatuses(markerPaths: Iterable<string>): PermissionHookS
 
 function getHookWrapperBasename(host: string): string | null {
   switch (normalizeHookHost(host)) {
+    case 'vscode':
+      return 'pretooluse-vscode.sh';
     case 'cursor':
       return 'pretooluse-cursor.sh';
     case 'windsurf':
@@ -162,8 +179,32 @@ export function getClaudeHookSettingsPath(homeDir = homedir()): string {
   return join(homeDir, '.claude', 'settings.json');
 }
 
+export function getVsCodeHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.copilot', 'hooks', 'dollhouse-permissions.json');
+}
+
+export function getVsCodeUserSettingsPath(homeDir = homedir()): string {
+  const currentPlatform = platform();
+  if (currentPlatform === 'darwin') {
+    return join(homeDir, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+  }
+  if (currentPlatform === 'win32') {
+    const appData = process.env.APPDATA || join(homeDir, 'AppData', 'Roaming');
+    return join(appData, 'Code', 'User', 'settings.json');
+  }
+  return join(homeDir, '.config', 'Code', 'User', 'settings.json');
+}
+
 export function getGeminiHookSettingsPath(homeDir = homedir()): string {
   return join(homeDir, '.gemini', 'settings.json');
+}
+
+export function getCursorHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.cursor', 'hooks.json');
+}
+
+export function getWindsurfHookSettingsPath(homeDir = homedir()): string {
+  return join(homeDir, '.codeium', 'windsurf', 'hooks.json');
 }
 
 export function getCodexHookSettingsPath(homeDir = homedir()): string {
@@ -217,6 +258,14 @@ export function getPermissionHookStatus(homeDir = homedir(), host?: string): Per
   }
 
   return summarizeMarkerStatuses(collectHookMarkerPaths(homeDir));
+}
+
+export async function getPermissionHookStatusAsync(homeDir = homedir(), host?: string): Promise<PermissionHookStatus> {
+  if (host) {
+    return readHostSpecificHookStatus(homeDir, host);
+  }
+
+  return summarizeMarkerStatuses(await collectHookMarkerPathsAsync(homeDir));
 }
 
 function normalizeHooksRoot(parsed: Record<string, unknown>): Record<string, unknown[]> {
@@ -282,6 +331,13 @@ export function ensureClaudePreToolUseHook(
   return ensureCommandHook(parsed, 'PreToolUse', command, '*');
 }
 
+export function ensureVsCodePreToolUseHook(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  return ensureCommandHook(parsed, 'PreToolUse', command, '*');
+}
+
 export function ensureGeminiBeforeToolHook(
   parsed: Record<string, unknown>,
   command: string,
@@ -296,6 +352,69 @@ export function ensureCodexPreToolUseHook(
   return ensureCommandHook(parsed, 'PreToolUse', command, 'Bash', {
     statusMessage: 'Checking Bash permissions',
   });
+}
+
+export function ensureCursorPreToolUseHook(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  if (parsed.version !== 1) {
+    parsed.version = 1;
+  }
+  const hooksRoot = normalizeHooksRoot(parsed);
+  const existingEntries: Array<Record<string, unknown>> = Array.isArray(hooksRoot.preToolUse)
+    ? hooksRoot.preToolUse.filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+    : [];
+  hooksRoot.preToolUse = existingEntries;
+
+  const commandExists = existingEntries.some((entry) =>
+    entry.command === command
+    && (entry.type === 'command' || entry.type === undefined),
+  );
+  if (commandExists) {
+    return { changed: false, parsed };
+  }
+
+  existingEntries.push({
+    type: 'command',
+    command,
+    matcher: '.*',
+  });
+
+  return { changed: true, parsed };
+}
+
+export function ensureWindsurfHooks(
+  parsed: Record<string, unknown>,
+  command: string,
+): { changed: boolean; parsed: Record<string, unknown> } {
+  const hooksRoot = normalizeHooksRoot(parsed);
+  let changed = false;
+
+  const ensureEventHook = (eventName: string) => {
+    const existingEntries: Array<Record<string, unknown>> = Array.isArray(hooksRoot[eventName])
+      ? hooksRoot[eventName].filter((entry): entry is Record<string, unknown> => typeof entry === 'object' && entry !== null)
+      : [];
+    hooksRoot[eventName] = existingEntries;
+
+    const commandExists = existingEntries.some((entry) =>
+      entry.command === command && (entry.type === 'command' || entry.type === undefined),
+    );
+    if (commandExists) {
+      return;
+    }
+
+    existingEntries.push({
+      type: 'command',
+      command,
+    });
+    changed = true;
+  };
+
+  ensureEventHook('pre_run_command');
+  ensureEventHook('pre_mcp_tool_use');
+
+  return { changed, parsed };
 }
 
 async function copyHookAsset(sourcePath: string, targetPath: string): Promise<boolean> {
@@ -362,6 +481,47 @@ async function mergeClaudeSettings(settingsPath: string, command: string): Promi
   return { changed: true, backupPath };
 }
 
+async function mergeVsCodeHookSettings(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureVsCodePreToolUseHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeVsCodeUserSettings(settingsPath: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{}\n');
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const current = parsed['chat.hookFilesLocations'];
+  const locations = (current && typeof current === 'object' && !Array.isArray(current))
+    ? { ...(current as Record<string, unknown>) }
+    : {};
+
+  if (locations['~/.copilot/hooks'] === true) {
+    return { changed: false };
+  }
+
+  locations['~/.copilot/hooks'] = true;
+  parsed['chat.hookFilesLocations'] = locations;
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+  await writeFile(settingsPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
 async function mergeGeminiSettings(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
   await mkdir(dirname(settingsPath), { recursive: true });
 
@@ -370,6 +530,42 @@ async function mergeGeminiSettings(settingsPath: string, command: string): Promi
   const indent = detectIndent(raw);
   const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
   const { changed, parsed: updated } = ensureGeminiBeforeToolHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeCursorHooks(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{\n  "version": 1,\n  "hooks": {}\n}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureCursorPreToolUseHook(parsed, command);
+  if (!changed) {
+    return { changed: false };
+  }
+
+  const backupPath = await writeBackupIfPresent(settingsPath, raw);
+
+  await writeFile(settingsPath, JSON.stringify(updated, null, indent) + '\n', 'utf-8');
+  return { changed: true, backupPath };
+}
+
+async function mergeWindsurfHooks(settingsPath: string, command: string): Promise<{ changed: boolean; backupPath?: string }> {
+  await mkdir(dirname(settingsPath), { recursive: true });
+
+  const raw = await readOptionalUtf8(settingsPath, '{\n  "hooks": {}\n}\n');
+
+  const indent = detectIndent(raw);
+  const parsed = raw.trim().length === 0 ? {} : JSON.parse(raw) as Record<string, unknown>;
+  const { changed, parsed: updated } = ensureWindsurfHooks(parsed, command);
   if (!changed) {
     return { changed: false };
   }
@@ -516,6 +712,7 @@ async function installHookAssetsForHost(
 
   const sharedStat = statSync(sharedSourcePath);
   if (!sharedStat.isFile()) {
+    logger.warn(`[PermissionHooks] Shared hook bridge missing for ${normalizedClient}: ${sharedSourcePath}`);
     throw new Error(`Permission hook source script not found: ${sharedSourcePath}`);
   }
   await copyHookAsset(sharedSourcePath, sharedTargetPath);
@@ -528,6 +725,7 @@ async function installHookAssetsForHost(
   const wrapperSourcePath = getHookSourcePath(normalizedClient);
   const wrapperStat = statSync(wrapperSourcePath);
   if (!wrapperStat.isFile()) {
+    logger.warn(`[PermissionHooks] Wrapper hook script missing for ${normalizedClient}: ${wrapperSourcePath}`);
     throw new Error(`Permission hook wrapper script not found: ${wrapperSourcePath}`);
   }
   await copyHookAsset(wrapperSourcePath, wrapperTargetPath);
@@ -566,6 +764,42 @@ async function installClaudeCodePermissionHook(
   };
 }
 
+async function installVsCodePermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'vscode';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getVsCodeHookSettingsPath(homeDir);
+  const userSettingsPath = getVsCodeUserSettingsPath(homeDir);
+  const hookResult = await mergeVsCodeHookSettings(settingsPath, `bash ${scriptPath}`);
+  const userSettingsResult = await mergeVsCodeUserSettings(userSettingsPath);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [userSettingsPath],
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    additionalPaths: [userSettingsPath],
+    markerPath,
+    backupPath: hookResult.backupPath ?? userSettingsResult.backupPath,
+    message: 'Installed VS Code permission hook and enabled chat.hookFilesLocations for ~/.copilot/hooks.',
+  };
+}
+
 async function installGeminiCliPermissionHook(
   homeDir: string,
   installedAt: string,
@@ -595,6 +829,70 @@ async function installGeminiCliPermissionHook(
     markerPath,
     backupPath: settingsResult.backupPath,
     message: 'Installed Gemini CLI permission hook and updated settings.json.',
+  };
+}
+
+async function installCursorPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'cursor';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getCursorHookSettingsPath(homeDir);
+  const settingsResult = await mergeCursorHooks(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Cursor permission hook and updated hooks.json.',
+  };
+}
+
+async function installWindsurfPermissionHook(
+  homeDir: string,
+  installedAt: string,
+  sourceScriptPath?: string,
+): Promise<InstallPermissionHookResult> {
+  const host = 'windsurf';
+  const { scriptPath } = await installHookAssetsForHost(host, homeDir, sourceScriptPath);
+  const settingsPath = getWindsurfHookSettingsPath(homeDir);
+  const settingsResult = await mergeWindsurfHooks(settingsPath, `bash ${scriptPath}`);
+  const markerPath = await writeHookMarker(homeDir, {
+    host,
+    scriptPath,
+    settingsPath,
+    configured: true,
+    assetsPrepared: true,
+    installedAt,
+  });
+
+  return {
+    supported: true,
+    installed: true,
+    configured: true,
+    assetsPrepared: true,
+    host,
+    scriptPath,
+    settingsPath,
+    markerPath,
+    backupPath: settingsResult.backupPath,
+    message: 'Installed Windsurf permission hooks and updated hooks.json.',
   };
 }
 
@@ -674,8 +972,20 @@ export async function installPermissionHook(
     return installClaudeCodePermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
+  if (normalizedClient === 'vscode') {
+    return installVsCodePermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
   if (normalizedClient === 'gemini-cli') {
     return installGeminiCliPermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
+  if (normalizedClient === 'cursor') {
+    return installCursorPermissionHook(homeDir, installedAt, options.sourceScriptPath);
+  }
+
+  if (normalizedClient === 'windsurf') {
+    return installWindsurfPermissionHook(homeDir, installedAt, options.sourceScriptPath);
   }
 
   if (normalizedClient === 'codex') {

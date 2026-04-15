@@ -6,13 +6,20 @@ import { join } from 'node:path';
 import {
   ensureClaudePreToolUseHook,
   ensureCodexPreToolUseHook,
+  ensureCursorPreToolUseHook,
   ensureGeminiBeforeToolHook,
+  ensureVsCodePreToolUseHook,
+  ensureWindsurfHooks,
   getCodexConfigPath,
   getCodexHookSettingsPath,
+  getCursorHookSettingsPath,
   getGeminiHookSettingsPath,
   getPermissionHookMarkerPath,
   getPermissionHookScriptPath,
   getPermissionHookStatus,
+  getVsCodeHookSettingsPath,
+  getVsCodeUserSettingsPath,
+  getWindsurfHookSettingsPath,
   installPermissionHook,
 } from '../../../src/utils/permissionHooks.js';
 
@@ -99,6 +106,31 @@ describe('permissionHooks', () => {
     });
   });
 
+  describe('ensureVsCodePreToolUseHook', () => {
+    it('adds a PreToolUse command hook when missing', () => {
+      const parsed = { hooks: {} } as Record<string, unknown>;
+
+      const result = ensureVsCodePreToolUseHook(parsed, 'bash ~/.dollhouse/hooks/pretooluse-vscode.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        hooks: {
+          PreToolUse: [
+            {
+              matcher: '*',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'bash ~/.dollhouse/hooks/pretooluse-vscode.sh',
+                },
+              ],
+            },
+          ],
+        },
+      });
+    });
+  });
+
   describe('ensureCodexPreToolUseHook', () => {
     it('adds a Bash-only PreToolUse command hook when missing', () => {
       const parsed = { hooks: {} } as Record<string, unknown>;
@@ -118,6 +150,54 @@ describe('permissionHooks', () => {
                   statusMessage: 'Checking Bash permissions',
                 },
               ],
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  describe('ensureCursorPreToolUseHook', () => {
+    it('adds a preToolUse command hook when missing', () => {
+      const parsed = { version: 1, hooks: {} } as Record<string, unknown>;
+
+      const result = ensureCursorPreToolUseHook(parsed, 'bash ~/.dollhouse/hooks/pretooluse-cursor.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        version: 1,
+        hooks: {
+          preToolUse: [
+            {
+              type: 'command',
+              command: 'bash ~/.dollhouse/hooks/pretooluse-cursor.sh',
+              matcher: '.*',
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  describe('ensureWindsurfHooks', () => {
+    it('adds pre_run_command and pre_mcp_tool_use hooks when missing', () => {
+      const parsed = { hooks: {} } as Record<string, unknown>;
+
+      const result = ensureWindsurfHooks(parsed, 'bash ~/.dollhouse/hooks/pretooluse-windsurf.sh');
+
+      expect(result.changed).toBe(true);
+      expect(result.parsed).toEqual({
+        hooks: {
+          pre_run_command: [
+            {
+              type: 'command',
+              command: 'bash ~/.dollhouse/hooks/pretooluse-windsurf.sh',
+            },
+          ],
+          pre_mcp_tool_use: [
+            {
+              type: 'command',
+              command: 'bash ~/.dollhouse/hooks/pretooluse-windsurf.sh',
             },
           ],
         },
@@ -205,6 +285,143 @@ describe('permissionHooks', () => {
         host: 'gemini-cli',
         scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-gemini.sh'),
         settingsPath: getGeminiHookSettingsPath(tempHome),
+      });
+    });
+
+    it('installs VS Code hook settings and updates chat.hookFilesLocations', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('vscode', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+        now: new Date('2026-04-14T12:15:00.000Z'),
+      });
+
+      expect(result.supported).toBe(true);
+      expect(result.installed).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.assetsPrepared).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh'));
+      expect(result.settingsPath).toBe(getVsCodeHookSettingsPath(tempHome));
+      expect(result.additionalPaths).toEqual([getVsCodeUserSettingsPath(tempHome)]);
+
+      const hooksRaw = await readFile(getVsCodeHookSettingsPath(tempHome), 'utf-8');
+      const hooks = JSON.parse(hooksRaw);
+      expect(hooks.hooks.PreToolUse).toEqual([
+        {
+          matcher: '*',
+          hooks: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh')}`,
+            },
+          ],
+        },
+      ]);
+
+      const userSettingsRaw = await readFile(getVsCodeUserSettingsPath(tempHome), 'utf-8');
+      const userSettings = JSON.parse(userSettingsRaw);
+      expect(userSettings['chat.hookFilesLocations']).toEqual({
+        '~/.copilot/hooks': true,
+      });
+
+      expect(getPermissionHookStatus(tempHome, 'vscode')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'vscode',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-vscode.sh'),
+        settingsPath: getVsCodeHookSettingsPath(tempHome),
+        additionalPaths: [getVsCodeUserSettingsPath(tempHome)],
+      });
+    });
+
+    it('installs Cursor hook settings and writes a host-specific marker', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('cursor', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+        now: new Date('2026-04-14T12:20:00.000Z'),
+      });
+
+      expect(result.supported).toBe(true);
+      expect(result.installed).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.assetsPrepared).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-cursor.sh'));
+      expect(result.settingsPath).toBe(getCursorHookSettingsPath(tempHome));
+
+      const settingsRaw = await readFile(getCursorHookSettingsPath(tempHome), 'utf-8');
+      const settings = JSON.parse(settingsRaw);
+      expect(settings).toEqual({
+        version: 1,
+        hooks: {
+          preToolUse: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-cursor.sh')}`,
+              matcher: '.*',
+            },
+          ],
+        },
+      });
+
+      expect(getPermissionHookStatus(tempHome, 'cursor')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'cursor',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-cursor.sh'),
+        settingsPath: getCursorHookSettingsPath(tempHome),
+      });
+    });
+
+    it('installs Windsurf hook settings and writes a host-specific marker', async () => {
+      const sourceScript = join(tempHome, 'pretooluse-dollhouse.sh');
+      await writeFile(sourceScript, '#!/bin/bash\necho ok\n', 'utf-8');
+
+      const result = await installPermissionHook('windsurf', {
+        homeDir: tempHome,
+        sourceScriptPath: sourceScript,
+        now: new Date('2026-04-14T12:25:00.000Z'),
+      });
+
+      expect(result.supported).toBe(true);
+      expect(result.installed).toBe(true);
+      expect(result.configured).toBe(true);
+      expect(result.assetsPrepared).toBe(true);
+      expect(result.scriptPath).toBe(join(tempHome, '.dollhouse', 'hooks', 'pretooluse-windsurf.sh'));
+      expect(result.settingsPath).toBe(getWindsurfHookSettingsPath(tempHome));
+
+      const settingsRaw = await readFile(getWindsurfHookSettingsPath(tempHome), 'utf-8');
+      const settings = JSON.parse(settingsRaw);
+      expect(settings).toEqual({
+        hooks: {
+          pre_run_command: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-windsurf.sh')}`,
+            },
+          ],
+          pre_mcp_tool_use: [
+            {
+              type: 'command',
+              command: `bash ${join(tempHome, '.dollhouse', 'hooks', 'pretooluse-windsurf.sh')}`,
+            },
+          ],
+        },
+      });
+
+      expect(getPermissionHookStatus(tempHome, 'windsurf')).toEqual({
+        installed: true,
+        configured: true,
+        assetsPrepared: true,
+        host: 'windsurf',
+        scriptPath: join(tempHome, '.dollhouse', 'hooks', 'pretooluse-windsurf.sh'),
+        settingsPath: getWindsurfHookSettingsPath(tempHome),
       });
     });
 

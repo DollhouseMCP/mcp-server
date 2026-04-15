@@ -66,6 +66,20 @@ npx @dollhousemcp/mcp-server@latest --web
 
 Opens a browser-based setup wizard with one-click install for Claude Desktop, Claude Code, Cursor, VS Code, Codex, Gemini CLI, Windsurf, Cline, and LM Studio. Detects existing installations, supports auto-updating and pinned versions.
 
+**Permission hook support** in the setup wizard currently breaks down like this:
+
+| Platform | Setup status | Permission hook status |
+| --- | --- | --- |
+| Claude Code | One-click install | Full native support |
+| Cursor | One-click install | Partial native support |
+| VS Code | One-click install | Partial native support |
+| Codex | One-click install | Partial native support, Bash-only |
+| Gemini CLI | One-click install | Partial native support |
+| Windsurf | One-click install | Partial native support |
+| Cline | One-click install | MCP setup only in this release |
+| LM Studio | One-click install | MCP setup only in this release |
+| Claude Desktop | One-click install | No native permission hook path in this release |
+
 **Claude Code** (one command):
 
 ```bash
