@@ -18,6 +18,7 @@ const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
 const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const BASH_BINARY = '/bin/bash';
 
 describe('Permission Server Integration', () => {
 
@@ -163,7 +164,7 @@ describe('Permission Server Integration', () => {
     itBash('hook script should fail open when port file is missing', (done) => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
-        execFile('bash', [HOOK_SCRIPT], {
+        execFile(BASH_BINARY, [HOOK_SCRIPT], {
           env: { HOME: os.homedir(), PATH: SAFE_TEST_PATH },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
@@ -206,7 +207,7 @@ describe('Permission Server Integration', () => {
       // Run hook script
       const { spawn } = await import('node:child_process');
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
-        const hookProc = spawn('bash', [HOOK_SCRIPT], {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
           env: {
             HOME: os.homedir(),
             PATH: SAFE_TEST_PATH,
