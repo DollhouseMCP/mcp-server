@@ -529,11 +529,11 @@ describe('Web console cleanup regressions', () => {
                 decision: 'ask',
                 reason: 'Needs confirmation before editing a protected file.',
                 platform: 'cursor',
-                target: '/tmp/important.txt',
+                target: '/opt/dollhouse/important.txt',
                 targetLabel: 'File',
                 details: [
                   { label: 'Platform', value: 'cursor', monospace: true },
-                  { label: 'File', value: '/tmp/important.txt', monospace: true },
+                  { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
                   { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
                 ],
               },
@@ -568,7 +568,7 @@ describe('Web console cleanup regressions', () => {
     expect(modal?.hasAttribute('open')).toBe(true);
     expect(win.document.getElementById('perm-audit-modal-title')?.textContent).toContain('All Sessions Audit View');
     expect(modalFeed?.textContent).toContain('Needs confirmation before editing a protected file.');
-    expect(modalFeed?.textContent).toContain('/tmp/important.txt');
+    expect(modalFeed?.textContent).toContain('/opt/dollhouse/important.txt');
     expect(modalFeed?.textContent).toContain('Matched Pattern');
     expect(modalFeed?.textContent).toContain('Exact Time');
     expect(modalFeed?.querySelector('.perm-audit-entry')).not.toBeNull();

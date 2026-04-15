@@ -597,7 +597,7 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({
           tool_name: 'Edit',
-          input: { file_path: '/tmp/example.txt' },
+          input: { file_path: '/opt/dollhouse/example.txt' },
           platform: 'cursor',
         });
 
@@ -607,12 +607,12 @@ describe('permissionRoutes', () => {
         tool_name: 'Edit',
         decision: 'ask',
         platform: 'cursor',
-        target: '/tmp/example.txt',
+        target: '/opt/dollhouse/example.txt',
         targetLabel: 'File',
       }));
       expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
         { label: 'Platform', value: 'cursor', monospace: true },
-        { label: 'File', value: '/tmp/example.txt', monospace: true },
+        { label: 'File', value: '/opt/dollhouse/example.txt', monospace: true },
         { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
       ]));
     });
