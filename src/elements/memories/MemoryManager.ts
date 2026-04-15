@@ -117,9 +117,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private readonly metadataService: MetadataService;
+  /** Issue #1948: Retention policy service ref, passed to Memory instances at construction. */
+  private _retentionPolicyService?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
-  // Track active memories by name (stable identifier) - Issue #18 Phase 4
-  private activeMemoryNames: Set<string> = new Set();
+  private readonly _localActiveMemoryNames: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {
     super(
@@ -131,6 +132,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -140,6 +143,16 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1948: Set retention policy service (called by Container after registration). */
+  setRetentionPolicyService(service: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean }): void {
+    this._retentionPolicyService = service;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('memories', this._localActiveMemoryNames);
   }
 
   /**
@@ -284,7 +297,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const { metadata, content: markdownContentFromFile } = this.parseMemoryFile(parsed);
 
       // Create memory instance
-      const memory = new Memory(metadata, this.metadataService);
+      const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
 
       // Fix #918: Read instructions from root-level YAML (where serializeElement writes them).
       // Previously instructions were written to root but never read back — silent data loss.
@@ -745,7 +758,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Issue #18 Phase 4: Apply active status to memories in the active set
       for (const memory of resultMemories) {
-        if (this.activeMemoryNames.has(memory.metadata.name)) {
+        if (this.getActivationSet().has(memory.metadata.name)) {
           await memory.activate();
         }
       }
@@ -783,7 +796,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeMemoryNames.add(memory.metadata.name);
+    this.getActivationSet().add(memory.metadata.name);
 
     // Update memory status in memory
     await memory.activate();
@@ -820,7 +833,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Remove from active set
-    this.activeMemoryNames.delete(memory.metadata.name);
+    this.getActivationSet().delete(memory.metadata.name);
 
     // Update memory status in memory
     await memory.deactivate();
@@ -840,7 +853,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   async getActiveMemories(): Promise<Memory[]> {
     const memories = await this.list();
-    return memories.filter(m => this.activeMemoryNames.has(m.metadata.name));
+    return memories.filter(m => this.getActivationSet().has(m.metadata.name));
   }
 
   /**
@@ -1072,12 +1085,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('memories');
 
     // Below threshold — no action needed
-    if (this.activeMemoryNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeMemoryNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active memories limit reached (${max}). ` +
         `Consider deactivating unused memories or setting DOLLHOUSE_MAX_ACTIVE_MEMORIES to a higher value.`
@@ -1087,7 +1100,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         type: 'MEMORY_LOADED',
         severity: 'MEDIUM',
         source: 'MemoryManager.checkAndCleanupActiveSet',
-        details: `Active memories limit reached: ${this.activeMemoryNames.size}/${max}`
+        details: `Active memories limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -1102,19 +1115,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   private async cleanupStaleActiveMemories(): Promise<void> {
     try {
-      const startSize = this.activeMemoryNames.size;
+      const startSize = this.getActivationSet().size;
       const memories = await this.list();
       const existingMemoryNames = new Set(memories.map(m => m.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeMemoryNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingMemoryNames.has(activeName)) {
-          this.activeMemoryNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeMemoryNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {
@@ -1550,7 +1563,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const { content, instructions, ...metadataFields } = metadata;
 
     // Create instance
-    const memory = new Memory(metadataFields, this.metadataService);
+    const memory = new Memory(metadataFields, this.metadataService, this, this._retentionPolicyService);
 
     // Set instructions if provided (v2.0 dual-field: memory-level directives)
     if (instructions) {
@@ -1614,7 +1627,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Create memory instance
-    const memory = new Memory(metadata, this.metadataService);
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
 
     // Load entries if present
     if (entries) {
@@ -1734,7 +1747,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   protected override createElement(metadata: MemoryMetadata, _content: string): Memory {
-    const memory = new Memory(metadata, this.metadataService);
+    const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
     // Extract instructions from metadata if present (v2 dual-field)
     if (metadata.instructions) {
       memory.instructions = metadata.instructions;
@@ -2060,7 +2073,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
           // Activate the memory
           // FIX Issue #35: Add to activeMemoryNames set so getActiveMemories() returns it
-          this.activeMemoryNames.add(memoryName);
+          this.getActivationSet().add(memoryName);
           await memory.activate();
           loaded++;
           totalTokens += estimatedTokens;

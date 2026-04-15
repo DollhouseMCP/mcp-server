@@ -45,8 +45,30 @@ import {
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 
+/**
+ * Minimal interface for an element manager resolved by name.
+ * The resolver returns heterogeneous managers (PersonaManager, SkillManager, etc.)
+ * — this captures the common surface needed by getElementContent().
+ */
+export interface ResolvedElementManager {
+  list(): Promise<Array<{
+    metadata: { name: string; [key: string]: unknown };
+    content?: string;
+    instructions?: string;
+    getEntries?: () => unknown[];
+    elements?: Record<string, unknown>;
+    extensions?: Record<string, unknown>;
+  }>>;
+}
+
 export interface AgentManagerDeps extends ElementManagerDeps {
   baseDir: string;
+  /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
+  elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
+  dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
+  verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 }
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -97,18 +119,13 @@ export class AgentManager extends BaseElementManager<Agent> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private metadataService: MetadataService;
-  // Track active agents by name (stable identifier)
-  private activeAgentNames: Set<string> = new Set();
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActiveAgentNames: Set<string> = new Set();
 
-  // Static resolver for element manager lookup (DI pattern)
-  // This allows Agent instances to resolve managers without tight coupling
-  private static elementManagerResolver?: (managerName: string) => any;
-
-  // Issue #402: Static resolver for DangerZoneEnforcer (DI pattern)
-  private static dangerZoneEnforcerResolver?: () => import('./types.js').DangerZoneBlocker;
-
-  // Issue #142: Static resolver for VerificationStore (DI pattern)
-  private static verificationStoreResolver?: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+  private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 
   constructor(deps: AgentManagerDeps) {
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
@@ -122,6 +139,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -131,6 +150,15 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
+    // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+    this._elementManagerResolver = deps.elementManagerResolver;
+    this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
+    this._verificationStore = deps.verificationStore;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('agents', this._localActiveAgentNames);
   }
 
   protected override getElementLabel(): string {
@@ -138,49 +166,25 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Configure the element manager resolver for element-agnostic activation
-   * This is called by the DI container during initialization
-   * Follows the same pattern as Memory.configureMemoryManagerResolver
-   *
-   * @param resolver Function that takes a manager name and returns the manager instance
+   * Issue #1948: Set element manager resolver on this instance.
+   * Primarily for tests that need to configure after construction.
    */
-  public static setElementManagerResolver(resolver: (managerName: string) => any): void {
-    AgentManager.elementManagerResolver = resolver;
+  setElementManagerResolver(resolver: (managerName: string) => ResolvedElementManager | null): void {
+    this._elementManagerResolver = resolver;
   }
 
-  /**
-   * Issue #402: Set DangerZoneEnforcer resolver for DI injection.
-   * Called by the DI container during initialization.
-   */
-  public static setDangerZoneEnforcerResolver(resolver: () => import('./types.js').DangerZoneBlocker): void {
-    AgentManager.dangerZoneEnforcerResolver = resolver;
+  /** Issue #1948: Set DangerZoneEnforcer on this instance. */
+  setDangerZoneEnforcerInstance(enforcer: import('./types.js').DangerZoneBlocker): void {
+    this._dangerZoneEnforcer = enforcer;
   }
 
-  /**
-   * Issue #142: Set VerificationStore resolver for DI injection.
-   * Called by the DI container during initialization.
-   */
-  public static setVerificationStoreResolver(resolver: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
-    AgentManager.verificationStoreResolver = resolver;
+  /** Issue #1948: Set VerificationStore on this instance. */
+  setVerificationStoreInstance(store: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
+    this._verificationStore = store;
   }
 
-  /**
-   * Get the element manager resolver
-   * @private
-   */
-  private static getElementManagerResolver(): ((managerName: string) => any) | undefined {
-    return AgentManager.elementManagerResolver;
-  }
-
-  /**
-   * Reset static resolvers (for test cleanup)
-   * Call this in afterEach hooks to prevent test isolation issues
-   */
-  public static resetResolvers(): void {
-    AgentManager.elementManagerResolver = undefined;
-    AgentManager.dangerZoneEnforcerResolver = undefined;
-    AgentManager.verificationStoreResolver = undefined;
-  }
+  /** @deprecated Issue #1948: Static resolvers removed. Use constructor injection. */
+  public static resetResolvers(): void { /* no-op */ }
 
   /**
    * Prepare directory structure for agents and state files.
@@ -777,7 +781,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {
-      if (this.activeAgentNames.has(agent.metadata.name)) {
+      if (this.getActivationSet().has(agent.metadata.name)) {
         // Activate the agent to set status to ACTIVE
         await agent.activate();
       }
@@ -809,7 +813,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeAgentNames.add(agent.metadata.name);
+    this.getActivationSet().add(agent.metadata.name);
 
     // Update agent status in memory
     await agent.activate();
@@ -858,7 +862,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Remove from active set
-    this.activeAgentNames.delete(agent.metadata.name);
+    this.getActivationSet().delete(agent.metadata.name);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -890,7 +894,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async getActiveAgents(): Promise<Agent[]> {
     const agents = await this.list();
-    return agents.filter(a => this.activeAgentNames.has(a.metadata.name));
+    return agents.filter(a => this.getActivationSet().has(a.metadata.name));
   }
 
   /**
@@ -1455,8 +1459,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementName: string,
     executionContext?: ExecutionContext
   ): Promise<string> {
-    // Get the static resolver
-    const resolver = AgentManager.getElementManagerResolver();
+    // Issue #1948: Use instance-injected resolver instead of static
+    const resolver = this._elementManagerResolver;
     if (!resolver) {
       logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
       return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
@@ -1504,7 +1508,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find((e: any) => e.metadata.name === elementName);
+      const element = elements.find(e => e.metadata.name === elementName);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
@@ -1519,7 +1523,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           return element.instructions || '';
 
         case 'memories': {
-          const entries = element.getEntries();
+          const entries = element.getEntries?.() ?? [];
           return `Memory '${elementName}' with ${entries.length} entries`;
         }
 
@@ -1534,8 +1538,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
 
         case 'agents': {
-          const instructions = element.extensions?.instructions || '';
-          return instructions;
+          const raw = element.extensions?.instructions;
+          return typeof raw === 'string' ? raw : '';
         }
 
         default:
@@ -1556,12 +1560,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('agents');
 
     // Below threshold — no action needed
-    if (this.activeAgentNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeAgentNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active agents limit reached (${max}). ` +
         `Consider deactivating unused agents or setting DOLLHOUSE_MAX_ACTIVE_AGENTS to a higher value.`
@@ -1571,11 +1575,11 @@ export class AgentManager extends BaseElementManager<Agent> {
         type: 'AGENT_ACTIVATED',
         severity: 'MEDIUM',
         source: 'AgentManager.checkAndCleanupActiveSet',
-        details: `Active agents limit reached (${this.activeAgentNames.size}/${max})`,
+        details: `Active agents limit reached (${this.getActivationSet().size}/${max})`,
         additionalData: {
-          activeCount: this.activeAgentNames.size,
+          activeCount: this.getActivationSet().size,
           maxAllowed: max,
-          activeAgentNames: Array.from(this.activeAgentNames),
+          activeAgentNames: Array.from(this.getActivationSet()),
         }
       });
     }
@@ -1591,19 +1595,19 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async cleanupStaleActiveAgents(): Promise<void> {
     try {
-      const startSize = this.activeAgentNames.size;
+      const startSize = this.getActivationSet().size;
       const agents = await this.list();
       const existingAgentNames = new Set(agents.map(a => a.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeAgentNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingAgentNames.has(activeName)) {
-          this.activeAgentNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeAgentNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {
@@ -2628,8 +2632,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       currentStepOutcome: params.outcome,
       nextActionHint: params.nextActionHint,
       riskScore: params.riskScore,
-      dangerZoneEnforcer: AgentManager.dangerZoneEnforcerResolver?.(),
-      verificationStore: AgentManager.verificationStoreResolver?.(),
+      dangerZoneEnforcer: this._dangerZoneEnforcer,
+      verificationStore: this._verificationStore,
       goalDescription: activeGoal.description,
       goalId: activeGoal.id,
     });

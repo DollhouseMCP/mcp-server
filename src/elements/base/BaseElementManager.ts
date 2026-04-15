@@ -64,6 +64,10 @@ export interface BaseElementManagerOptions {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  /** Issue #1946: ContextTracker for session-scoped activation state resolution */
+  contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
+  /** Issue #1946: Registry for per-session activation state */
+  activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
 }
 
 /**
@@ -82,6 +86,10 @@ export interface ElementManagerDeps {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  /** Issue #1946: ContextTracker for session-scoped activation state resolution */
+  contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
+  /** Issue #1946: Registry for per-session activation state */
+  activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
 }
 
 /**
@@ -127,6 +135,11 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   private readonly elementType: ElementType;
   private readonly memoryBudget?: CacheMemoryBudget;
   protected readonly backupService?: BackupService;
+
+  /** Issue #1946: ContextTracker for session-scoped activation state */
+  protected readonly contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
+  /** Issue #1946: Registry for per-session activation state */
+  protected readonly activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
 
   /** Map plural ElementType enum values to singular ContentValidator context.
    *  Partial because not all element types have a content context (e.g., ensembles). */
@@ -208,6 +221,38 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this.eventDispatcher;
   }
 
+  /**
+   * Resolve the current session's activation Set for the given element type key.
+   * Returns the Set from SessionActivationRegistry if available, or the provided
+   * fallback Set when the registry is not injected (tests, backward compat).
+   *
+   * Issue #1946: Per-session activation state. All 5 managers use this instead
+   * of their own private Set fields.
+   *
+   * @param setKey - Which Set to return from SessionActivationState
+   * @param fallback - Local Set to use when registry is not available
+   */
+  private _activationFallbackWarned = false;
+
+  protected resolveActivationSet(
+    setKey: 'personas' | 'skills' | 'agents' | 'memories' | 'ensembles',
+    fallback: Set<string>,
+  ): Set<string> {
+    if (!this.activationRegistry) {
+      if (!this._activationFallbackWarned && process.env.NODE_ENV !== 'test') {
+        this._activationFallbackWarned = true;
+        logger.warn(
+          `[${this.constructor.name}] SessionActivationRegistry not injected — using local fallback Set. ` +
+          `This indicates a DI configuration issue. Activation state will not be session-scoped.`
+        );
+      }
+      return fallback;
+    }
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.activationRegistry.getDefaultSessionId();
+    return this.activationRegistry.getOrCreate(sessionId)[setKey];
+  }
+
   // Cache configuration constants
   private static readonly MAX_ELEMENT_CACHE_SIZE = 1000;
   private static readonly MAX_PATH_CACHE_SIZE = 1000;
@@ -235,6 +280,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.fileOperations = fileOperationsService;
     this.fileWatchService = options.fileWatchService;
     this.backupService = options.backupService;
+    this.contextTracker = options.contextTracker;
+    this.activationRegistry = options.activationRegistry;
 
     // Get the specialized validator for this element type
     this.validator = validationRegistry.getValidator(elementType);

@@ -28,6 +28,7 @@ import { EnhancedIndexManager } from "../portfolio/EnhancedIndexManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
 import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
+import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import { SkillManager } from "../elements/skills/index.js";
 import { TemplateManager } from "../elements/templates/TemplateManager.js";
 import { TemplateRenderer } from "../utils/TemplateRenderer.js";
@@ -82,9 +83,14 @@ import { ValidationService } from "../services/validation/ValidationService.js";
 import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
 import { AnthropicToDollhouseConverter, DollhouseToAnthropicConverter } from "../converters/index.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
-import { ActivationStore } from "../services/ActivationStore.js";
-import { VerificationStore } from "@dollhousemcp/safety";
+import type { IActivationStateStore } from "../state/IActivationStateStore.js";
 import { VerificationNotifier } from "../services/VerificationNotifier.js";
+import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
+import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
+import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
+import type { IConfirmationStore } from "../state/IConfirmationStore.js";
+import { SessionActivationRegistry } from "../state/SessionActivationState.js";
+import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
@@ -174,7 +180,12 @@ export class DollhouseContainer {
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
   public deferredSetupComplete = false;
 
-  constructor() {
+  /**
+   * @param lifecycleService - Optional LifecycleService instance (created before the
+   *   container in index.ts because error handlers must be installed before any async work).
+   *   Registered in the container so it's resolvable via DI like any other service.
+   */
+  constructor(lifecycleService?: import('../lifecycle/LifecycleService.js').LifecycleService) {
     // FIX: DMCP-SEC-006 - Audit DI container initialization
     SecurityMonitor.logSecurityEvent({
       type: 'PORTFOLIO_INITIALIZATION',
@@ -183,6 +194,10 @@ export class DollhouseContainer {
       details: 'Dependency injection container initializing'
     });
     this.registerServices();
+    // Issue #1948: Register LifecycleService in DI if provided
+    if (lifecycleService) {
+      this.register('LifecycleService', () => lifecycleService);
+    }
   }
 
   /**
@@ -358,6 +373,7 @@ export class DollhouseContainer {
       personaImporter: this.resolve('PersonaImporter'),
       notifier: this.resolve('StateChangeNotifier'),
       contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
       fileWatchService: this.resolve('FileWatchService'),
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
@@ -506,6 +522,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     this.register('TemplateManager', () => new TemplateManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -532,6 +550,12 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
+      // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+      elementManagerResolver: (name: string) => this.resolve(name) as import('../elements/agents/AgentManager.js').ResolvedElementManager,
+      dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
+      verificationStore: this.resolve('ChallengeStore'),
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -544,6 +568,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
     this.register('EnsembleManager', () => new EnsembleManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -556,16 +582,11 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      contextTracker: this.resolve('ContextTracker'),
+      activationRegistry: this.resolve('SessionActivationRegistry'),
     }));
-    Memory.configureMemoryManagerResolver(() => this.resolve('MemoryManager'));
-    // Issue #51: Configure retention policy resolver for Memory class
-    Memory.configureRetentionPolicyResolver(() => this.resolve('RetentionPolicyService'));
-    // Issue #111: Configure element manager resolver for AgentManager (element-agnostic activation)
-    AgentManager.setElementManagerResolver((managerName: string) => this.resolve(managerName));
-    // Issue #402: Configure DangerZoneEnforcer resolver for AgentManager (autonomy evaluation)
-    AgentManager.setDangerZoneEnforcerResolver(() => this.resolve('DangerZoneEnforcer'));
-    // Issue #142: Configure VerificationStore resolver for AgentManager (danger zone verification)
-    AgentManager.setVerificationStoreResolver(() => this.resolve('VerificationStore'));
+    // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
+    // to avoid eager resolution during constructor (breaks test containers).
 
     // QUERY SERVICES (Issue #38: Pagination, filtering, sorting)
     // These services are element-agnostic and can be used with any element type
@@ -583,23 +604,48 @@ export class DollhouseContainer {
     this.register('DollhouseToAnthropicConverter', () => new DollhouseToAnthropicConverter());
 
     // SECURITY SERVICES
+    // Issue #1948: PathValidator as DI-managed singleton (replaces static class state)
+    this.register('PathValidator', () => {
+      const personasDir = this.resolve<PortfolioManager>('PortfolioManager')
+        .getElementDir(ElementType.PERSONA);
+      const instance = new PathValidator(personasDir);
+      PathValidator.setRootInstance(instance);
+      return instance;
+    });
     // Issue #402: DangerZoneEnforcer as DI-managed singleton (replaces module-level singleton)
     this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService')
     ));
     // Shared stdio session — single source of truth for session identity
     this.register('StdioSession', () => createStdioSession());
-    // Issue #598: ActivationStore for per-session activation persistence
+    // Issue #1946: Session activation registry — maps sessionId → SessionActivationState
+    this.register('SessionActivationRegistry', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new SessionActivationRegistry(session.sessionId);
+    });
+    // Issue #598, #1945: Per-session activation persistence (file-backed)
     this.register('ActivationStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      return new ActivationStore(
+      return new FileActivationStateStore(
         this.resolve('FileOperationsService'),
         undefined,
         session.sessionId
       );
     });
-    // Issue #142: VerificationStore for danger zone challenge codes (server-side)
-    this.register('VerificationStore', () => new VerificationStore());
+    // Issue #1945: ConfirmationStore for Gatekeeper state persistence
+    this.register('ConfirmationStore', () => {
+      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      return new FileConfirmationStore(
+        this.resolve('FileOperationsService'),
+        undefined,
+        session.sessionId
+      );
+    });
+    // Issue #142: ChallengeStore for danger zone challenge codes (server-side)
+    // Issue #1945: Wrapped in IChallengeStore interface for backend swappability
+    this.register('ChallengeStore', () => new InMemoryChallengeStore());
+    // Backward-compat alias — existing code resolves 'VerificationStore'
+    this.register('VerificationStore', () => this.resolve('ChallengeStore'));
     // Issue #522: Non-blocking OS dialog notifier for verification codes
     this.register('VerificationNotifier', () => new VerificationNotifier());
     this.register('TokenManager', () => new TokenManager(
@@ -607,6 +653,11 @@ export class DollhouseContainer {
     ));
     this.register('PatternEncryptor', () => new PatternEncryptor());
     this.register('ContextTracker', () => new ContextTracker());
+    // Issue #1946: Make MetadataService session-aware for correct user attribution
+    this.resolve<MetadataService>('MetadataService').configureSessionAwareness(
+      this.resolve<ContextTracker>('ContextTracker'),
+      this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+    );
     this.register('PatternDecryptor', () => new PatternDecryptor(
       this.resolve('PatternEncryptor'),
       this.resolve('ContextTracker')
@@ -779,6 +830,15 @@ export class DollhouseContainer {
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
   public async preparePortfolio(): Promise<void> {
+    // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)
+    try {
+      const mm = this.resolve<MemoryManager>('MemoryManager');
+      mm.setRetentionPolicyService(this.resolve('RetentionPolicyService'));
+      Memory.setRootMemoryManager(mm as { list(): Promise<import('../elements/memories/Memory.js').Memory[]>; save(memory: import('../elements/memories/Memory.js').Memory, filePath?: string): Promise<void> });
+    } catch {
+      // Not available in test containers — safe to skip
+    }
+
     const timer = this.resolve<StartupTimer>('StartupTimer');
     const startTime = Date.now();
     const migrationManager = this.resolve<MigrationManager>('MigrationManager');
@@ -970,8 +1030,21 @@ export class DollhouseContainer {
 
   private async deferredActivationRestore(timer?: StartupTimer): Promise<void> {
     timer?.startPhase('activation_restore', false);
+
+    // Issue #1946: Pre-register the stdio session in the activation registry
+    // so managers resolve the correct session's Sets during restoration.
+    // Also attach the ActivationStore so ElementCRUDHandler persists to the right session.
     try {
-      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const registry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
+      const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const state = registry.getOrCreate(stdioSession.sessionId);
+      state.activationStore = this.resolve<IActivationStateStore>('ActivationStore');
+    } catch (error) {
+      logger.warn('[Container] Failed to pre-register stdio session in activation registry:', error);
+    }
+
+    try {
+      const activationStore = this.resolve<IActivationStateStore>('ActivationStore');
       await activationStore.initialize();
 
       if (activationStore.isEnabled()) {
@@ -980,6 +1053,19 @@ export class DollhouseContainer {
     } catch (error) {
       logger.warn('[Container] Activation state restoration failed:', error);
     }
+
+    // Issue #1947: Register per-session GatekeeperSession for stdio with persistence
+    try {
+      const cStore = this.resolve<IConfirmationStore>('ConfirmationStore');
+      const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
+      const stdioSess = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const stdioGkSession = new GatekeeperSession(undefined, 100, undefined, cStore, stdioSess.sessionId);
+      await stdioGkSession.initialize(); // Restores persisted confirmations from disk
+      gatekeeper.registerSession(stdioSess.sessionId, stdioGkSession);
+    } catch (error) {
+      logger.warn('[Container] Gatekeeper session registration failed:', error);
+    }
+
     timer?.endPhase('activation_restore');
   }
 
@@ -1044,7 +1130,7 @@ export class DollhouseContainer {
     try {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return null;
 
-      const activationStore = this.resolve<ActivationStore>('ActivationStore');
+      const activationStore = this.resolve<IActivationStateStore>('ActivationStore');
       const sessionId = activationStore.getSessionId();
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
       const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
@@ -1155,14 +1241,14 @@ export class DollhouseContainer {
   }
 
   /**
-   * Restore per-session activation state from the ActivationStore.
+   * Restore per-session activation state from the activation store.
    * Called during preparePortfolio() after auto-load memories.
    *
    * Issue #598: Each element type is restored independently.
    * Missing elements (deleted since last session) are skipped and pruned.
    * Auto-loaded memories are deduplicated (not activated twice).
    */
-  private async restoreActivations(store: ActivationStore): Promise<void> {
+  private async restoreActivations(store: IActivationStateStore): Promise<void> {
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
     const skillManager = this.resolve<SkillManager>('SkillManager');
     const agentManager = this.resolve<AgentManager>('AgentManager');
@@ -1172,108 +1258,48 @@ export class DollhouseContainer {
     let restoredCount = 0;
     let skippedCount = 0;
 
-    // Restore personas (uses filename if available, falls back to name)
-    // Issue #843: activatePersona() is now async — uses disk fallback for cache misses
-    for (const activation of store.getActivations('persona')) {
-      try {
-        const identifier = activation.filename || activation.name;
-        const result = await personaManager.activatePersona(identifier);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[ActivationStore] Pruning missing persona '${activation.name}'`);
-          store.removeStaleActivation('persona', activation.name);
+    const restoreType = async (
+      elementType: string,
+      activateFn: (activation: import('../state/IActivationStateStore.js').PersistedActivation) => Promise<{ success: boolean }>,
+      skip?: Set<string>,
+    ): Promise<void> => {
+      for (const activation of store.getActivations(elementType)) {
+        if (skip?.has(activation.name)) {
+          logger.debug(`[Container] ${elementType} '${activation.name}' already active (auto-loaded), skipping`);
+          continue;
+        }
+        try {
+          const result = await activateFn(activation);
+          if (result.success) {
+            restoredCount++;
+          } else {
+            logger.debug(`[Container] Pruning missing ${elementType} '${activation.name}'`);
+            store.removeStaleActivation(elementType, activation.name);
+            skippedCount++;
+          }
+        } catch {
+          logger.debug(`[Container] Skipping failed ${elementType} '${activation.name}'`);
+          store.removeStaleActivation(elementType, activation.name);
           skippedCount++;
         }
-      } catch {
-        logger.debug(`[ActivationStore] Skipping failed persona '${activation.name}'`);
-        store.removeStaleActivation('persona', activation.name);
-        skippedCount++;
       }
-    }
+    };
 
-    // Restore skills
-    // NOTE: activateSkill() returns {success, message} — it never throws on not-found.
-    for (const activation of store.getActivations('skill')) {
-      try {
-        const result = await skillManager.activateSkill(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[ActivationStore] Pruning missing skill '${activation.name}'`);
-          store.removeStaleActivation('skill', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[ActivationStore] Skipping failed skill '${activation.name}'`);
-        store.removeStaleActivation('skill', activation.name);
-        skippedCount++;
-      }
-    }
+    // Personas use filename if available (Issue #843)
+    await restoreType('persona', (a) => personaManager.activatePersona(a.filename || a.name));
+    await restoreType('skill', (a) => skillManager.activateSkill(a.name));
+    await restoreType('agent', (a) => agentManager.activateAgent(a.name));
 
-    // Restore agents
-    for (const activation of store.getActivations('agent')) {
-      try {
-        const result = await agentManager.activateAgent(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[ActivationStore] Pruning missing agent '${activation.name}'`);
-          store.removeStaleActivation('agent', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[ActivationStore] Skipping failed agent '${activation.name}'`);
-        store.removeStaleActivation('agent', activation.name);
-        skippedCount++;
-      }
-    }
-
-    // Restore memories (dedup against auto-loaded ones)
+    // Memories: dedup against auto-loaded ones
     const activeMemories = await memoryManager.getActiveMemories();
     const activeMemoryNames = new Set(activeMemories.map(m => m.metadata.name));
-    for (const activation of store.getActivations('memory')) {
-      if (activeMemoryNames.has(activation.name)) {
-        logger.debug(`[ActivationStore] Memory '${activation.name}' already active (auto-loaded), skipping`);
-        continue;
-      }
-      try {
-        const result = await memoryManager.activateMemory(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[ActivationStore] Pruning missing memory '${activation.name}'`);
-          store.removeStaleActivation('memory', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[ActivationStore] Skipping failed memory '${activation.name}'`);
-        store.removeStaleActivation('memory', activation.name);
-        skippedCount++;
-      }
-    }
+    await restoreType('memory', (a) => memoryManager.activateMemory(a.name), activeMemoryNames);
 
-    // Restore ensembles
-    for (const activation of store.getActivations('ensemble')) {
-      try {
-        const result = await ensembleManager.activateEnsemble(activation.name);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[ActivationStore] Pruning missing ensemble '${activation.name}'`);
-          store.removeStaleActivation('ensemble', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[ActivationStore] Skipping failed ensemble '${activation.name}'`);
-        store.removeStaleActivation('ensemble', activation.name);
-        skippedCount++;
-      }
-    }
+    await restoreType('ensemble', (a) => ensembleManager.activateEnsemble(a.name));
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(
-        `[ActivationStore] Restored ${restoredCount} element(s), skipped ${skippedCount} stale for session '${store.getSessionId()}'`
+        `[Container] Restored ${restoredCount} element(s), skipped ${skippedCount} stale for session '${store.getSessionId()}'`
       );
     }
   }
@@ -1288,7 +1314,9 @@ export class DollhouseContainer {
       throw new Error("Persona directory not initialized. Call preparePortfolio() first.");
     }
 
-    PathValidator.initialize(this.personasDir);
+    // Issue #1948: PathValidator initialized via DI (instance-based, no static mutation)
+    // Resolving here ensures it's created with the correct personasDir
+    this.resolve<PathValidator>('PathValidator');
 
     const indicatorService = this.resolve<PersonaIndicatorService>('PersonaIndicatorService');
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
@@ -1340,9 +1368,11 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       this.resolve('ElementQueryService'),
       this.resolve('ValidationRegistry'),
-      this.resolve('ActivationStore'),
+      this.resolve<IActivationStateStore>('ActivationStore'),
       this.resolve('BackupService'),
-      this.resolve('PolicyExportService')
+      this.resolve('PolicyExportService'),
+      this.resolve('SessionActivationRegistry'),
+      this.resolve('ContextTracker'),
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);
@@ -1426,11 +1456,13 @@ export class DollhouseContainer {
 
     // Issue #452: Create Gatekeeper policy engine instance
     // Issue #679: allowElementPolicyOverrides wired from env (DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES)
+    // Issue #1947: Gatekeeper with per-session resolution via ContextTracker
+    const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
     const gatekeeper = new Gatekeeper(undefined, {
       enableAuditLogging: true,
       requireDangerZoneVerification: true,
       allowElementPolicyOverrides: env.DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES,
-    });
+    }, this.resolve<ContextTracker>('ContextTracker'), stdioSession.sessionId);
 
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
@@ -1456,7 +1488,7 @@ export class DollhouseContainer {
       cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
       gatekeeper,  // Issue #452: Policy engine for enforce()
       dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
-      verificationStore: this.resolve('VerificationStore'),  // Issue #142: Verification codes
+      verificationStore: this.resolve('ChallengeStore'),  // Issue #142, #1945: Verification codes via IChallengeStore
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
@@ -1555,10 +1587,10 @@ export class DollhouseContainer {
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
    * @returns Per-session Server instance plus a dispose callback
    */
-  public createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): {
+  public async createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): Promise<{
     server: Server;
     dispose: () => Promise<void>;
-  } {
+  }> {
     if (!this.httpHandlerBundle) {
       throw new Error(
         'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
@@ -1567,8 +1599,39 @@ export class DollhouseContainer {
 
     const bundle = this.httpHandlerBundle;
     const contextTracker = this.resolve<ContextTracker>('ContextTracker');
+    const sid = sessionContext.sessionId;
 
-    // Per-session Server instance (SDK requires one Server per transport)
+    // Issue #1948: Create a child container for this session's scoped services
+    const child = new SessionContainer(this, sid);
+
+    // Register per-session persistence stores.
+    // HTTP sessions are ephemeral — ActivationStore.initialize() is intentionally
+    // NOT called here (unlike stdio). Activation state starts fresh per connection.
+    child.register('ActivationStore', () =>
+      new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
+    child.register('ConfirmationStore', () =>
+      new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
+    child.register('GatekeeperSession', () =>
+      new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+
+    // Bridge: attach per-session activation store to the activation registry
+    const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
+    const httpSessionState = activationRegistry.getOrCreate(sid);
+    httpSessionState.activationStore = child.resolve<IActivationStateStore>('ActivationStore');
+
+    // Bridge: register per-session GatekeeperSession with the shared Gatekeeper
+    const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
+    const httpGkSession = child.resolve<GatekeeperSession>('GatekeeperSession');
+    try {
+      await httpGkSession.initialize();
+    } catch (initError) {
+      logger.warn('[HTTP Session] GatekeeperSession initialization failed — starting fresh', {
+        error: initError instanceof Error ? initError.message : String(initError),
+      });
+    }
+    gatekeeper.registerSession(sid, httpGkSession);
+
+    // Per-session Server, ServerSetup, ToolRegistry — registered in child container
     const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
     try {
       const configManager = this.resolve<ConfigManager>('ConfigManager');
@@ -1582,33 +1645,31 @@ export class DollhouseContainer {
       });
     }
 
-    const server = new Server(
+    child.register('Server', () => new Server(
       { name: 'dollhousemcp', version: PACKAGE_VERSION },
       { capabilities }
-    );
+    ));
+    child.register('SessionResolver', () => (() => sessionContext) as SessionResolver);
+    child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
+    child.register('ToolRegistry', () => {
+      const registry = new ToolRegistry(child.resolve<Server>('Server'));
+      this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
+      return registry;
+    });
 
-    // Per-session SessionResolver — always returns this session's context
-    const sessionResolver: SessionResolver = () => sessionContext;
-
-    // Per-session ServerSetup (owns the tool call handler and list-tools cache)
-    const serverSetup = new ServerSetup(contextTracker, sessionResolver);
-
-    // Register tools on this session's ToolRegistry
-    const toolRegistry = new ToolRegistry(server);
-    this.registerToolsOnRegistry(toolRegistry, bundle, env.MCP_INTERFACE_MODE);
-
+    // Wire up: setup server with tools
+    const server = child.resolve<Server>('Server');
+    const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
+    const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
 
     return {
       server,
       dispose: async () => {
-        // Server cleanup is handled by the SDK transport layer.
-        // Phase 3: dispose per-session ActivationStore here.
-
-        // Clean up session-keyed state in the shared MCPAQLHandler
-        // (executing agents, pending saves, frequency counters, aborted goals).
-        // Without this, entries accumulate as HTTP sessions disconnect.
-        bundle.mcpAqlHandler.cleanupSession(sessionContext.sessionId);
+        // Issue #1948: Child container disposal handles all session cleanup:
+        // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
+        // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
+        await child.dispose();
       },
     };
   }
@@ -1851,8 +1912,17 @@ export class DollhouseContainer {
     for (const [name, service] of this.services) {
       if (!service.instance) continue;
       const instance = service.instance as any;
+      // Priority: dispose > close > destroy > cleanup
+      // dispose: standard DI lifecycle
+      // close: stream-like objects (LogManager, MetricsManager)
+      // destroy: timer-bearing objects (VerificationStore, ChallengeStore)
+      // cleanup: sweep operations (non-destructive)
       if (typeof instance.dispose === 'function') {
         promises.push({ name, promise: Promise.resolve().then(() => instance.dispose()) });
+      } else if (typeof instance.close === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.close()) });
+      } else if (typeof instance.destroy === 'function') {
+        promises.push({ name, promise: Promise.resolve().then(() => instance.destroy()) });
       } else if (typeof instance.cleanup === 'function') {
         promises.push({ name, promise: Promise.resolve().then(() => instance.cleanup()) });
       }

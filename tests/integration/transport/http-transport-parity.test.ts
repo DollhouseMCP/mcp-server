@@ -251,20 +251,28 @@ describe('HTTP Transport — Session Context Propagation', () => {
       await read(handle.client, { operation: 'get_build_info' });
       await read(handle2.client, { operation: 'get_build_info' });
 
-      // Query logs from the second client
-      const logsText = await read(handle2.client, {
+      // query_logs is session-scoped: each session sees only its own entries.
+      // Query from both sessions and extract their session UUIDs.
+      const logsText1 = await read(handle.client, {
+        operation: 'query_logs',
+        params: { limit: 50 },
+      });
+      const logsText2 = await read(handle2.client, {
         operation: 'query_logs',
         params: { limit: 50 },
       });
 
-      // Parse the log response to find session IDs
-      // Log entries contain sessionId fields — look for UUID patterns
-      const uuidMatches = logsText.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
-      expect(uuidMatches).not.toBeNull();
+      // Each session's logs should contain UUID patterns (sessionId, correlationId)
+      const uuids1 = logsText1.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
+      const uuids2 = logsText2.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
+      expect(uuids1).not.toBeNull();
+      expect(uuids2).not.toBeNull();
 
-      // Should have at least 2 distinct UUIDs (one per session)
-      const uniqueIds = new Set(uuidMatches);
-      expect(uniqueIds.size).toBeGreaterThanOrEqual(2);
+      // The session UUIDs should be distinct across sessions
+      const set1 = new Set(uuids1);
+      const set2 = new Set(uuids2);
+      const combined = new Set([...set1, ...set2]);
+      expect(combined.size).toBeGreaterThan(set1.size);
     } finally {
       await handle2.disconnect();
     }

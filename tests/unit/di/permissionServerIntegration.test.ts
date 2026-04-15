@@ -173,7 +173,8 @@ describe('Permission Server Integration', () => {
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
-          req.on('data', () => { /* drain */ });
+          let body = '';
+          req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
           req.on('end', () => {
             capturedBody = JSON.parse(body);
             res.writeHead(200, { 'Content-Type': 'application/json' });

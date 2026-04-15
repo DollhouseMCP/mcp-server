@@ -466,14 +466,21 @@ describe('HTTP Smoke — Multi-Session Isolation', () => {
   it('both clients can create elements', async () => {
     const resultA = await create(handleA.client, {
       operation: 'create_element',
-      params: { element_name: 'session-a-skill', element_type: 'skill', description: 'From A', content: '# A' },
+      params: { element_name: 'session-a-skill', element_type: 'skill', description: 'From session A', content: '# Session A Skill\n\nThis skill was created by session A for isolation testing.' },
     });
     const resultB = await create(handleB.client, {
       operation: 'create_element',
-      params: { element_name: 'session-b-skill', element_type: 'skill', description: 'From B', content: '# B' },
+      params: { element_name: 'session-b-skill', element_type: 'skill', description: 'From session B', content: '# Session B Skill\n\nThis skill was created by session B for isolation testing.' },
     });
-    expect(resultA.toLowerCase()).toMatch(/created|success/);
-    expect(resultB.toLowerCase()).toMatch(/created|success/);
+    expect(resultA.toLowerCase()).toMatch(/created/);
+    expect(resultB.toLowerCase()).toMatch(/created/);
+
+    // Verify the created element is immediately findable
+    const verifyA = await read(handleA.client, {
+      operation: 'get_element_details',
+      params: { element_name: 'session-a-skill', element_type: 'skill' },
+    });
+    expect(verifyA).toContain('session-a-skill');
   });
 
   it('both clients see each others elements (shared portfolio)', async () => {
@@ -527,6 +534,42 @@ describe('HTTP Smoke — Multi-Session Isolation', () => {
   afterAll(async () => {
     await del(handleA.client, { operation: 'delete_element', params: { element_name: 'session-a-skill', element_type: 'skill' } }).catch(() => {});
     await del(handleA.client, { operation: 'delete_element', params: { element_name: 'session-b-skill', element_type: 'skill' } }).catch(() => {});
+  });
+
+  // ── Phase 3 Session Isolation (Issue #1946, #1947) ──────────────────────
+
+  it('activation in Session A is NOT visible in Session B', async () => {
+    // Use session-a-skill created in the "both clients can create elements" test above.
+    // activate_element is routed to the READ endpoint
+    const activateResult = await read(handleA.client, {
+      operation: 'activate_element',
+      element_type: 'skill',
+      params: { element_name: 'session-a-skill', element_type: 'skill' },
+    });
+    expect(activateResult.toLowerCase()).toMatch(/activated|already active/);
+
+    // Session B checks active elements — should NOT see Session A's activation
+    const activeB = await read(handleB.client, {
+      operation: 'get_active_elements',
+      element_type: 'skill',
+      params: { element_type: 'skill' },
+    });
+    expect(activeB).not.toContain('session-a-skill');
+
+    // Session A should see its own activation
+    const activeA = await read(handleA.client, {
+      operation: 'get_active_elements',
+      element_type: 'skill',
+      params: { element_type: 'skill' },
+    });
+    expect(activeA).toContain('session-a-skill');
+
+    // Deactivate for cleanup
+    await read(handleA.client, {
+      operation: 'deactivate_element',
+      element_type: 'skill',
+      params: { element_name: 'session-a-skill', element_type: 'skill' },
+    }).catch(() => {});
   });
 });
 
@@ -653,11 +696,15 @@ describe('HTTP Smoke — Session Cleanup', () => {
 
   it('server shutdown cleans up all sessions', async () => {
     const env = await createHttpTestEnvironmentWithConsole();
-    await connectHttpClient(env.runtime);
-    await connectHttpClient(env.runtime);
+    const clientA = await connectHttpClient(env.runtime);
+    const clientB = await connectHttpClient(env.runtime);
     await new Promise(resolve => setTimeout(resolve, 200));
 
     expect(env.ingestRoutes.getSessions().filter(s => s.kind === 'http').length).toBe(2);
+
+    // Disconnect clients before shutdown to avoid leaked client-side connections
+    await clientA.disconnect();
+    await clientB.disconnect();
 
     // Shutdown the runtime (this disposes all sessions)
     await env.runtime.close();

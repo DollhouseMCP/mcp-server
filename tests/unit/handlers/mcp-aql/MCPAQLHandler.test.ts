@@ -1943,7 +1943,8 @@ describe('MCPAQLHandler', () => {
         }));
       }
       expect(mockVerificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'XYZ789');
-      expect(mockDangerZoneEnforcer.unblock).toHaveBeenCalledWith('code-reviewer', VALID_CHALLENGE_ID);
+      // Issue #1947: unblock now receives sessionId as third arg (undefined in tests without session context)
+      expect(mockDangerZoneEnforcer.unblock).toHaveBeenCalledWith('code-reviewer', VALID_CHALLENGE_ID, undefined);
     });
 
     it('should fail with incorrect code', async () => {

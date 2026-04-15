@@ -125,7 +125,8 @@ describe('PersonaManager — session-aware identity (Step 1.5)', () => {
       expect(result).toBe('Alice Smith');
     });
 
-    it('falls back to MetadataService when session userId is default stdio', async () => {
+    it('returns stdio default userId when no explicit identity override exists', async () => {
+      // Issue #1946: local-user is now a valid identity, not a sentinel to skip
       const pm = createPersonaManager(tracker);
       const session = makeSession({ userId: STDIO_DEFAULT_USER_ID });
       const ctx = tracker.createSessionContext('llm-request', session);
@@ -135,7 +136,7 @@ describe('PersonaManager — session-aware identity (Step 1.5)', () => {
         result = pm.getCurrentUserForAttribution();
       });
 
-      expect(result).toBe('os-fallback-user');
+      expect(result).toBe(STDIO_DEFAULT_USER_ID);
     });
 
     it('falls back to MetadataService when session userId is system', async () => {
@@ -182,10 +183,8 @@ describe('PersonaManager — session-aware identity (Step 1.5)', () => {
       expect(result?.email).toBe('bob@example.com');
     });
 
-    it('falls back to process.env for default stdio session', async () => {
-      process.env.DOLLHOUSE_USER = 'env-user';
-      process.env.DOLLHOUSE_EMAIL = 'env@example.com';
-
+    it('returns stdio userId directly for default stdio session', async () => {
+      // Issue #1946: local-user is now a valid identity, returned directly
       const pm = createPersonaManager(tracker);
       const session = makeSession({ userId: STDIO_DEFAULT_USER_ID });
       const ctx = tracker.createSessionContext('llm-request', session);
@@ -195,21 +194,15 @@ describe('PersonaManager — session-aware identity (Step 1.5)', () => {
         result = pm.getUserIdentity();
       });
 
-      expect(result?.username).toBe('env-user');
-      expect(result?.email).toBe('env@example.com');
+      expect(result?.username).toBe(STDIO_DEFAULT_USER_ID);
     });
 
-    it('falls back to process.env when no session active', () => {
-      process.env.DOLLHOUSE_USER = 'env-user';
+    it('falls back to MetadataService when no session active', () => {
+      // Issue #1946: No session → MetadataService fallback (OS user)
       const pm = createPersonaManager(tracker);
       const result = pm.getUserIdentity();
-      expect(result.username).toBe('env-user');
-    });
-
-    it('returns null username when no session and no env var', () => {
-      const pm = createPersonaManager(tracker);
-      const result = pm.getUserIdentity();
-      expect(result.username).toBeNull();
+      // MetadataService always resolves to something (OS username or anonymous ID)
+      expect(result.username).toBe('os-fallback-user');
       expect(result.email).toBeNull();
     });
   });

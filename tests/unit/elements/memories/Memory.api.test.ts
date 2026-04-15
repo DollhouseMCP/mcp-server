@@ -36,6 +36,8 @@ describe('Memory API Integration (Issue #1320)', () => {
 
     container = new DollhouseContainer();
     manager = container.resolve('MemoryManager');
+    // Issue #1948: Set root memory manager for static methods (findByTrustLevel, find)
+    Memory.setRootMemoryManager(manager as any);
   });
 
   afterEach(async () => {
@@ -200,7 +202,7 @@ describe('Memory API Integration (Issue #1320)', () => {
 
   describe('save()', () => {
     it('should persist memory to disk when path is set', async () => {
-      const memory = new Memory({ name: 'Test Save Memory API' }, metadataService);
+      const memory = new Memory({ name: 'Test Save Memory API' }, metadataService, manager);
       await memory.addEntry('Test content', ['test']);
 
       // Save using manager first to get a valid path
@@ -222,7 +224,7 @@ describe('Memory API Integration (Issue #1320)', () => {
     });
 
     it('should save updated trust levels', async () => {
-      const memory = new Memory({ name: 'Test Save Trust Memory API' }, metadataService);
+      const memory = new Memory({ name: 'Test Save Trust Memory API' }, metadataService, manager);
       await memory.addEntry('Test content', ['test']);
 
       // Save first

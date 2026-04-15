@@ -26,14 +26,13 @@ const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_@.]+$/;
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
-
 export class SkillManager extends BaseElementManager<Skill> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  // Track active skills by name (stable identifier)
-  private activeSkillNames: Set<string> = new Set();
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActiveSkillNames: Set<string> = new Set();
 
   constructor(deps: ElementManagerDeps) {
     super(
@@ -45,6 +44,8 @@ export class SkillManager extends BaseElementManager<Skill> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -53,6 +54,11 @@ export class SkillManager extends BaseElementManager<Skill> {
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('skills', this._localActiveSkillNames);
   }
 
   protected override getElementLabel(): string {
@@ -313,7 +319,7 @@ export class SkillManager extends BaseElementManager<Skill> {
 
     // Apply active status to skills that are in the active set (by name)
     for (const skill of skills) {
-      if (this.activeSkillNames.has(skill.metadata.name)) {
+      if (this.getActivationSet().has(skill.metadata.name)) {
         // Access the protected _status field and set to ACTIVE (value 2)
         await skill.activate();
       }
@@ -346,7 +352,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeSkillNames.add(skill.metadata.name);
+    this.getActivationSet().add(skill.metadata.name);
 
     // Update skill status in memory
     await skill.activate();
@@ -387,7 +393,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     }
 
     // Remove from active set
-    this.activeSkillNames.delete(skill.metadata.name);
+    this.getActivationSet().delete(skill.metadata.name);
 
     // Update skill status in memory
     await skill.deactivate();
@@ -406,7 +412,7 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   async getActiveSkills(): Promise<Skill[]> {
     const results: Skill[] = [];
-    for (const name of this.activeSkillNames) {
+    for (const name of this.getActivationSet()) {
       const skill = await this.findByName(name);
       if (skill) results.push(skill);
     }
@@ -435,12 +441,12 @@ export class SkillManager extends BaseElementManager<Skill> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('skills');
 
     // Below threshold — no action needed
-    if (this.activeSkillNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeSkillNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active skills limit reached (${max}). ` +
         `Consider deactivating unused skills or setting DOLLHOUSE_MAX_ACTIVE_SKILLS to a higher value.`
@@ -450,7 +456,7 @@ export class SkillManager extends BaseElementManager<Skill> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'SkillManager.checkAndCleanupActiveSet',
-        details: `Active skills limit reached: ${this.activeSkillNames.size}/${max}`
+        details: `Active skills limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -470,20 +476,20 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   private async cleanupStaleActiveSkills(): Promise<void> {
     try {
-      const startSize = this.activeSkillNames.size;
+      const startSize = this.getActivationSet().size;
       const skills = await this.list();
       const existingSkillNames = new Set(skills.map(s => s.metadata.name));
 
       // Remove any active skill names that no longer exist in portfolio
       const staleNames: string[] = [];
-      for (const activeName of this.activeSkillNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingSkillNames.has(activeName)) {
-          this.activeSkillNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeSkillNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {

@@ -59,7 +59,7 @@ import { RateLimiterFactory } from '../../utils/RateLimiter.js';
 import { env } from '../../config/env.js';
 import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import type { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
-import type { VerificationStore } from '@dollhousemcp/safety';
+import type { IChallengeStore } from '../../state/IChallengeStore.js';
 import type { IVerificationNotifier } from '../../services/VerificationNotifier.js';
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
@@ -222,9 +222,14 @@ function validateLogQueryParams(params: Record<string, unknown>): LogQueryOption
   if (typeof params.correlationId === 'string') {
     options.correlationId = params.correlationId;
   }
+  // userId filter is not session-scoped — within a single session, all log
+  // entries share the same userId. The sessionId guard in dispatchLogging()
+  // restricts results to the caller's session, which implicitly scopes userId.
   if (typeof params.userId === 'string') {
     options.userId = params.userId;
   }
+  // sessionId is validated but may be overridden by dispatchLogging()'s
+  // session enforcement — callers cannot query other sessions' logs.
   if (typeof params.sessionId === 'string') {
     options.sessionId = params.sessionId;
   }
@@ -450,7 +455,8 @@ export interface HandlerRegistry {
   // Issue #402: DI-injected danger zone enforcer (replaces singleton import)
   dangerZoneEnforcer?: DangerZoneEnforcer;
   // Issue #142: Server-side verification store for challenge codes
-  verificationStore?: VerificationStore;
+  // Issue #1945: Changed from VerificationStore to IChallengeStore for backend swappability
+  verificationStore?: IChallengeStore;
   // Issue #522: Non-blocking OS dialog for verification codes (replaces returning code to LLM)
   verificationNotifier?: IVerificationNotifier;
   // Issue #528: MemoryLogSink for CRUDE-routed query_logs
@@ -526,14 +532,9 @@ export class MCPAQLHandler {
    * Logs warnings at configurable thresholds to catch runaway loops early.
    */
   private readonly saveFrequencyCounters = new Map<string, { timestamps: number[]; warned: boolean; critical: boolean }>();
-  /** Issue #625 Phase 4: Rate limiter for permission_prompt evaluations (configurable via env) */
-  private readonly permissionPromptLimiter = RateLimiterFactory.createPermissionPromptLimiter(
-    env.DOLLHOUSE_PERMISSION_PROMPT_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
-  );
-  /** Issue #625 Phase 4: Rate limiter for CLI approval record creation (configurable via env) */
-  private readonly cliApprovalLimiter = RateLimiterFactory.createCliApprovalLimiter(
-    env.DOLLHOUSE_CLI_APPROVAL_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
-  );
+  /** Issue #1947: Per-session rate limiters (prevents cross-session rate limit exhaustion) */
+  private readonly permissionPromptLimiters = new Map<string, import('../../utils/RateLimiter.js').RateLimiter>();
+  private readonly cliApprovalLimiters = new Map<string, import('../../utils/RateLimiter.js').RateLimiter>();
   /**
    * Build a standardized rate-limit deny response for permission_prompt.
    */
@@ -564,8 +565,8 @@ export class MCPAQLHandler {
     };
   }
 
-  /** Issue #142: Rate limiter for verify_challenge attempts (max 10 failures per 60s window) */
-  private readonly verificationRateLimiter = new VerificationRateLimiter();
+  /** Issue #1947: Per-session verification rate limiters */
+  private readonly verificationRateLimiters = new Map<string, VerificationRateLimiter>();
   /** Issue #142: Metrics tracker for verification operations */
   private readonly verificationMetrics = new VerificationMetricsTracker();
   /**
@@ -646,6 +647,48 @@ export class MCPAQLHandler {
   }
 
   /**
+   * Resolve a per-session instance from a Map, creating on first access.
+   * Issue #1947: All per-session rate limiters use this pattern.
+   */
+  private resolveSessionScoped<T>(map: Map<string, T>, factory: () => T): T {
+    const key = this.contextTracker?.getSessionContext?.()?.sessionId ?? 'default';
+    let instance = map.get(key);
+    if (!instance) {
+      instance = factory();
+      map.set(key, instance);
+    }
+    return instance;
+  }
+
+  private resolveVerificationRateLimiter(): VerificationRateLimiter {
+    return this.resolveSessionScoped(this.verificationRateLimiters, () => new VerificationRateLimiter());
+  }
+
+  private resolvePermissionPromptLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
+    return this.resolveSessionScoped(this.permissionPromptLimiters, () =>
+      RateLimiterFactory.createPermissionPromptLimiter(
+        env.DOLLHOUSE_PERMISSION_PROMPT_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
+      ));
+  }
+
+  private resolveCliApprovalLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
+    return this.resolveSessionScoped(this.cliApprovalLimiters, () =>
+      RateLimiterFactory.createCliApprovalLimiter(
+        env.DOLLHOUSE_CLI_APPROVAL_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
+      ));
+  }
+
+  /** Delete all entries from a Map or Set whose keys start with the given prefix. */
+  private deleteByPrefix(collection: Map<string, unknown> | Set<string>, prefix: string): void {
+    const keys = collection instanceof Set ? collection : collection.keys();
+    for (const key of keys) {
+      if (key.startsWith(prefix)) {
+        collection.delete(key);
+      }
+    }
+  }
+
+  /**
    * Remove all session-keyed state for a disconnected HTTP session.
    *
    * The shared MCPAQLHandler uses Maps keyed by `{sessionId}:{name}` to
@@ -666,26 +709,15 @@ export class MCPAQLHandler {
       }
     }
 
-    // Remove executing agent tracking
-    for (const key of this.executingAgents.keys()) {
-      if (key.startsWith(prefix)) {
-        this.executingAgents.delete(key);
-      }
-    }
+    // Remove session-keyed entries from tracking collections
+    this.deleteByPrefix(this.executingAgents, prefix);
+    this.deleteByPrefix(this.saveFrequencyCounters, prefix);
+    this.deleteByPrefix(this.abortedGoals, prefix);
 
-    // Remove save frequency counters
-    for (const key of this.saveFrequencyCounters.keys()) {
-      if (key.startsWith(prefix)) {
-        this.saveFrequencyCounters.delete(key);
-      }
-    }
-
-    // Remove aborted goals
-    for (const goal of this.abortedGoals) {
-      if (goal.startsWith(prefix)) {
-        this.abortedGoals.delete(goal);
-      }
-    }
+    // Issue #1947: Remove per-session rate limiters
+    this.verificationRateLimiters.delete(sessionId);
+    this.permissionPromptLimiters.delete(sessionId);
+    this.cliApprovalLimiters.delete(sessionId);
   }
 
   /**
@@ -693,7 +725,7 @@ export class MCPAQLHandler {
    * Follows the same pattern as DangerZoneEnforcer.getMetrics().
    */
   getVerificationMetrics(): VerificationMetrics {
-    return this.verificationMetrics.getMetrics(this.verificationRateLimiter);
+    return this.verificationMetrics.getMetrics(this.resolveVerificationRateLimiter());
   }
 
   /**
@@ -2582,7 +2614,7 @@ export class MCPAQLHandler {
         });
 
         // Rate limiting: reject if too many recent failures
-        if (this.verificationRateLimiter.isLimited()) {
+        if (this.resolveVerificationRateLimiter().isLimited()) {
           this.verificationMetrics.recordRateLimited();
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
@@ -2602,7 +2634,7 @@ export class MCPAQLHandler {
           validateChallengeIdFormat(challengeId);
         } catch (error) {
           this.verificationMetrics.recordInvalidFormat();
-          this.verificationRateLimiter.recordFailure();
+          this.resolveVerificationRateLimiter().recordFailure();
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
             severity: 'HIGH',
@@ -2627,7 +2659,7 @@ export class MCPAQLHandler {
         if (!challengePreCheck) {
           // Challenge not found — either expired, already used, or never existed
           this.verificationMetrics.recordExpired();
-          this.verificationRateLimiter.recordFailure();
+          this.resolveVerificationRateLimiter().recordFailure();
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_EXPIRED',
             severity: 'HIGH',
@@ -2642,11 +2674,32 @@ export class MCPAQLHandler {
           );
         }
 
+        // Issue #1947: Check session ownership BEFORE consuming the challenge.
+        // Prevents Session B from consuming Session A's one-time-use challenge.
+        const preCheckSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+        const enforcerPreCheck = this.handlers.dangerZoneEnforcer;
+        if (enforcerPreCheck) {
+          for (const agentName of enforcerPreCheck.getBlockedAgents()) {
+            const blockInfo = enforcerPreCheck.check(agentName);
+            if (blockInfo.verificationId === challengeId && blockInfo.blocked) {
+              // If block has sessionId, caller must match (or have a sessionId at all)
+              if (blockInfo.sessionId && blockInfo.sessionId !== preCheckSessionId) {
+                this.verificationMetrics.recordFailure();
+                throw new VerificationError(
+                  GatekeeperErrorCode.VERIFICATION_FAILED,
+                  'Verification failed: this challenge belongs to a different session.'
+                );
+              }
+              break;
+            }
+          }
+        }
+
         // Verify the code (one-time use — store deletes challenge after this call)
         const valid = store.verify(challengeId, code);
         if (!valid) {
           this.verificationMetrics.recordFailure();
-          const rateLimitExceeded = this.verificationRateLimiter.recordFailure();
+          const rateLimitExceeded = this.resolveVerificationRateLimiter().recordFailure();
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
             severity: 'HIGH',
@@ -2674,7 +2727,9 @@ export class MCPAQLHandler {
           for (const agentName of blockedAgents) {
             const blockInfo = enforcer.check(agentName);
             if (blockInfo.verificationId === challengeId) {
-              const success = enforcer.unblock(agentName, challengeId);
+              // Issue #1947: Pass sessionId to prevent cross-session unblock
+              const currentSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+              const success = enforcer.unblock(agentName, challengeId, currentSessionId);
               if (success) {
                 unblockedAgent = agentName;
               }
@@ -2736,7 +2791,9 @@ export class MCPAQLHandler {
         const expiresAt = Date.now() + BEETLEJUICE_CHALLENGE_TIMEOUT_MS;
 
         store.set(challengeId, { code, expiresAt, reason: 'Beetlejuice test trigger (Issue #503)' });
-        enforcer.block(agentName, 'Beetlejuice test trigger', ['beetlejuice_beetlejuice_beetlejuice'], challengeId);
+        // Issue #1947: Pass sessionId so only this session can verify
+        const beetlejuiceSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+        enforcer.block(agentName, 'Beetlejuice test trigger', ['beetlejuice_beetlejuice_beetlejuice'], challengeId, undefined, beetlejuiceSessionId);
 
         // Issue #522: Show code via OS dialog (fire-and-forget, non-blocking)
         // The code is NEVER included in the MCP response — only the human sees it.
@@ -2802,11 +2859,11 @@ export class MCPAQLHandler {
         const agentIdentity = typeof params.agent_identity === 'string' ? params.agent_identity : undefined;
 
         // Issue #625 Phase 4: Rate limit check
-        const promptRateStatus = this.permissionPromptLimiter.checkLimit();
+        const promptRateStatus = this.resolvePermissionPromptLimiter().checkLimit();
         if (!promptRateStatus.allowed) {
           return this.buildRateLimitDeny('permission_prompt', toolName, promptRateStatus);
         }
-        this.permissionPromptLimiter.consumeToken();
+        this.resolvePermissionPromptLimiter().consumeToken();
 
         // Issue #625 Phase 4: Track that permission_prompt is active (fail-safe detection)
         if (!this.gatekeeper.isPermissionPromptActive) {
@@ -2877,14 +2934,14 @@ export class MCPAQLHandler {
           const risk = assessRisk(toolName, toolInput, classification);
           const policySource = elementDecision.confirmSource || 'unknown';
 
-          const approvalRateStatus = this.cliApprovalLimiter.checkLimit();
+          const approvalRateStatus = this.resolveCliApprovalLimiter().checkLimit();
           if (!approvalRateStatus.allowed) {
             return this.buildRateLimitDeny(
               'cli_approval', toolName, approvalRateStatus,
               classification.riskLevel, classification.reason,
             );
           }
-          this.cliApprovalLimiter.consumeToken();
+          this.resolveCliApprovalLimiter().consumeToken();
 
           const approvalPolicy = resolveCliApprovalPolicy(activeElements);
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
@@ -2950,14 +3007,14 @@ export class MCPAQLHandler {
             .join(', ') || 'env:DOLLHOUSE_CLI_APPROVAL_POLICY';
 
           // Issue #625 Phase 4: Rate limit CLI approval creation
-          const approvalRateStatus = this.cliApprovalLimiter.checkLimit();
+          const approvalRateStatus = this.resolveCliApprovalLimiter().checkLimit();
           if (!approvalRateStatus.allowed) {
             return this.buildRateLimitDeny(
               'cli_approval', toolName, approvalRateStatus,
               classification.riskLevel, classification.reason,
             );
           }
-          this.cliApprovalLimiter.consumeToken();
+          this.resolveCliApprovalLimiter().consumeToken();
 
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
           const requestId = this.gatekeeper.createCliApprovalRequest(
@@ -3010,7 +3067,7 @@ export class MCPAQLHandler {
         // Evaluate CLI permission for PreToolUse hooks (all platforms)
         const { evaluatePermission } = await import('./evaluatePermission.js');
         return evaluatePermission(params, {
-          permissionPromptLimiter: this.permissionPromptLimiter,
+          permissionPromptLimiter: this.resolvePermissionPromptLimiter(),
           classifyTool,
           evaluateCliToolPolicy,
           getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId),
@@ -3179,6 +3236,17 @@ export class MCPAQLHandler {
     switch (method) {
       case 'query': {
         const options = validateLogQueryParams(params);
+        // Session-scoped log filtering: auto-inject the calling session's ID
+        // when no explicit sessionId is provided, and reject cross-session
+        // queries when a session context is active.
+        const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+        if (callerSessionId) {
+          // Enforce session boundary — callers cannot read other sessions' logs
+          if (options.sessionId && options.sessionId !== callerSessionId) {
+            throw new Error('Cannot query logs for a different session');
+          }
+          options.sessionId = callerSessionId;
+        }
         const result = this.handlers.memorySink.query(options);
         return { _type: 'LogQueryResult', ...result };
       }
@@ -3192,6 +3260,10 @@ export class MCPAQLHandler {
    *
    * Routes query_metrics through the unified CRUDE pipeline, providing
    * operation routing, gatekeeper policy enforcement, and structured response format.
+   *
+   * Note: Metrics are server-global (CPU, memory, cache hit rates, operation
+   * counts) and are not session-scoped. All sessions can view all metrics.
+   * This is intentional for operational monitoring in single-operator deployments.
    */
   private dispatchMetrics(
     method: string,

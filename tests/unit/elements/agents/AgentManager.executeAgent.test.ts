@@ -104,19 +104,8 @@ describe('AgentManager.executeAgent', () => {
     ));
 
     // Create AgentManager instance
-    const agentManagerInstance = new AgentManager({
-      portfolioManager: container.resolve('PortfolioManager'),
-      fileLockManager: container.resolve('FileLockManager'),
-      baseDir: portfolioPath,
-      fileOperationsService: container.resolve('FileOperationsService'),
-      validationRegistry: container.resolve('ValidationRegistry'),
-      serializationService: container.resolve('SerializationService'),
-      metadataService: container.resolve('MetadataService'),
-      eventDispatcher: new ElementEventDispatcher(),
-    });
-
-    // Set up element manager resolver for activating elements (using static method)
-    AgentManager.setElementManagerResolver((managerName: string) => {
+    // Issue #1948: Element manager resolver passed via constructor deps instead of static setter
+    const elementManagerResolver = (managerName: string) => {
       if (managerName === 'PersonaManager') {
         return {
           list: async () => {
@@ -190,6 +179,18 @@ describe('AgentManager.executeAgent', () => {
         } as any;
       }
       return null;
+    };
+
+    const agentManagerInstance = new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+      elementManagerResolver,
     });
 
     container.register('AgentManager', () => agentManagerInstance);
@@ -1099,9 +1100,8 @@ activates:
     });
 
     it('should still activate other elements when one fails (partial failure)', async () => {
-      // Set up element manager resolver that succeeds for code-reviewer but fails for nonexistent
-      AgentManager.resetResolvers();
-      AgentManager.setElementManagerResolver((managerName: string) => {
+      // Issue #1948: Use instance method to reconfigure resolver for this test
+      agentManager.setElementManagerResolver((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [

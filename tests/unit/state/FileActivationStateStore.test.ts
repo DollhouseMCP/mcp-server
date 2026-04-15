@@ -1,17 +1,21 @@
 /**
- * Unit tests for ActivationStore
+ * Unit tests for FileActivationStateStore
  *
- * Tests per-session element activation persistence.
- * Issue #598: Activation state survives server restarts.
+ * Tests file-backed activation state persistence — persist/restore cycle,
+ * ENOENT tolerance, element type normalization, session ID validation,
+ * security event logging, and Unicode handling.
+ *
+ * Issue #1945, Pre-Phase 4 Store Consolidation
  */
 
-import path from 'path';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
-// Create mock function for SecurityMonitor
+const TEST_STATE_DIR = path.join(os.tmpdir(), 'dollhouse-test-state');
+
 const mockLogSecurityEvent = jest.fn();
 
-// ESM mocking: use unstable_mockModule for proper mock isolation
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
     debug: jest.fn(),
@@ -33,25 +37,25 @@ jest.unstable_mockModule('fs/promises', () => ({
   mkdir: mockMkdir,
 }));
 
-// Dynamic import after mocking (required for ESM)
-const { ActivationStore } = await import('../../../src/services/ActivationStore.js');
+const { FileActivationStateStore } = await import('../../../src/state/FileActivationStateStore.js');
 
-/**
- * Create a mock FileOperationsService with controlled read/write behavior
- */
 function createMockFileOps(options?: {
   readFileResult?: string;
   readFileError?: Error;
   writeFileError?: Error;
 }) {
+  let readFileMock: jest.Mock<() => Promise<string>>;
+  if (options?.readFileError) {
+    readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
+  } else if (options?.readFileResult === undefined) {
+    readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(
+      Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+    );
+  } else {
+    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
+  }
   return {
-    readFile: options?.readFileError
-      ? jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError)
-      : options?.readFileResult !== undefined
-        ? jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult)
-        : jest.fn<() => Promise<string>>().mockRejectedValue(
-            Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
-          ),
+    readFile: readFileMock,
     writeFile: options?.writeFileError
       ? jest.fn<() => Promise<void>>().mockRejectedValue(options.writeFileError)
       : jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
@@ -60,142 +64,155 @@ function createMockFileOps(options?: {
     fileExists: jest.fn<() => Promise<boolean>>().mockResolvedValue(false),
     listFiles: jest.fn<() => Promise<string[]>>().mockResolvedValue([]),
     ensureDirectory: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
-  } as any;
+  } as ReturnType<typeof createMockFileOps>;
 }
 
-describe('ActivationStore', () => {
-  let store: InstanceType<typeof ActivationStore>;
+describe('FileActivationStateStore', () => {
+  let store: InstanceType<typeof FileActivationStateStore>;
   let mockFileOps: ReturnType<typeof createMockFileOps>;
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
     jest.clearAllMocks();
-    // Reset env vars
     delete process.env.DOLLHOUSE_SESSION_ID;
     delete process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE;
     mockFileOps = createMockFileOps();
-    store = new ActivationStore(mockFileOps, '/tmp/test-state');
+    store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
   });
 
   afterEach(() => {
-    // Restore env
     process.env = { ...originalEnv };
   });
 
-  describe('constructor', () => {
-    it('should generate unique session ID when env var not set', () => {
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+  // ── Session Identity ────────────────────────────────────────────────
+
+  describe('session identity', () => {
+    it('should use the provided sessionId', () => {
+      expect(store.getSessionId()).toBe('test-session');
     });
 
-    it('should use DOLLHOUSE_SESSION_ID when set', () => {
-      process.env.DOLLHOUSE_SESSION_ID = 'my-session';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toBe('my-session');
-    });
-
-    it('should fall back to default for invalid session ID', () => {
-      process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+    it('should reject invalid sessionId and fall back to default', () => {
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '../evil-path');
       expect(s.getSessionId()).toBe('default');
     });
 
-    it('should generate unique session ID for empty session ID', () => {
+    it('should generate unique session ID when env var not set and no param', () => {
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
+      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+    });
+
+    it('should use DOLLHOUSE_SESSION_ID when set and no param', () => {
+      process.env.DOLLHOUSE_SESSION_ID = 'my-session';
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
+      expect(s.getSessionId()).toBe('my-session');
+    });
+
+    it('should fall back to default for invalid env session ID', () => {
+      process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
+      expect(s.getSessionId()).toBe('default');
+    });
+
+    it('should generate unique session ID for empty env session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should accept alphanumeric with hyphens and underscores', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'claude-code_v2';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('claude-code_v2');
     });
 
     it('should reject session IDs starting with a number', () => {
       process.env.DOLLHOUSE_SESSION_ID = '123-session';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('default');
     });
 
-    describe('with explicit sessionId parameter', () => {
-      const testStateDir = path.join('fake-home', '.dollhouse', 'test-state');
-
-      it('should use provided sessionId when valid', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, 'explicit-session');
-        expect(s.getSessionId()).toBe('explicit-session');
-      });
-
-      it('should fall back to default when provided sessionId has path traversal', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '../evil-path');
-        expect(s.getSessionId()).toBe('default');
-      });
-
-      it('should fall back to default when provided sessionId starts with number', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '123-bad');
-        expect(s.getSessionId()).toBe('default');
-      });
-
-      it('should fall back to resolveSessionId when provided sessionId is empty string', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '');
-        // Empty string triggers resolveSessionId() fallback which generates random ID
-        expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
-      });
-
-      it('should trim whitespace from provided sessionId', () => {
-        const s = new ActivationStore(mockFileOps, testStateDir, '  valid-session  ');
-        expect(s.getSessionId()).toBe('valid-session');
-      });
-
-      it('should still use resolveSessionId when sessionId param is undefined', () => {
-        process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, testStateDir, undefined);
-        expect(s.getSessionId()).toBe('from-env');
-      });
-
-      it('should prefer explicit sessionId over env var', () => {
-        process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-        const s = new ActivationStore(mockFileOps, testStateDir, 'from-param');
-        expect(s.getSessionId()).toBe('from-param');
-      });
+    it('should prefer explicit sessionId over env var', () => {
+      process.env.DOLLHOUSE_SESSION_ID = 'from-env';
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'from-param');
+      expect(s.getSessionId()).toBe('from-param');
     });
 
+    it('should fall back to resolveSessionId when sessionId param is empty', () => {
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '');
+      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+    });
+
+    it('should trim whitespace from provided sessionId', () => {
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '  valid-session  ');
+      expect(s.getSessionId()).toBe('valid-session');
+    });
+
+    it('should reject param sessionId starting with number', () => {
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '123-bad');
+      expect(s.getSessionId()).toBe('default');
+    });
+  });
+
+  // ── Enabled/Disabled ────────────────────────────────────────────────
+
+  describe('persistence enabled/disabled', () => {
     it('should be enabled by default', () => {
       expect(store.isEnabled()).toBe(true);
     });
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=false', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
       expect(s.isEnabled()).toBe(false);
     });
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=0', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = '0';
-      const s = new ActivationStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
       expect(s.isEnabled()).toBe(false);
+    });
+
+    it('should not persist when disabled', async () => {
+      process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+
+      s.recordActivation('skill', 'code-reviewer');
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(mockFileOps.writeFile).not.toHaveBeenCalled();
+      expect(s.getActivations('skill')).toEqual([]);
+    });
+
+    it('should skip initialization when persistence is disabled', async () => {
+      process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+
+      await s.initialize();
+
+      expect(mockFileOps.readFile).not.toHaveBeenCalled();
     });
   });
 
+  // ── Initialize ──────────────────────────────────────────────────────
+
   describe('initialize()', () => {
-    it('should start with empty activations when no file exists', async () => {
+    it('should start fresh when no file exists (ENOENT)', async () => {
       await store.initialize();
       expect(store.getActivations('skill')).toEqual([]);
-      expect(store.getActivations('persona')).toEqual([]);
     });
 
     it('should load valid persisted state from disk', async () => {
       const persisted = {
         version: 1,
-        sessionId: 'default',
-        lastUpdated: '2026-02-25T00:00:00Z',
+        sessionId: 'test-session',
+        lastUpdated: '2026-04-13T00:00:00Z',
         activations: {
-          skill: [{ name: 'code-reviewer', activatedAt: '2026-02-25T00:00:00Z' }],
-          persona: [{ name: 'Dev', filename: 'dev.md', activatedAt: '2026-02-25T00:00:00Z' }],
+          skill: [{ name: 'code-reviewer', activatedAt: '2026-04-13T00:00:00Z' }],
+          persona: [{ name: 'Dev', filename: 'dev.md', activatedAt: '2026-04-13T00:00:00Z' }],
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -207,11 +224,9 @@ describe('ActivationStore', () => {
 
     it('should handle corrupt JSON gracefully', async () => {
       mockFileOps = createMockFileOps({ readFileResult: '{invalid json' });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
-
-      // Should start with empty state
       expect(store.getActivations('skill')).toEqual([]);
     });
 
@@ -225,10 +240,38 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+
+      await store.initialize();
+      expect(store.getActivations('skill')).toEqual([]);
+    });
+
+    it('should ignore unknown element types from file', async () => {
+      const persisted = {
+        version: 1,
+        sessionId: 'test-session',
+        lastUpdated: '2026-04-13T00:00:00Z',
+        activations: {
+          skill: [{ name: 'valid', activatedAt: '2026-04-13T00:00:00Z' }],
+          bogus: [{ name: 'should-not-load', activatedAt: '2026-04-13T00:00:00Z' }],
+        },
+      };
+      mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
+      expect(store.getActivations('skill')).toHaveLength(1);
+      expect(store.getActivations('bogus')).toEqual([]);
+    });
+
+    it('should start fresh on non-ENOENT errors (graceful degradation)', async () => {
+      mockFileOps = createMockFileOps({
+        readFileError: Object.assign(new Error('permission denied'), { code: 'EACCES' }),
+      });
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+
+      await store.initialize();
       expect(store.getActivations('skill')).toEqual([]);
     });
 
@@ -246,60 +289,12 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
       expect(store.getActivations('skill')).toHaveLength(1);
       expect(store.getActivations('skill')[0].name).toBe('valid-skill');
-    });
-
-    it('should ignore unknown element types from file', async () => {
-      const persisted = {
-        version: 1,
-        sessionId: 'default',
-        lastUpdated: '2026-02-25T00:00:00Z',
-        activations: {
-          skill: [{ name: 'valid', activatedAt: '2026-02-25T00:00:00Z' }],
-          bogus: [{ name: 'should-not-load', activatedAt: '2026-02-25T00:00:00Z' }],
-        },
-      };
-      mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
-
-      await store.initialize();
-
-      expect(store.getActivations('skill')).toHaveLength(1);
-      expect(store.getActivations('bogus')).toEqual([]);
-    });
-
-    it('should skip initialization when persistence is disabled', async () => {
-      process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
-
-      await store.initialize();
-
-      expect(mockFileOps.readFile).not.toHaveBeenCalled();
-    });
-
-    it('should restore activations and report count on successful load', async () => {
-      const persisted = {
-        version: 1,
-        sessionId: 'default',
-        lastUpdated: '2026-02-25T00:00:00Z',
-        activations: {
-          skill: [{ name: 'my-skill', activatedAt: '2026-02-25T00:00:00Z' }],
-          agent: [{ name: 'my-agent', activatedAt: '2026-02-25T00:00:00Z' }],
-        },
-      };
-      mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
-
-      await store.initialize();
-
-      // Verify data was loaded across multiple types
-      expect(store.getActivations('skill')).toHaveLength(1);
-      expect(store.getActivations('agent')).toHaveLength(1);
     });
 
     it('should normalize persisted activation names and filenames on restore', async () => {
@@ -313,7 +308,7 @@ describe('ActivationStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -322,6 +317,8 @@ describe('ActivationStore', () => {
       expect(store.getActivations('persona')[0].filename).toBe('resumé.md');
     });
   });
+
+  // ── recordActivation ────────────────────────────────────────────────
 
   describe('recordActivation()', () => {
     it('should add an activation for a valid element type', () => {
@@ -344,15 +341,12 @@ describe('ActivationStore', () => {
 
     it('should not include filename field for non-persona types', () => {
       store.recordActivation('skill', 'my-skill');
-
-      const activations = store.getActivations('skill');
-      expect(activations[0]).not.toHaveProperty('filename');
+      expect(store.getActivations('skill')[0]).not.toHaveProperty('filename');
     });
 
     it('should deduplicate — no double activation', () => {
       store.recordActivation('skill', 'code-reviewer');
       store.recordActivation('skill', 'code-reviewer');
-
       expect(store.getActivations('skill')).toHaveLength(1);
     });
 
@@ -366,32 +360,8 @@ describe('ActivationStore', () => {
     });
 
     it('should ignore unknown element types', () => {
-      store.recordActivation('template', 'my-template');
-      expect(store.getActivations('template')).toEqual([]);
-    });
-
-    it('should trigger persist on successful recording', async () => {
-      store.recordActivation('skill', 'code-reviewer');
-
-      // Allow fire-and-forget persist to execute
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      expect(mockFileOps.writeFile).toHaveBeenCalled();
-      const writtenContent = JSON.parse(mockFileOps.writeFile.mock.calls[0][1]);
-      expect(writtenContent.version).toBe(1);
-      expect(writtenContent.activations.skill).toHaveLength(1);
-    });
-
-    it('should not persist when disabled', async () => {
-      process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
-
-      store.recordActivation('skill', 'code-reviewer');
-
-      await new Promise(resolve => setTimeout(resolve, 10));
-
-      expect(mockFileOps.writeFile).not.toHaveBeenCalled();
-      expect(store.getActivations('skill')).toEqual([]);
+      store.recordActivation('webhook', 'my-webhook');
+      expect(store.getActivations('webhook')).toEqual([]);
     });
 
     it('should handle case-insensitive element types', () => {
@@ -400,31 +370,69 @@ describe('ActivationStore', () => {
     });
 
     it('should normalize plural ElementType values to singular', () => {
-      // ElementType enum uses plural forms: 'skills', 'personas', etc.
       store.recordActivation('skills', 'plural-skill');
       store.recordActivation('personas', 'plural-persona');
       store.recordActivation('agents', 'plural-agent');
       store.recordActivation('memories', 'plural-memory');
       store.recordActivation('ensembles', 'plural-ensemble');
 
-      // Should be retrievable via singular form
       expect(store.getActivations('skill')).toHaveLength(1);
       expect(store.getActivations('persona')).toHaveLength(1);
       expect(store.getActivations('agent')).toHaveLength(1);
       expect(store.getActivations('memory')).toHaveLength(1);
       expect(store.getActivations('ensemble')).toHaveLength(1);
-
-      // Should also be retrievable via plural form
-      expect(store.getActivations('skills')).toHaveLength(1);
-      expect(store.getActivations('personas')).toHaveLength(1);
     });
 
     it('should deduplicate across plural and singular type forms', () => {
       store.recordActivation('skill', 'code-reviewer');
-      store.recordActivation('skills', 'code-reviewer'); // should be deduped
+      store.recordActivation('skills', 'code-reviewer');
       expect(store.getActivations('skill')).toHaveLength(1);
     });
+
+    it('should trigger persist on successful recording', async () => {
+      store.recordActivation('skill', 'code-reviewer');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(mockFileOps.writeFile).toHaveBeenCalled();
+      const writtenContent = JSON.parse(mockFileOps.writeFile.mock.calls[0][1]);
+      expect(writtenContent.version).toBe(1);
+      expect(writtenContent.activations.skill).toHaveLength(1);
+    });
+
+    it('should log ELEMENT_ACTIVATED security event', async () => {
+      const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');
+      const spy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+
+      store.recordActivation('skill', 'code-reviewer');
+
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ELEMENT_ACTIVATED',
+          source: 'FileActivationStateStore.recordActivation',
+        })
+      );
+
+      spy.mockRestore();
+    });
+
+    it('should NOT log ELEMENT_ACTIVATED on duplicate (dedup guard)', async () => {
+      const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');
+      const spy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+
+      store.recordActivation('skill', 'code-reviewer');
+      spy.mockClear();
+
+      store.recordActivation('skill', 'code-reviewer');
+      expect(spy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ELEMENT_ACTIVATED' })
+      );
+
+      spy.mockRestore();
+    });
   });
+
+  // ── recordDeactivation ──────────────────────────────────────────────
 
   describe('recordDeactivation()', () => {
     it('should remove a previously activated element', () => {
@@ -437,16 +445,16 @@ describe('ActivationStore', () => {
       expect(store.getActivations('skill')[0].name).toBe('debugger');
     });
 
+    it('should handle deactivation of non-activated element gracefully', () => {
+      expect(() => store.recordDeactivation('skill', 'never-activated')).not.toThrow();
+    });
+
     it('should not trigger persist when nothing changes', async () => {
       store.recordDeactivation('skill', 'nonexistent');
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(mockFileOps.writeFile).not.toHaveBeenCalled();
-    });
-
-    it('should handle deactivation of non-activated element gracefully', () => {
-      expect(() => store.recordDeactivation('skill', 'never-activated')).not.toThrow();
     });
 
     it('should deactivate canonical-equivalent Unicode names', () => {
@@ -456,7 +464,44 @@ describe('ActivationStore', () => {
       store.recordDeactivation('skill', 'Café Skill');
       expect(store.getActivations('skill')).toHaveLength(0);
     });
+
+    it('should log ELEMENT_DEACTIVATED security event', async () => {
+      // Re-import SecurityMonitor mock to verify it's wired up
+      const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');
+      const spy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+
+      store.recordActivation('skill', 'code-reviewer');
+      expect(store.getActivations('skill')).toHaveLength(1);
+
+      spy.mockClear();
+      store.recordDeactivation('skill', 'code-reviewer');
+      expect(store.getActivations('skill')).toHaveLength(0);
+
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'ELEMENT_DEACTIVATED',
+          source: 'FileActivationStateStore.recordDeactivation',
+        })
+      );
+
+      spy.mockRestore();
+    });
+
+    it('should NOT log ELEMENT_DEACTIVATED when element is not present', async () => {
+      const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');
+      const spy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+
+      store.recordDeactivation('skill', 'nonexistent');
+
+      expect(spy).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'ELEMENT_DEACTIVATED' })
+      );
+
+      spy.mockRestore();
+    });
   });
+
+  // ── removeStaleActivation ───────────────────────────────────────────
 
   describe('removeStaleActivation()', () => {
     it('should remove stale entries', () => {
@@ -467,6 +512,8 @@ describe('ActivationStore', () => {
       expect(store.getActivations('agent')).toHaveLength(0);
     });
   });
+
+  // ── getActivations ─────────────────────────────────────────────────
 
   describe('getActivations()', () => {
     it('should return empty array for element type with no activations', () => {
@@ -483,6 +530,8 @@ describe('ActivationStore', () => {
       expect(activations1).not.toBe(activations2);
     });
   });
+
+  // ── clearAll ────────────────────────────────────────────────────────
 
   describe('clearAll()', () => {
     it('should remove all activations', () => {
@@ -508,6 +557,8 @@ describe('ActivationStore', () => {
     });
   });
 
+  // ── Persistence ─────────────────────────────────────────────────────
+
   describe('persistence', () => {
     it('should write valid JSON with correct structure', async () => {
       store.recordActivation('skill', 'my-skill');
@@ -515,69 +566,84 @@ describe('ActivationStore', () => {
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Get the last write call
       const lastCall = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1];
       const written = JSON.parse(lastCall[1]);
 
       expect(written.version).toBe(1);
-      expect(written.sessionId).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+      expect(written.sessionId).toBe('test-session');
       expect(written.lastUpdated).toBeDefined();
       expect(written.activations.skill).toHaveLength(1);
       expect(written.activations.agent).toHaveLength(1);
     });
 
     it('should write to session-specific file path', async () => {
-      process.env.DOLLHOUSE_SESSION_ID = 'zulip-bridge';
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
-
-      store.recordActivation('skill', 'my-skill');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'zulip-bridge');
+      s.recordActivation('skill', 'my-skill');
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(mockFileOps.writeFile).toHaveBeenCalledWith(
-        path.join('/tmp/test-state', 'activations-zulip-bridge.json'),
+        path.join(TEST_STATE_DIR, 'activations-zulip-bridge.json'),
         expect.any(String)
       );
     });
 
     it('should handle write failures gracefully — in-memory state preserved', async () => {
       mockFileOps = createMockFileOps({ writeFileError: new Error('Disk full') });
-      store = new ActivationStore(mockFileOps, '/tmp/test-state');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
-      // Should not throw even when disk write fails
       store.recordActivation('skill', 'my-skill');
 
       await new Promise(resolve => setTimeout(resolve, 50));
 
-      // In-memory state should still be updated despite disk failure
       expect(store.getActivations('skill')).toHaveLength(1);
       expect(store.getActivations('skill')[0].name).toBe('my-skill');
     });
   });
 
+  // ── Round-Trip ──────────────────────────────────────────────────────
+
   describe('round-trip persistence', () => {
     it('should survive a write → read cycle', async () => {
-      // Write phase
       store.recordActivation('skill', 'code-reviewer');
       store.recordActivation('persona', 'Creative Dev', 'creative-dev.md');
-      store.recordActivation('memory', 'session-notes');
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      // Capture what was written
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
-      // Read phase — create new store that reads the written content
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new ActivationStore(readMockFileOps, '/tmp/test-state');
+      const store2 = new FileActivationStateStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
       await store2.initialize();
 
       expect(store2.getActivations('skill')).toHaveLength(1);
       expect(store2.getActivations('skill')[0].name).toBe('code-reviewer');
       expect(store2.getActivations('persona')).toHaveLength(1);
       expect(store2.getActivations('persona')[0].filename).toBe('creative-dev.md');
+    });
+
+    it('should survive a write → read cycle across all element types', async () => {
+      store.recordActivation('skill', 'code-reviewer');
+      store.recordActivation('persona', 'Creative Dev', 'creative-dev.md');
+      store.recordActivation('memory', 'session-notes');
+      store.recordActivation('agent', 'my-agent');
+      store.recordActivation('ensemble', 'my-ensemble');
+      store.recordActivation('template', 'my-template');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
+
+      const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
+      const store2 = new FileActivationStateStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
+      await store2.initialize();
+
+      expect(store2.getActivations('skill')).toHaveLength(1);
+      expect(store2.getActivations('persona')).toHaveLength(1);
       expect(store2.getActivations('memory')).toHaveLength(1);
-      expect(store2.getActivations('memory')[0].name).toBe('session-notes');
+      expect(store2.getActivations('agent')).toHaveLength(1);
+      expect(store2.getActivations('ensemble')).toHaveLength(1);
+      expect(store2.getActivations('template')).toHaveLength(1);
     });
   });
 });

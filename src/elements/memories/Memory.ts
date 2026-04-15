@@ -170,57 +170,55 @@ export class Memory extends BaseElement implements IElement {
   // instructions inherited from BaseElement (v2.0 dual-field architecture)
   // content: overridden below with a custom getter that returns formatted entries
 
+  /** Bounded set for log deduplication — caps at 10k to prevent unbounded growth in long-running HTTP servers. */
   private static readonly createdMemoryNames = new Set<string>();
-  private static memoryManagerResolver?: () => { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void>; } | undefined;
+  private static readonly MAX_CREATED_MEMORY_NAMES = 10_000;
+  // Issue #1948: Instance-injected service refs (replaces static resolvers).
+  // Set via constructor params when MemoryManager creates Memory instances.
+  private readonly _memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
+  private readonly _retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean };
 
   /**
-   * Static resolver for RetentionPolicyService (Issue #51)
-   * Used to check if retention enforcement should happen on load
+   * @deprecated Issue #1948: Use constructor injection instead.
+   * Kept for backward compat with tests.
    */
-  private static retentionPolicyResolver?: () => { shouldEnforceOnLoad(): boolean; isEnabled(): boolean; } | undefined;
+  public static configureMemoryManagerResolver(_resolver: () => any): void { /* no-op */ }
+  public static configureRetentionPolicyResolver(_resolver: () => any): void { /* no-op */ }
+  public static resetResolvers(): void { /* no-op */ }
 
-  public static configureMemoryManagerResolver(resolver: () => { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void>; } | undefined): void {
-    this.memoryManagerResolver = resolver;
-  }
+  // Issue #1948: Root memory manager ref for static methods (findByTrustLevel, etc.)
+  private static _rootMemoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> };
 
-  /**
-   * Configure the RetentionPolicyService resolver (Issue #51)
-   * Called during DI container setup
-   */
-  public static configureRetentionPolicyResolver(resolver: () => { shouldEnforceOnLoad(): boolean; isEnabled(): boolean; } | undefined): void {
-    this.retentionPolicyResolver = resolver;
-  }
-
-  /**
-   * Reset all static resolvers (for test cleanup)
-   * Call this in afterEach hooks to prevent test isolation issues
-   * where a stale resolver references disposed services
-   */
-  public static resetResolvers(): void {
-    this.memoryManagerResolver = undefined;
-    this.retentionPolicyResolver = undefined;
-  }
-
-  /**
-   * Get the RetentionPolicyService instance
-   * Returns undefined if not configured (allows graceful fallback)
-   */
-  private static getRetentionPolicyService() {
-    if (!this.retentionPolicyResolver) {
-      return undefined;
+  /** Set the root memory manager ref (called by Container). Warns on re-set (prevents silent replacement). */
+  static setRootMemoryManager(manager: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> }): void {
+    if (Memory._rootMemoryManagerRef && Memory._rootMemoryManagerRef !== manager) {
+      // Warn but don't throw — tests create multiple containers
+      if (process.env.NODE_ENV !== 'test') {
+        throw new Error('Memory root manager already set — cannot replace at runtime');
+      }
     }
-    return this.retentionPolicyResolver();
+    Memory._rootMemoryManagerRef = manager;
   }
 
-  private static getMemoryManager() {
-    if (!this.memoryManagerResolver) {
-      throw new Error('Memory manager resolver not configured');
+  /** Get memory manager for static methods (findByTrustLevel, etc.) */
+  private static getStaticMemoryManager() {
+    if (!Memory._rootMemoryManagerRef) {
+      throw new Error('Memory root manager not configured — call Memory.setRootMemoryManager()');
     }
-    const manager = this.memoryManagerResolver();
-    if (!manager) {
-      throw new Error('Memory manager resolver returned undefined');
+    return Memory._rootMemoryManagerRef;
+  }
+
+  private getRetentionPolicyService() {
+    return this._retentionPolicyRef;
+  }
+
+  private getMemoryManager() {
+    // Instance ref first (normal path), then static fallback (for static methods)
+    const ref = this._memoryManagerRef ?? Memory._rootMemoryManagerRef;
+    if (!ref) {
+      throw new Error('Memory manager ref not configured — Memory must be created via MemoryManager');
     }
-    return manager;
+    return ref;
   }
   // Memory-specific properties (with size limits to prevent memory leaks)
   private entries: LRUCache<MemoryEntry>;
@@ -243,7 +241,14 @@ export class Memory extends BaseElement implements IElement {
   private static readonly MAX_SANITIZATION_CACHE_SIZE = 500;
   private static readonly MAX_SANITIZATION_CACHE_MEMORY_MB = 5;
   
-  constructor(metadata: Partial<MemoryMetadata> = {}, metadataService: MetadataService) {
+  constructor(
+    metadata: Partial<MemoryMetadata>,
+    metadataService: MetadataService,
+    /** Issue #1948: MemoryManager ref for self-save operations. */
+    memoryManagerRef?: { list(): Promise<Memory[]>; save(memory: Memory, filePath?: string): Promise<void> },
+    /** Issue #1948: RetentionPolicyService ref for retention enforcement. */
+    retentionPolicyRef?: { shouldEnforceOnLoad(): boolean; isEnabled(): boolean },
+  ) {
     // SECURITY FIX: Sanitize all inputs during construction
     const sanitizedMetadata = {
       ...metadata,
@@ -266,6 +271,10 @@ export class Memory extends BaseElement implements IElement {
     };
 
     super(ElementType.MEMORY, sanitizedMetadata, metadataService);
+
+    // Issue #1948: Store injected service refs
+    this._memoryManagerRef = memoryManagerRef;
+    this._retentionPolicyRef = retentionPolicyRef;
 
     // Initialize memory-specific properties with defaults
     this.storageBackend = metadata.storageBackend || MEMORY_CONSTANTS.DEFAULT_STORAGE_BACKEND;
@@ -328,7 +337,7 @@ export class Memory extends BaseElement implements IElement {
     };
     this.searchIndex = new MemorySearchIndex(indexConfig);
 
-    // Log memory creation (once per unique name per server lifetime)
+    // Log memory creation (once per unique name, bounded to prevent unbounded growth)
     if (!Memory.createdMemoryNames.has(this.metadata.name)) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_CREATED,
@@ -336,7 +345,9 @@ export class Memory extends BaseElement implements IElement {
         source: 'Memory.constructor',
         details: `Memory created: ${this.metadata.name} with ${this.storageBackend} backend`
       });
-      Memory.createdMemoryNames.add(this.metadata.name);
+      if (Memory.createdMemoryNames.size < Memory.MAX_CREATED_MEMORY_NAMES) {
+        Memory.createdMemoryNames.add(this.metadata.name);
+      }
     }
   }
 
@@ -969,7 +980,7 @@ export class Memory extends BaseElement implements IElement {
       // IMPORTANT: Retention enforcement is now opt-in, not automatic
       // NOTE: Wrapped in try/catch to handle test environments where ConfigManager may not be initialized
       try {
-        const retentionService = Memory.getRetentionPolicyService();
+        const retentionService = this.getRetentionPolicyService();
         if (retentionService?.shouldEnforceOnLoad()) {
           // User has explicitly enabled on-load enforcement
           this.enforceRetentionPolicy();
@@ -1223,7 +1234,7 @@ export class Memory extends BaseElement implements IElement {
    * @throws {Error} If memory has not been loaded from file and no path is set
    */
   public async save(): Promise<void> {
-    const manager = Memory.getMemoryManager();
+    const manager = this.getMemoryManager();
     await manager.save(this, this.filePath);
   }
 
@@ -1241,7 +1252,7 @@ export class Memory extends BaseElement implements IElement {
     trustLevel: TrustLevel,
     options?: { limit?: number }
   ): Promise<Memory[]> {
-    const manager = Memory.getMemoryManager();
+    const manager = Memory.getStaticMemoryManager();
 
     // Load all memories and filter by trust level
     const allMemories = await manager.list();
@@ -1286,7 +1297,7 @@ export class Memory extends BaseElement implements IElement {
     tags?: string[];
     maxAge?: number;
   }): Promise<Memory[]> {
-    const manager = Memory.getMemoryManager();
+    const manager = Memory.getStaticMemoryManager();
 
     // Load all memories
     const allMemories = await manager.list();
