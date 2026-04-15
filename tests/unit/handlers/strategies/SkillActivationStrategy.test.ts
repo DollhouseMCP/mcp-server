@@ -66,6 +66,37 @@ describe('SkillActivationStrategy', () => {
       expect(result.content[0].text).toContain('simple-skill');
     });
 
+    it('should include a warning when the skill gatekeeper policy is malformed', async () => {
+      const mockSkill = {
+        metadata: {
+          name: 'warning-skill',
+          description: 'Warns about malformed policy',
+          gatekeeperDiagnostics: {
+            valid: false,
+            enforceable: false,
+            message: 'externalRestrictions must be nested under gatekeeper',
+          },
+        },
+        instructions: 'Follow these instructions',
+        activate: jest.fn().mockResolvedValue(undefined),
+        deactivate: jest.fn(),
+        getStatus: jest.fn(),
+      };
+
+      mockSkillManager.activateSkill.mockResolvedValue({
+        success: true,
+        message: 'Activated',
+        skill: mockSkill,
+      });
+
+      const result = await strategy.activate('warning-skill');
+
+      expect(result.content[0].text).toContain('Gatekeeper Policy Warning');
+      expect(result.content[0].text).toContain('externalRestrictions must be nested under gatekeeper');
+      expect(result.content[0].text).toContain('still activate');
+      expect(result.content[0].text).toContain('not being enforced');
+    });
+
     it('should return error when skill not found', async () => {
       mockSkillManager.activateSkill.mockResolvedValue({
         success: false,

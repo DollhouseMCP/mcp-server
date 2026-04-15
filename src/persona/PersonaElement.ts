@@ -262,7 +262,7 @@ export class PersonaElement extends BaseElement implements IElement {
         revenue_split: metadata.revenue_split,
         license: metadata.license,
         created_date: metadata.created_date,
-        gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name || 'unknown', 'persona'),
+        gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name || 'unknown', 'persona', metadata as unknown as Record<string, unknown>),
       };
 
       // Dual-field loading: detect v2 format (instructions in YAML frontmatter)

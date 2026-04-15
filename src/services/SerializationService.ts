@@ -277,6 +277,10 @@ export const METADATA_FIELD_ORDER: readonly string[] = [
   'unique_id',
 ];
 
+const TRANSIENT_METADATA_FIELDS = new Set([
+  'gatekeeperDiagnostics',
+]);
+
 // Pre-created Set for O(1) lookup in orderMetadataFields (avoids allocation per call)
 const METADATA_FIELD_ORDER_SET = new Set(METADATA_FIELD_ORDER);
 
@@ -791,6 +795,10 @@ export class SerializationService {
     const cleaned: Record<string, any> = {};
 
     for (const [key, value] of Object.entries(metadata)) {
+      if (TRANSIENT_METADATA_FIELDS.has(key)) {
+        continue;
+      }
+
       const shouldRemove =
         (strategy === 'remove-undefined' && value === undefined) ||
         (strategy === 'remove-null' && value === null) ||
@@ -990,4 +998,3 @@ export class SerializationService {
     }
   }
 }
-

@@ -364,6 +364,79 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('shows invalid gatekeeper warnings in the permissions dashboard without hiding the source', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            invalidPolicyElementCount: 1,
+            advisory: '1 active element has malformed gatekeeper policy. The element remains active, but that policy is not enforceable until fixed.',
+            elements: [
+              {
+                type: 'skill',
+                element_name: 'broken-guardian',
+                description: 'Still useful, but with bad policy',
+                allowPatterns: [],
+                allowRules: [],
+                confirmPatterns: [],
+                confirmRules: [],
+                denyPatterns: [],
+                denyRules: [],
+                invalidGatekeeperPolicy: true,
+                invalidGatekeeperMessage: 'externalRestrictions must be nested under gatekeeper',
+              },
+            ],
+            recentDecisions: [],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    expect(win.document.getElementById('perm-all-invalid-policy-summary')?.textContent).toContain('malformed gatekeeper policy');
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('broken-guardian');
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('policy invalid');
+
+    cleanup();
+  });
+
   it('ignores malformed persisted policy session entries in the picker', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="session-indicator"></div>
