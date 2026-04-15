@@ -77,6 +77,70 @@ type ConfigPathClient =
   | 'gemini-cli'
   | 'codex';
 
+type SetupSupportLevel =
+  | 'full_native'
+  | 'partial_native'
+  | 'mcp_only'
+  | 'unsupported';
+
+interface SetupSupportMetadata {
+  level: SetupSupportLevel;
+  label: string;
+  statusTag: string;
+  limitation: string;
+}
+
+const SETUP_SUPPORT_MATRIX: Record<string, SetupSupportMetadata> = {
+  'claude': {
+    level: 'unsupported',
+    label: 'Claude Desktop',
+    statusTag: 'coming soon',
+    limitation: 'Claude Desktop can host DollhouseMCP, but this release does not ship a native permissions setup flow for it yet.',
+  },
+  'claude-code': {
+    level: 'full_native',
+    label: 'Claude Code',
+    statusTag: 'claude code',
+    limitation: 'Claude Code has the full native permission-hook path in this release.',
+  },
+  'cursor': {
+    level: 'partial_native',
+    label: 'Cursor',
+    statusTag: 'native hooks',
+    limitation: 'Cursor exposes native hooks, but its permission handling still needs broader runtime verification across allow and ask decisions.',
+  },
+  'cline': {
+    level: 'mcp_only',
+    label: 'Cline',
+    statusTag: 'mcp only',
+    limitation: 'Cline MCP setup is supported here, but native permission-hook automation is still incomplete in this release.',
+  },
+  'windsurf': {
+    level: 'partial_native',
+    label: 'Windsurf',
+    statusTag: 'allow / deny',
+    limitation: 'Windsurf exposes native pre-run and pre-MCP hooks, but they are binary allow-or-block hooks. Confirmation-style policies currently degrade to block.',
+  },
+  'lmstudio': {
+    level: 'mcp_only',
+    label: 'LM Studio',
+    statusTag: 'mcp only',
+    limitation: 'LM Studio MCP setup is supported here, but permission enforcement currently relies on LM Studio built-in confirmations or a future fallback adapter.',
+  },
+  'gemini-cli': {
+    level: 'partial_native',
+    label: 'Gemini CLI',
+    statusTag: 'allow / deny',
+    limitation: 'Gemini CLI exposes native BeforeTool hooks, but it does not support an ask/confirm response path. Confirmation-style policies currently degrade to deny.',
+  },
+  'codex': {
+    level: 'partial_native',
+    label: 'Codex',
+    statusTag: 'bash only',
+    limitation: 'Codex currently only supports native PreToolUse hooks for Bash, so this turns on Bash permission guardrails only.',
+  },
+};
+
 /** Allowed release channels for the install endpoint. */
 const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
 
@@ -459,7 +523,11 @@ export function createSetupRoutes(opts?: {
     await Promise.all(clients.map(async ({ id, name }) => {
       const detection = await detectClient(id);
       if (detection) {
-        const result: Record<string, unknown> = { name, ...detection };
+        const result: Record<string, unknown> = {
+          name,
+          support: SETUP_SUPPORT_MATRIX[id],
+          ...detection,
+        };
         if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
           const hookStatus = await getPermissionHookStatusAsync(undefined, id);
           result.hookInstalled = hookStatus.installed;
