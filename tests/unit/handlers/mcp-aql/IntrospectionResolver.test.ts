@@ -1056,6 +1056,15 @@ describe('IntrospectionResolver', () => {
         expect(notes.some(n => n.includes('gatekeeper') && n.includes('allow') && n.includes('deny'))).toBe(true);
       });
 
+      it.each(elementTypes)('should explain operation rules versus externalRestrictions in %s syntaxNotes', (type) => {
+        const result = IntrospectionResolver.resolve({ query: 'format', name: type });
+        const spec = result.formatSpec as Record<string, unknown>;
+        const notes = (spec.syntaxNotes as string[]).join('\n');
+        expect(notes).toContain('externalRestrictions');
+        expect(notes).toContain('read_*');
+        expect(notes).toContain('Bash:git status*');
+      });
+
       it('should include gatekeeper in agent fullExample with allow/confirm/deny', () => {
         const result = IntrospectionResolver.resolve({ query: 'format', name: 'agent' });
         const spec = result.formatSpec as Record<string, unknown>;
@@ -1064,6 +1073,15 @@ describe('IntrospectionResolver', () => {
         expect(example).toContain('allow:');
         expect(example).toContain('confirm:');
         expect(example).toContain('deny: [delete_element]');
+      });
+
+      it('should include externalRestrictions in skill fullExample', () => {
+        const result = IntrospectionResolver.resolve({ query: 'format', name: 'skill' });
+        const spec = result.formatSpec as Record<string, unknown>;
+        const example = spec.fullExample as string;
+        expect(example).toContain('externalRestrictions:');
+        expect(example).toContain('Read:*');
+        expect(example).toContain('Bash:rm *');
       });
     });
 
