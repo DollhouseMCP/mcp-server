@@ -14,7 +14,7 @@ import * as yaml from 'js-yaml';
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
 import type { ElementGatekeeperPolicy } from '../../../src/handlers/mcp-aql/GatekeeperTypes.js';
-import { sanitizeGatekeeperPolicy } from '../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
+import { getGatekeeperDiagnostics, sanitizeGatekeeperPolicy } from '../../../src/handlers/mcp-aql/policies/ElementPolicies.js';
 
 let metadataService: MetadataService;
 
@@ -183,6 +183,41 @@ describe('Gatekeeper policy round-trip (Issue #524)', () => {
       expect(result).toBeUndefined();
     });
 
+    it('should attach diagnostics to metadata targets for malformed policies', () => {
+      const metadata: Record<string, unknown> = {};
+
+      const result = sanitizeGatekeeperPolicy(
+        { deny: 42 },
+        'bad-element',
+        'skill',
+        metadata,
+      );
+
+      expect(result).toBeUndefined();
+      expect(getGatekeeperDiagnostics(metadata)).toEqual({
+        valid: false,
+        enforceable: false,
+        message: expect.stringContaining('gatekeeper'),
+      });
+    });
+
+    it('should clear diagnostics when the policy is later valid', () => {
+      const metadata: Record<string, unknown> = {};
+
+      sanitizeGatekeeperPolicy({ deny: 42 }, 'bad-element', 'skill', metadata);
+      expect(getGatekeeperDiagnostics(metadata)).toBeDefined();
+
+      const result = sanitizeGatekeeperPolicy(
+        { deny: ['delete_element'] },
+        'good-element',
+        'skill',
+        metadata,
+      );
+
+      expect(result).toBeDefined();
+      expect(getGatekeeperDiagnostics(metadata)).toBeUndefined();
+    });
+
     it('should validate scopeRestrictions', () => {
       const result = sanitizeGatekeeperPolicy(
         {
@@ -194,6 +229,30 @@ describe('Gatekeeper policy round-trip (Issue #524)', () => {
       );
       expect(result).toBeDefined();
       expect(result!.scopeRestrictions?.allowedTypes).toEqual(['persona', 'skill']);
+    });
+  });
+
+  describe('transient diagnostics', () => {
+    it('should not serialize gatekeeper diagnostics into frontmatter', () => {
+      const skill = new Skill(
+        {
+          name: 'Transient Diagnostics Skill',
+          description: 'A skill with runtime-only diagnostics',
+          gatekeeperDiagnostics: {
+            valid: false,
+            enforceable: false,
+            message: 'Malformed gatekeeper policy',
+          },
+        } as any,
+        'Do things skillfully.',
+        metadataService,
+      );
+
+      const serialized = skill.serialize();
+      const frontmatterMatch = serialized.match(/^---\n([\s\S]*?)\n---/);
+      expect(frontmatterMatch).toBeTruthy();
+      const frontmatter = yaml.load(frontmatterMatch![1]) as any;
+      expect(frontmatter.gatekeeperDiagnostics).toBeUndefined();
     });
   });
 });

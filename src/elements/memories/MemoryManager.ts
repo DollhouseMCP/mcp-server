@@ -1952,7 +1952,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Memory type classification
       memoryType: metadataSource.memoryType,
       // Issue #524 — Gatekeeper policy (all element types)
-      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, nameResult.sanitizedValue || 'unknown', 'memory'),
+      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, nameResult.sanitizedValue || 'unknown', 'memory', metadataSource as Record<string, unknown>),
     };
 
     // Enhanced trigger validation and logging

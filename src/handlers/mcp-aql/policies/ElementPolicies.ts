@@ -45,6 +45,12 @@ export interface ActiveElement {
   metadata: ElementMetadataWithPolicy;
 }
 
+export interface GatekeeperPolicyDiagnostics {
+  valid: false;
+  enforceable: false;
+  message: string;
+}
+
 /**
  * Result of element policy resolution.
  * Contains the effective permission level and policy source.
@@ -725,14 +731,16 @@ export function sanitizeGatekeeperPolicy(
   rawPolicy: unknown,
   elementName: string,
   elementType: string,
+  diagnosticsTarget?: Record<string, unknown>,
 ): ElementGatekeeperPolicy | undefined {
-  if (!rawPolicy || typeof rawPolicy !== 'object') {
+  if (rawPolicy === undefined || rawPolicy === null) {
     return undefined;
   }
 
   try {
     // Wrap in a metadata envelope so parseElementPolicy can extract it
     const validated = parseElementPolicy({ gatekeeper: rawPolicy });
+    clearGatekeeperDiagnostics(diagnosticsTarget ?? rawPolicy);
     if (validated) {
       // Issue #758: Strip gatekeeper infrastructure operations from element policies
       // to prevent cascading confirmation loops
@@ -757,6 +765,49 @@ export function sanitizeGatekeeperPolicy(
       details: `Malformed gatekeeper policy in "${elementName}" stripped during load: ${message}`,
     });
     logger.warn(`Stripped malformed gatekeeper policy from ${elementType} "${elementName}": ${message}`);
+    attachGatekeeperDiagnostics(diagnosticsTarget ?? rawPolicy, message);
     return undefined;
   }
+}
+
+export function attachGatekeeperDiagnostics(target: unknown, message: string): void {
+  if (!target || typeof target !== 'object') {
+    return;
+  }
+
+  (target as Record<string, unknown>).gatekeeperDiagnostics = {
+    valid: false,
+    enforceable: false,
+    message,
+  } satisfies GatekeeperPolicyDiagnostics;
+}
+
+export function clearGatekeeperDiagnostics(target: unknown): void {
+  if (!target || typeof target !== 'object') {
+    return;
+  }
+
+  delete (target as Record<string, unknown>).gatekeeperDiagnostics;
+}
+
+export function getGatekeeperDiagnostics(target: unknown): GatekeeperPolicyDiagnostics | undefined {
+  if (!target || typeof target !== 'object') {
+    return undefined;
+  }
+
+  const diagnostics = (target as Record<string, unknown>).gatekeeperDiagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    return undefined;
+  }
+
+  const record = diagnostics as Record<string, unknown>;
+  if (record.valid === false && record.enforceable === false && typeof record.message === 'string' && record.message.trim() !== '') {
+    return {
+      valid: false,
+      enforceable: false,
+      message: record.message,
+    };
+  }
+
+  return undefined;
 }

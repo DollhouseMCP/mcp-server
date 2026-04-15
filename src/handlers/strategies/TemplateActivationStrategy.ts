@@ -31,9 +31,12 @@ export class TemplateActivationStrategy extends BaseActivationStrategy implement
     }
 
     const variables = template.metadata.variables?.map((v: any) => v.name).join(', ') || 'none';
-    return this.createSuccessResponse(
-      `✅ Template '${name}' ready to use\nVariables: ${variables}\n\nUse 'render_template' to generate content with this template.`
-    );
+    let text = `✅ Template '${name}' ready to use\nVariables: ${variables}\n\nUse 'render_template' to generate content with this template.`;
+    const gatekeeperWarning = this.formatGatekeeperValidityWarning(template.metadata as unknown as Record<string, unknown>);
+    if (gatekeeperWarning) {
+      text += gatekeeperWarning;
+    }
+    return this.createSuccessResponse(text);
   }
 
   /**

@@ -217,13 +217,16 @@
     const selectedSessionId = selectedData?.sessionId;
     if (elements.length === 0) {
       list.innerHTML = '<li class="perm-pattern-empty">No active elements with policies</li>';
+      renderInvalidPolicySummary('perm-all-invalid-policy-summary', []);
       return;
     }
 
+    renderInvalidPolicySummary('perm-all-invalid-policy-summary', elements);
     list.innerHTML = elements.map(el => `
       <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
         <span class="perm-source-type">${esc(el.type)}</span>
         <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
+        ${el.invalidGatekeeperPolicy ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>` : ''}
         ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
       </li>
     `).join('');
@@ -267,12 +270,14 @@
     }
 
     const elements = selectedData.elements || [];
+    renderInvalidPolicySummary('perm-selected-invalid-policy-summary', elements);
     sourceList.innerHTML = elements.length === 0
       ? '<li class="perm-pattern-empty">No policy-bearing elements found for this session</li>'
       : elements.map(el => `
           <li class="perm-source-item perm-source-item--detail">
             <span class="perm-source-type">${esc(el.type)}</span>
             <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
+            ${el.invalidGatekeeperPolicy ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>` : ''}
             ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
           </li>
         `).join('');
@@ -375,6 +380,8 @@
           type: element.type,
           element_name: element.element_name,
           description: element.description,
+          invalidGatekeeperPolicy: !!element.invalidGatekeeperPolicy,
+          invalidGatekeeperMessage: element.invalidGatekeeperMessage,
         };
       }),
       permissionPromptActive: !!aggregateData?.permissionPromptActive,
@@ -501,6 +508,7 @@
               <div>
                 <div class="perm-selected-title" id="perm-selected-title">Selected Session</div>
                 <div class="perm-selected-subtitle" id="perm-selected-subtitle"></div>
+                <div class="perm-inline-warning" id="perm-selected-invalid-policy-summary" hidden></div>
               </div>
               <span class="perm-selected-badge" id="perm-selected-badge" hidden>Persisted Policy State (Debug Info)</span>
             </div>
@@ -544,6 +552,7 @@
               <div>
                 <div class="perm-selected-title">All Sessions</div>
                 <div class="perm-selected-subtitle">${esc('Aggregate policy state across all live and persisted sessions. Rules shown here include both Dollhouse operation policies and external tool restrictions.')}${dataAdvisoryPlaceholder()}</div>
+                <div class="perm-inline-warning" id="perm-all-invalid-policy-summary" hidden></div>
               </div>
             </div>
 
@@ -695,6 +704,27 @@
 
   function dataAdvisoryPlaceholder() {
     return '<span id="perm-all-sessions-advisory" class="perm-inline-advisory" hidden></span>';
+  }
+
+  function renderInvalidPolicySummary(elementId, elements) {
+    const banner = document.getElementById(elementId);
+    if (!banner) return;
+
+    const invalid = (elements || []).filter(function (element) {
+      return !!element.invalidGatekeeperPolicy;
+    });
+
+    if (invalid.length === 0) {
+      banner.hidden = true;
+      banner.textContent = '';
+      return;
+    }
+
+    const names = invalid.map(function (element) {
+      return element.element_name || element.name || 'unknown';
+    });
+    banner.hidden = false;
+    banner.textContent = `${invalid.length} active element${invalid.length === 1 ? '' : 's'} ha${invalid.length === 1 ? 's' : 've'} malformed gatekeeper policy. These elements remain active, but that policy is not being enforced: ${names.join(', ')}`;
   }
 
 })();

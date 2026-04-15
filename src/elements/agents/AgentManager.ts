@@ -1860,7 +1860,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
     // Malformed policies are stripped and logged as security events (never reach enforcement)
     if (metadata.gatekeeper) {
-      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'agent');
+      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'agent', metadata as Record<string, unknown>);
     }
 
     // Issue #722: Validate V2 agent fields on load — structural checks, strip malformed data.

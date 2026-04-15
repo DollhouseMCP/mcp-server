@@ -24,7 +24,7 @@
 import { CRUDEndpoint } from './OperationRouter.js';
 import { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, translateToolConfigToPolicy, canOperationBeElevated } from './policies/index.js';
-import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements } from './policies/ElementPolicies.js';
+import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode } from './GatekeeperTypes.js';
 import { getRoute } from './OperationRouter.js';
 import { ALL_OPERATION_SCHEMAS } from './OperationSchema.js';
@@ -2977,6 +2977,8 @@ export class MCPAQLHandler {
           confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
           denyOperations: el.metadata?.gatekeeper?.deny ?? [],
           description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+          invalidGatekeeperPolicy: !!getGatekeeperDiagnostics(el.metadata),
+          invalidGatekeeperMessage: getGatekeeperDiagnostics(el.metadata)?.message,
           sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
         }));
 
@@ -3024,6 +3026,7 @@ export class MCPAQLHandler {
         const hasOperationRestrictions = combinedAllowOperations.length > 0
           || combinedDenyOperations.length > 0
           || combinedConfirmOperations.length > 0;
+        const invalidPolicyElements = elementPolicies.filter(policy => policy.invalidGatekeeperPolicy);
         let advisory: string | undefined;
         if (hasCliRestrictions) {
           if (!enforcementReady) {
@@ -3033,6 +3036,11 @@ export class MCPAQLHandler {
           }
         } else if (hasOperationRestrictions) {
           advisory = 'MCP-AQL operation policies are active for Dollhouse actions in this session.';
+        }
+
+        if (invalidPolicyElements.length > 0) {
+          const invalidAdvisory = `${invalidPolicyElements.length} active element${invalidPolicyElements.length === 1 ? '' : 's'} ha${invalidPolicyElements.length === 1 ? 's' : 've'} malformed gatekeeper policy. The element${invalidPolicyElements.length === 1 ? ' remains' : 's remain'} active, but that policy is not enforceable until fixed.`;
+          advisory = advisory ? `${advisory} ${invalidAdvisory}` : invalidAdvisory;
         }
 
         return {
@@ -3050,6 +3058,7 @@ export class MCPAQLHandler {
           hookInstalled,
           enforcementReady,
           hookHost: hookStatus.host,
+          invalidPolicyElementCount: invalidPolicyElements.length,
           advisory,
         };
       }

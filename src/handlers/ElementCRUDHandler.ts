@@ -56,6 +56,7 @@ import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
+import { getGatekeeperDiagnostics } from './mcp-aql/policies/ElementPolicies.js';
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
@@ -147,7 +148,7 @@ export class ElementCRUDHandler {
   }
 
   private hasGatekeeperPolicy(metadata: Record<string, unknown> | undefined): boolean {
-    return Boolean(metadata?.['gatekeeper']);
+    return Boolean(metadata?.['gatekeeper'] || getGatekeeperDiagnostics(metadata));
   }
 
   private toPolicyElementType(type: string): string {
