@@ -8,8 +8,11 @@
  * Issue #1945, Pre-Phase 4 Store Consolidation
  */
 
+import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+
+const TEST_STATE_DIR = path.join(os.tmpdir(), 'dollhouse-test-state');
 
 const mockLogSecurityEvent = jest.fn();
 
@@ -44,12 +47,12 @@ function createMockFileOps(options?: {
   let readFileMock: jest.Mock<() => Promise<string>>;
   if (options?.readFileError) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
-  } else if (options?.readFileResult !== undefined) {
-    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
-  } else {
+  } else if (options?.readFileResult === undefined) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(
       Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
     );
+  } else {
+    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
   }
   return {
     readFile: readFileMock,
@@ -74,7 +77,7 @@ describe('FileActivationStateStore', () => {
     delete process.env.DOLLHOUSE_SESSION_ID;
     delete process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE;
     mockFileOps = createMockFileOps();
-    store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+    store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
   });
 
   afterEach(() => {
@@ -89,63 +92,63 @@ describe('FileActivationStateStore', () => {
     });
 
     it('should reject invalid sessionId and fall back to default', () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', '../evil-path');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '../evil-path');
       expect(s.getSessionId()).toBe('default');
     });
 
     it('should generate unique session ID when env var not set and no param', () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should use DOLLHOUSE_SESSION_ID when set and no param', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'my-session';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('my-session');
     });
 
     it('should fall back to default for invalid env session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('default');
     });
 
     it('should generate unique session ID for empty env session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should accept alphanumeric with hyphens and underscores', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'claude-code_v2';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('claude-code_v2');
     });
 
     it('should reject session IDs starting with a number', () => {
       process.env.DOLLHOUSE_SESSION_ID = '123-session';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toBe('default');
     });
 
     it('should prefer explicit sessionId over env var', () => {
       process.env.DOLLHOUSE_SESSION_ID = 'from-env';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', 'from-param');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'from-param');
       expect(s.getSessionId()).toBe('from-param');
     });
 
     it('should fall back to resolveSessionId when sessionId param is empty', () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', '');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '');
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
     it('should trim whitespace from provided sessionId', () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', '  valid-session  ');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '  valid-session  ');
       expect(s.getSessionId()).toBe('valid-session');
     });
 
     it('should reject param sessionId starting with number', () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', '123-bad');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '123-bad');
       expect(s.getSessionId()).toBe('default');
     });
   });
@@ -159,19 +162,19 @@ describe('FileActivationStateStore', () => {
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=false', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', 'test-session');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
       expect(s.isEnabled()).toBe(false);
     });
 
     it('should respect DOLLHOUSE_ACTIVATION_PERSISTENCE=0', () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = '0';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', 'test-session');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
       expect(s.isEnabled()).toBe(false);
     });
 
     it('should not persist when disabled', async () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', 'test-session');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       s.recordActivation('skill', 'code-reviewer');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -182,7 +185,7 @@ describe('FileActivationStateStore', () => {
 
     it('should skip initialization when persistence is disabled', async () => {
       process.env.DOLLHOUSE_ACTIVATION_PERSISTENCE = 'false';
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test', 'test-session');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await s.initialize();
 
@@ -209,7 +212,7 @@ describe('FileActivationStateStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -221,7 +224,7 @@ describe('FileActivationStateStore', () => {
 
     it('should handle corrupt JSON gracefully', async () => {
       mockFileOps = createMockFileOps({ readFileResult: '{invalid json' });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
       expect(store.getActivations('skill')).toEqual([]);
@@ -237,7 +240,7 @@ describe('FileActivationStateStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
       expect(store.getActivations('skill')).toEqual([]);
@@ -254,7 +257,7 @@ describe('FileActivationStateStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -266,7 +269,7 @@ describe('FileActivationStateStore', () => {
       mockFileOps = createMockFileOps({
         readFileError: Object.assign(new Error('permission denied'), { code: 'EACCES' }),
       });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
       expect(store.getActivations('skill')).toEqual([]);
@@ -286,7 +289,7 @@ describe('FileActivationStateStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -305,7 +308,7 @@ describe('FileActivationStateStore', () => {
         },
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -574,20 +577,20 @@ describe('FileActivationStateStore', () => {
     });
 
     it('should write to session-specific file path', async () => {
-      const s = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'zulip-bridge');
+      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'zulip-bridge');
       s.recordActivation('skill', 'my-skill');
 
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(mockFileOps.writeFile).toHaveBeenCalledWith(
-        path.join('/tmp/test-state', 'activations-zulip-bridge.json'),
+        path.join(TEST_STATE_DIR, 'activations-zulip-bridge.json'),
         expect.any(String)
       );
     });
 
     it('should handle write failures gracefully — in-memory state preserved', async () => {
       mockFileOps = createMockFileOps({ writeFileError: new Error('Disk full') });
-      store = new FileActivationStateStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       store.recordActivation('skill', 'my-skill');
 
@@ -610,7 +613,7 @@ describe('FileActivationStateStore', () => {
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileActivationStateStore(readMockFileOps, '/tmp/test-state', 'test-session');
+      const store2 = new FileActivationStateStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
       await store2.initialize();
 
       expect(store2.getActivations('skill')).toHaveLength(1);
@@ -632,7 +635,7 @@ describe('FileActivationStateStore', () => {
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileActivationStateStore(readMockFileOps, '/tmp/test-state', 'test-session');
+      const store2 = new FileActivationStateStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
       await store2.initialize();
 
       expect(store2.getActivations('skill')).toHaveLength(1);

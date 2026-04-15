@@ -7,7 +7,11 @@
  * Issue #1945
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+
+const TEST_STATE_DIR = path.join(os.tmpdir(), 'dollhouse-test-state');
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
@@ -39,12 +43,12 @@ function createMockFileOps(options?: {
   let readFileMock: jest.Mock<() => Promise<string>>;
   if (options?.readFileError) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
-  } else if (options?.readFileResult !== undefined) {
-    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
-  } else {
+  } else if (options?.readFileResult === undefined) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(
       Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
     );
+  } else {
+    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
   }
   return {
     readFile: readFileMock,
@@ -59,7 +63,7 @@ describe('FileConfirmationStore', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
-    store = new FileConfirmationStore(mockFileOps, '/tmp/test-state', 'test-session');
+    store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
   });
 
   describe('initialize()', () => {
@@ -87,7 +91,7 @@ describe('FileConfirmationStore', () => {
         permissionPromptActive: true,
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileConfirmationStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -137,7 +141,7 @@ describe('FileConfirmationStore', () => {
         permissionPromptActive: false,
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileConfirmationStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
 
@@ -149,7 +153,7 @@ describe('FileConfirmationStore', () => {
 
     it('should handle corrupt JSON gracefully', async () => {
       mockFileOps = createMockFileOps({ readFileResult: 'not-json' });
-      store = new FileConfirmationStore(mockFileOps, '/tmp/test-state', 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
 
       await store.initialize();
       expect(store.getAllConfirmations()).toEqual([]);
@@ -270,7 +274,7 @@ describe('FileConfirmationStore', () => {
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileConfirmationStore(readMockFileOps, '/tmp/test-state', 'test-session');
+      const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
       await store2.initialize();
 
       expect(store2.getConfirmation('create_element:skill')?.operation).toBe('create_element');

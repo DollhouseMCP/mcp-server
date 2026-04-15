@@ -1260,7 +1260,7 @@ export class DollhouseContainer {
 
     const restoreType = async (
       elementType: string,
-      activateFn: (name: string) => Promise<{ success: boolean }>,
+      activateFn: (activation: import('../state/IActivationStateStore.js').PersistedActivation) => Promise<{ success: boolean }>,
       skip?: Set<string>,
     ): Promise<void> => {
       for (const activation of store.getActivations(elementType)) {
@@ -1269,7 +1269,7 @@ export class DollhouseContainer {
           continue;
         }
         try {
-          const result = await activateFn(activation.name);
+          const result = await activateFn(activation);
           if (result.success) {
             restoredCount++;
           } else {
@@ -1286,33 +1286,16 @@ export class DollhouseContainer {
     };
 
     // Personas use filename if available (Issue #843)
-    for (const activation of store.getActivations('persona')) {
-      const identifier = activation.filename || activation.name;
-      try {
-        const result = await personaManager.activatePersona(identifier);
-        if (result.success) {
-          restoredCount++;
-        } else {
-          logger.debug(`[Container] Pruning missing persona '${activation.name}'`);
-          store.removeStaleActivation('persona', activation.name);
-          skippedCount++;
-        }
-      } catch {
-        logger.debug(`[Container] Skipping failed persona '${activation.name}'`);
-        store.removeStaleActivation('persona', activation.name);
-        skippedCount++;
-      }
-    }
-
-    await restoreType('skill', (name) => skillManager.activateSkill(name));
-    await restoreType('agent', (name) => agentManager.activateAgent(name));
+    await restoreType('persona', (a) => personaManager.activatePersona(a.filename || a.name));
+    await restoreType('skill', (a) => skillManager.activateSkill(a.name));
+    await restoreType('agent', (a) => agentManager.activateAgent(a.name));
 
     // Memories: dedup against auto-loaded ones
     const activeMemories = await memoryManager.getActiveMemories();
     const activeMemoryNames = new Set(activeMemories.map(m => m.metadata.name));
-    await restoreType('memory', (name) => memoryManager.activateMemory(name), activeMemoryNames);
+    await restoreType('memory', (a) => memoryManager.activateMemory(a.name), activeMemoryNames);
 
-    await restoreType('ensemble', (name) => ensembleManager.activateEnsemble(name));
+    await restoreType('ensemble', (a) => ensembleManager.activateEnsemble(a.name));
 
     if (restoredCount > 0 || skippedCount > 0) {
       logger.info(

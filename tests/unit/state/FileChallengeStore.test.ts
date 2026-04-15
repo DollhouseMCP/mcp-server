@@ -7,7 +7,11 @@
  * Issue #1945
  */
 
+import os from 'node:os';
+import path from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+
+const TEST_STATE_DIR = path.join(os.tmpdir(), 'dollhouse-test-state');
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
@@ -39,12 +43,12 @@ function createMockFileOps(options?: {
   let readFileMock: jest.Mock<() => Promise<string>>;
   if (options?.readFileError) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(options.readFileError);
-  } else if (options?.readFileResult !== undefined) {
-    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
-  } else {
+  } else if (options?.readFileResult === undefined) {
     readFileMock = jest.fn<() => Promise<string>>().mockRejectedValue(
       Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
     );
+  } else {
+    readFileMock = jest.fn<() => Promise<string>>().mockResolvedValue(options.readFileResult);
   }
   return {
     readFile: readFileMock,
@@ -60,7 +64,7 @@ describe('FileChallengeStore', () => {
     jest.clearAllMocks();
     mockFileOps = createMockFileOps();
     // Disable auto-cleanup timer in tests (pass 0)
-    store = new FileChallengeStore(mockFileOps, '/tmp/test-state', 'test-session', 0);
+    store = new FileChallengeStore(mockFileOps, TEST_STATE_DIR, 'test-session', 0);
   });
 
   afterEach(() => {
@@ -136,7 +140,7 @@ describe('FileChallengeStore', () => {
         ],
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileChallengeStore(mockFileOps, '/tmp/test-state', 'test-session', 0);
+      store = new FileChallengeStore(mockFileOps, TEST_STATE_DIR, 'test-session', 0);
 
       await store.initialize();
 
@@ -160,7 +164,7 @@ describe('FileChallengeStore', () => {
       const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileChallengeStore(readMockFileOps, '/tmp/test-state', 'test-session', 0);
+      const store2 = new FileChallengeStore(readMockFileOps, TEST_STATE_DIR, 'test-session', 0);
       await store2.initialize();
 
       expect(store2.size()).toBe(1);
