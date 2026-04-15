@@ -42,6 +42,9 @@ interface PermissionDecisionTracker {
   getRecentDecisions(): PermissionDecision[];
 }
 
+const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
+const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
+
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
@@ -75,8 +78,8 @@ function extractReason(result: Record<string, unknown>): string {
   return extractString(result, ['reason', 'message'], '');
 }
 
-function shouldNormalizeClaudeHook(platform: string): boolean {
-  return platform === 'claude_code' || platform === 'vscode';
+function shouldNormalizeClaudeHook(platform: string | undefined): boolean {
+  return platform !== undefined && CLAUDE_COMPATIBLE_HOOK_PLATFORMS.has(platform);
 }
 
 function normalizePermissionResponseForPlatform(
@@ -97,7 +100,7 @@ function normalizePermissionResponseForPlatform(
   }
 
   const decision = extractDecision(result);
-  if (decision === 'allow' || decision === 'deny' || decision === 'ask') {
+  if (NORMALIZABLE_PERMISSION_DECISIONS.has(decision)) {
     return formatPermissionResponse(decision, platform, input, extractReason(result));
   }
 

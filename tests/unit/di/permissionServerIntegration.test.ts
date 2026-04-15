@@ -17,6 +17,7 @@ const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
+const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 
 describe('Permission Server Integration', () => {
 
@@ -163,7 +164,7 @@ describe('Permission Server Integration', () => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
         execFile('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
+          env: { HOME: os.homedir(), PATH: SAFE_TEST_PATH },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
           expect(error).toBeNull();
@@ -208,7 +209,7 @@ describe('Permission Server Integration', () => {
         const hookProc = spawn('bash', [HOOK_SCRIPT], {
           env: {
             HOME: os.homedir(),
-            PATH: '/usr/local/bin:/usr/bin:/bin',
+            PATH: SAFE_TEST_PATH,
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
           },
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -411,7 +412,7 @@ function runHookScript(payload: Record<string, unknown>): Promise<{ code: number
     const hookProc = spawn('bash', [HOOK_SCRIPT], {
       env: {
         HOME: os.homedir(),
-        PATH: '/usr/local/bin:/usr/bin:/bin',
+        PATH: SAFE_TEST_PATH,
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
       },
       stdio: ['pipe', 'pipe', 'pipe'],

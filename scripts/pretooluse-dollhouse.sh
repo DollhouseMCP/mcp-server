@@ -121,6 +121,10 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 
   if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
     debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
+    if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
+      debug "Non-JSON response for platform $HOOK_PLATFORM — fail open"
+      exit 0
+    fi
     NORMALIZED_RESPONSE=$(normalize_response "$RESPONSE")
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
       echo "$NORMALIZED_RESPONSE"
