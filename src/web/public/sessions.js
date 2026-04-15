@@ -401,7 +401,7 @@
       killBtn.className = 'session-kill-btn';
       killBtn.type = 'button';
       killBtn.textContent = '\u00D7';
-      if (isPolicyOnlySession(s) || s.kind === 'http') {
+      if (isPolicyOnlySession(s) || s.kind === 'http' || s.kind === 'console') {
         killBtn.disabled = true;
         killBtn.style.visibility = 'hidden';
       } else {
