@@ -201,15 +201,19 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     // metadata by the dispatcher (MCPAQLHandler). createElement just sanitizes and delegates.
     const sanitized = sanitizeMetadata(metadata);
 
+    const topLevelGatekeeperErrors = getGatekeeperAuthoringErrors({ ...args });
+    const metadataGatekeeperErrors = getGatekeeperAuthoringErrors(metadata as Record<string, unknown> | undefined);
     const gatekeeperErrors = [
-      ...getGatekeeperAuthoringErrors(args as unknown as Record<string, unknown>),
-      ...getGatekeeperAuthoringErrors(metadata as Record<string, unknown> | undefined),
+      ...topLevelGatekeeperErrors,
+      ...metadataGatekeeperErrors,
     ];
     if (gatekeeperErrors.length > 0) {
       const uniqueErrors = [...new Set(gatekeeperErrors)];
-      return formatSimpleErrorResponse(
-        `Gatekeeper policy validation failed:\n${uniqueErrors.map(err => `  • ${err}`).join('\n')}`
-      );
+      const gatekeeperValidationMessage = [
+        'Gatekeeper policy validation failed:',
+        ...uniqueErrors.map(err => `  • ${err}`),
+      ].join('\n');
+      return formatSimpleErrorResponse(gatekeeperValidationMessage);
     }
 
     // Issue #621: Validate category format for element types that support it

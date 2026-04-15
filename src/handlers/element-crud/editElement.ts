@@ -605,17 +605,20 @@ export async function editElement(
     return error(`Field type validation failed:\n${typeErrors.map(e => `  • ${e}`).join('\n')}`);
   }
 
+  const metadataInput = input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
+    ? input.metadata as Record<string, unknown>
+    : undefined;
   const gatekeeperErrors = [
     ...getGatekeeperAuthoringErrors(input),
-    ...getGatekeeperAuthoringErrors(
-      input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
-        ? input.metadata as Record<string, unknown>
-        : undefined
-    ),
+    ...getGatekeeperAuthoringErrors(metadataInput),
   ];
   if (gatekeeperErrors.length > 0) {
     const uniqueErrors = [...new Set(gatekeeperErrors)];
-    return error(`Gatekeeper policy validation failed:\n${uniqueErrors.map(err => `  • ${err}`).join('\n')}`);
+    const gatekeeperValidationMessage = [
+      'Gatekeeper policy validation failed:',
+      ...uniqueErrors.map(err => `  • ${err}`),
+    ].join('\n');
+    return error(gatekeeperValidationMessage);
   }
 
   // Validate string field values using injected validator
