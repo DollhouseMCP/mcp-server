@@ -12,7 +12,15 @@ import { registerPermissionRoutes } from '../../../src/web/routes/permissionRout
 function createMockHandler(readResult?: unknown) {
   return {
     handleRead: jest.fn().mockResolvedValue(
-      readResult ?? [{ success: true, data: { decision: 'allow' } }]
+      readResult ?? [{
+        success: true,
+        data: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+          },
+        },
+      }]
     ),
   } as any;
 }
@@ -36,7 +44,12 @@ describe('permissionRoutes', () => {
         .send({ tool_name: 'Bash', input: { command: 'npm test' }, platform: 'claude_code' });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ decision: 'allow' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
       expect(handler.handleRead).toHaveBeenCalledWith({
         operation: 'evaluate_permission',
         params: {
@@ -143,7 +156,13 @@ describe('permissionRoutes', () => {
     it('should return deny response from handler', async () => {
       const handler = createMockHandler([{
         success: true,
-        data: { decision: 'deny', reason: 'Blocked by policy' },
+        data: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'Blocked by policy',
+          },
+        },
       }]);
       const app = createApp(handler);
 
@@ -151,7 +170,33 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'git push --force' } });
 
-      expect(res.body).toEqual({ decision: 'deny', reason: 'Blocked by policy' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
+    });
+
+    it('should wrap legacy flat Claude responses into hookSpecificOutput', async () => {
+      const handler = createMockHandler([{
+        success: true,
+        data: { decision: 'deny', reason: 'Blocked by policy' },
+      }]);
+      const app = createApp(handler);
+
+      const res = await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash', input: { command: 'git push --force' }, platform: 'claude_code' });
+
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
     });
   });
 

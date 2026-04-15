@@ -42,6 +42,10 @@ interface PermissionDecisionTracker {
   getRecentDecisions(): PermissionDecision[];
 }
 
+const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
+const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
+type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
+
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
   for (const key of keys) {
@@ -73,6 +77,40 @@ function extractReason(result: Record<string, unknown>): string {
   }
 
   return extractString(result, ['reason', 'message'], '');
+}
+
+function shouldNormalizeClaudeHook(platform: string | undefined): boolean {
+  return platform !== undefined && CLAUDE_COMPATIBLE_HOOK_PLATFORMS.has(platform);
+}
+
+function normalizePermissionResponseForPlatform(
+  platform: string,
+  input: Record<string, unknown>,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!shouldNormalizeClaudeHook(platform)) {
+    return result;
+  }
+
+  const nested = result.hookSpecificOutput;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
+    if (typeof nestedDecision === 'string') {
+      return result;
+    }
+  }
+
+  const decision = extractDecision(result);
+  if (NORMALIZABLE_PERMISSION_DECISIONS.has(decision)) {
+    return formatPermissionResponse(
+      decision as NormalizablePermissionDecision,
+      platform,
+      input,
+      extractReason(result),
+    );
+  }
+
+  return formatPermissionResponse('allow', platform, input);
 }
 
 function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): PermissionDecisionTracker {
@@ -220,13 +258,18 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         return;
       }
 
-      const decision = extractDecision(opResult.data as Record<string, unknown>);
+      const responseData = normalizePermissionResponseForPlatform(
+        platform,
+        input || {},
+        opResult.data as Record<string, unknown>,
+      );
+      const decision = extractDecision(responseData);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(session_id, tool_name, input || {}, opResult.data as Record<string, unknown>);
+      decisionTracker.trackDecision(session_id, tool_name, input || {}, responseData);
 
-      res.json(opResult.data);
+      res.json(responseData);
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
       logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms):`, err);
