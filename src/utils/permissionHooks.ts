@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { access, chmod, copyFile, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, platform } from 'node:os';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from './logger.js';
 
@@ -184,7 +184,15 @@ export function getVsCodeHookSettingsPath(homeDir = homedir()): string {
 }
 
 export function getVsCodeUserSettingsPath(homeDir = homedir()): string {
-  return join(homeDir, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+  const currentPlatform = platform();
+  if (currentPlatform === 'darwin') {
+    return join(homeDir, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+  }
+  if (currentPlatform === 'win32') {
+    const appData = process.env.APPDATA || join(homeDir, 'AppData', 'Roaming');
+    return join(appData, 'Code', 'User', 'settings.json');
+  }
+  return join(homeDir, '.config', 'Code', 'User', 'settings.json');
 }
 
 export function getGeminiHookSettingsPath(homeDir = homedir()): string {
