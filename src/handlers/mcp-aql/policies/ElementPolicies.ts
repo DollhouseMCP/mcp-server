@@ -393,6 +393,39 @@ export function parseElementPolicy(
 }
 
 /**
+ * Validate authored gatekeeper input before save.
+ *
+ * Authoring-time validation is stricter than load-time sanitization: it should
+ * reject misplaced policy blocks instead of silently saving an element that
+ * later appears active but has non-enforceable external restrictions.
+ */
+export function getGatekeeperAuthoringErrors(
+  record: Record<string, unknown> | undefined
+): string[] {
+  if (!record || typeof record !== 'object') {
+    return [];
+  }
+
+  const errors: string[] = [];
+
+  if (Object.hasOwn(record, 'externalRestrictions')) {
+    errors.push(
+      'Invalid gatekeeper policy: externalRestrictions must be nested under gatekeeper.externalRestrictions'
+    );
+  }
+
+  if (record.gatekeeper !== undefined) {
+    try {
+      parseElementPolicy({ gatekeeper: record.gatekeeper });
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  return errors;
+}
+
+/**
  * Validate that a value is an array of strings.
  *
  * @param value - The value to validate

@@ -350,7 +350,8 @@ describe('evaluatePermission', () => {
       expect(SUPPORTED_PLATFORMS).toContain('cursor');
       expect(SUPPORTED_PLATFORMS).toContain('windsurf');
       expect(SUPPORTED_PLATFORMS).toContain('codex');
-      expect(SUPPORTED_PLATFORMS.length).toBe(5);
+      expect(SUPPORTED_PLATFORMS).toContain('vscode');
+      expect(SUPPORTED_PLATFORMS.length).toBe(6);
     });
 
     it('should default to claude_code format for unknown platform', () => {

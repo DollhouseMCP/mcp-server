@@ -14,7 +14,9 @@ import {
   formatValidElementTypesList,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
-  formatElementResolutionWarnings
+  formatElementResolutionWarnings,
+  collectGatekeeperAuthoringErrors,
+  formatGatekeeperValidationMessage,
 } from './helpers.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
 import { ElementCrudContext } from './types.js';
@@ -199,6 +201,11 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     // Element-specific fields (ensemble elements, agent V2 fields) are merged into
     // metadata by the dispatcher (MCPAQLHandler). createElement just sanitizes and delegates.
     const sanitized = sanitizeMetadata(metadata);
+
+    const gatekeeperErrors = collectGatekeeperAuthoringErrors({ ...args }, sanitized);
+    if (gatekeeperErrors.length > 0) {
+      return formatSimpleErrorResponse(formatGatekeeperValidationMessage(gatekeeperErrors));
+    }
 
     // Issue #621: Validate category format for element types that support it
     // Persona also supports categories (validated internally by PersonaManager) — include here for consistent early error reporting

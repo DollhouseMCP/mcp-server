@@ -33,27 +33,112 @@ Active elements (personas, skills, agents, ensembles) can declare gatekeeper pol
 gatekeeper:
   # Internal operations (MCP-AQL layer)
   allow:
-    - create_element    # Elevate to AUTO_APPROVE (if canBeElevated)
+    - read_*
+    - list_*
+    - search_*
+    - get_*
   confirm:
-    - some_operation    # Require confirmation (even if normally auto-approved)
-  deny:
-    - delete_element    # Hard-block — cannot be confirmed or overridden
+    - edit_*
+    - update_*
     - execute_agent
+  deny:
+    - delete_*
+    - clear_*
 
   # External tool calls (CLI layer)
   externalRestrictions:
-    description: "Read-only development"
+    description: "Read-only development session"
     allowPatterns:
-      - "git status*"
-      - "npm test*"
+      - "Read:*"
+      - "Glob:*"
+      - "Grep:*"
+    confirmPatterns:
+      - "Edit:*"
+      - "Write:*"
+      - "Bash:git push*"
     denyPatterns:
-      - "rm -rf *"
-      - "git push --force*"
+      - "Bash:rm *"
+      - "WebSearch:*"
 ```
 
 Priority: **element deny > element confirm > element allow > route default**
 
 Both systems (internal and external) are evaluated across all active elements on every request. A single element definition controls both the MCP operation surface and the external tool surface.
+
+### Choose the Right Policy Surface
+
+Use the two policy surfaces differently:
+
+- `gatekeeper.allow / confirm / deny`
+  - For Dollhouse / MCP-AQL operation names such as `read_*`, `edit_*`, `delete_element`, or `execute_agent`
+- `gatekeeper.externalRestrictions.allowPatterns / confirmPatterns / denyPatterns`
+  - For external tool or hook patterns such as `Read:*`, `Edit:*`, `Write:*`, `Bash:git status*`, or `Bash:rm *`
+
+`externalRestrictions` must stay nested under `gatekeeper`, and it must include a non-empty `description`.
+
+### Directly Usable Profiles
+
+#### Read-only analyst
+
+```yaml
+gatekeeper:
+  allow:
+    - read_*
+    - list_*
+    - search_*
+    - get_*
+    - browse_*
+    - query_*
+  deny:
+    - create_*
+    - edit_*
+    - update_*
+    - delete_*
+    - clear_*
+    - execute_agent
+  externalRestrictions:
+    description: "Read-only shell and tool usage"
+    allowPatterns:
+      - "Read:*"
+      - "Glob:*"
+      - "Grep:*"
+    denyPatterns:
+      - "Edit:*"
+      - "Write:*"
+      - "Bash:*"
+      - "WebSearch:*"
+```
+
+#### Confirm writes, deny destructive shell commands
+
+```yaml
+gatekeeper:
+  allow:
+    - read_*
+    - list_*
+    - search_*
+    - get_*
+  confirm:
+    - create_*
+    - edit_*
+    - update_*
+  deny:
+    - delete_*
+  externalRestrictions:
+    description: "Confirm writes, block high-risk external actions"
+    allowPatterns:
+      - "Read:*"
+      - "Glob:*"
+      - "Grep:*"
+    confirmPatterns:
+      - "Edit:*"
+      - "Write:*"
+      - "Bash:git push*"
+    denyPatterns:
+      - "Bash:rm *"
+      - "Bash:sudo *"
+      - "WebFetch:*"
+```
 
 ## The Sandbox Model
 
@@ -161,9 +246,9 @@ This is a server-side invariant that element authors cannot override.
 
 | Layer | Internal (MCP-AQL) | External (CLI tools) |
 |---|---|---|
-| **Policy source** | `gatekeeper.allow/confirm/deny` | `gatekeeper.externalRestrictions.allowPatterns/denyPatterns` |
+| **Policy source** | `gatekeeper.allow/confirm/deny` | `gatekeeper.externalRestrictions.allowPatterns/confirmPatterns/denyPatterns` |
 | **Enforcement** | `Gatekeeper.enforce()` | `ToolClassification.evaluateElementPolicies()` |
-| **Priority** | deny > confirm > allow > route default | deny > allow > static classification |
+| **Priority** | deny > confirm > allow > route default | deny > confirm > allow > static classification |
 | **Scope** | All active elements evaluated | All active elements evaluated |
 | **Export** | Via MCP-AQL introspection | Via `PolicyExportService` to bridge imports |
 

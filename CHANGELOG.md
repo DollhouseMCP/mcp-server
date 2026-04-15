@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.17] - 2026-04-15
+
+- Expanded client setup and permission integration support across more MCP hosts.
+- Added stronger gatekeeper policy authoring guidance, examples, and introspection.
+- Reject malformed gatekeeper policy structures during create/edit flows and raw YAML/frontmatter saves.
+
 ## [2.0.16] - 2026-04-14
 
 - Version bump

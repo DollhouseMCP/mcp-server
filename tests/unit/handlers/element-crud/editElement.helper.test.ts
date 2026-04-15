@@ -1045,6 +1045,50 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
+    it('should reject top-level externalRestrictions during edit', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          externalRestrictions: {
+            description: 'misnested',
+            denyPatterns: ['Bash:rm *'],
+          },
+        } as any,
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('Gatekeeper policy validation failed');
+      expect(result.content[0].text).toContain('externalRestrictions must be nested');
+      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should reject metadata gatekeeper without externalRestrictions description during edit', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm *'],
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('externalRestrictions.description is required');
+      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
     it('should reject number where string is expected (description)', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);

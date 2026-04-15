@@ -277,8 +277,11 @@ describe('Web console cleanup regressions', () => {
                 element_name: 'drawing-room-safety',
                 description: 'Shared baseline restrictions',
                 allowPatterns: ['Bash:git status*'],
+                allowRules: ['Bash:git status*'],
                 confirmPatterns: [],
+                confirmRules: [],
                 denyPatterns: [],
+                denyRules: [],
                 sessionIds: ['session-alpha'],
               },
               {
@@ -286,8 +289,11 @@ describe('Web console cleanup regressions', () => {
                 element_name: 'autonomy-scout-demo',
                 description: 'Selected session details',
                 allowPatterns: ['mcp__DollhouseMCP__mcp_aql_read*'],
+                allowRules: ['mcp__DollhouseMCP__mcp_aql_read*'],
                 confirmPatterns: ['mcp__DollhouseMCP__mcp_aql_execute*'],
+                confirmRules: ['mcp__DollhouseMCP__mcp_aql_execute*'],
                 denyPatterns: ['mcp__DollhouseMCP__mcp_aql_delete*'],
+                denyRules: ['mcp__DollhouseMCP__mcp_aql_delete*'],
                 sessionIds: ['session-focus'],
               },
             ],
@@ -297,6 +303,9 @@ describe('Web console cleanup regressions', () => {
             ],
             recentDecisions: [],
             permissionPromptActive: false,
+            allowRules: ['Bash:git status*'],
+            confirmRules: ['Bash:git push*'],
+            denyRules: ['Bash:rm -rf *', 'Bash:git clean -f*'],
           }),
         });
       }
