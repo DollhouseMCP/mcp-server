@@ -77,6 +77,23 @@ type ConfigPathClient =
   | 'gemini-cli'
   | 'codex';
 
+type SetupSupportLevel =
+  | 'full_native'
+  | 'partial_native'
+  | 'mcp_only'
+  | 'unsupported';
+
+const SETUP_SUPPORT_LEVELS: Record<string, SetupSupportLevel> = {
+  'claude': 'unsupported',
+  'claude-code': 'full_native',
+  'cursor': 'partial_native',
+  'cline': 'mcp_only',
+  'windsurf': 'partial_native',
+  'lmstudio': 'mcp_only',
+  'gemini-cli': 'partial_native',
+  'codex': 'partial_native',
+};
+
 /** Allowed release channels for the install endpoint. */
 const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
 
@@ -459,7 +476,11 @@ export function createSetupRoutes(opts?: {
     await Promise.all(clients.map(async ({ id, name }) => {
       const detection = await detectClient(id);
       if (detection) {
-        const result: Record<string, unknown> = { name, ...detection };
+        const result: Record<string, unknown> = {
+          name,
+          support: { level: SETUP_SUPPORT_LEVELS[id] },
+          ...detection,
+        };
         if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
           const hookStatus = await getPermissionHookStatusAsync(undefined, id);
           result.hookInstalled = hookStatus.installed;

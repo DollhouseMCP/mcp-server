@@ -276,7 +276,20 @@ describe('Setup Routes — API Endpoints', () => {
         expect(res.body[client].name).toBeDefined();
         expect(typeof res.body[client].installed).toBe('boolean');
         expect(res.body[client].configPath).toBeDefined();
+        expect(res.body[client].support).toBeDefined();
+        expect(typeof res.body[client].support.level).toBe('string');
       }
+    });
+
+    it('returns support metadata that distinguishes native and MCP-only clients', async () => {
+      const res = await request(app)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      expect(res.body['claude-code'].support.level).toBe('full_native');
+      expect(res.body['cursor'].support.level).toBe('partial_native');
+      expect(res.body['cline'].support.level).toBe('mcp_only');
+      expect(res.body['lmstudio'].support.level).toBe('mcp_only');
     });
 
     it('includes currentConfig when installed', async () => {
@@ -725,11 +738,18 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
 
     it('treats Codex as partial Bash-only permission support', () => {
-      expect(js).toContain("hookSupport: 'partial'");
+      expect(js).toContain("supportLevel: 'partial_native'");
       expect(js).toContain('~/.codex/hooks.json');
       expect(js).toContain('codex_hooks = true');
       expect(js).toContain('PreToolUse');
       expect(js).toContain('Checking Bash permissions');
+    });
+
+    it('stores permission support in one shared matrix', () => {
+      expect(js).toContain('PERMISSION_SUPPORT_MATRIX');
+      expect(js).toContain("supportLevel: 'full_native'");
+      expect(js).toContain("supportLevel: 'partial_native'");
+      expect(js).toContain("supportLevel: 'mcp_only'");
     });
 
     it('builds pinned configs with version parameter', () => {
@@ -1629,6 +1649,22 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(btn?.dataset.permissionInstallClient).toBe('codex');
     expect(panel?.textContent).toContain('bash only');
     expect(panel?.textContent).toContain('Codex currently only supports native PreToolUse hooks for Bash');
+  });
+
+  it('Cline permissions panel is labeled as MCP-only without a native hook button', () => {
+    const panel = document.getElementById('setup-panel-cline');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).toBeNull();
+    expect(panel?.textContent).toContain('mcp only');
+    expect(panel?.textContent).toContain('native permission-hook automation is still incomplete');
+  });
+
+  it('LM Studio permissions panel is labeled as MCP-only without a native hook button', () => {
+    const panel = document.getElementById('setup-panel-lmstudio');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).toBeNull();
+    expect(panel?.textContent).toContain('mcp only');
+    expect(panel?.textContent).toContain('built-in confirmations or a future fallback adapter');
   });
 
   it('all generated panels are hidden by default', () => {
