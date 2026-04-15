@@ -1323,85 +1323,111 @@ codex_hooks = true`;
     return html;
   };
 
+  const buildPartialAutoHint = (p, partial) => {
+    const base = partial.limitation;
+    if (p.id === 'codex') {
+      return `${base} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.`;
+    }
+    if (p.id === 'vscode') {
+      return `${base} This automatic path writes the shared hook bridge, creates <code>~/.copilot/hooks/dollhouse-permissions.json</code>, and enables <code>~/.copilot/hooks</code> in VS Code's <code>chat.hookFilesLocations</code> setting.`;
+    }
+    return `${base} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`;
+  };
+
+  const buildPartialFeatureHeading = (p, partial) => {
+    if (partial.featureHeading) return partial.featureHeading;
+    if (p.id === 'codex') return '2. Enable Codex hooks in <code>~/.codex/config.toml</code>';
+    return '2. Add the additional client settings';
+  };
+
+  const renderVerifiedPermissionSection = (p, verified) => {
+    const permissionInstallClient = p.installClient || p.id;
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">${verified.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <div class="setup-install-row">
+        <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
+        <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
+      </div>
+      <p class="setup-hint">This writes the shared hook bridge assets and updates ${verified.configPath} automatically.</p>
+    </div>
+    <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <details class="setup-manual-fallback">
+        <summary>Manual fallback</summary>
+        <div class="setup-manual-fallback-body">
+          <h4>1. Save the shared hook bridge once</h4>
+          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+          </div>
+          <h4>2. Add the ${verified.label} hook settings</h4>
+          <p>Add this block to ${verified.configPath} so ${verified.label} can call the hook bridge before tool use.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(verified.settingsBlock)}' aria-label="Copy ${verified.label} hook settings">Copy</button>
+            <pre><code>${escapeHtml(verified.settingsBlock)}</code></pre>
+          </div>
+          <p class="setup-hint">Command hook target: <code>${verified.scriptPath}</code></p>
+        </div>
+      </details>
+    </div>`;
+  };
+
+  const renderPartialPermissionSection = (p, partial) => {
+    const permissionInstallClient = p.installClient || p.id;
+    const autoHint = buildPartialAutoHint(p, partial);
+    const featureHeading = buildPartialFeatureHeading(p, partial);
+    const featureSection = partial.featureBlock
+      ? `<h4>${featureHeading}</h4>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="${escapeAttr(partial.featureCopyLabel || `Copy ${partial.label} settings`)}">Copy</button>
+              <pre><code>${escapeHtml(partial.featureBlock)}</code></pre>
+            </div>`
+      : '';
+    const stepNumber = partial.featureBlock ? '3' : '2';
+
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">${partial.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <div class="setup-install-row">
+        <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
+        <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
+      </div>
+      <p class="setup-hint">${autoHint}</p>
+    </div>
+    <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <details class="setup-manual-fallback">
+        <summary>Manual fallback</summary>
+        <div class="setup-manual-fallback-body">
+          <h4>1. Save the shared hook bridge once</h4>
+          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+          </div>
+          ${featureSection}
+          <h4>${stepNumber}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
+            <pre><code>${escapeHtml(partial.settingsBlock)}</code></pre>
+          </div>
+          <p class="setup-hint">Command hook target: <code>${partial.scriptPath}</code></p>
+        </div>
+      </details>
+    </div>`;
+  };
+
   const renderPermissionSection = (p) => {
     const hookSupport = p.hookSupport || 'unsupported';
     const configPath = p.hookConfigPath || p.configPath || p.tomlPath || 'this client’s user configuration';
 
     if (hookSupport === 'verified' && VERIFIED_PERMISSION_PLATFORMS[p.id]) {
-      const verified = VERIFIED_PERMISSION_PLATFORMS[p.id];
-      const permissionInstallClient = p.installClient || p.id;
-      return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">${verified.statusTag}</span></h3>
-        <div class="setup-permission-status" data-state="info">
-          <strong class="setup-permission-status-title"></strong>
-          <p class="setup-permission-status-msg"></p>
-        </div>
-        <div class="setup-install-row">
-          <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
-          <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
-        </div>
-        <p class="setup-hint">This writes the shared hook bridge assets and updates ${verified.configPath} automatically.</p>
-      </div>
-      <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <details class="setup-manual-fallback">
-          <summary>Manual fallback</summary>
-          <div class="setup-manual-fallback-body">
-            <h4>1. Save the shared hook bridge once</h4>
-            <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
-              <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
-            </div>
-            <h4>2. Add the ${verified.label} hook settings</h4>
-            <p>Add this block to ${verified.configPath} so ${verified.label} can call the hook bridge before tool use.</p>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(verified.settingsBlock)}' aria-label="Copy ${verified.label} hook settings">Copy</button>
-              <pre><code>${escapeHtml(verified.settingsBlock)}</code></pre>
-            </div>
-            <p class="setup-hint">Command hook target: <code>${verified.scriptPath}</code></p>
-          </div>
-        </details>
-      </div>`;
+      return renderVerifiedPermissionSection(p, VERIFIED_PERMISSION_PLATFORMS[p.id]);
     }
 
     if (hookSupport === 'partial' && PARTIAL_PERMISSION_PLATFORMS[p.id]) {
-      const partial = PARTIAL_PERMISSION_PLATFORMS[p.id];
-      const permissionInstallClient = p.installClient || p.id;
-      return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">${partial.statusTag}</span></h3>
-        <div class="setup-permission-status" data-state="info">
-          <strong class="setup-permission-status-title"></strong>
-          <p class="setup-permission-status-msg"></p>
-        </div>
-        <div class="setup-install-row">
-          <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
-          <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
-        </div>
-        <p class="setup-hint">${p.id === 'codex'
-          ? `${partial.limitation} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.`
-          : p.id === 'vscode'
-            ? `${partial.limitation} This automatic path writes the shared hook bridge, creates <code>~/.copilot/hooks/dollhouse-permissions.json</code>, and enables <code>~/.copilot/hooks</code> in VS Code's <code>chat.hookFilesLocations</code> setting.`
-            : `${partial.limitation} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`}</p>
-      </div>
-      <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <details class="setup-manual-fallback">
-          <summary>Manual fallback</summary>
-          <div class="setup-manual-fallback-body">
-            <h4>1. Save the shared hook bridge once</h4>
-            <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
-              <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
-            </div>
-            ${partial.featureBlock ? `<h4>${partial.featureHeading || (p.id === 'codex' ? '2. Enable Codex hooks in <code>~/.codex/config.toml</code>' : '2. Add the additional client settings')}</h4>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="${escapeAttr(partial.featureCopyLabel || `Copy ${partial.label} settings`)}">Copy</button>
-              <pre><code>${escapeHtml(partial.featureBlock)}</code></pre>
-            </div>` : ''}
-            <h4>${partial.featureBlock ? '3' : '2'}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
-            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
-              <pre><code>${escapeHtml(partial.settingsBlock)}</code></pre>
-            </div>
-            <p class="setup-hint">Command hook target: <code>${partial.scriptPath}</code></p>
-          </div>
-        </details>
-      </div>`;
+      return renderPartialPermissionSection(p, PARTIAL_PERMISSION_PLATFORMS[p.id]);
     }
 
     if (hookSupport === 'manual') {

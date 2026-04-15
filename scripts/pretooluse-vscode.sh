@@ -79,6 +79,8 @@ case "$RAW_TOOL_NAME" in
   searchWeb|search_web)
     TOOL_NAME='WebSearch'
     ;;
+  *)
+    ;;
 esac
 
 if [[ -z "$TOOL_NAME" ]]; then

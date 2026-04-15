@@ -681,6 +681,7 @@ async function installHookAssetsForHost(
 
   const sharedStat = statSync(sharedSourcePath);
   if (!sharedStat.isFile()) {
+    logger.warn(`[PermissionHooks] Shared hook bridge missing for ${normalizedClient}: ${sharedSourcePath}`);
     throw new Error(`Permission hook source script not found: ${sharedSourcePath}`);
   }
   await copyHookAsset(sharedSourcePath, sharedTargetPath);
@@ -693,6 +694,7 @@ async function installHookAssetsForHost(
   const wrapperSourcePath = getHookSourcePath(normalizedClient);
   const wrapperStat = statSync(wrapperSourcePath);
   if (!wrapperStat.isFile()) {
+    logger.warn(`[PermissionHooks] Wrapper hook script missing for ${normalizedClient}: ${wrapperSourcePath}`);
     throw new Error(`Permission hook wrapper script not found: ${wrapperSourcePath}`);
   }
   await copyHookAsset(wrapperSourcePath, wrapperTargetPath);

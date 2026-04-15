@@ -15,6 +15,7 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
+import { parse as parseToml } from 'smol-toml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -154,22 +155,31 @@ function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
     return { installed: false };
   }
 
-  const tomlConfig: Record<string, unknown> = {};
-  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
-  if (!sectionMatch) return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+  try {
+    const parsed = parseToml(raw) as Record<string, unknown>;
+    const mcpServers = parsed.mcp_servers;
+    if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
+      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+    }
 
-  tomlConfig.serverName = sectionMatch[1];
-  const sectionStart = sectionMatch.index + sectionMatch[0].length;
-  const nextSection = raw.indexOf('\n[', sectionStart);
-  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+    const matchingEntry = Object.entries(mcpServers).find(([key]) =>
+      key.toLowerCase().includes('dollhousemcp'));
+    if (!matchingEntry) {
+      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+    }
 
-  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
-  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
-  if (commandMatch) tomlConfig.command = commandMatch[1];
-  if (argsMatch) {
-    tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replaceAll('"', ''));
+    const [serverName, serverConfig] = matchingEntry;
+    const tomlConfig: Record<string, unknown> = { serverName };
+    if (serverConfig && typeof serverConfig === 'object' && !Array.isArray(serverConfig)) {
+      const { command, args } = serverConfig as { command?: unknown; args?: unknown };
+      if (typeof command === 'string') tomlConfig.command = command;
+      if (Array.isArray(args)) tomlConfig.args = args;
+    }
+
+    return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+  } catch {
+    return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
   }
-  return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
 }
 
 /** Parse a JSON config file for a DollhouseMCP server entry */
@@ -224,6 +234,27 @@ function validateClient(
     return null;
   }
   return normalized;
+}
+
+function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: string; error?: string } {
+  const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
+  const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
+  if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
+    return { error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
+  }
+
+  const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
+  const effectiveVersion = normalizedChannel && ALLOWED_INSTALL_CHANNELS.has(normalizedChannel) && normalizedChannel !== 'latest'
+    ? normalizedChannel
+    : normalizedVersion;
+
+  return { effectiveVersion };
+}
+
+function toNvmMitigationApplied(result: Awaited<ReturnType<typeof applyNvmLauncherIfNeeded>>): boolean | null {
+  if (result === 'applied') return true;
+  if (result === 'failed') return false;
+  return null;
 }
 
 // ── License verification ─────────────────────────────────────────────
@@ -479,19 +510,11 @@ export function createSetupRoutes(opts?: {
     const normalizedClient = validateClient(req, res, ALLOWED_CLIENTS);
     if (!normalizedClient) return;
 
-    // Validate version or channel if provided — must be semver-like or a known channel (no shell injection)
-    const { version, channel } = req.body as { version?: string; channel?: string };
-    const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
-    if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-      res.status(400).json({ error: 'Invalid version format. Expected semver (e.g., 2.0.2)' });
+    const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
+    if (error) {
+      res.status(400).json({ error });
       return;
     }
-    // Channel overrides version for auto-updating installs (beta, rc, latest).
-    // Normalize and validate against the allowlist to prevent injection.
-    const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
-    const effectiveVersion = normalizedChannel && ALLOWED_INSTALL_CHANNELS.has(normalizedChannel) && normalizedChannel !== 'latest'
-      ? normalizedChannel
-      : normalizedVersion;
 
     const tag = effectiveVersion ? `@${effectiveVersion}` : '@latest';
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
@@ -507,13 +530,7 @@ export function createSetupRoutes(opts?: {
       // cognitive complexity within bounds (SonarCloud S3776).
       const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
 
-      // true = mitigation applied; false = present but failed; null = not applicable
-      let nvmMitigationApplied: boolean | null = null;
-      if (nvmResult === 'applied') {
-        nvmMitigationApplied = true;
-      } else if (nvmResult === 'failed') {
-        nvmMitigationApplied = false;
-      }
+      const nvmMitigationApplied = toNvmMitigationApplied(nvmResult);
 
       const hookInstall = await permissionHookInstaller(normalizedClient);
 
