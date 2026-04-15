@@ -15,12 +15,14 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
+import { parse as parseToml } from 'smol-toml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
+import { getPermissionHookStatusAsync, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -30,6 +32,15 @@ import { randomInt } from 'node:crypto';
 import { PostHog } from 'posthog-node';
 import { v4 as uuidv4 } from 'uuid';
 
+function isMissingPathError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && (error as { code?: string }).code === 'ENOENT',
+  );
+}
+
 // PostHog project capture key — write-only by design, safe to expose publicly.
 // This key can ONLY send events to PostHog; it cannot read data, query analytics,
 // configure destinations, or access any other PostHog API. Same key used in
@@ -37,7 +48,7 @@ import { v4 as uuidv4 } from 'uuid';
 // Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
 
-/** Allowed client identifiers — must match install-mcp's --client values */
+/** Supported client identifiers for one-click setup. */
 const ALLOWED_CLIENTS = new Set([
   'claude',
   'claude-code',
@@ -53,7 +64,18 @@ const ALLOWED_CLIENTS = new Set([
   'zed',
   'warp',
   'codex',
+  'lmstudio',
 ]);
+
+type ConfigPathClient =
+  | 'claude'
+  | 'claude-code'
+  | 'cursor'
+  | 'windsurf'
+  | 'cline'
+  | 'lmstudio'
+  | 'gemini-cli'
+  | 'codex';
 
 /** Allowed release channels for the install endpoint. */
 const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
@@ -69,7 +91,7 @@ function getConfigPath(client: string): string | null {
   const home = homedir();
   const plat = platform();
 
-  const paths: Record<string, () => string | null> = {
+  const paths: Record<ConfigPathClient, () => string | null> = {
     'claude': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
       if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
@@ -78,12 +100,17 @@ function getConfigPath(client: string): string | null {
     'claude-code': () => join(home, '.claude.json'),
     'cursor': () => join(home, '.cursor', 'mcp.json'),
     'windsurf': () => join(home, '.codeium', 'windsurf', 'mcp_config.json'),
+    'cline': () => {
+      if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
+      if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
+      return join(home, '.config', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
+    },
     'lmstudio': () => join(home, '.lmstudio', 'mcp.json'),
     'gemini-cli': () => join(home, '.gemini', 'settings.json'),
     'codex': () => join(home, '.codex', 'config.toml'),
   };
 
-  const resolver = paths[client];
+  const resolver = paths[client as ConfigPathClient];
   return resolver ? resolver() : null;
 }
 
@@ -119,7 +146,7 @@ function openInEditor(filePath: string): Promise<string> {
 
 /** Clients whose config files we can locate and open */
 const OPENABLE_CLIENTS = new Set([
-  'claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex',
+  'claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex',
 ]);
 
 /**
@@ -138,22 +165,31 @@ function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
     return { installed: false };
   }
 
-  const tomlConfig: Record<string, unknown> = {};
-  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
-  if (!sectionMatch) return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+  try {
+    const parsed = parseToml(raw) as Record<string, unknown>;
+    const mcpServers = parsed.mcp_servers;
+    if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
+      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+    }
 
-  tomlConfig.serverName = sectionMatch[1];
-  const sectionStart = sectionMatch.index + sectionMatch[0].length;
-  const nextSection = raw.indexOf('\n[', sectionStart);
-  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+    const matchingEntry = Object.entries(mcpServers).find(([key]) =>
+      key.toLowerCase().includes('dollhousemcp'));
+    if (!matchingEntry) {
+      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+    }
 
-  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
-  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
-  if (commandMatch) tomlConfig.command = commandMatch[1];
-  if (argsMatch) {
-    tomlConfig.args = argsMatch[1].split(',').map(s => s.trim().replaceAll('"', ''));
+    const [serverName, serverConfig] = matchingEntry;
+    const tomlConfig: Record<string, unknown> = { serverName };
+    if (serverConfig && typeof serverConfig === 'object' && !Array.isArray(serverConfig)) {
+      const { command, args } = serverConfig as { command?: unknown; args?: unknown };
+      if (typeof command === 'string') tomlConfig.command = command;
+      if (Array.isArray(args)) tomlConfig.args = args;
+    }
+
+    return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+  } catch {
+    return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
   }
-  return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
 }
 
 /** Parse a JSON config file for a DollhouseMCP server entry */
@@ -210,9 +246,32 @@ function validateClient(
   return normalized;
 }
 
+function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: string; error?: string } {
+  const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
+  const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
+  if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
+    return { error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
+  }
+
+  const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
+  const effectiveVersion = normalizedChannel && ALLOWED_INSTALL_CHANNELS.has(normalizedChannel) && normalizedChannel !== 'latest'
+    ? normalizedChannel
+    : normalizedVersion;
+
+  return { effectiveVersion };
+}
+
+function toNvmMitigationApplied(result: Awaited<ReturnType<typeof applyNvmLauncherIfNeeded>>): boolean | null {
+  if (result === 'applied') return true;
+  if (result === 'failed') return false;
+  return null;
+}
+
 // ── License verification ─────────────────────────────────────────────
 
-const VERIFICATION_CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MS_PER_MINUTE = 60 * 1000;
+const VERIFICATION_CODE_TTL_MINUTES = 10;
+const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
 
 /** Generate a cryptographically random 6-digit verification code. */
@@ -365,6 +424,8 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
 export function createSetupRoutes(opts?: {
   /** Override install-mcp runner. For testing only — prefix signals test-only use. */
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
+  /** Override permission hook installer. For testing only. */
+  _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -379,6 +440,7 @@ export function createSetupRoutes(opts?: {
   resendVerificationHandler: (req: Request, res: Response) => Promise<void>;
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
+  const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
   const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -386,6 +448,7 @@ export function createSetupRoutes(opts?: {
       { id: 'claude', name: 'Claude Desktop' },
       { id: 'claude-code', name: 'Claude Code' },
       { id: 'cursor', name: 'Cursor' },
+      { id: 'cline', name: 'Cline' },
       { id: 'windsurf', name: 'Windsurf' },
       { id: 'lmstudio', name: 'LM Studio' },
       { id: 'gemini-cli', name: 'Gemini CLI' },
@@ -396,7 +459,13 @@ export function createSetupRoutes(opts?: {
     await Promise.all(clients.map(async ({ id, name }) => {
       const detection = await detectClient(id);
       if (detection) {
-        results[id] = { name, ...detection };
+        const result: Record<string, unknown> = { name, ...detection };
+        if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+          const hookStatus = await getPermissionHookStatusAsync(undefined, id);
+          result.hookInstalled = hookStatus.installed;
+          result.hookAssetsPrepared = hookStatus.assetsPrepared;
+        }
+        results[id] = result;
       }
     }));
 
@@ -451,25 +520,19 @@ export function createSetupRoutes(opts?: {
     const normalizedClient = validateClient(req, res, ALLOWED_CLIENTS);
     if (!normalizedClient) return;
 
-    // Validate version or channel if provided — must be semver-like or a known channel (no shell injection)
-    const { version, channel } = req.body as { version?: string; channel?: string };
-    const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
-    if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-      res.status(400).json({ error: 'Invalid version format. Expected semver (e.g., 2.0.2)' });
+    const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
+    if (error) {
+      res.status(400).json({ error });
       return;
     }
-    // Channel overrides version for auto-updating installs (beta, rc, latest).
-    // Normalize and validate against the allowlist to prevent injection.
-    const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
-    const effectiveVersion = normalizedChannel && ALLOWED_INSTALL_CHANNELS.has(normalizedChannel) && normalizedChannel !== 'latest'
-      ? normalizedChannel
-      : normalizedVersion;
 
     const tag = effectiveVersion ? `@${effectiveVersion}` : '@latest';
     logger.info(`[Setup] Installing DollhouseMCP${tag} to client: ${normalizedClient}`);
 
     try {
-      const output = await installer(normalizedClient, effectiveVersion);
+      const output = normalizedClient === 'lmstudio'
+        ? await installLmStudioConfig(effectiveVersion)
+        : await installer(normalizedClient, effectiveVersion);
       logger.info(`[Setup] Successfully installed to ${normalizedClient}`);
 
       // Best-effort NVM mitigation (macOS/Linux only).
@@ -477,13 +540,9 @@ export function createSetupRoutes(opts?: {
       // cognitive complexity within bounds (SonarCloud S3776).
       const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
 
-      // true = mitigation applied; false = present but failed; null = not applicable
-      let nvmMitigationApplied: boolean | null = null;
-      if (nvmResult === 'applied') {
-        nvmMitigationApplied = true;
-      } else if (nvmResult === 'failed') {
-        nvmMitigationApplied = false;
-      }
+      const nvmMitigationApplied = toNvmMitigationApplied(nvmResult);
+
+      const hookInstall = await permissionHookInstaller(normalizedClient);
 
       res.json({
         success: true,
@@ -491,6 +550,7 @@ export function createSetupRoutes(opts?: {
         client: normalizedClient,
         version: effectiveVersion || 'latest',
         nvmMitigationApplied,
+        hookInstall,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1139,6 +1199,59 @@ export async function patchConfigForNvmLauncher(client: string, wrapperPath: str
   logger.debug(`[Setup] patchConfigForNvmLauncher: writing ${client} config (indent=${JSON.stringify(indent)})`);
   await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
   logger.info(`[Setup] Patched ${client} config to use NVM-aware launcher: ${wrapperPath}`);
+}
+
+function buildMcpServerEntry(version?: string): Record<string, unknown> {
+  const tag = version ? `@${version}` : '@latest';
+  return {
+    command: 'npx',
+    args: [`@dollhousemcp/mcp-server${tag}`],
+  };
+}
+
+export async function installJsonMcpClientConfig(
+  client: string,
+  version?: string,
+  configPathOverride?: string,
+): Promise<string> {
+  const configPath = configPathOverride ?? getConfigPath(client);
+  if (!configPath) {
+    throw new Error(`Config path unknown for client: ${client}`);
+  }
+  if (configPath.endsWith('.toml')) {
+    throw new Error(`JSON MCP install is not supported for TOML client: ${client}`);
+  }
+
+  await mkdir(dirname(configPath), { recursive: true });
+
+  let raw = '';
+  let parsed: Record<string, unknown> = {};
+  try {
+    raw = await readFile(configPath, 'utf-8');
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw new Error(`Could not parse existing config at ${configPath}`);
+    }
+  }
+
+  const rootKey = client === 'vscode' ? 'servers' : 'mcpServers';
+  const existingRoot = parsed[rootKey];
+  const root = existingRoot && typeof existingRoot === 'object' && !Array.isArray(existingRoot)
+    ? existingRoot as Record<string, unknown>
+    : {};
+
+  root.dollhousemcp = buildMcpServerEntry(version);
+  parsed[rootKey] = root;
+
+  const indent = raw ? detectIndent(raw) : 2;
+  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+
+  return `Installed MCP server "dollhousemcp" in ${client} (${configPath})`;
+}
+
+async function installLmStudioConfig(version?: string): Promise<string> {
+  return installJsonMcpClientConfig('lmstudio', version);
 }
 
 /**

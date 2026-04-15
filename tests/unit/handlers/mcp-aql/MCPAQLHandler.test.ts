@@ -61,6 +61,7 @@ describe('MCPAQLHandler', () => {
         deactivateElement: jest.fn().mockResolvedValue({ deactivated: true }),
         getActiveElements: jest.fn().mockResolvedValue([]),
         getActiveElementsForPolicy: jest.fn().mockResolvedValue([]),
+        getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
       },
       memoryManager: {
         find: jest.fn().mockResolvedValue({
@@ -333,6 +334,121 @@ describe('MCPAQLHandler', () => {
           expect(result.error).toContain('mcp_aql_delete');
         }
       });
+    });
+  });
+
+  describe('get_effective_cli_policies', () => {
+    it('includes operation rules and external patterns in the combined dashboard view', async () => {
+      (mockRegistry.elementCRUD.getActiveElementsForPolicy as jest.Mock).mockResolvedValue([
+        {
+          type: 'persona',
+          name: 'careful-persona',
+          metadata: {
+            name: 'careful-persona',
+            gatekeeper: {
+              allow: ['read_*'],
+              confirm: ['edit_*'],
+              deny: ['delete_*'],
+              externalRestrictions: {
+                allowPatterns: ['Bash:git status*'],
+                confirmPatterns: ['Bash:git push*'],
+                denyPatterns: ['Bash:rm*'],
+                description: 'Safer shell access',
+              },
+            },
+          },
+        },
+      ]);
+
+      const result = await handler.handleRead({
+        operation: 'get_effective_cli_policies',
+        params: {},
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        const data = result.data as Record<string, unknown>;
+        expect(data.combinedAllowOperations).toEqual(['read_*']);
+        expect(data.combinedConfirmOperations).toEqual(['edit_*']);
+        expect(data.combinedDenyOperations).toEqual(['delete_*']);
+        expect(data.combinedConfirmPatterns).toEqual(['Bash:git push*']);
+        expect(data.elements).toEqual([
+          expect.objectContaining({
+            allowOperations: ['read_*'],
+            confirmOperations: ['edit_*'],
+            denyOperations: ['delete_*'],
+            confirmPatterns: ['Bash:git push*'],
+          }),
+        ]);
+      }
+    });
+
+    it('uses reportable policy elements for dashboard session views', async () => {
+      (mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue([
+        {
+          type: 'skill',
+          name: 'audit-trace-demo',
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:curl*'],
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+          sessionIds: ['session-demo-1'],
+        },
+      ]);
+
+      const result = await handler.handleRead({
+        operation: 'get_effective_cli_policies',
+        params: {
+          reporting_scope: 'dashboard',
+          session_id: 'session-demo-1',
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith('session-demo-1');
+      if (result.success) {
+        const data = result.data as Record<string, unknown>;
+        expect(data.combinedDenyPatterns).toEqual(['Bash:curl*']);
+        expect(data.combinedConfirmPatterns).toEqual(['Bash:git push*']);
+      }
+    });
+  });
+
+  describe('evaluate_permission', () => {
+    it('uses session-scoped reportable policy elements when session_id is provided', async () => {
+      (mockRegistry.elementCRUD.getPolicyElementsForReport as jest.Mock).mockResolvedValue([
+        {
+          type: 'skill',
+          name: 'audit-trace-demo',
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+          sessionIds: ['session-follower-1'],
+        },
+      ]);
+
+      const result = await handler.handleRead({
+        operation: 'evaluate_permission',
+        params: {
+          tool_name: 'ToolX',
+          input: { action: 'demo' },
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith('session-follower-1');
     });
   });
 
@@ -1490,6 +1606,7 @@ describe('MCPAQLHandler', () => {
           deactivateElement: jest.fn().mockResolvedValue({ deactivated: true }),
           getActiveElements: jest.fn().mockResolvedValue([]),
           getActiveElementsForPolicy: jest.fn().mockResolvedValue([]),
+          getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
         },
         memoryManager: {
           find: jest.fn().mockResolvedValue({

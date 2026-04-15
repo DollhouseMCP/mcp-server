@@ -140,7 +140,7 @@ Create a new element of any type.
 | `systemPrompt` | string | Agents | Custom system prompt for LLM context |
 | `autonomy` | object | Agents | `{ riskTolerance, maxAutonomousSteps, requiresApproval, autoApprove }` |
 | `resilience` | object | Agents | `{ onStepLimitReached, onExecutionFailure, maxRetries, maxContinuations }` |
-| `gatekeeper` | object | No | Per-element security policy: `{ allow?, confirm?, deny?, scopeRestrictions? }` |
+| `gatekeeper` | object | No | Per-element security policy: `{ allow?, confirm?, deny?, scopeRestrictions?, externalRestrictions?: { description, allowPatterns?, confirmPatterns?, denyPatterns? } }`. Use `allow/confirm/deny` for MCP-AQL operation patterns like `read_*` or `delete_element`; use `externalRestrictions` for external tool patterns like `Read:*` or `Bash:git status*`. |
 | `metadata` | object | No | Additional metadata. For ensembles: include `elements` array. |
 
 ### import_element

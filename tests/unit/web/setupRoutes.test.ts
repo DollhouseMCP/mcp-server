@@ -10,9 +10,10 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { readFileSync } from 'node:fs';
-import { readFile as readFileAsync } from 'node:fs/promises';
+import { mkdtemp, readFile as readFileAsync, writeFile as writeFileAsync } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..', '..', '..', 'src');
@@ -80,7 +81,7 @@ describe('Setup Routes — API Endpoints', () => {
       const validClients = [
         'claude', 'claude-code', 'cursor', 'vscode', 'cline',
         'roo-cline', 'windsurf', 'witsy', 'enconvo', 'gemini-cli',
-        'goose', 'zed', 'warp', 'codex',
+        'goose', 'zed', 'warp', 'codex', 'lmstudio',
       ];
 
       for (const client of validClients) {
@@ -164,6 +165,13 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: async () => ({
+          supported: true,
+          installed: true,
+          configured: true,
+          host: 'claude-code',
+          message: 'Installed Claude Code permission hook and updated settings.json.',
+        }),
         _skipRateLimit: true,
       });
 
@@ -184,6 +192,41 @@ describe('Setup Routes — API Endpoints', () => {
       expect(res.body.success).toBe(true);
       expect(res.body.client).toBe('claude');
       expect(res.body.version).toBeDefined();
+      expect(res.body).toHaveProperty('hookInstall');
+    });
+
+    it('includes hook install details after a successful install', async () => {
+      const installPermissionHookMock = async (client: string) => ({
+        supported: client === 'claude-code',
+        installed: client === 'claude-code',
+        configured: client === 'claude-code',
+        host: client,
+        message: client === 'claude-code'
+          ? 'Installed Claude Code permission hook and updated settings.json.'
+          : `Automatic permission hook wiring is not yet supported for ${client}.`,
+      });
+
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        _installPermissionHook: installPermissionHookMock,
+        _skipRateLimit: true,
+      });
+
+      const testApp = express();
+      testApp.use(express.json());
+      testApp.post('/api/setup/install', installHandler);
+
+      const res = await request(testApp)
+        .post('/api/setup/install')
+        .send({ client: 'claude-code' })
+        .expect(200);
+
+      expect(res.body.hookInstall).toEqual(expect.objectContaining({
+        supported: true,
+        configured: true,
+        host: 'claude-code',
+      }));
     });
   });
 
@@ -227,7 +270,7 @@ describe('Setup Routes — API Endpoints', () => {
 
       expect(typeof res.body).toBe('object');
       // Should have entries for the detectable clients
-      const knownClients = ['claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
+      const knownClients = ['claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
       for (const client of knownClients) {
         expect(res.body[client]).toBeDefined();
         expect(res.body[client].name).toBeDefined();
@@ -295,8 +338,8 @@ describe('Setup Routes — API Endpoints', () => {
       // testing against the rejects-unsupported test above — if 'vscode' gets 400
       // but 'cursor' would not, validation is working.
       // The actual open behavior is tested manually.
-      const openableClients = ['claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
-      const nonOpenable = ['vscode', 'cline', 'roo-cline'];
+      const openableClients = ['claude', 'claude-code', 'cursor', 'cline', 'windsurf', 'lmstudio', 'gemini-cli', 'codex'];
+      const nonOpenable = ['vscode', 'roo-cline'];
 
       // Verify non-openable get rejected
       for (const client of nonOpenable) {
@@ -306,18 +349,56 @@ describe('Setup Routes — API Endpoints', () => {
 
       // Verify openable clients are in the expected set (JS-level validation)
       // This confirms the OPENABLE_CLIENTS allowlist matches our expectations
-      expect(openableClients.length).toBe(7);
+      expect(openableClients.length).toBe(8);
     });
 
     it('rejects clients not in the openable set', () => {
-      // VS Code and Cline are not in OPENABLE_CLIENTS
-      const nonOpenable = ['vscode', 'cline', 'roo-cline', 'random'];
+      // VS Code is not in OPENABLE_CLIENTS
+      const nonOpenable = ['vscode', 'roo-cline', 'random'];
       return Promise.all(nonOpenable.map(async (client) => {
         const res = await request(app)
           .post('/api/setup/open-config')
           .send({ client });
         expect(res.status).toBe(400);
       }));
+    });
+  });
+});
+
+describe('Setup Routes — direct JSON MCP installs', () => {
+  it('writes LM Studio mcp.json directly when install-mcp is not available', async () => {
+    const { installJsonMcpClientConfig } = await import('../../../src/web/routes/setupRoutes.js');
+    const tempDir = await mkdtemp(join(tmpdir(), 'dollhouse-lmstudio-'));
+    const configPath = join(tempDir, 'mcp.json');
+
+    const message = await installJsonMcpClientConfig('lmstudio', 'beta', configPath);
+    const parsed = JSON.parse(await readFileAsync(configPath, 'utf-8'));
+
+    expect(message).toContain('lmstudio');
+    expect(parsed.mcpServers?.dollhousemcp).toEqual({
+      command: 'npx',
+      args: ['@dollhousemcp/mcp-server@beta'],
+    });
+  });
+
+  it('preserves existing JSON keys when directly writing LM Studio config', async () => {
+    const { installJsonMcpClientConfig } = await import('../../../src/web/routes/setupRoutes.js');
+    const tempDir = await mkdtemp(join(tmpdir(), 'dollhouse-lmstudio-existing-'));
+    const configPath = join(tempDir, 'mcp.json');
+
+    await writeFileAsync(configPath, JSON.stringify({
+      mcpServers: {
+        existing: { command: 'npx', args: ['existing-server'] },
+      },
+    }, null, 2) + '\n', 'utf-8');
+
+    await installJsonMcpClientConfig('lmstudio', undefined, configPath);
+    const parsed = JSON.parse(await readFileAsync(configPath, 'utf-8'));
+
+    expect(parsed.mcpServers?.existing).toBeDefined();
+    expect(parsed.mcpServers?.dollhousemcp).toEqual({
+      command: 'npx',
+      args: ['@dollhousemcp/mcp-server@latest'],
     });
   });
 });
@@ -397,15 +478,15 @@ describe('Setup Tab — HTML Content Integrity', () => {
 
   describe('Configure Now buttons (generated panels)', () => {
     it('JS PLATFORMS registry defines installClient for generated platforms', () => {
-      const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline'];
+      const generatedWithInstall = ['cursor', 'vscode', 'codex', 'gemini-cli', 'windsurf', 'cline', 'lmstudio'];
       for (const client of generatedWithInstall) {
         expect(js).toContain(`installClient: '${client}'`);
       }
     });
 
-    it('LM Studio has no installClient in registry', () => {
+    it('LM Studio has installClient in registry', () => {
       const lmLine = /id:\s*'lmstudio'[^}]*/.exec(js);
-      expect(lmLine?.[0]).not.toContain('installClient');
+      expect(lmLine?.[0]).toContain("installClient: 'lmstudio'");
     });
   });
 
@@ -419,7 +500,7 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('JS PLATFORMS registry defines openClient for generated platforms', () => {
-      const openClients = ['cursor', 'codex', 'gemini-cli', 'windsurf', 'lmstudio'];
+      const openClients = ['cursor', 'cline', 'codex', 'gemini-cli', 'windsurf', 'lmstudio'];
       for (const client of openClients) {
         expect(js).toContain(`openClient: '${client}'`);
       }
@@ -526,6 +607,11 @@ describe('Setup Tab — HTML Content Integrity', () => {
 
     it('has global method button', () => {
       expect(html).toContain('data-method="global"');
+    });
+
+    it('has permissions method button', () => {
+      expect(html).toContain('data-method="permissions"');
+      expect(html).toContain('Permissions &amp; Security');
     });
 
     it('npx is active by default', () => {
@@ -636,6 +722,14 @@ describe('Setup Tab — JavaScript Integrity', () => {
     it('references @latest not @rc', () => {
       expect(js).not.toContain('@rc');
       expect(js).toContain('@latest');
+    });
+
+    it('treats Codex as partial Bash-only permission support', () => {
+      expect(js).toContain("hookSupport: 'partial'");
+      expect(js).toContain('~/.codex/hooks.json');
+      expect(js).toContain('codex_hooks = true');
+      expect(js).toContain('PreToolUse');
+      expect(js).toContain('Checking Bash permissions');
     });
 
     it('builds pinned configs with version parameter', () => {
@@ -774,6 +868,11 @@ describe('Setup Tab — CSS Integrity', () => {
 
   it('channel toggle has hidden attribute override to prevent display:flex conflict', () => {
     expect(css).toContain('.setup-channel-toggle[hidden]');
+    expect(css).toContain('display: none');
+  });
+
+  it('permissions intro has hidden attribute override to prevent display:grid conflict', () => {
+    expect(css).toContain('.setup-permissions-intro[hidden]');
     expect(css).toContain('display: none');
   });
 });
@@ -950,6 +1049,12 @@ describe('Setup Tab — Regressions', () => {
       expect(panel).toContain('~/.claude.json');
       expect(panel).toContain('Or add manually');
     });
+
+    it('Setup includes a permissions intro area for manual hook assets', () => {
+      expect(html).toContain('id="setup-permissions-intro"');
+      expect(js).toContain('renderPermissionsIntro');
+      expect(js).toContain('pretooluse-dollhouse.sh');
+    });
   });
 
   describe('All platforms have consistent structure', () => {
@@ -980,6 +1085,13 @@ describe('Setup Tab — Regressions', () => {
     it('generated panels include copy buttons and code blocks', () => {
       expect(js).toContain('setup-copy-btn');
       expect(js).toContain('setup-code-block');
+    });
+
+    it('generated panels include manual hook bridge assets for supported clients', () => {
+      expect(js).toContain('pretooluse-cursor.sh');
+      expect(js).toContain('pretooluse-codex.sh');
+      expect(js).toContain('pretooluse-gemini.sh');
+      expect(js).toContain('pretooluse-windsurf.sh');
     });
   });
 
@@ -1073,7 +1185,7 @@ describe('Setup Tab — Regressions', () => {
 
     it('channel selector hidden on init when pinned mode is active', () => {
       // The init sync line must apply hidden state without waiting for a click
-      expect(js).toContain("channelToggle.hidden = currentMethod === 'global'");
+      expect(js).toContain("channelToggle.hidden = currentMethod !== 'npx'");
     });
 
     it('channel change re-evaluates detection state', () => {
@@ -1423,7 +1535,7 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
   });
 
   it('platforms with installClient have a Configure Now button', () => {
-    const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline'];
+    const withInstall = ['cursor', 'vscode', 'codex', 'gemini', 'windsurf', 'cline', 'lmstudio'];
     for (const p of withInstall) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-install-btn');
@@ -1432,14 +1544,15 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('LM Studio does not have a Configure Now button', () => {
+  it('LM Studio has a Configure Now button', () => {
     const panel = document.getElementById('setup-panel-lmstudio');
     const btn = panel?.querySelector('.setup-install-btn');
-    expect(btn).toBeNull();
+    expect(btn).not.toBeNull();
+    expect((btn as HTMLElement)?.dataset.installClient).toBe('lmstudio');
   });
 
   it('platforms with openClient have an Open config file button', () => {
-    const withOpen = ['cursor', 'codex', 'gemini', 'windsurf', 'lmstudio'];
+    const withOpen = ['cursor', 'cline', 'codex', 'gemini', 'windsurf', 'lmstudio'];
     for (const p of withOpen) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-open-btn');
@@ -1448,8 +1561,8 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     }
   });
 
-  it('VS Code and Cline do not have Open config file buttons', () => {
-    for (const p of ['vscode', 'cline']) {
+  it('VS Code does not have an Open config file button', () => {
+    for (const p of ['vscode']) {
       const panel = document.getElementById('setup-panel-' + p);
       const btn = panel?.querySelector('.setup-open-btn');
       expect(btn).toBeNull();
@@ -1461,6 +1574,61 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     const codeBlocks = panel?.querySelectorAll('.setup-code-block');
     // Terminal command + TOML config = at least 2
     expect(codeBlocks?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('Claude Code permissions panel exposes a Configure Now button', () => {
+    const panel = document.getElementById('setup-panel-claude-code');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('claude-code');
+  });
+
+  it('Gemini permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-gemini');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('gemini-cli');
+    expect(panel?.textContent).toContain('allow / deny');
+    expect(panel?.textContent).toContain('does not support an ask/confirm response path');
+  });
+
+  it('Cursor permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-cursor');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('cursor');
+    expect(panel?.textContent).toContain('native hooks');
+    expect(panel?.textContent).toContain('Cursor exposes native hooks');
+    expect(panel?.innerHTML).toContain('.cursor/hooks.json');
+  });
+
+  it('VS Code permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-vscode');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('vscode');
+    expect(panel?.textContent).toContain('native hooks');
+    expect(panel?.textContent).toContain('ignores matcher values');
+    expect(panel?.innerHTML).toContain('.copilot/hooks/dollhouse-permissions.json');
+  });
+
+  it('Windsurf permissions panel exposes a Configure Now button for native partial support', () => {
+    const panel = document.getElementById('setup-panel-windsurf');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('windsurf');
+    expect(panel?.textContent).toContain('allow / deny');
+    expect(panel?.textContent).toContain('binary allow-or-block hooks');
+    expect(panel?.innerHTML).toContain('.codeium/windsurf/hooks.json');
+  });
+
+  it('Codex permissions panel exposes a Configure Now button for Bash-only support', () => {
+    const panel = document.getElementById('setup-panel-codex');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).not.toBeNull();
+    expect(btn?.dataset.permissionInstallClient).toBe('codex');
+    expect(panel?.textContent).toContain('bash only');
+    expect(panel?.textContent).toContain('Codex currently only supports native PreToolUse hooks for Bash');
   });
 
   it('all generated panels are hidden by default', () => {
@@ -1480,8 +1648,9 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
           expect(() => JSON.parse(text)).not.toThrow();
           const parsed = JSON.parse(text);
           const server = parsed.mcpServers?.dollhousemcp || parsed.servers?.dollhousemcp;
-          expect(server).toBeTruthy();
-          expect(server.command).toBe('npx');
+          if (server) {
+            expect(server.command).toBe('npx');
+          }
         }
       }
     }
@@ -1599,6 +1768,11 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     if (!select) return;
     select.value = value;
     select.dispatchEvent(new window.Event('change'));
+  }
+
+  function switchMethod(method: 'npx' | 'global' | 'permissions') {
+    const btn = document.querySelector(`.setup-method-btn[data-method="${method}"]`) as HTMLButtonElement | null;
+    btn?.click();
   }
 
   describe('Initial state with @latest config', () => {
@@ -1731,6 +1905,23 @@ describe('Setup Tab — Channel Selector Interactions', () => {
       }
     });
   });
+
+  describe('Permissions mode separates enforcement from MCP install state', () => {
+    beforeAll(() => switchMethod('permissions'));
+
+    it('hides the generic installed notice in permissions mode', () => {
+      const notice = getNotice();
+      expect(notice ?? null).toBeNull();
+    });
+
+    it('shows a permissions-specific status message instead of generic config copy', () => {
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const status = panel?.querySelector('.setup-permission-status');
+      expect(status).not.toBeNull();
+      expect(status?.textContent).toContain('Permissions & security tools are unavailable for Claude Desktop right now.');
+      expect(status?.textContent).not.toContain('already configured for this client');
+    });
+  });
 });
 
 // ── npm package inclusion check ───────────────────────────────────────
@@ -1753,6 +1944,16 @@ describe('Setup Tab — Package Inclusion', () => {
   it('files field includes dist/seed-elements/** for seed memories', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('dist/seed-elements/**');
+  });
+
+  it('files field includes manual permission hook wrapper scripts', () => {
+    const files = packageJson.files as string[];
+    expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/pretooluse-vscode.sh');
+    expect(files).toContain('scripts/pretooluse-cursor.sh');
+    expect(files).toContain('scripts/pretooluse-windsurf.sh');
+    expect(files).toContain('scripts/pretooluse-gemini.sh');
+    expect(files).toContain('scripts/pretooluse-codex.sh');
   });
 
   it('dist/web/public/index.html exists', () => {

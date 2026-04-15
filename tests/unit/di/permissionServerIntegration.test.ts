@@ -170,12 +170,19 @@ describe('Permission Server Integration', () => {
 
     itBash('hook script should discover server via port file and get a response', async () => {
       const testPort = 49360;
+      let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           req.on('data', () => { /* drain */ });
           req.on('end', () => {
+            capturedBody = JSON.parse(body);
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ decision: 'allow' }));
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'allow',
+              },
+            }));
           });
         } else {
           res.writeHead(404);
@@ -192,7 +199,11 @@ describe('Permission Server Integration', () => {
       const { spawn } = await import('node:child_process');
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
+          env: {
+            HOME: os.homedir(),
+            PATH: '/usr/local/bin:/usr/bin:/bin',
+            DOLLHOUSE_SESSION_ID: 'session-hook-test',
+          },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -210,9 +221,15 @@ describe('Permission Server Integration', () => {
       await fs.unlink(PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
+      expect(capturedBody).toEqual({
+        tool_name: 'Read',
+        input: { file_path: './test-fixture.txt' },
+        platform: 'claude_code',
+        session_id: 'session-hook-test',
+      });
       if (stdout.trim()) {
         const response = JSON.parse(stdout.trim());
-        expect(response.decision).toBe('allow');
+        expect(response.hookSpecificOutput.permissionDecision).toBe('allow');
       }
     });
   });

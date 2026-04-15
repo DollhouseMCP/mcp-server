@@ -629,6 +629,7 @@ async function startFallbackServer(options: OpenBrowserOptions, port: number): P
   const { createIngestRoutes } = await import('./console/IngestRoutes.js');
   const ingestResult = createIngestRoutes({
     logBroadcast: (entry) => liveBroadcast?.(entry),
+    storeMetricsSnapshot: (snapshot) => metricsSink?.onSnapshot(snapshot),
   });
   ingestResult.registerConsoleSession();
 

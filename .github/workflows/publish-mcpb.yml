@@ -1,0 +1,114 @@
+name: Publish MCP Bundle
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag to upload the bundle to (e.g., v2.0.15)'
+        required: true
+        type: string
+
+concurrency:
+  group: release-publish-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+jobs:
+  publish-mcpb:
+    name: Build and upload .mcpb
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Resolve release metadata
+        id: release_meta
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag_name }}
+        run: |
+          TAG_NAME="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$TAG_NAME" ]; then
+            echo "❌ No tag name available for MCP bundle publication"
+            exit 1
+          fi
+
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "❌ Invalid tag format for MCP bundle publication: $TAG_NAME"
+            exit 1
+          fi
+
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VERSION}"
+
+          if [ "$TAG_NAME" != "$EXPECTED_TAG" ]; then
+            echo "❌ Tag/version mismatch: release tag is $TAG_NAME but package.json is $EXPECTED_TAG"
+            exit 1
+          fi
+
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset_path=dollhousemcp-${VERSION}.mcpb" >> "$GITHUB_OUTPUT"
+
+      - name: Build MCP bundle
+        shell: bash
+        run: ./scripts/build-mcpb.sh
+
+      - name: Generate MCP bundle checksum
+        id: checksum
+        shell: bash
+        env:
+          ASSET_PATH: ${{ steps.release_meta.outputs.asset_path }}
+        run: |
+          sha256sum "$ASSET_PATH" > "${ASSET_PATH}.sha256"
+          echo "checksum_path=${ASSET_PATH}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Attest MCP bundle provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            ${{ steps.release_meta.outputs.asset_path }}
+            ${{ steps.checksum.outputs.checksum_path }}
+
+      - name: Upload MCP bundle to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release_meta.outputs.tag_name }}
+          ASSET_PATH: ${{ steps.release_meta.outputs.asset_path }}
+        run: |
+          for asset in "$ASSET_PATH" "${ASSET_PATH}.sha256"; do
+            success=false
+            for attempt in 1 2 3; do
+              if gh release upload "$TAG_NAME" "$asset" --clobber; then
+                echo "✅ Uploaded $asset"
+                success=true
+                break
+              fi
+              echo "⚠️ Upload attempt $attempt failed for $asset"
+              sleep 5
+            done
+
+            if [[ "$success" != "true" ]]; then
+              echo "❌ Failed to upload $asset after 3 attempts"
+              exit 1
+            fi
+          done

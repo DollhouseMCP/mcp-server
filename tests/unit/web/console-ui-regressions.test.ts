@@ -15,6 +15,7 @@ let appSource = '';
 let sessionsSource = '';
 let logsSource = '';
 let metricsSource = '';
+let permissionsSource = '';
 
 type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
 
@@ -24,11 +25,12 @@ const SESSION_FILTER_INJECTION_WAIT_MS = 40;
 
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
-  [appSource, sessionsSource, logsSource, metricsSource] = await Promise.all([
+  [appSource, sessionsSource, logsSource, metricsSource, permissionsSource] = await Promise.all([
     readFile(join(base, 'app.js'), 'utf8'),
     readFile(join(base, 'sessions.js'), 'utf8'),
     readFile(join(base, 'logs.js'), 'utf8'),
     readFile(join(base, 'metrics.js'), 'utf8'),
+    readFile(join(base, 'permissions.js'), 'utf8'),
   ]);
 });
 
@@ -229,6 +231,190 @@ describe('Web console cleanup regressions', () => {
     expect(select?.options[1].value).toBe('session-1');
     expect(select?.options[1].textContent).toContain('Barbie');
     expect(select?.options[1].textContent).toContain('(leader)');
+
+    cleanup();
+  });
+
+  it('keeps aggregate policy sources visible when selecting a persisted policy session', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            sessions: [{
+              sessionId: 'console-1',
+              status: 'active',
+              displayName: 'Web Console',
+              startedAt: '2026-04-13T20:00:00.000Z',
+              isLeader: false,
+              authenticated: true,
+              kind: 'console',
+              color: '#6366f1',
+            }],
+          }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 2,
+            hasAllowlist: true,
+            denyPatterns: ['Bash:rm -rf *', 'Bash:git clean -f*'],
+            allowPatterns: [],
+            confirmPatterns: ['Bash:git push*'],
+            elements: [
+              {
+                type: 'ensemble',
+                element_name: 'drawing-room-safety',
+                description: 'Shared baseline restrictions',
+                allowPatterns: ['Bash:git status*'],
+                allowRules: ['Bash:git status*'],
+                confirmPatterns: [],
+                confirmRules: [],
+                denyPatterns: [],
+                denyRules: [],
+                sessionIds: ['session-alpha'],
+              },
+              {
+                type: 'agent',
+                element_name: 'autonomy-scout-demo',
+                description: 'Selected session details',
+                allowPatterns: ['mcp__DollhouseMCP__mcp_aql_read*'],
+                allowRules: ['mcp__DollhouseMCP__mcp_aql_read*'],
+                confirmPatterns: ['mcp__DollhouseMCP__mcp_aql_execute*'],
+                confirmRules: ['mcp__DollhouseMCP__mcp_aql_execute*'],
+                denyPatterns: ['mcp__DollhouseMCP__mcp_aql_delete*'],
+                denyRules: ['mcp__DollhouseMCP__mcp_aql_delete*'],
+                sessionIds: ['session-focus'],
+              },
+            ],
+            knownSessions: [
+              { sessionId: 'session-alpha', displayName: 'session-alpha', source: 'policy' },
+              { sessionId: 'session-focus', displayName: 'session-focus', source: 'policy' },
+            ],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            allowRules: ['Bash:git status*'],
+            confirmRules: ['Bash:git push*'],
+            denyRules: ['Bash:rm -rf *', 'Bash:git clean -f*'],
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseAuth.apiFetch = apiFetch;
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    expect(sessionBox).not.toBeNull();
+    sessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const debugHeading = Array.from(win.document.querySelectorAll('.session-dropdown-heading'))
+      .map(node => node.textContent);
+    expect(debugHeading).toContain('Persisted Policy State (Debug Info)');
+
+    const persistedItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]') as HTMLElement | null;
+    expect(persistedItem).not.toBeNull();
+    persistedItem?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const sourceItems = Array.from(win.document.querySelectorAll('#perm-source-list .perm-source-item'));
+    expect(sourceItems).toHaveLength(2);
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('drawing-room-safety');
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('autonomy-scout-demo');
+    expect(win.document.getElementById('perm-allow-list')?.textContent).toContain('Bash:git status*');
+
+    const highlighted = win.document.querySelectorAll('#perm-source-list .perm-source-item--selected');
+    expect(highlighted).toHaveLength(1);
+    expect(highlighted[0]?.textContent).toContain('autonomy-scout-demo');
+
+    const selectedCard = win.document.getElementById('perm-selected-card');
+    expect(selectedCard?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-selected-title')?.textContent).toContain('session-focus');
+    expect(win.document.getElementById('perm-selected-badge')?.textContent).toContain('Persisted Policy State (Debug Info)');
+    expect(win.document.getElementById('perm-selected-source-list')?.textContent).toContain('autonomy-scout-demo');
+    expect(win.document.getElementById('perm-selected-deny-list')?.textContent).toContain('mcp__DollhouseMCP__mcp_aql_delete*');
+    const selectedSessionRequests = apiFetch.mock.calls
+      .map(([url]) => url)
+      .filter((url): url is string => typeof url === 'string' && url.includes('sessionId=session-focus'));
+    expect(selectedSessionRequests).toHaveLength(0);
+
+    cleanup();
+  });
+
+  it('ignores malformed persisted policy session entries in the picker', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [{
+          sessionId: 'console-1',
+          status: 'active',
+          displayName: 'Web Console',
+          startedAt: '2026-04-13T20:00:00.000Z',
+          isLeader: false,
+          authenticated: true,
+          kind: 'console',
+          color: '#6366f1',
+        }],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    win.DollhouseSessions.setPolicySessions([
+      null,
+      { sessionId: '', displayName: 'empty' },
+      { sessionId: 'session-good', displayName: 'session-good' },
+      { sessionId: 'session-good', displayName: 'duplicate' },
+      { sessionId: 42, displayName: 'bad-type' },
+    ]);
+
+    const select = win.document.getElementById('log-session-filter') as HTMLSelectElement | null;
+    expect(select).not.toBeNull();
+    const options = Array.from(select?.options ?? []).map(option => ({
+      value: option.value,
+      label: option.textContent,
+    }));
+
+    expect(options).toEqual([
+      { value: '', label: 'All Sessions' },
+      { value: 'console-1', label: 'Web Console' },
+      { value: 'session-good', label: 'session-good (policy only)' },
+    ]);
 
     cleanup();
   });

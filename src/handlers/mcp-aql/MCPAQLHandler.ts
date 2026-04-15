@@ -78,6 +78,7 @@ import type { PortfolioHandler } from '../PortfolioHandler.js';
 import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
 import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
+import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
 import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
@@ -717,9 +718,11 @@ export class MCPAQLHandler {
    * @returns Array of active elements with their gatekeeper policies, or empty
    *          array if gathering fails (fail-open: only route policies apply).
    */
-  private async getActiveElements(): Promise<ActiveElement[]> {
+  private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
-      const rawElements = await this.handlers.elementCRUD.getActiveElementsForPolicy();
+      const rawElements = sessionId
+        ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
+        : await this.handlers.elementCRUD.getActiveElementsForPolicy();
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,
@@ -731,23 +734,46 @@ export class MCPAQLHandler {
       }));
 
       // Issue #449: Include executing agents with gatekeeper policies
-      for (const [, agentEntry] of this.executingAgents) {
-        activeElements.push({
-          type: 'agent',
-          name: agentEntry.name,
-          metadata: {
+      if (!sessionId) {
+        for (const [, agentEntry] of this.executingAgents) {
+          activeElements.push({
+            type: 'agent',
             name: agentEntry.name,
-            gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
-          },
-        });
+            metadata: {
+              name: agentEntry.name,
+              gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
+            },
+          });
+        }
       }
 
       return activeElements;
     } catch (error) {
       // Fail open — if we can't gather active elements, enforce without them
       // This means only route validation and default policies will apply
-      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error });
+      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
       return [];
+    }
+  }
+
+  private async getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]> {
+    try {
+      const rawElements = await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId);
+      return rawElements.map((el) => ({
+        type: el.type,
+        name: el.name,
+        metadata: {
+          name: el.name,
+          description: (el.metadata.description as string) ?? undefined,
+          gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...(Array.isArray((el as { sessionIds?: string[] }).sessionIds)
+            ? { sessionIds: (el as { sessionIds?: string[] }).sessionIds }
+            : {}),
+        },
+      }));
+    } catch (error) {
+      logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
+      return sessionId ? [] : this.getActiveElements();
     }
   }
 
@@ -2987,7 +3013,7 @@ export class MCPAQLHandler {
           permissionPromptLimiter: this.permissionPromptLimiter,
           classifyTool,
           evaluateCliToolPolicy,
-          getActiveElements: () => this.getActiveElements(),
+          getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId),
         });
       }
 
@@ -2995,23 +3021,36 @@ export class MCPAQLHandler {
         // Issue #625 Phase 2: Get effective CLI permission policies
         const toolName = params.tool_name as string | undefined;
         const toolInput = (params.tool_input as Record<string, unknown>) ?? {};
+        const reportSessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+        const reportingScope = params.reporting_scope === 'dashboard';
 
         // 1. Get all active elements
-        const policyElements = await this.getActiveElements();
+        const policyElements = reportingScope && !toolName
+          ? await this.getPolicyReportElements(reportSessionId)
+          : await this.getActiveElements();
 
         // 2. Extract externalRestrictions from each element
         const elementPolicies = policyElements.map(el => ({
           type: el.type,
           name: el.name,
           allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
+          confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
           denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
+          allowOperations: el.metadata?.gatekeeper?.allow ?? [],
+          confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
+          denyOperations: el.metadata?.gatekeeper?.deny ?? [],
           description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+          sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
         }));
 
         // 3. Build combined view
         const combinedAllow = elementPolicies.flatMap(p => p.allowPatterns);
+        const combinedConfirm = elementPolicies.flatMap(p => p.confirmPatterns);
         const combinedDeny = elementPolicies.flatMap(p => p.denyPatterns);
-        const hasAllowlist = combinedAllow.length > 0;
+        const combinedAllowOperations = elementPolicies.flatMap(p => p.allowOperations);
+        const combinedConfirmOperations = elementPolicies.flatMap(p => p.confirmOperations);
+        const combinedDenyOperations = elementPolicies.flatMap(p => p.denyOperations);
+        const hasAllowlist = combinedAllow.length > 0 || combinedAllowOperations.length > 0;
 
         // 4. If tool_name provided, evaluate it against current policies
         let evaluation: Record<string, unknown> | undefined = undefined;
@@ -3041,20 +3080,39 @@ export class MCPAQLHandler {
 
         // 5. Fail-safe detection (Issue #625 Phase 4)
         const permissionPromptActive = this.gatekeeper.isPermissionPromptActive;
-        const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0;
-        const advisory = (hasRestrictions && !permissionPromptActive)
-          ? 'CLI restrictions are defined but permission_prompt has not been called yet. ' +
-            'Ensure the CLI client is launched with --permission-prompt-tool to enforce these restrictions.'
-          : undefined;
+        const hookStatus = getPermissionHookStatus();
+        const hookInstalled = hookStatus.installed;
+        const enforcementReady = permissionPromptActive || hookInstalled;
+        const hasCliRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
+        const hasOperationRestrictions = combinedAllowOperations.length > 0
+          || combinedDenyOperations.length > 0
+          || combinedConfirmOperations.length > 0;
+        let advisory: string | undefined;
+        if (hasCliRestrictions) {
+          if (!enforcementReady) {
+            advisory = 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.';
+          } else if (hookInstalled && !permissionPromptActive) {
+            advisory = `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`;
+          }
+        } else if (hasOperationRestrictions) {
+          advisory = 'MCP-AQL operation policies are active for Dollhouse actions in this session.';
+        }
 
         return {
           activeElementCount: policyElements.length,
           hasAllowlist,
           elements: elementPolicies,
           combinedAllowPatterns: combinedAllow,
+          combinedConfirmPatterns: combinedConfirm,
           combinedDenyPatterns: combinedDeny,
+          combinedAllowOperations,
+          combinedConfirmOperations,
+          combinedDenyOperations,
           evaluation,
           permissionPromptActive,
+          hookInstalled,
+          enforcementReady,
+          hookHost: hookStatus.host,
           advisory,
         };
       }
