@@ -492,6 +492,99 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('renders an expanded audit modal with scrollable decision context details', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [
+              {
+                id: 'd-1',
+                timestamp: '2026-04-15T20:10:11.000Z',
+                tool_name: 'Edit',
+                decision: 'ask',
+                reason: 'Needs confirmation before editing a protected file.',
+                platform: 'cursor',
+                target: '/opt/dollhouse/important.txt',
+                targetLabel: 'File',
+                details: [
+                  { label: 'Platform', value: 'cursor', monospace: true },
+                  { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
+                  { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+                ],
+              },
+            ],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    expect(openButton).not.toBeNull();
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const modal = win.document.getElementById('perm-audit-modal');
+    const modalFeed = win.document.getElementById('perm-audit-modal-feed');
+    expect(modal?.hasAttribute('open')).toBe(true);
+    expect(win.document.getElementById('perm-audit-modal-title')?.textContent).toContain('All Sessions Audit View');
+    expect(modalFeed?.textContent).toContain('Needs confirmation before editing a protected file.');
+    expect(modalFeed?.textContent).toContain('/opt/dollhouse/important.txt');
+    expect(modalFeed?.textContent).toContain('Matched Pattern');
+    expect(modalFeed?.textContent).toContain('Exact Time');
+    expect(modalFeed?.querySelector('.perm-audit-entry')).not.toBeNull();
+
+    const details = modalFeed?.querySelector('details') as HTMLDetailsElement | null;
+    expect(details).not.toBeNull();
+    details?.setAttribute('open', '');
+
+    const closeButton = win.document.getElementById('perm-audit-modal-close') as HTMLButtonElement | null;
+    closeButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+    expect(modal?.hasAttribute('open')).toBe(false);
+
+    cleanup();
+  });
+
   it('shows a visible logs banner when the SSE stream disconnects', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="tab-logs"></div>

@@ -25,6 +25,16 @@ interface PermissionDecision {
   command?: string;
   decision: string;
   reason?: string;
+  platform?: string;
+  target?: string;
+  targetLabel?: string;
+  details?: PermissionDecisionDetail[];
+}
+
+interface PermissionDecisionDetail {
+  label: string;
+  value: string;
+  monospace?: boolean;
 }
 
 interface KnownPolicySession {
@@ -38,7 +48,13 @@ const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
-  trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void;
+  trackDecision(
+    sessionId: string | undefined,
+    toolName: string,
+    input: Record<string, unknown>,
+    result: Record<string, unknown>,
+    platform: string,
+  ): void;
   getRecentDecisions(): PermissionDecision[];
 }
 
@@ -113,12 +129,73 @@ function normalizePermissionResponseForPlatform(
   return formatPermissionResponse('allow', platform, input);
 }
 
+function buildDecisionDetails(
+  toolName: string,
+  input: Record<string, unknown>,
+  result: Record<string, unknown>,
+  platform: string,
+): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
+  const details: PermissionDecisionDetail[] = [];
+
+  if (platform) {
+    details.push({ label: 'Platform', value: platform, monospace: true });
+  }
+
+  if (toolName === 'Bash' && typeof input.command === 'string' && input.command !== '') {
+    details.push({ label: 'Command', value: input.command, monospace: true });
+  }
+
+  const targetDescriptors: Array<{ key: string; label: string; monospace?: boolean }> = [
+    { key: 'file_path', label: 'File', monospace: true },
+    { key: 'path', label: 'Path', monospace: true },
+    { key: 'url', label: 'URL' },
+    { key: 'pattern', label: 'Pattern', monospace: true },
+    { key: 'query', label: 'Query' },
+    { key: 'element_name', label: 'Element', monospace: true },
+    { key: 'request_id', label: 'Request', monospace: true },
+  ];
+
+  let target: string | undefined;
+  let targetLabel: string | undefined;
+
+  for (const descriptor of targetDescriptors) {
+    const value = input[descriptor.key];
+    if (typeof value !== 'string' || value === '') {
+      continue;
+    }
+
+    target = value;
+    targetLabel = descriptor.label;
+    details.push({ label: descriptor.label, value, monospace: descriptor.monospace });
+    break;
+  }
+
+  const matchedPattern = extractString(result, ['matched_pattern', 'matchedPattern'], '');
+  if (matchedPattern !== '') {
+    details.push({ label: 'Matched Pattern', value: matchedPattern, monospace: true });
+  }
+
+  const policySource = extractString(result, ['policy_source', 'policySource'], '');
+  if (policySource !== '') {
+    details.push({ label: 'Policy Source', value: policySource, monospace: true });
+  }
+
+  return { target, targetLabel, details };
+}
+
 function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): PermissionDecisionTracker {
   const recentDecisions: PermissionDecision[] = [];
   let decisionCounter = 0;
 
   return {
-    trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
+    trackDecision(
+      sessionId: string | undefined,
+      toolName: string,
+      input: Record<string, unknown>,
+      result: Record<string, unknown>,
+      platform: string,
+    ): void {
+      const detailState = buildDecisionDetails(toolName, input, result, platform);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
@@ -127,6 +204,10 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
         decision: extractDecision(result),
         reason: extractReason(result),
+        platform,
+        target: detailState.target,
+        targetLabel: detailState.targetLabel,
+        details: detailState.details,
       };
       recentDecisions.unshift(entry);
       if (recentDecisions.length > bufferSize) {
@@ -258,16 +339,18 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         return;
       }
 
+      const rawResult = opResult.data as Record<string, unknown>;
       const responseData = normalizePermissionResponseForPlatform(
         platform,
         input || {},
-        opResult.data as Record<string, unknown>,
+        rawResult,
       );
+      const trackedResult = { ...rawResult, ...responseData };
       const decision = extractDecision(responseData);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(session_id, tool_name, input || {}, responseData);
+      decisionTracker.trackDecision(session_id, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
     } catch (err) {

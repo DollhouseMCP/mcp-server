@@ -355,9 +355,10 @@
 }
 
 .perm-feed--modal {
-  height: calc(100vh - 11rem);
+  height: 100%;
   max-height: none;
   min-height: 0;
+  overflow: auto;
 }
 
 .perm-feed-empty {
@@ -398,6 +399,16 @@
   .perm-selected-grid {
     grid-template-columns: 1fr;
   }
+
+  .perm-audit-summary-row {
+    grid-template-columns: 1fr;
+    gap: 0.45rem;
+  }
+
+  .perm-audit-detail-row {
+    grid-template-columns: 1fr;
+    gap: 0.25rem;
+  }
 }
 
 .perm-feed-tool {
@@ -418,6 +429,133 @@
 
 .perm-audit-modal-dialog {
   width: min(82rem, 100%);
+}
+
+.perm-audit-modal .modal-body {
+  display: flex;
+  min-height: 0;
+  padding: 0;
+}
+
+.perm-audit-modal .modal-meta {
+  row-gap: 0.35rem;
+}
+
+.perm-audit-modal .perm-feed--modal {
+  padding: 0.875rem 1rem 1rem;
+}
+
+.perm-audit-entry {
+  border: 1px solid var(--ink-100, #e2e8f0);
+  border-radius: 0.75rem;
+  background: var(--paper-strong, #fff);
+  margin-bottom: 0.75rem;
+  overflow: hidden;
+}
+
+.perm-audit-entry:last-child {
+  margin-bottom: 0;
+}
+
+.perm-audit-entry[open] {
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--ink-900, #0f172a) 10%, transparent);
+}
+
+.perm-audit-summary-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, auto) auto minmax(9rem, auto) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.875rem 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.perm-audit-summary-row::-webkit-details-marker {
+  display: none;
+}
+
+.perm-audit-summary-row:hover {
+  background: var(--ink-50, #f8fafc);
+}
+
+.perm-audit-time-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.perm-audit-time {
+  color: var(--ink-800, #1e293b);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.perm-audit-date {
+  color: var(--ink-500, #64748b);
+  font-size: 0.72rem;
+}
+
+.perm-audit-tool {
+  color: var(--ink-800, #1e293b);
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.perm-audit-context {
+  color: var(--ink-600, #475569);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.perm-audit-entry-body {
+  border-top: 1px solid var(--ink-100, #e2e8f0);
+  padding: 0.95rem 1rem 1rem;
+  background: color-mix(in srgb, var(--paper-base, #f8fafc) 82%, white);
+}
+
+.perm-audit-reason-block {
+  margin-bottom: 0.85rem;
+}
+
+.perm-audit-reason-text {
+  margin: 0.3rem 0 0;
+  color: var(--ink-700, #334155);
+  line-height: 1.55;
+}
+
+.perm-audit-detail-list {
+  display: grid;
+  gap: 0.625rem;
+  margin: 0;
+}
+
+.perm-audit-detail-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 11rem) minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.perm-audit-meta-label {
+  color: var(--ink-500, #64748b);
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.perm-audit-meta-value {
+  margin: 0;
+  color: var(--ink-800, #1e293b);
+  overflow-wrap: anywhere;
+}
+
+.perm-audit-detail-value--mono {
+  font-family: var(--font-mono, 'IBM Plex Mono', monospace);
+  font-size: 0.82rem;
 }
 
 /* ── Source Elements ───────────────────────────────────────── */
@@ -550,7 +688,10 @@
 [data-theme="dark"] .perm-selected-title,
 [data-theme="dark"] .perm-feed-tool,
 [data-theme="dark"] .perm-pattern-text,
-[data-theme="dark"] .perm-source-name {
+[data-theme="dark"] .perm-source-name,
+[data-theme="dark"] .perm-audit-time,
+[data-theme="dark"] .perm-audit-tool,
+[data-theme="dark"] .perm-audit-meta-value {
   color: var(--ink-200, #e2e8f0);
 }
 
@@ -558,6 +699,20 @@
 [data-theme="dark"] .perm-pattern-list,
 [data-theme="dark"] .perm-feed {
   background: color-mix(in srgb, var(--paper) 36%, var(--surface-1));
+}
+
+[data-theme="dark"] .perm-audit-entry {
+  background: color-mix(in srgb, var(--paper) 22%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--line) 88%, transparent);
+}
+
+[data-theme="dark"] .perm-audit-summary-row:hover {
+  background: color-mix(in srgb, var(--surface-2) 72%, var(--paper-strong));
+}
+
+[data-theme="dark"] .perm-audit-entry-body {
+  background: color-mix(in srgb, var(--surface-1) 82%, var(--paper-strong));
+  border-color: color-mix(in srgb, var(--line) 92%, transparent);
 }
 
 [data-theme="dark"] .perm-source-item,
@@ -569,6 +724,16 @@
 [data-theme="dark"] .perm-source-item:hover,
 [data-theme="dark"] .perm-feed-row:hover {
   background: color-mix(in srgb, var(--surface-2) 72%, var(--paper-strong));
+}
+
+[data-theme="dark"] .perm-audit-context,
+[data-theme="dark"] .perm-audit-reason-text {
+  color: var(--ink-300, #cbd5e1);
+}
+
+[data-theme="dark"] .perm-audit-date,
+[data-theme="dark"] .perm-audit-meta-label {
+  color: var(--ink-500, #7b93a7);
 }
 
 [data-theme="dark"] .perm-source-type {
