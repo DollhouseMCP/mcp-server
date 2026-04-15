@@ -178,7 +178,7 @@
     "jsdom": "^24.1.3",
     "node-fetch": "^3.3.2",
     "otpauth": "^9.5.0",
-    "posthog-node": "^5.24.17",
+    "posthog-node": "^5.29.2",
     "qrcode": "^1.5.4",
     "smol-toml": "^1.6.1",
     "uuid": "^11.1.0",
