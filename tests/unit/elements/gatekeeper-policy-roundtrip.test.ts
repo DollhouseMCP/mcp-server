@@ -197,8 +197,9 @@ describe('Gatekeeper policy round-trip (Issue #524)', () => {
       expect(getGatekeeperDiagnostics(metadata)).toEqual({
         valid: false,
         enforceable: false,
-        message: expect.stringContaining('gatekeeper'),
+        message: expect.stringContaining('Fix:'),
       });
+      expect(getGatekeeperDiagnostics(metadata)?.message).toContain('Use YAML arrays of strings');
     });
 
     it('should clear diagnostics when the policy is later valid', () => {

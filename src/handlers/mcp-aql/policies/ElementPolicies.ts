@@ -757,7 +757,7 @@ export function sanitizeGatekeeperPolicy(
     }
     return validated;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatGatekeeperDiagnosticMessage(error instanceof Error ? error.message : String(error));
     SecurityMonitor.logSecurityEvent({
       type: 'YAML_PARSING_WARNING',
       severity: 'MEDIUM',
@@ -768,6 +768,36 @@ export function sanitizeGatekeeperPolicy(
     attachGatekeeperDiagnostics(diagnosticsTarget ?? rawPolicy, message);
     return undefined;
   }
+}
+
+function formatGatekeeperDiagnosticMessage(message: string): string {
+  const normalized = message.trim();
+  const guidance = getGatekeeperFixGuidance(normalized);
+  return guidance ? `${normalized} Fix: ${guidance}` : normalized;
+}
+
+function getGatekeeperFixGuidance(message: string): string | undefined {
+  if (message.includes('externalRestrictions must be nested under gatekeeper.externalRestrictions')) {
+    return 'Move externalRestrictions under gatekeeper.externalRestrictions and keep allowPatterns, confirmPatterns, and denyPatterns inside that nested object.';
+  }
+
+  if (message.includes('externalRestrictions.description is required')) {
+    return 'Add gatekeeper.externalRestrictions.description with a short explanation, for example description: "Read-only shell policy".';
+  }
+
+  if (message.includes('must be an array') || message.includes('must contain only strings')) {
+    return 'Use YAML arrays of strings, for example denyPatterns: ["Bash:rm *"] or allow: ["read_*"].';
+  }
+
+  if (message.includes('scopeRestrictions must be an object')) {
+    return 'Use scopeRestrictions as an object, for example scopeRestrictions: { allowedTypes: ["persona", "skill"] }.';
+  }
+
+  if (message.includes('must be an object')) {
+    return 'Use gatekeeper as an object, for example gatekeeper: { deny: ["delete_element"] }.';
+  }
+
+  return 'Compare the element against the gatekeeper examples from introspection or the security docs, then reactivate it after fixing the structure.';
 }
 
 export function attachGatekeeperDiagnostics(target: unknown, message: string): void {

@@ -222,14 +222,9 @@
     }
 
     renderInvalidPolicySummary('perm-all-invalid-policy-summary', elements);
-    list.innerHTML = elements.map(el => `
-      <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
-        <span class="perm-source-type">${esc(el.type)}</span>
-        <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
-        ${el.invalidGatekeeperPolicy ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>` : ''}
-        ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
-      </li>
-    `).join('');
+    list.innerHTML = elements.map(el =>
+      renderPolicySourceItem(el, elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : '')
+    ).join('');
   }
 
   function renderSelectedSessionDetail(selectedData) {
@@ -273,14 +268,7 @@
     renderInvalidPolicySummary('perm-selected-invalid-policy-summary', elements);
     sourceList.innerHTML = elements.length === 0
       ? '<li class="perm-pattern-empty">No policy-bearing elements found for this session</li>'
-      : elements.map(el => `
-          <li class="perm-source-item perm-source-item--detail">
-            <span class="perm-source-type">${esc(el.type)}</span>
-            <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
-            ${el.invalidGatekeeperPolicy ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>` : ''}
-            ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
-          </li>
-        `).join('');
+      : elements.map(el => renderPolicySourceItem(el, ' perm-source-item--detail')).join('');
 
     renderPatternList('perm-selected-deny-list', selectedData.denyRules || [], 'deny');
     renderPatternList('perm-selected-allow-list', selectedData.allowRules || [], 'allow');
@@ -357,6 +345,24 @@
     if (modalCount) {
       modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
     }
+  }
+
+  function renderPolicySourceItem(el, extraClass = '') {
+    const invalidBadge = el.invalidGatekeeperPolicy
+      ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>`
+      : '';
+    const description = el.description
+      ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>`
+      : '';
+
+    return `
+      <li class="perm-source-item${extraClass}">
+        <span class="perm-source-type">${esc(el.type)}</span>
+        <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
+        ${invalidBadge}
+        ${description}
+      </li>
+    `;
   }
 
   function deriveSelectedSessionData(aggregateData, sessionId) {
