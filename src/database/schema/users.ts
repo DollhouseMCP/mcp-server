@@ -21,11 +21,11 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 });
 
+// Identity fields (username, email, displayName) live exclusively in the
+// users table. Join on users.id when display information is needed alongside
+// settings — the PK-to-FK join cost is negligible.
 export const userSettings = pgTable('user_settings', {
   userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
-  username: varchar('username', { length: 255 }),
-  email: varchar('email', { length: 255 }),
-  displayName: varchar('display_name', { length: 255 }),
   githubConfig: jsonb('github_config').notNull().default({}),
   syncConfig: jsonb('sync_config').notNull().default({}),
   autoloadConfig: jsonb('autoload_config').notNull().default({}),

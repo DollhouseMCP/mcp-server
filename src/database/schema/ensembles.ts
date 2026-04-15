@@ -24,7 +24,7 @@ import { elements } from './elements.js';
 export const ensembleMembers = pgTable('ensemble_members', {
   id: uuid('id').primaryKey().defaultRandom(),
   ensembleId: uuid('ensemble_id').notNull().references(() => elements.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').notNull().references(() => users.id),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   memberName: varchar('member_name', { length: 255 }).notNull(),
   memberType: varchar('member_type', { length: 32 }).notNull(),
   role: varchar('role', { length: 32 }).notNull().default('core'),

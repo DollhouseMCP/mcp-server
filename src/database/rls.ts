@@ -57,21 +57,5 @@ export async function withUserRead<T>(
   });
 }
 
-/**
- * System context — bypasses RLS for administrative operations.
- * Used for background tasks, migrations, and startup operations
- * that need to access data across all users.
- *
- * The caller must have a database role that bypasses RLS
- * (e.g., the migration user or superuser).
- */
-export async function withSystemContext<T>(
-  db: DatabaseInstance,
-  fn: (tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0]) => Promise<T>,
-): Promise<T> {
-  return db.transaction(async (tx) => {
-    // Reset any previously set user context
-    await tx.execute(sql`RESET app.current_user_id`);
-    return fn(tx);
-  });
-}
+// withSystemContext lives in ./admin.ts — intentionally separated
+// so that RLS bypass requires an explicit, reviewable import.

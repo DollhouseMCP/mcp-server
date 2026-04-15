@@ -36,6 +36,7 @@ export function createDatabaseConnection(config: DatabaseConfig) {
   const client = postgres(config.connectionUrl, {
     max: poolSize,
     ssl: config.ssl === 'disable' ? false : config.ssl ?? 'prefer',
+    connect_timeout: 10,
     idle_timeout: 20,
     max_lifetime: 60 * 30,
     onnotice: (notice) => {

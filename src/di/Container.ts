@@ -88,7 +88,11 @@ import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
 import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
+import { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
+import { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
+import { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
+import type { DatabaseInstance } from "../database/connection.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -242,6 +246,13 @@ export class DollhouseContainer {
    * @returns The service instance
    * @throws Error if service is not registered
    */
+  /**
+   * Check whether a service has been registered (without resolving it).
+   */
+  public hasRegistration(name: string): boolean {
+    return this.services.has(name);
+  }
+
   public resolve<T>(name: string): T {
     const service = this.services.get(name);
     if (!service) {
@@ -623,27 +634,49 @@ export class DollhouseContainer {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       return new SessionActivationRegistry(session.sessionId);
     });
-    // Issue #598, #1945: Per-session activation persistence (file-backed)
+    // Issue #598, #1945, #1886: Per-session state stores — database or file-backed.
+    // hasRegistration check is inside each lambda so it evaluates at resolution time,
+    // allowing DatabaseInstance to be registered after the container is constructed
+    // (e.g., by HTTP transport lazy bootstrap).
     this.register('ActivationStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      if (this.hasRegistration('DatabaseInstance')) {
+        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
+        const userId = this.resolve<string>('CurrentUserId');
+        return new DatabaseActivationStateStore(db, userId, session.sessionId);
+      }
       return new FileActivationStateStore(
         this.resolve('FileOperationsService'),
         undefined,
         session.sessionId
       );
     });
-    // Issue #1945: ConfirmationStore for Gatekeeper state persistence
+
     this.register('ConfirmationStore', () => {
       const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      if (this.hasRegistration('DatabaseInstance')) {
+        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
+        const userId = this.resolve<string>('CurrentUserId');
+        return new DatabaseConfirmationStore(db, userId, session.sessionId);
+      }
       return new FileConfirmationStore(
         this.resolve('FileOperationsService'),
         undefined,
         session.sessionId
       );
     });
+
     // Issue #142: ChallengeStore for danger zone challenge codes (server-side)
     // Issue #1945: Wrapped in IChallengeStore interface for backend swappability
-    this.register('ChallengeStore', () => new InMemoryChallengeStore());
+    this.register('ChallengeStore', () => {
+      if (this.hasRegistration('DatabaseInstance')) {
+        const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
+        const userId = this.resolve<string>('CurrentUserId');
+        return new DatabaseChallengeStore(db, userId, session.sessionId);
+      }
+      return new InMemoryChallengeStore();
+    });
     // Backward-compat alias — existing code resolves 'VerificationStore'
     this.register('VerificationStore', () => this.resolve('ChallengeStore'));
     // Issue #522: Non-blocking OS dialog notifier for verification codes

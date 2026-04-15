@@ -28,7 +28,7 @@ import { elements } from './elements.js';
 
 export const memoryEntries = pgTable('memory_entries', {
   id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   memoryId: uuid('memory_id').notNull().references(() => elements.id, { onDelete: 'cascade' }),
   entryId: varchar('entry_id', { length: 255 }).notNull(),
   timestamp: timestamp('timestamp', { withTimezone: true }).notNull(),

@@ -16,7 +16,7 @@ import {
   jsonb,
   boolean,
   timestamp,
-  index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -44,6 +44,6 @@ export const sessions = pgTable('sessions', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
-  index('idx_sessions_user').on(table.userId),
-  index('idx_sessions_session_id').on(table.sessionId),
+  // Composite unique covers userId-only queries via leading-column prefix scan
+  uniqueIndex('idx_sessions_user_session').on(table.userId, table.sessionId),
 ]);

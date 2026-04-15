@@ -24,7 +24,7 @@ import { elements } from './elements.js';
 export const agentStates = pgTable('agent_states', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id').notNull().references(() => elements.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').notNull().references(() => users.id),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   goals: jsonb('goals').notNull().default([]),
   decisions: jsonb('decisions').notNull().default([]),
   context: jsonb('context').notNull().default({}),

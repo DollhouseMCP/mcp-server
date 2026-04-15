@@ -8,5 +8,7 @@
  */
 
 export { createDatabaseConnection, type DatabaseConfig, type DatabaseInstance } from './connection.js';
-export { withUserContext, withUserRead, withSystemContext } from './rls.js';
+export { withUserContext, withUserRead } from './rls.js';
+// withSystemContext is NOT re-exported here — import from './admin.js' directly.
+// This separation is intentional: see admin.ts for rationale.
 export * from './schema/index.js';
