@@ -470,7 +470,7 @@
   padding: 0.125rem 0.375rem;
   border-radius: 999px;
   background: color-mix(in srgb, #f59e0b 16%, white);
-  color: #b45309;
+  color: #7c2d12;
   font-size: 0.6875rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -482,7 +482,7 @@
   border: 1px solid color-mix(in srgb, #f59e0b 35%, white);
   border-radius: 0.75rem;
   background: color-mix(in srgb, #f59e0b 10%, white);
-  color: #92400e;
+  color: #7c2d12;
   font-size: 0.8125rem;
   line-height: 1.45;
 }

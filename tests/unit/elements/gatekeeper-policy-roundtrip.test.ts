@@ -250,7 +250,7 @@ describe('Gatekeeper policy round-trip (Issue #524)', () => {
       );
 
       const serialized = skill.serialize();
-      const frontmatterMatch = serialized.match(/^---\n([\s\S]*?)\n---/);
+      const frontmatterMatch = /^---\n([\s\S]*?)\n---/.exec(serialized);
       expect(frontmatterMatch).toBeTruthy();
       const frontmatter = yaml.load(frontmatterMatch![1]) as any;
       expect(frontmatter.gatekeeperDiagnostics).toBeUndefined();
