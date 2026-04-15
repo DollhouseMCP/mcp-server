@@ -392,7 +392,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       allowNested,
       maxNestingDepth,
       elements,
-      gatekeeper: sanitizeGatekeeperPolicy(data.gatekeeper, name, 'ensemble'),  // Issue #524
+      gatekeeper: sanitizeGatekeeperPolicy(data.gatekeeper, name, 'ensemble', data as Record<string, unknown>),  // Issue #524
     };
 
     return metadata;
@@ -695,7 +695,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       maxNestingDepth: metadata.maxNestingDepth || ENSEMBLE_DEFAULTS.MAX_NESTING_DEPTH,
       elements: migratedElements,
       // Issue #524 — Gatekeeper policy (symmetric with buildMetadata deserialization)
-      gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name!, 'ensemble'),
+      gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name!, 'ensemble', metadata as unknown as Record<string, unknown>),
     };
 
     // Use inherited getElementFilename() for consistent filename normalization

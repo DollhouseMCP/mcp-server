@@ -234,7 +234,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
     // Malformed policies are stripped and logged as security events (never reach enforcement)
     if (metadata.gatekeeper) {
-      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill');
+      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill', metadata as Record<string, unknown>);
     }
 
     return metadata;

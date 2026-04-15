@@ -121,6 +121,8 @@ function normalizePolicyElements(elements: Array<Record<string, unknown>>): Arra
     allowRules: mergeRuleArrays(element.allowPatterns, element.allowOperations),
     confirmRules: mergeRuleArrays(element.confirmPatterns, element.confirmOperations),
     denyRules: mergeRuleArrays(element.denyPatterns, element.denyOperations),
+    invalidGatekeeperPolicy: !!element.invalidGatekeeperPolicy,
+    invalidGatekeeperMessage: typeof element.invalidGatekeeperMessage === 'string' ? element.invalidGatekeeperMessage : undefined,
   }));
 }
 
@@ -285,6 +287,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         hookInstalled: data.hookInstalled,
         hookHost: data.hookHost,
         enforcementReady: data.enforcementReady,
+        invalidPolicyElementCount: data.invalidPolicyElementCount ?? 0,
         advisory: data.advisory,
         recentDecisions: decisionTracker.getRecentDecisions(),
       });

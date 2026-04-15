@@ -188,6 +188,36 @@ This is a test skill.`;
       await expect(skillManager.save(skill, '../../../etc/passwd'))
         .rejects.toThrow('Invalid skill path');
     });
+
+    it('should reject saving skill content with top-level externalRestrictions in frontmatter', async () => {
+      const skill = new Skill({
+        name: 'Broken Policy Skill',
+        description: 'Has misplaced external restrictions',
+      }, 'content', metadataService);
+
+      (skill.metadata as any).externalRestrictions = {
+        description: 'misnested',
+        denyPatterns: ['Bash:rm *'],
+      };
+
+      await expect(skillManager.save(skill, 'broken-policy.md'))
+        .rejects.toThrow('externalRestrictions must be nested under gatekeeper.externalRestrictions');
+    });
+
+    it('should reject saving skill content with malformed gatekeeper externalRestrictions', async () => {
+      const skill = new Skill({
+        name: 'Missing Description Skill',
+        description: 'Invalid gatekeeper policy',
+        gatekeeper: {
+          externalRestrictions: {
+            denyPatterns: ['Bash:rm *'],
+          },
+        } as any,
+      }, 'content', metadataService);
+
+      await expect(skillManager.save(skill, 'missing-description.md'))
+        .rejects.toThrow('externalRestrictions.description is required');
+    });
   });
 
   describe('list', () => {

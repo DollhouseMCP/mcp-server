@@ -28,6 +28,7 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { ContentValidator } from '../../security/contentValidator.js';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
 import { MemoryType } from './types.js';
@@ -40,7 +41,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import { ElementMessages } from '../../utils/elementMessages.js';
-import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
@@ -640,6 +641,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const validationMs = Date.now() - validationStart;
       if (validationMs > 50) {
         logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
+      }
+
+      const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
+      const gatekeeperErrors = [
+        ...getGatekeeperAuthoringErrors(parsedYaml),
+        ...getGatekeeperAuthoringErrors(
+          parsedYaml.metadata && typeof parsedYaml.metadata === 'object' && !Array.isArray(parsedYaml.metadata)
+            ? parsedYaml.metadata as Record<string, unknown>
+            : undefined
+        ),
+      ];
+      if (gatekeeperErrors.length > 0) {
+        throw new Error(
+          `Invalid gatekeeper policy in serialized memory YAML: ${[...new Set(gatekeeperErrors)].join('; ')}`
+        );
       }
 
       // CRITICAL FIX: Use FileOperationsService for atomic file write
@@ -1949,7 +1965,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       // Memory type classification
       memoryType: metadataSource.memoryType,
       // Issue #524 — Gatekeeper policy (all element types)
-      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, nameResult.sanitizedValue || 'unknown', 'memory'),
+      gatekeeper: sanitizeGatekeeperPolicy(metadataSource.gatekeeper, nameResult.sanitizedValue || 'unknown', 'memory', metadataSource as Record<string, unknown>),
     };
 
     // Enhanced trigger validation and logging

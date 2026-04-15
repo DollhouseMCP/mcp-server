@@ -449,7 +449,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     metadata.version = data.version ? sanitizeInput(data.version, 20) : undefined;
 
     // Issue #524 — Gatekeeper policy (all element types)
-    metadata.gatekeeper = sanitizeGatekeeperPolicy(data.gatekeeper, metadata.name || 'unknown', 'template');
+    metadata.gatekeeper = sanitizeGatekeeperPolicy(data.gatekeeper, metadata.name || 'unknown', 'template', metadata as Record<string, unknown>);
 
     metadata.name = metadata.name ?? 'Untitled Template';
     metadata.description = metadata.description ?? '';

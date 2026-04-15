@@ -294,6 +294,49 @@ describe('permissionRoutes', () => {
       ]);
     });
 
+    it('should surface invalid gatekeeper policy state without hiding the active element', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 1,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            combinedDenyOperations: [],
+            combinedAllowOperations: [],
+            combinedConfirmOperations: [],
+            elements: [
+              {
+                name: 'broken-guardian',
+                type: 'skill',
+                invalidGatekeeperPolicy: true,
+                invalidGatekeeperMessage: 'gatekeeper.externalRestrictions.description is required',
+              },
+            ],
+            invalidPolicyElementCount: 1,
+            permissionPromptActive: false,
+            advisory: '1 active element has malformed gatekeeper policy. The element remains active, but that policy is not enforceable until fixed.',
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.invalidPolicyElementCount).toBe(1);
+      expect(res.body.advisory).toContain('malformed gatekeeper policy');
+      expect(res.body.elements).toEqual([
+        expect.objectContaining({
+          name: 'broken-guardian',
+          invalidGatekeeperPolicy: true,
+          invalidGatekeeperMessage: 'gatekeeper.externalRestrictions.description is required',
+        }),
+      ]);
+    });
+
     it('should expose known persisted policy sessions for the session picker', async () => {
       const handler = {
         handleRead: jest.fn().mockResolvedValue([{

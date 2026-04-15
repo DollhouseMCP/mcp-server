@@ -202,6 +202,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
       parts.push(restrictionWarning);
     }
 
+    const gatekeeperWarning = this.formatGatekeeperValidityWarning(agent.metadata as unknown as Record<string, unknown>);
+    if (gatekeeperWarning) {
+      parts.push(gatekeeperWarning);
+    }
+
     return {
       content: [{
         type: "text",

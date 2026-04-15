@@ -41,6 +41,7 @@ import { type ElementValidator } from '../../services/validation/ElementValidato
 import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
 import type { IStorageLayer } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
+import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import {
   getValidatedScanCooldown,
   getValidatedElementCacheTTL,
@@ -616,6 +617,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * fail to load, so rejecting it on write prevents permanently broken elements.
    */
   private validateSerializedContent(content: string): void {
+    const validateGatekeeperMetadata = (record: Record<string, unknown> | undefined, sourceLabel: string) => {
+      const errors = getGatekeeperAuthoringErrors(record);
+      if (errors.length > 0) {
+        throw new Error(
+          `Invalid gatekeeper policy in serialized ${this.getElementLabel()} ${sourceLabel}: ${[...new Set(errors)].join('; ')}`
+        );
+      }
+    };
+
     // Extract frontmatter if present (SonarCloud S6594: use RegExp.exec)
     const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n---/;
     const frontmatterMatch = frontmatterRegex.exec(content);
@@ -648,6 +658,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         }
       }
 
+      const frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
+      validateGatekeeperMetadata(frontmatterData, 'frontmatter');
+
       // Body content validation with element type context
       const contentContext = BaseElementManager.ELEMENT_TYPE_TO_CONTEXT[this.elementType];
       const bodyValidation = ContentValidator.validateAndSanitize(bodyContent, {
@@ -658,6 +671,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           `Critical security threat detected in serialized body content: ${bodyValidation.detectedPatterns?.join(', ')}`,
           'critical'
         );
+      }
+    } else if (this.elementType === ElementType.MEMORY) {
+      const rawYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
+      validateGatekeeperMetadata(rawYaml, 'YAML root');
+      if (rawYaml.metadata && typeof rawYaml.metadata === 'object' && !Array.isArray(rawYaml.metadata)) {
+        validateGatekeeperMetadata(rawYaml.metadata as Record<string, unknown>, 'metadata');
       }
     }
   }
