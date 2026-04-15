@@ -19,6 +19,7 @@ import {
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
 import { ElementCrudContext } from './types.js';
 import { logger } from '../../utils/logger.js';
+import { getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 // FIX: Issue #281 - SecurityMonitor import removed, persona logging now in PersonaManager.create()
 import {
   formatSimpleErrorResponse,
@@ -199,6 +200,17 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     // Element-specific fields (ensemble elements, agent V2 fields) are merged into
     // metadata by the dispatcher (MCPAQLHandler). createElement just sanitizes and delegates.
     const sanitized = sanitizeMetadata(metadata);
+
+    const gatekeeperErrors = [
+      ...getGatekeeperAuthoringErrors(args as unknown as Record<string, unknown>),
+      ...getGatekeeperAuthoringErrors(metadata as Record<string, unknown> | undefined),
+    ];
+    if (gatekeeperErrors.length > 0) {
+      const uniqueErrors = [...new Set(gatekeeperErrors)];
+      return formatSimpleErrorResponse(
+        `Gatekeeper policy validation failed:\n${uniqueErrors.map(err => `  • ${err}`).join('\n')}`
+      );
+    }
 
     // Issue #621: Validate category format for element types that support it
     // Persona also supports categories (validated internally by PersonaManager) — include here for consistent early error reporting

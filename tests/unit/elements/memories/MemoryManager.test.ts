@@ -133,6 +133,36 @@ describe('MemoryManager', () => {
       const memory = new Memory({}, metadataService);
       await expect(manager.save(memory, '../../../etc/passwd')).rejects.toThrow('Path traversal detected');
     });
+
+    it('should reject saving memory YAML with top-level externalRestrictions in metadata', async () => {
+      const memory = new Memory({
+        name: 'Broken Memory Policy',
+        description: 'Misnested external restrictions',
+      }, metadataService);
+
+      (memory.metadata as any).externalRestrictions = {
+        description: 'misnested',
+        denyPatterns: ['Bash:rm *'],
+      };
+
+      await expect(manager.save(memory, 'broken-memory.yaml'))
+        .rejects.toThrow('externalRestrictions must be nested under gatekeeper.externalRestrictions');
+    });
+
+    it('should reject saving memory YAML with malformed gatekeeper externalRestrictions', async () => {
+      const memory = new Memory({
+        name: 'Invalid Memory Policy',
+        description: 'Missing external restriction description',
+        gatekeeper: {
+          externalRestrictions: {
+            denyPatterns: ['Bash:rm *'],
+          },
+        } as any,
+      }, metadataService);
+
+      await expect(manager.save(memory, 'invalid-memory.yaml'))
+        .rejects.toThrow('externalRestrictions.description is required');
+    });
     
     it('should cache loaded memories', async () => {
       const memory = new Memory({ name: 'Cached Memory' }, metadataService);

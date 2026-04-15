@@ -28,6 +28,7 @@ import {
   formatElementResolutionWarnings
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
+import { getGatekeeperAuthoringErrors } from '../mcp-aql/policies/ElementPolicies.js';
 
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   save(element: T, filePath: string): Promise<void>;
@@ -602,6 +603,19 @@ export async function editElement(
   const typeErrors = validateFieldTypes(input, normalizedType);
   if (typeErrors.length > 0) {
     return error(`Field type validation failed:\n${typeErrors.map(e => `  • ${e}`).join('\n')}`);
+  }
+
+  const gatekeeperErrors = [
+    ...getGatekeeperAuthoringErrors(input),
+    ...getGatekeeperAuthoringErrors(
+      input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata)
+        ? input.metadata as Record<string, unknown>
+        : undefined
+    ),
+  ];
+  if (gatekeeperErrors.length > 0) {
+    const uniqueErrors = [...new Set(gatekeeperErrors)];
+    return error(`Gatekeeper policy validation failed:\n${uniqueErrors.map(err => `  • ${err}`).join('\n')}`);
   }
 
   // Validate string field values using injected validator
