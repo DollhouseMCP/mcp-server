@@ -324,27 +324,132 @@
     if (latestId === lastDecisionId) return; // no change
     lastDecisionId = latestId;
 
-    const html = decisions.map(d => {
-      const time = new Date(d.timestamp).toLocaleTimeString();
-      const toolDisplay = d.tool_name === 'Bash'
-        ? `Bash: ${esc(truncate(d.command || '', 60))}`
-        : esc(d.tool_name);
-
-      return `
-        <div class="perm-feed-row">
-          <span class="perm-feed-time">${time}</span>
-          <span class="perm-feed-decision perm-feed-decision--${d.decision}">${d.decision.toUpperCase()}</span>
-          <span class="perm-feed-tool" title="${esc(d.command || d.tool_name)}">${toolDisplay}</span>
-          <span class="perm-feed-reason" title="${esc(d.reason || '')}">${esc(d.reason || '')}</span>
-        </div>
-      `;
-    }).join('');
+    const html = decisions.map(renderCompactDecisionRow).join('');
 
     feed.innerHTML = html;
-    if (modalFeed) modalFeed.innerHTML = html;
+    if (modalFeed) modalFeed.innerHTML = renderAuditModal(decisions);
     if (modalCount) {
       modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
     }
+  }
+
+  function renderCompactDecisionRow(decision) {
+    const toolDisplay = decision.tool_name === 'Bash'
+      ? `Bash: ${esc(truncate(decision.command || '', 60))}`
+      : esc(decision.tool_name);
+
+    return `
+      <div class="perm-feed-row">
+        <span class="perm-feed-time">${esc(formatShortTime(decision.timestamp))}</span>
+        <span class="perm-feed-decision perm-feed-decision--${decision.decision}">${esc(getDecisionLabel(decision.decision))}</span>
+        <span class="perm-feed-tool" title="${esc(decision.command || decision.tool_name)}">${toolDisplay}</span>
+        <span class="perm-feed-reason" title="${esc(decision.reason || '')}">${esc(decision.reason || '')}</span>
+      </div>
+    `;
+  }
+
+  function renderAuditModal(decisions) {
+    if (!decisions || decisions.length === 0) {
+      return '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+    }
+
+    return decisions.map(renderAuditDecisionEntry).join('');
+  }
+
+  function renderAuditDecisionEntry(decision) {
+    const compactContext = getCompactContext(decision);
+    const detailRows = Array.isArray(decision.details) ? decision.details : [];
+    const reasonBlock = decision.reason
+      ? `
+        <div class="perm-audit-reason-block">
+          <div class="perm-audit-meta-label">Reason</div>
+          <p class="perm-audit-reason-text">${esc(decision.reason)}</p>
+        </div>
+      `
+      : '';
+    const detailList = detailRows.length > 0
+      ? `
+        <dl class="perm-audit-detail-list">
+          ${detailRows.map(detail => `
+            <div class="perm-audit-detail-row">
+              <dt class="perm-audit-meta-label">${esc(detail.label)}</dt>
+              <dd class="perm-audit-meta-value${detail.monospace ? ' perm-audit-detail-value--mono' : ''}">${esc(detail.value)}</dd>
+            </div>
+          `).join('')}
+          <div class="perm-audit-detail-row">
+            <dt class="perm-audit-meta-label">Exact Time</dt>
+            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
+          </div>
+        </dl>
+      `
+      : `
+        <dl class="perm-audit-detail-list">
+          <div class="perm-audit-detail-row">
+            <dt class="perm-audit-meta-label">Exact Time</dt>
+            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
+          </div>
+        </dl>
+      `;
+
+    return `
+      <details class="perm-audit-entry">
+        <summary class="perm-audit-summary-row">
+          <span class="perm-audit-time-group">
+            <span class="perm-audit-time">${esc(formatShortTime(decision.timestamp))}</span>
+            <span class="perm-audit-date">${esc(formatShortDate(decision.timestamp))}</span>
+          </span>
+          <span class="perm-feed-decision perm-feed-decision--${decision.decision}">${esc(getDecisionLabel(decision.decision))}</span>
+          <span class="perm-audit-tool">${esc(decision.tool_name)}</span>
+          <span class="perm-audit-context">${esc(compactContext)}</span>
+        </summary>
+        <div class="perm-audit-entry-body">
+          ${reasonBlock}
+          ${detailList}
+        </div>
+      </details>
+    `;
+  }
+
+  function formatShortTime(timestamp) {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  function formatShortDate(timestamp) {
+    return new Date(timestamp).toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  function formatExactTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short',
+    });
+  }
+
+  function getDecisionLabel(decision) {
+    return String(decision || '').toUpperCase();
+  }
+
+  function getCompactContext(decision) {
+    if (decision.targetLabel && decision.target) {
+      return `${decision.targetLabel}: ${truncate(decision.target, 96)}`;
+    }
+    if (decision.command) {
+      return truncate(decision.command, 96);
+    }
+    return decision.reason || 'No extra context captured';
   }
 
   function renderPolicySourceItem(el, extraClass = '') {

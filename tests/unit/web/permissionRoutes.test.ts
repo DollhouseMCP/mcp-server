@@ -565,5 +565,56 @@ describe('permissionRoutes', () => {
         }),
       ]);
     });
+
+    it('should include useful audit detail fields for tracked decisions', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              decision: 'ask',
+              reason: 'Needs confirmation',
+              matched_pattern: 'Edit:*',
+            },
+          }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Edit',
+          input: { file_path: '/tmp/example.txt' },
+          platform: 'cursor',
+        });
+
+      const status = await request(app).get('/api/permissions/status');
+
+      expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
+        tool_name: 'Edit',
+        decision: 'ask',
+        platform: 'cursor',
+        target: '/tmp/example.txt',
+        targetLabel: 'File',
+      }));
+      expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
+        { label: 'Platform', value: 'cursor', monospace: true },
+        { label: 'File', value: '/tmp/example.txt', monospace: true },
+        { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+      ]));
+    });
   });
 });
