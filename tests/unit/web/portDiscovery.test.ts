@@ -11,6 +11,55 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { findAvailablePort, writePortFile, cleanupPortFile, discoverAndBindPort } from '../../../src/web/portDiscovery.js';
 
+const MAX_PORT_ATTEMPTS = 10;
+const PORT_RANGE_DISCOVERY_ATTEMPTS = 25;
+
+async function listenOnPort(port: number): Promise<ReturnType<typeof createServer>> {
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve());
+  });
+  return server;
+}
+
+async function closeServers(servers: ReturnType<typeof createServer>[]): Promise<void> {
+  await Promise.all(servers.map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+}
+
+async function reserveBlockedPortRange(rangeSize: number): Promise<{
+  startPort: number;
+  blockers: ReturnType<typeof createServer>[];
+}> {
+  for (let attempt = 0; attempt < PORT_RANGE_DISCOVERY_ATTEMPTS; attempt++) {
+    const probe = createServer();
+    const startPort = await new Promise<number>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(0, '127.0.0.1', () => {
+        const address = probe.address();
+        if (typeof address === 'object' && address) {
+          resolve(address.port);
+          return;
+        }
+        reject(new Error('Could not determine probe port'));
+      });
+    });
+    await new Promise<void>(resolve => probe.close(() => resolve()));
+
+    const blockers: ReturnType<typeof createServer>[] = [];
+    try {
+      for (let i = 0; i < rangeSize; i++) {
+        blockers.push(await listenOnPort(startPort + i));
+      }
+      return { startPort, blockers };
+    } catch {
+      await closeServers(blockers);
+    }
+  }
+
+  throw new Error(`Could not reserve ${rangeSize} consecutive ports for test`);
+}
+
 describe('portDiscovery', () => {
   describe('findAvailablePort', () => {
     it('should return the requested port when available', async () => {
@@ -39,22 +88,12 @@ describe('portDiscovery', () => {
     });
 
     it('should reject after MAX_PORT_ATTEMPTS exhausted', async () => {
-      const blockers: ReturnType<typeof createServer>[] = [];
-      const startPort = 49200;
+      const { startPort, blockers } = await reserveBlockedPortRange(MAX_PORT_ATTEMPTS);
 
       try {
-        for (let i = 0; i <= 10; i++) {
-          const server = createServer();
-          await new Promise<void>((resolve, reject) => {
-            server.once('error', reject);
-            server.listen(startPort + i, '127.0.0.1', () => resolve());
-          });
-          blockers.push(server);
-        }
-
         await expect(findAvailablePort(startPort)).rejects.toThrow();
       } finally {
-        await Promise.all(blockers.map(s => new Promise<void>(r => s.close(() => r()))));
+        await closeServers(blockers);
       }
     });
   });
