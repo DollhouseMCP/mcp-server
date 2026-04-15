@@ -118,6 +118,18 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_WEB_CONSOLE: z.coerce.boolean().default(true),
 
   // ============================================================================
+  // Database Configuration (Phase 4)
+  // ============================================================================
+  /** Storage backend: 'file' (default) or 'database' (PostgreSQL). */
+  DOLLHOUSE_STORAGE_BACKEND: z.enum(['file', 'database']).default('file'),
+  /** PostgreSQL connection string (required when DOLLHOUSE_STORAGE_BACKEND=database). */
+  DOLLHOUSE_DATABASE_URL: z.string().optional(),
+  /** Maximum connection pool size. */
+  DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  /** SSL mode for database connection. */
+  DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+
+  // ============================================================================
   // Test Configuration
   // ============================================================================
   TEST_BASE_DIR: z.string().optional(),
