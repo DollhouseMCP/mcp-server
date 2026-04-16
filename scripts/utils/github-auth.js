@@ -44,7 +44,7 @@ export async function getAuthToken() {
       const token = await fs.readFile(tokenPath, 'utf-8');
       const trimmed = token.trim();
       if (trimmed && (trimmed.startsWith('gho_') || trimmed.startsWith('ghp_') || trimmed.startsWith('github_pat_'))) {
-        console.log('✅ Using OAuth token from:', tokenPath);
+        console.log('✅ Using OAuth token from configured storage');
         return trimmed;
       }
     } catch (error) {
@@ -77,7 +77,7 @@ export async function validateToken(token) {
     if (!response.ok) {
       return { 
         valid: false, 
-        error: `GitHub API returned ${response.status}: ${response.statusText}` 
+        error: 'GitHub authentication failed'
       };
     }
     
@@ -109,7 +109,7 @@ export async function validateToken(token) {
   } catch (error) {
     return {
       valid: false,
-      error: `Failed to validate token: ${error.message}`
+      error: 'Unable to validate GitHub authentication'
     };
   }
 }
@@ -148,20 +148,20 @@ export async function showAuthStatus() {
   const validation = await validateToken(token);
   
   if (!validation.valid) {
-    console.log('❌ Invalid token:', validation.error);
+    console.log('❌ Invalid token');
+    console.log('   GitHub rejected the token or authentication could not be verified');
     return false;
   }
   
-  console.log('✅ Authenticated as:', validation.user);
-  console.log('   Name:', validation.name || 'Not set');
+  console.log('✅ Authentication verified');
   console.log('   Mode:', validation.isTestMode ? '🧪 TEST (PAT)' : '🔐 PRODUCTION (OAuth)');
   
   if (validation.scopes.length > 0) {
-    console.log('   Scopes:', validation.scopes.join(', '));
+    console.log('   Scopes: available');
   }
   
-  console.log('   Rate Limit:', `${validation.rateLimit.remaining}/${validation.rateLimit.limit}`);
-  console.log('   Reset:', validation.rateLimit.reset.toLocaleTimeString());
+  console.log('   Rate Limit: available');
+  console.log('   Reset: available');
   
   // Warn if using PAT in what looks like production
   if (validation.isTestMode && !process.env.CI && !process.env.TEST) {
