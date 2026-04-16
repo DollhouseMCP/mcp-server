@@ -2395,7 +2395,7 @@ describe('MCPAQLHandler', () => {
             advisoryElements: [],
           },
           persistedStateCleared: true,
-          snapshotFile: '/tmp/deadlock-relief-test.json',
+          snapshotFile: '/opt/dollhouse/test-data/deadlock-relief-test.json',
         }),
       };
 
@@ -2421,7 +2421,7 @@ describe('MCPAQLHandler', () => {
             sandboxingElement: { type: 'persona', element_name: 'locked-persona' },
             advisoryElements: [],
           },
-          snapshotFile: '/tmp/deadlock-relief-test.json',
+          snapshotFile: '/opt/dollhouse/test-data/deadlock-relief-test.json',
         }));
       }
       expect(verificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'RELIEF1');
