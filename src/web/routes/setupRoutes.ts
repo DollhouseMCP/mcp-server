@@ -519,6 +519,20 @@ function getLicenseWorkerFailureMessage(result: { status?: number; error: string
   return 'We could not send the verification email right now. Please try again in a moment.';
 }
 
+function logLicenseWorkerDeliveryFailure(
+  message: string,
+  licenseData: Record<string, unknown>,
+  deliveryResult: { status?: number; error: string; responseBody?: string },
+): void {
+  logger.error(message, {
+    email: licenseData.email,
+    tier: licenseData.tier,
+    status: deliveryResult.status ?? null,
+    error: deliveryResult.error,
+    responseBody: deliveryResult.responseBody ?? null,
+  });
+}
+
 export function createSetupRoutes(opts?: {
   /** Override install-mcp runner. For testing only — prefix signals test-only use. */
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
@@ -807,13 +821,7 @@ export function createSetupRoutes(opts?: {
       if (deliveryResult.ok) {
         logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
       } else {
-        logger.error('[Setup] Verification email delivery failed', {
-          email: licenseData.email,
-          tier: licenseData.tier,
-          status: deliveryResult.status ?? null,
-          error: deliveryResult.error,
-          responseBody: deliveryResult.responseBody ?? null,
-        });
+        logLicenseWorkerDeliveryFailure('[Setup] Verification email delivery failed', licenseData, deliveryResult);
 
         const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
         res.status(502).json({
@@ -964,13 +972,7 @@ export function createSetupRoutes(opts?: {
     try {
       const deliveryResult = await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
       if (!deliveryResult.ok) {
-        logger.error('[Setup] Verification resend delivery failed', {
-          email: license.email,
-          tier: license.tier,
-          status: deliveryResult.status ?? null,
-          error: deliveryResult.error,
-          responseBody: deliveryResult.responseBody ?? null,
-        });
+        logLicenseWorkerDeliveryFailure('[Setup] Verification resend delivery failed', license, deliveryResult);
         res.status(502).json({
           error: getLicenseWorkerFailureMessage(deliveryResult),
           verificationRequired: true,

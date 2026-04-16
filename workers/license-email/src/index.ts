@@ -55,6 +55,7 @@ const DIRECT_IP_WINDOW_SECONDS = 60;
 const DIRECT_IP_MAX_REQUESTS = 5;
 const DIRECT_EMAIL_COOLDOWN_SECONDS = 60;
 const DIRECT_STORE_PREFIX = 'https://dollhouse-cache.local/license-email/';
+const JSON_RESPONSE_HEADERS = { 'Content-Type': 'application/json' };
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
 const memoryStore = new Map<string, { value: string; expiresAt: number }>();
 
@@ -126,8 +127,33 @@ function isValidEmailAddress(value: unknown): boolean {
   const localPart = email.slice(0, atIndex);
   const domain = email.slice(atIndex + 1);
   if (!localPart || !domain) return false;
-  if (domain.startsWith('.') || domain.endsWith('.')) return false;
-  if (!domain.includes('.') || domain.includes('..')) return false;
+  if (localPart.startsWith('.') || localPart.endsWith('.')) return false;
+
+  const domainLabels = domain.split('.');
+  if (domainLabels.length < 2) return false;
+
+  for (const label of domainLabels) {
+    if (!isValidDomainLabel(label)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isValidDomainLabel(label: string): boolean {
+  if (!label || label.length > 63) return false;
+  if (label.startsWith('-') || label.endsWith('-')) return false;
+
+  for (const char of label) {
+    const code = char.charCodeAt(0);
+    const isNumber = code >= 48 && code <= 57;
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    if (!(isNumber || isUpper || isLower || char === '-')) {
+      return false;
+    }
+  }
 
   return true;
 }
@@ -206,7 +232,7 @@ async function handleVerification(props: PostHogEvent['properties'], env: Env): 
   if (!props.verification_code) {
     throw new Error('Missing verification_code for verification event');
   }
-  const verificationEmail = buildVerificationEmail(props, env);
+  const verificationEmail = buildVerificationEmail(props);
   await sendEmail({
     from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
     to: props.email,
@@ -245,6 +271,18 @@ async function handleActivation(props: PostHogEvent['properties'], env: Env): Pr
   }
 }
 
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: JSON_RESPONSE_HEADERS,
+  });
+}
+
+function emailDeliveryFailureResponse(error: unknown): Response {
+  console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
+  return jsonResponse({ error: 'Email delivery failed', success: false }, 500);
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
@@ -273,21 +311,14 @@ export default {
 
       try {
         await handleVerification(event.properties, env);
-        return new Response(JSON.stringify({
+        return jsonResponse({
           success: true,
           tier: event.properties.tier,
           email: event.properties.email,
           event_type: 'verification',
-        }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
         });
       } catch (error) {
-        console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
-        return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json' },
-        });
+        return emailDeliveryFailureResponse(error);
       }
     }
 
@@ -314,16 +345,9 @@ export default {
         await handleActivation(event.properties, env);
       }
 
-      return new Response(JSON.stringify({ success: true, tier, email, event_type: event_type ?? 'activation' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return jsonResponse({ success: true, tier, email, event_type: event_type ?? 'activation' });
     } catch (error) {
-      console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
-      return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
+      return emailDeliveryFailureResponse(error);
     }
   },
 };
@@ -345,7 +369,6 @@ function esc(str: string | undefined | null): string {
 
 function buildVerificationEmail(
   props: PostHogEvent['properties'],
-  env: Env,
 ): { subject: string; html: string } {
   const code = esc(props.verification_code);
   const verifyUrl = `http://dollhouse.localhost:41715#verify=${code}`;

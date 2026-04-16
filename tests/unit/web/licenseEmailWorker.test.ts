@@ -478,6 +478,38 @@ describe('License Email Worker', () => {
       expect(await res.text()).toContain('verification_code');
     });
 
+    it('rejects direct requests with malformed email domains', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'broken@domain..example',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.111' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('Missing required fields');
+    });
+
+    it('rejects direct requests with invalid domain label characters', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'broken@bad_label.example',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.112' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('Missing required fields');
+    });
+
     it('rejects activation events on the direct verification endpoint', async () => {
       const env = makeEnv();
       const req = makeRequest(
