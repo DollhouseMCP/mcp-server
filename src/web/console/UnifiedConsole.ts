@@ -63,6 +63,7 @@ import { env } from '../../config/env.js';
 const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
+const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
 
 function currentTimestamp(): string {
   return new Date().toISOString();
@@ -247,22 +248,30 @@ async function discoverLeaderViaSessionsApi(
   authToken: string | null,
   fetchImpl: typeof fetch,
 ): Promise<ConsoleLeaderInfo | null> {
-  const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, {
-    headers: buildDiscoveryHeaders(authToken),
-  });
-  if (!response.ok) {
-    return null;
-  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LEADER_DISCOVERY_TIMEOUT_MS);
 
-  const payload = await response.json() as { sessions?: SessionApiRecord[] };
-  const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-  const leaderSession = sessions.find((session) =>
-    session.pid === ownerPid &&
-    session.isLeader === true &&
-    session.kind === 'mcp' &&
-    session.status !== 'stopped'
-  );
-  return leaderSession ? buildLeaderInfoFromSession(port, ownerPid, leaderSession) : null;
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: buildDiscoveryHeaders(authToken),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return null;
+    }
+
+    const payload = await response.json() as { sessions?: SessionApiRecord[] };
+    const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+    const leaderSession = sessions.find((session) =>
+      session.pid === ownerPid &&
+      session.isLeader === true &&
+      session.kind === 'mcp' &&
+      session.status !== 'stopped'
+    );
+    return leaderSession ? buildLeaderInfoFromSession(port, ownerPid, leaderSession) : null;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 export async function discoverLeaderServingPort(

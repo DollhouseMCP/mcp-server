@@ -198,9 +198,10 @@ describe('discoverLeaderServingPort', () => {
       readLeaderLockImpl: async () => null,
     });
 
-    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', {
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', expect.objectContaining({
       headers: { Authorization: 'Bearer token-123' },
-    });
+      signal: expect.any(AbortSignal),
+    }));
     expect(result.source).toBe('api');
     expect(result.ownerPid).toBe(4567);
     expect(result.leaderInfo).toMatchObject({
@@ -238,6 +239,31 @@ describe('discoverLeaderServingPort', () => {
   it('falls back to a synthetic leader when the port owner is known but sessions are unavailable', async () => {
     const result = await discoverLeaderServingPort(41715, null, {
       fetchImpl: jest.fn<typeof fetch>().mockRejectedValue(new Error('connect ECONNRESET')),
+      findPidOnPortImpl: async () => 81234,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(result.source).toBe('synthetic');
+    expect(result.ownerPid).toBe(81234);
+    expect(result.leaderInfo).toMatchObject({
+      sessionId: 'port-owner-81234',
+      pid: 81234,
+      port: 41715,
+    });
+  });
+
+  it('falls back to a synthetic leader when the sessions API hangs', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      await new Promise((resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        setTimeout(resolve, 5000);
+      });
+      throw new Error('unreachable');
+    });
+
+    const result = await discoverLeaderServingPort(41715, null, {
+      fetchImpl: fetchStub,
       findPidOnPortImpl: async () => 81234,
       readLeaderLockImpl: async () => null,
     });
