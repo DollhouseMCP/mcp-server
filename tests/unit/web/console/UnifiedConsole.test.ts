@@ -17,6 +17,7 @@
  */
 
 import { describe, it, expect, jest } from '@jest/globals';
+import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
@@ -42,6 +43,13 @@ import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/co
  * avoids the false positive without suppressing the rule globally.
  */
 const FIXTURE_LEGACY_LOCK_PATH = '/sonar-fixture/legacy.lock';
+
+function makeNewerVersion(version: string): string {
+  const [mainVersion] = version.replace(/^v/, '').split('-');
+  const parts = mainVersion.split('.').map(part => Number.parseInt(part, 10) || 0);
+  const [major = 0, minor = 0, patch = 0] = parts;
+  return `${major}.${minor}.${patch + 1}`;
+}
 
 /** Build a minimal logger stub with jest mocks for .warn and .debug. */
 function makeLoggerStub() {
@@ -443,7 +451,7 @@ describe('resolveFollowerAuthority', () => {
   });
 
   it('follows the actual port owner when split-brain is present but replacement is not preferred', async () => {
-    const actualOwnerVersion = '999.0.0';
+    const actualOwnerVersion = makeNewerVersion(PACKAGE_VERSION);
     const electedLeader: ConsoleLeaderInfo = {
       version: 1,
       pid: 77290,
