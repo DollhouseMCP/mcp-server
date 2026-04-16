@@ -47,7 +47,7 @@ function spawnClientConnection(port: number): Promise<import('node:child_process
       [
         '--input-type=module',
         '-e',
-        `
+        String.raw`
           import net from 'node:net';
           const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.TEST_PORT) }, () => {
             process.stdout.write('CONNECTED\\n');

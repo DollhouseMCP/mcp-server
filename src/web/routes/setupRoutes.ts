@@ -290,6 +290,8 @@ const MS_PER_MINUTE = 60 * 1000;
 const VERIFICATION_CODE_TTL_MINUTES = 10;
 const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
+const LICENSE_WORKER_TIMEOUT_MS = 2_000;
+const DEFAULT_LICENSE_WORKER_URL = 'https://dollhousemcp-license-email.mick-eba.workers.dev';
 
 /** Generate a cryptographically random 6-digit verification code. */
 function generateVerificationCode(): string {
@@ -436,6 +438,47 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
     },
   });
   await posthog.shutdown();
+}
+
+function buildLicenseWorkerRequestBody(
+  licenseData: Record<string, unknown>,
+  verificationCode: string,
+  distinctId: string,
+): string {
+  return JSON.stringify({
+    event: 'license_activation',
+    distinct_id: distinctId,
+    properties: {
+      tier: licenseData.tier,
+      email: licenseData.email,
+      event_type: 'verification',
+      verification_code: verificationCode,
+      server_version: PACKAGE_VERSION,
+      os: platform(),
+    },
+  });
+}
+
+async function sendLicenseWorkerVerificationEmail(
+  licenseData: Record<string, unknown>,
+  verificationCode: string,
+  distinctId: string,
+): Promise<void> {
+  const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL;
+  const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
+  const response = await fetch(workerUrl, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
+    },
+    body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
+    signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Worker returned ${response.status}`);
+  }
 }
 
 export function createSetupRoutes(opts?: {
@@ -723,27 +766,7 @@ export function createSetupRoutes(opts?: {
       // PostHog event also fires for analytics, but the email can't wait for
       // PostHog's event pipeline (1-5 min delay).
       try {
-        const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
-        const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-        await fetch(workerUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-          },
-          body: JSON.stringify({
-            event: 'license_activation',
-            distinct_id: 'direct-verification',
-            properties: {
-              tier: licenseData.tier,
-              email: licenseData.email,
-              event_type: 'verification',
-              verification_code: code,
-              server_version: PACKAGE_VERSION,
-              os: platform(),
-            },
-          }),
-        });
+        await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
         logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
       } catch (workerError) {
         logger.warn(`[Setup] Direct Worker call failed, falling back to PostHog pipeline: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
@@ -887,27 +910,7 @@ export function createSetupRoutes(opts?: {
 
     // Send verification email directly to Worker for instant delivery
     try {
-      const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
-      const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-      await fetch(workerUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-        },
-        body: JSON.stringify({
-          event: 'license_activation',
-          distinct_id: 'direct-resend',
-          properties: {
-            tier: license.tier,
-            email: license.email,
-            event_type: 'verification',
-            verification_code: code,
-            server_version: PACKAGE_VERSION,
-            os: platform(),
-          },
-        }),
-      });
+      await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
       logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
     } catch (workerError) {
       logger.warn(`[Setup] Direct Worker call failed: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
