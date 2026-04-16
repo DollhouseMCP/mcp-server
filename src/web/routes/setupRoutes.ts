@@ -264,7 +264,11 @@ function validateClient(
   return normalized;
 }
 
-function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: string; error?: string } {
+type RequestedInstallVersionResult =
+  | { effectiveVersion?: string; error?: undefined }
+  | { effectiveVersion?: undefined; error: string };
+
+function resolveRequestedInstallVersion(body: unknown): RequestedInstallVersionResult {
   const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
   const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
   if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
@@ -619,7 +623,7 @@ export function createSetupRoutes(opts?: {
     if (!normalizedClient) return;
 
     const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
-    if (error) {
+    if (typeof error === 'string') {
       res.status(400).json({ error });
       return;
     }

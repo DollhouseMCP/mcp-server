@@ -887,5 +887,26 @@ describe('License Routes — Email Verification', () => {
       expect(res.body.verificationRequired).toBe(true);
       expect(res.body.error).toMatch(/could not send the verification email/i);
     });
+
+    it('keeps the setup flow successful when PostHog capture fails after worker success', async () => {
+      globalThis.fetch = jest.fn().mockImplementation((input: string | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('workers.dev/direct-verification')) {
+          return mockFetchResponse(true, 200, { success: true });
+        }
+        if (url.includes('app.posthog.com/batch')) {
+          return Promise.reject(new Error('posthog unavailable'));
+        }
+        return mockFetchResponse(true, 200, { success: true });
+      });
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.verificationRequired).toBe(true);
+    });
   });
 });

@@ -111,6 +111,10 @@ function normalizeEmail(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function getSafeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function isValidEmailAddress(value: unknown): boolean {
   const email = normalizeEmail(value);
   if (email.length < 3 || email.length > 254) return false;
@@ -132,8 +136,8 @@ function isValidEmailAddress(value: unknown): boolean {
 }
 
 function getClientIp(request: Request): string {
-  const header = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown';
-  return header.split(',')[0]?.trim() || 'unknown';
+  const header = request.headers.get('CF-Connecting-IP');
+  return header?.trim() || 'unknown';
 }
 
 function parseIpWindowCounter(raw: string | null): { count: number; resetAt: number } | null {
@@ -282,7 +286,7 @@ export default {
           headers: { 'Content-Type': 'application/json' },
         });
       } catch (error) {
-        console.error('License email worker error:', error);
+        console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
         return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
           status: 500,
           headers: { 'Content-Type': 'application/json' },
@@ -318,7 +322,7 @@ export default {
         headers: { 'Content-Type': 'application/json' },
       });
     } catch (error) {
-      console.error('License email worker error:', error);
+      console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
       return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
