@@ -839,13 +839,13 @@ describe('IntrospectionResolver', () => {
       });
     });
 
-    describe('all 14 migrated operations have schema metadata via introspect', () => {
+    describe('all 15 migrated operations have schema metadata via introspect', () => {
       const migratedOps = [
         'addEntry', 'clear',
         'execute_agent', 'get_execution_state', 'record_execution_step',
         'complete_execution', 'continue_execution', 'abort_execution',
         'get_gathered_data', 'prepare_handoff', 'resume_from_handoff',
-        'confirm_operation', 'verify_challenge', 'beetlejuice_beetlejuice_beetlejuice',
+        'confirm_operation', 'verify_challenge', 'release_deadlock', 'beetlejuice_beetlejuice_beetlejuice',
         'query_logs',
       ];
 

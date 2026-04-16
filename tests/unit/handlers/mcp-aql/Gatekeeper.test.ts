@@ -820,6 +820,7 @@ describe('Gatekeeper', () => {
     it('should allow explicit overrides to differ from endpoint default', () => {
       // verify_challenge is on CREATE (default CONFIRM_SESSION) but overridden to AUTO_APPROVE
       expect(getDefaultPermissionLevel('verify_challenge')).toBe(PermissionLevel.AUTO_APPROVE);
+      expect(getDefaultPermissionLevel('release_deadlock')).toBe(PermissionLevel.AUTO_APPROVE);
       // confirm_operation is on EXECUTE (default CONFIRM_SINGLE_USE) but overridden to AUTO_APPROVE
       expect(getDefaultPermissionLevel('confirm_operation')).toBe(PermissionLevel.AUTO_APPROVE);
       // get_execution_state is on EXECUTE but overridden to AUTO_APPROVE
