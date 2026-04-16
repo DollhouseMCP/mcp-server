@@ -17,6 +17,7 @@ import type { UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 import {
   electLeader,
@@ -51,6 +52,12 @@ import { env } from '../../config/env.js';
  *   3. 41715 (hardcoded default in env.ts)
  */
 const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
+const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
+const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
+
+function currentTimestamp(): string {
+  return new Date().toISOString();
+}
 
 /**
  * Options for starting the unified console.
@@ -120,7 +127,7 @@ export async function warnIfLegacyConsolePresent(
         `(pid=${legacy.pid}, port=${legacy.port}). Both consoles will run ` +
         `independently on different ports with different security posture. ` +
         `The authenticated console (this process) uses port ${currentPort}; ` +
-        `the legacy console uses port ${legacy.port ?? 3939}. ` +
+        `the legacy console uses port ${legacy.port ?? LEGACY_CONSOLE_FALLBACK_PORT}. ` +
         `For consistent security, update the legacy installation to a ` +
         `version with the authenticated console.`,
       );
@@ -151,6 +158,11 @@ export interface PortLeaderDiscovery {
   leaderInfo: ConsoleLeaderInfo | null;
   ownerPid: number | null;
   source: 'api' | 'lock' | 'synthetic' | 'none';
+}
+
+export interface BindFailureRecoveryResult extends PortLeaderDiscovery {
+  lockCleanupAttempted: boolean;
+  lockCleanupPerformed: boolean;
 }
 
 interface DiscoveryDependencies {
@@ -186,6 +198,7 @@ export async function discoverLeaderServingPort(
           session.status !== 'stopped'
         );
         if (leaderSession) {
+          const normalizedSessionId = UnicodeValidator.normalize(leaderSession.sessionId).normalizedContent;
           return {
             ownerPid,
             source: 'api',
@@ -193,9 +206,9 @@ export async function discoverLeaderServingPort(
               version: LOCK_VERSION,
               pid: ownerPid,
               port,
-              sessionId: leaderSession.sessionId,
-              startedAt: leaderSession.startedAt ?? new Date().toISOString(),
-              heartbeat: leaderSession.lastHeartbeat ?? new Date().toISOString(),
+              sessionId: normalizedSessionId,
+              startedAt: leaderSession.startedAt ?? currentTimestamp(),
+              heartbeat: leaderSession.lastHeartbeat ?? currentTimestamp(),
               serverVersion: leaderSession.serverVersion ?? LEGACY_SERVER_VERSION,
               consoleProtocolVersion: leaderSession.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
             },
@@ -213,11 +226,18 @@ export async function discoverLeaderServingPort(
 
   const lock = await readLeaderLockImpl();
   if (lock && lock.port === port && (ownerPid === null || lock.pid === ownerPid)) {
-    return { leaderInfo: lock, ownerPid: ownerPid ?? lock.pid, source: 'lock' };
+    return {
+      ownerPid: ownerPid ?? lock.pid,
+      source: 'lock',
+      leaderInfo: {
+        ...lock,
+        sessionId: UnicodeValidator.normalize(lock.sessionId).normalizedContent,
+      },
+    };
   }
 
   if (ownerPid !== null) {
-    const now = new Date().toISOString();
+    const now = currentTimestamp();
     return {
       ownerPid,
       source: 'synthetic',
@@ -225,7 +245,7 @@ export async function discoverLeaderServingPort(
         version: LOCK_VERSION,
         pid: ownerPid,
         port,
-        sessionId: `port-owner-${ownerPid}`,
+        sessionId: `${SYNTHETIC_PORT_OWNER_SESSION_PREFIX}${ownerPid}`,
         startedAt: now,
         heartbeat: now,
         serverVersion: LEGACY_SERVER_VERSION,
@@ -246,20 +266,61 @@ export async function recoverLeaderBindFailure(
   port: number,
   authToken: string | null,
   deps: BindFailureRecoveryDependencies = {},
-): Promise<PortLeaderDiscovery> {
+): Promise<BindFailureRecoveryResult> {
   const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
   const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
+  logger.info('[UnifiedConsole] Leader bind recovery initiated', {
+    provisionalSessionId: provisionalLeader.sessionId,
+    provisionalPid: provisionalLeader.pid,
+    port,
+  });
+
+  let fallback = await discoverLeaderServingPort(port, authToken, deps);
+  let lockCleanupAttempted = false;
+  let lockCleanupPerformed = false;
   const currentLock = await readLeaderLockImpl();
-  if (
+  const provisionalLockMatches = Boolean(
     currentLock &&
     currentLock.pid === provisionalLeader.pid &&
     currentLock.port === provisionalLeader.port &&
-    currentLock.sessionId === provisionalLeader.sessionId
-  ) {
+    currentLock.sessionId === provisionalLeader.sessionId,
+  );
+  const fallbackPointsToProvisionalLeader = Boolean(
+    fallback.leaderInfo &&
+    fallback.leaderInfo.pid === provisionalLeader.pid &&
+    fallback.leaderInfo.port === provisionalLeader.port &&
+    fallback.leaderInfo.sessionId === provisionalLeader.sessionId,
+  );
+
+  if (provisionalLockMatches) {
+    lockCleanupAttempted = true;
     await deleteLeaderLockImpl();
+    lockCleanupPerformed = true;
+    logger.info('[UnifiedConsole] Removed provisional leader lock after bind failure', {
+      provisionalSessionId: provisionalLeader.sessionId,
+      provisionalPid: provisionalLeader.pid,
+      port,
+    });
+    if (fallbackPointsToProvisionalLeader) {
+      fallback = await discoverLeaderServingPort(port, authToken, deps);
+    }
   }
 
-  return discoverLeaderServingPort(port, authToken, deps);
+  logger.info('[UnifiedConsole] Leader bind recovery completed', {
+    provisionalSessionId: provisionalLeader.sessionId,
+    provisionalPid: provisionalLeader.pid,
+    port,
+    discoverySource: fallback.source,
+    ownerPid: fallback.ownerPid,
+    lockCleanupAttempted,
+    lockCleanupPerformed,
+  });
+
+  return {
+    ...fallback,
+    lockCleanupAttempted,
+    lockCleanupPerformed,
+  };
 }
 
 /**
@@ -358,9 +419,14 @@ async function startAsLeader(
     if (fallback.leaderInfo) {
       logger.warn('[UnifiedConsole] Leader role aborted: bind failed, falling back to follower', {
         port: consolePort,
+        bindError: webResult.bindResult.error,
+        bindDetail: webResult.bindResult.detail,
         provisionalLeaderPid: election.leaderInfo.pid,
+        provisionalLeaderSessionId: election.leaderInfo.sessionId,
         ownerPid: fallback.ownerPid,
         source: fallback.source,
+        lockCleanupAttempted: fallback.lockCleanupAttempted,
+        lockCleanupPerformed: fallback.lockCleanupPerformed,
       });
       const followerElection: ElectionResult = { role: 'follower', leaderInfo: fallback.leaderInfo };
       return startAsFollower(options, followerElection, consolePort, primaryToken.token);

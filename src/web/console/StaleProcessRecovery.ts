@@ -21,6 +21,10 @@ const KILL_POLL_COUNT = 10;
 const SIGKILL_WAIT_MS = 500;
 /** Wait between lock file reads for TOCTOU mitigation (ms) */
 const LOCK_RECHECK_DELAY_MS = 500;
+/** Number of lock-file checks before deciding the port holder is not a fresh leader. */
+const LOCK_RECHECK_ATTEMPTS = 2;
+/** PID used by the OS init/launchd process; direct children are effectively orphaned. */
+const ROOT_PARENT_PID = 1;
 
 let _logger: typeof import('../../utils/logger.js').logger | null = null;
 async function getLogger() {
@@ -210,7 +214,7 @@ export async function killStaleProcessDetailed(pid: number, port: number): Promi
   }
 
   let parentCommand: string | undefined;
-  if (processInfo.parentPid > 1 && isPidAlive(processInfo.parentPid)) {
+  if (processInfo.parentPid > ROOT_PARENT_PID && isPidAlive(processInfo.parentPid)) {
     parentCommand = (await getProcessCommand(processInfo.parentPid)) ?? undefined;
     if (parentCommand && isRecognizedMcpHostParent(parentCommand)) {
       await logger.warn(`[WebUI] Port ${port} held by active client-backed DollhouseMCP process (pid ${pid}) — not killing`, {
@@ -306,7 +310,7 @@ export async function recoverStalePort(port: number): Promise<boolean> {
   // written its lock file. Read the lock, pause, re-read. If the second read
   // now matches the port holder, it's a fresh leader — don't kill.
   const { readLeaderLock } = await import('./LeaderElection.js');
-  for (let check = 0; check < 2; check++) {
+  for (let check = 0; check < LOCK_RECHECK_ATTEMPTS; check++) {
     try {
       const lock = await readLeaderLock();
       if (lock?.pid === stalePid && lock?.port === port && lock.pid !== process.pid) {
@@ -316,7 +320,7 @@ export async function recoverStalePort(port: number): Promise<boolean> {
     } catch {
       // Can't read lock file — continue to next check or kill
     }
-    if (check === 0) {
+    if (check < LOCK_RECHECK_ATTEMPTS - 1) {
       await new Promise(r => setTimeout(r, LOCK_RECHECK_DELAY_MS));
     }
   }

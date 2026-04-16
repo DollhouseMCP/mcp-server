@@ -210,6 +210,29 @@ describe('discoverLeaderServingPort', () => {
     });
   });
 
+  it('normalizes the discovered leader session ID from /api/sessions', async () => {
+    const result = await discoverLeaderServingPort(41715, null, {
+      fetchImpl: jest.fn<typeof fetch>().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          sessions: [
+            {
+              sessionId: 'real\u200Bleader',
+              pid: 4567,
+              isLeader: true,
+              kind: 'mcp',
+              status: 'active',
+            },
+          ],
+        }),
+      } as Response),
+      findPidOnPortImpl: async () => 4567,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(result.leaderInfo?.sessionId).toBe('realleader');
+  });
+
   it('falls back to a synthetic leader when the port owner is known but sessions are unavailable', async () => {
     const result = await discoverLeaderServingPort(41715, null, {
       fetchImpl: jest.fn<typeof fetch>().mockRejectedValue(new Error('connect ECONNRESET')),
@@ -265,6 +288,8 @@ describe('recoverLeaderBindFailure', () => {
 
     expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
     expect(result.source).toBe('api');
+    expect(result.lockCleanupAttempted).toBe(true);
+    expect(result.lockCleanupPerformed).toBe(true);
     expect(result.leaderInfo).toMatchObject({
       sessionId: 'ollie',
       pid: 57117,
