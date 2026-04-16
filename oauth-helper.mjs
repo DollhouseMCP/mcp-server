@@ -110,7 +110,7 @@ async function pollGitHub(deviceCode, clientId) {
     const data = await response.json();
     return data;
   } catch (error) {
-    await log(`Network error polling GitHub: ${error.message}`);
+    await log('Network error polling GitHub');
     throw error;
   }
 }
@@ -130,8 +130,8 @@ async function storeToken(token) {
     await TokenManager.storeGitHubToken(token);
     await log('Token stored successfully using TokenManager');
     return true;
-  } catch (error) {
-    await log(`Failed to store token using TokenManager: ${error.message}`);
+  } catch {
+    await log('Failed to store token using TokenManager');
     
     // Fallback: Write to a temporary file for the MCP server to pick up
     try {
@@ -154,10 +154,10 @@ async function storeToken(token) {
       // Verify file permissions
       await fs.chmod(tempTokenFile, 0o600);
       
-      await log(`Token written to fallback file with secure permissions`);
+      await log('Token written to fallback file with secure permissions');
       return true;
     } catch (fallbackError) {
-      await log(`Fallback storage also failed: ${fallbackError.message}`);
+      await log('Fallback storage also failed');
       throw fallbackError;
     }
   }
@@ -192,14 +192,14 @@ async function writePidFile() {
     await fs.mkdir(pidDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(pidFile, process.pid.toString(), { mode: 0o600 });
     await log(`PID file written: ${pidFile}`);
-  } catch (error) {
-    await log(`Failed to write PID file: ${error.message}`);
+  } catch {
+    await log('Failed to write PID file');
   }
 }
 
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
-  await log(`[CONFIG] Device code: ${deviceCode.substring(0, 2)}****`); // More aggressive truncation
+  await log('[CONFIG] Device code received');
   await log(`[CONFIG] Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
   await log(`[CONFIG] Node version: ${process.version}`);
   await log(`[CONFIG] Platform: ${process.platform}`);
@@ -278,9 +278,9 @@ async function main() {
             process.exit(1);
             
           default:
-            await log(`OAUTH_HELPER_276: Unknown error from GitHub: ${response.error}`);
-            await log(`[ERROR] Error description: ${response.error_description}`);
-            console.error(`OAUTH_UNKNOWN_RESPONSE: Unknown error '${response.error}' at line 276`);
+            await log('OAUTH_HELPER_276: Unknown error from GitHub during device flow polling');
+            await log('[ERROR] GitHub returned an unrecognized OAuth polling response');
+            console.error('OAUTH_UNKNOWN_RESPONSE: Unknown GitHub OAuth response at line 276');
         }
       } else if (response.access_token) {
         // Success! We got the token
@@ -309,7 +309,7 @@ async function main() {
         consecutiveErrors = 0;
       }
     } catch (error) {
-      await log(`[ERROR] Polling error: ${error.message}`);
+      await log('[ERROR] Polling error');
       
       // Classify error types
       const isNetworkError = error.message && (
@@ -333,8 +333,8 @@ async function main() {
         }
       } else {
         // Non-network error, likely fatal
-        await log(`OAUTH_HELPER_330: Non-recoverable error: ${error.message}`);
-        console.error(`OAUTH_FATAL_ERROR: Non-recoverable error at line 330 - ${error.message}`);
+        await log('OAUTH_HELPER_330: Non-recoverable error');
+        console.error('OAUTH_FATAL_ERROR: Non-recoverable error at line 330');
         clearInterval(heartbeatInterval);
         await cleanupPidFile();
         process.exit(1);
@@ -355,9 +355,9 @@ async function main() {
 }
 
 // Run the main function
-main().catch(async (error) => {
-  await log(`Fatal error: ${error.message}`);
-  console.error('Fatal error in OAuth helper:', error);
+main().catch(async () => {
+  await log('Fatal error');
+  console.error('Fatal error in OAuth helper');
   await cleanupPidFile();
   process.exit(1);
 });
