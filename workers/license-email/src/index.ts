@@ -318,6 +318,23 @@ async function handleDirectVerificationRequest(
   }
 }
 
+async function maybeHandleCompatibilityVerificationRequest(
+  request: Request,
+  event: PostHogEvent,
+  env: Env,
+): Promise<Response | null> {
+  if (new URL(request.url).pathname !== '/') {
+    return null;
+  }
+
+  const validationError = validateDirectVerificationEvent(event);
+  if (validationError) {
+    return null;
+  }
+
+  return handleDirectVerificationRequest(request, event, env);
+}
+
 async function handleWebhookRequest(event: PostHogEvent, env: Env): Promise<Response> {
   if (event.event !== 'license_activation') {
     return new Response('Ignored: not a license_activation event', { status: 200 });
@@ -363,6 +380,10 @@ export default {
     if (env.POSTHOG_WEBHOOK_SECRET) {
       const secret = request.headers.get('x-posthog-secret');
       if (secret !== env.POSTHOG_WEBHOOK_SECRET) {
+        const compatibilityResponse = await maybeHandleCompatibilityVerificationRequest(request, event, env);
+        if (compatibilityResponse) {
+          return compatibilityResponse;
+        }
         return new Response('Unauthorized', { status: 401 });
       }
     }
