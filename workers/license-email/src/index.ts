@@ -146,7 +146,10 @@ function isValidDomainLabel(label: string): boolean {
   if (label.startsWith('-') || label.endsWith('-')) return false;
 
   for (const char of label) {
-    const code = char.charCodeAt(0);
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      return false;
+    }
     const isNumber = code >= 48 && code <= 57;
     const isUpper = code >= 65 && code <= 90;
     const isLower = code >= 97 && code <= 122;
@@ -283,6 +286,61 @@ function emailDeliveryFailureResponse(error: unknown): Response {
   return jsonResponse({ error: 'Email delivery failed', success: false }, 500);
 }
 
+function parseEventRequest(request: Request): Promise<PostHogEvent> {
+  return request.json() as Promise<PostHogEvent>;
+}
+
+async function handleDirectVerificationRequest(
+  request: Request,
+  event: PostHogEvent,
+  env: Env,
+): Promise<Response> {
+  const validationError = validateDirectVerificationEvent(event);
+  if (validationError) {
+    return new Response(validationError, { status: 400 });
+  }
+
+  const rateLimitResponse = await enforceDirectVerificationLimits(request, event.properties.email);
+  if (rateLimitResponse) {
+    return rateLimitResponse;
+  }
+
+  try {
+    await handleVerification(event.properties, env);
+    return jsonResponse({
+      success: true,
+      tier: event.properties.tier,
+      email: event.properties.email,
+      event_type: 'verification',
+    });
+  } catch (error) {
+    return emailDeliveryFailureResponse(error);
+  }
+}
+
+async function handleWebhookRequest(event: PostHogEvent, env: Env): Promise<Response> {
+  if (event.event !== 'license_activation') {
+    return new Response('Ignored: not a license_activation event', { status: 200 });
+  }
+
+  const { tier, email, event_type } = event.properties;
+  if (!email || !tier) {
+    return new Response('Missing required fields: tier, email', { status: 400 });
+  }
+
+  try {
+    if (event_type === 'verification') {
+      await handleVerification(event.properties, env);
+    } else {
+      await handleActivation(event.properties, env);
+    }
+
+    return jsonResponse({ success: true, tier, email, event_type: event_type ?? 'activation' });
+  } catch (error) {
+    return emailDeliveryFailureResponse(error);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
@@ -293,33 +351,13 @@ export default {
 
     let event: PostHogEvent;
     try {
-      event = await request.json() as PostHogEvent;
+      event = await parseEventRequest(request);
     } catch {
       return new Response('Invalid JSON', { status: 400 });
     }
 
     if (url.pathname === DIRECT_VERIFICATION_PATH) {
-      const validationError = validateDirectVerificationEvent(event);
-      if (validationError) {
-        return new Response(validationError, { status: 400 });
-      }
-
-      const rateLimitResponse = await enforceDirectVerificationLimits(request, event.properties.email);
-      if (rateLimitResponse) {
-        return rateLimitResponse;
-      }
-
-      try {
-        await handleVerification(event.properties, env);
-        return jsonResponse({
-          success: true,
-          tier: event.properties.tier,
-          email: event.properties.email,
-          event_type: 'verification',
-        });
-      } catch (error) {
-        return emailDeliveryFailureResponse(error);
-      }
+      return handleDirectVerificationRequest(request, event, env);
     }
 
     if (env.POSTHOG_WEBHOOK_SECRET) {
@@ -329,26 +367,7 @@ export default {
       }
     }
 
-    if (event.event !== 'license_activation') {
-      return new Response('Ignored: not a license_activation event', { status: 200 });
-    }
-
-    const { tier, email, event_type } = event.properties;
-    if (!email || !tier) {
-      return new Response('Missing required fields: tier, email', { status: 400 });
-    }
-
-    try {
-      if (event_type === 'verification') {
-        await handleVerification(event.properties, env);
-      } else {
-        await handleActivation(event.properties, env);
-      }
-
-      return jsonResponse({ success: true, tier, email, event_type: event_type ?? 'activation' });
-    } catch (error) {
-      return emailDeliveryFailureResponse(error);
-    }
+    return handleWebhookRequest(event, env);
   },
 };
 

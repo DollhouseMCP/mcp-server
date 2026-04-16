@@ -265,14 +265,14 @@ function validateClient(
 }
 
 type RequestedInstallVersionResult =
-  | { effectiveVersion?: string; error?: undefined }
-  | { effectiveVersion?: undefined; error: string };
+  | { effectiveVersion: string | undefined; error: null }
+  | { effectiveVersion: null; error: string };
 
 function resolveRequestedInstallVersion(body: unknown): RequestedInstallVersionResult {
   const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
   const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
   if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-    return { error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
+    return { effectiveVersion: null, error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
   }
 
   const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
@@ -280,7 +280,7 @@ function resolveRequestedInstallVersion(body: unknown): RequestedInstallVersionR
     ? normalizedChannel
     : normalizedVersion;
 
-  return { effectiveVersion };
+  return { effectiveVersion, error: null };
 }
 
 function toNvmMitigationApplied(result: Awaited<ReturnType<typeof applyNvmLauncherIfNeeded>>): boolean | null {
@@ -637,7 +637,7 @@ export function createSetupRoutes(opts?: {
     if (!normalizedClient) return;
 
     const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
-    if (typeof error === 'string') {
+    if (error !== null) {
       res.status(400).json({ error });
       return;
     }

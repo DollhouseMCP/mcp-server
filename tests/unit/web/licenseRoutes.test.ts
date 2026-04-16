@@ -44,9 +44,19 @@ function installWorkerTimeoutFetchMock() {
 
 function findDirectWorkerCall(fetchMock: jest.Mock): unknown[] | undefined {
   return fetchMock.mock.calls.find(([input]) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+    const url = getFetchInputUrl(input);
     return url.includes(DIRECT_WORKER_PATH_SUFFIX);
   });
+}
+
+function getFetchInputUrl(input: unknown): string {
+  if (typeof input === 'string') {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return '';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
