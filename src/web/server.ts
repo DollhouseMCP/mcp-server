@@ -51,6 +51,8 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
+/** Placeholder in index.html that is replaced with the asset cache-busting version. */
+const ASSET_VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_ASSET_VERSION}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -373,7 +375,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     index: false,
     // In debug mode, disable caching on all static assets (JS, CSS) so
     // UI changes are picked up on normal reload without Cmd+Shift+R.
-    ...(isDebug ? { etag: false, lastModified: false, maxAge: 0 } : {}),
+    ...(isDebug
+      ? { etag: false, lastModified: false, maxAge: 0 }
+      : { maxAge: '1y', immutable: true }),
   }));
 
   // SPA fallback with console token injection (#1780).
@@ -404,7 +408,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll('>', '&gt;');
     cachedIndexHtml = template
       .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
-      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION)
+      .replaceAll(ASSET_VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };
@@ -422,12 +427,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     try {
       const html = await renderIndexHtml();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      // In debug mode, prevent browser caching so UI changes are picked up
-      // immediately. In production, allow short caching for performance.
-      const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
-      res.setHeader('Cache-Control', isDebug
-        ? 'no-cache, no-store, must-revalidate'
-        : 'private, max-age=60');
+      // The shell should always revalidate so a forced reload can pick up
+      // a new leader/version immediately. Asset files themselves carry a
+      // version query and can be cached aggressively.
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.send(html);
     } catch (err) {
       logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);
@@ -438,7 +441,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // Global error handler — catch Express errors and route to logger instead of terminal.
   // Without this, Express dumps stack traces to stderr (visible in --web terminal).
   // All errors still appear in the management console's Logs tab via MemoryLogSink.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: Error, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
     const status = (err as any).status || (err as any).statusCode || 500;
     logger.warn(`[WebUI] ${err.name}: ${err.message}`);

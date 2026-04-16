@@ -28,6 +28,56 @@
   var filterSessionId = '';
   var dropdownBuilt = false;
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
+  var lastReloadTargetVersion = '';
+
+  function normalizeSemver(version) {
+    return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version)
+      ? version
+      : '';
+  }
+
+  function compareSemver(versionA, versionB) {
+    var a = normalizeSemver(versionA);
+    var b = normalizeSemver(versionB);
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    var aParts = a.replace(/^v/, '').split('-')[0].split('.');
+    var bParts = b.replace(/^v/, '').split('-')[0].split('.');
+    var maxLength = Math.max(aParts.length, bParts.length);
+    for (var i = 0; i < maxLength; i++) {
+      var aPart = parseInt(aParts[i] || '0', 10) || 0;
+      var bPart = parseInt(bParts[i] || '0', 10) || 0;
+      if (aPart < bPart) return -1;
+      if (aPart > bPart) return 1;
+    }
+    return 0;
+  }
+
+  function getCurrentConsoleVersion() {
+    var dc = window.DollhouseConsole;
+    if (dc && typeof dc.currentServerVersion === 'string') {
+      return normalizeSemver(dc.currentServerVersion);
+    }
+    var meta = document.querySelector('meta[name="dollhouse-server-version"]');
+    return normalizeSemver(meta ? meta.getAttribute('content') || '' : '');
+  }
+
+  function maybeForceReloadForNewLeader(list) {
+    var dc = window.DollhouseConsole;
+    if (!dc || typeof dc.forceReload !== 'function' || !Array.isArray(list)) return;
+    var currentVersion = getCurrentConsoleVersion();
+    var leader = list.find(function(session) {
+      return session && session.status === 'active' && session.isLeader && session.kind === 'mcp';
+    });
+    if (!leader) return;
+    var leaderVersion = normalizeSemver(leader.serverVersion);
+    if (!leaderVersion) return;
+    if (compareSemver(leaderVersion, currentVersion) <= 0) return;
+    if (lastReloadTargetVersion === leaderVersion) return;
+    lastReloadTargetVersion = leaderVersion;
+    dc.forceReload('leader-upgraded', leaderVersion);
+  }
 
   function formatUptime(startedAt) {
     if (!startedAt) return '';
@@ -535,6 +585,7 @@
     }).then(function(data) {
       if (data && data.sessions) {
         sessions = data.sessions;
+        maybeForceReloadForNewLeader(sessions);
         updateSessionIndicator();
         updateSessionFilterOptions();
         clearSessionsError();
