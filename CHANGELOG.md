@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.21] - 2026-04-16
+
+- Sanitize OAuth and PAT helper logging to restore SonarCloud security quality
+
 ## [2.0.20] - 2026-04-16
 
 Point release for console leader bind authority and follower registration recovery.
