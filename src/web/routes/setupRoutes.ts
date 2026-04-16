@@ -176,12 +176,21 @@ interface DetectResult {
   serverKey?: string;
 }
 
+/**
+ * Parse a single `[mcp_servers.<name>]` TOML section into a config summary.
+ *
+ * When `caseSensitive` is true, the section header must match exactly. This is
+ * important for Codex because the installer writes `[mcp_servers.dollhousemcp]`
+ * in lowercase and we want to prefer that canonical entry over legacy mixed-case
+ * sections that may still be present in the file.
+ */
 function parseTomlSectionConfig(
   sectionName: string,
   raw: string,
+  caseSensitive = false,
 ): Record<string, unknown> | null {
   const escapedSectionName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sectionRegex = new RegExp(`\\[mcp_servers\\.${escapedSectionName}\\]`, 'i');
+  const sectionRegex = new RegExp(`\\[mcp_servers\\.${escapedSectionName}\\]`, caseSensitive ? '' : 'i');
   const sectionMatch = sectionRegex.exec(raw);
   if (!sectionMatch) return null;
 
@@ -205,13 +214,19 @@ function parseTomlSectionConfig(
   return tomlConfig;
 }
 
-/** Parse a TOML config file for a DollhouseMCP server entry */
+/**
+ * Parse a TOML config file for a DollhouseMCP server entry.
+ *
+ * Detection prefers the canonical lowercase Codex section name first, then
+ * falls back to older Dollhouse-related section names so stale configs are
+ * still visible in the UI instead of being mistaken for a fresh install.
+ */
 export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   if (!raw.toLowerCase().includes('dollhousemcp')) {
     return { installed: false };
   }
 
-  const exactConfig = parseTomlSectionConfig('dollhousemcp', raw);
+  const exactConfig = parseTomlSectionConfig('dollhousemcp', raw, true);
   if (exactConfig) {
     return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
   }

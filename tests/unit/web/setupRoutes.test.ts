@@ -445,6 +445,32 @@ describe('Setup Routes — TOML detection', () => {
     });
   });
 
+  it('treats the canonical lowercase codex section as a stricter match than mixed-case sections', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/legacy.js"]',
+      'enabled = false',
+      '',
+      '[mcp_servers.dollhousemcp]',
+      'command = "npx"',
+      'args = ["-y", "@dollhousemcp/mcp-server@latest"]',
+      'enabled = true',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.currentConfig).toEqual({
+      serverName: 'dollhousemcp',
+      command: 'npx',
+      args: ['-y', '@dollhousemcp/mcp-server@latest'],
+      enabled: true,
+    });
+  });
+
   it('falls back to a legacy dollhouse-style section when no exact entry exists', async () => {
     const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
 
@@ -463,6 +489,28 @@ describe('Setup Routes — TOML detection', () => {
       serverName: 'DollhouseMCP-V2-Refactor',
       command: '/bin/zsh',
       args: ['-lc', 'node /tmp/mcp-server-v2-refactor/dist/index.js'],
+      enabled: false,
+    });
+  });
+
+  it('preserves a mixed-case legacy section when no lowercase canonical section exists', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/legacy.js"]',
+      'enabled = false',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.currentConfig).toEqual({
+      serverName: 'DollhouseMCP',
+      command: '/bin/zsh',
+      args: ['-lc', 'node /tmp/legacy.js'],
       enabled: false,
     });
   });
