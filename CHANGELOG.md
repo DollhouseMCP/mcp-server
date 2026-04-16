@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.18] - 2026-04-16
+
+- Expanded permission setup and support-matrix clarity across supported clients.
+- Added stronger gatekeeper validation, activation diagnostics, and audit tooling.
+- Fixed Claude Code hook response-shape compatibility and stabilized release CI tests.
+
 ## [2.0.17] - 2026-04-15
 
 - Expanded client setup and permission integration support across more MCP hosts.
