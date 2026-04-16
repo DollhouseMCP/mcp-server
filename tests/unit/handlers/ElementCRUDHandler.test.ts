@@ -452,7 +452,7 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(result.likelyDeadlockCause).toEqual({
         advisoryElements: [],
       });
-      expect(result.snapshotFile).toContain('/.dollhouse/state/deadlock-relief/');
+      expect(result.snapshotFile).toMatch(/[\\/]\.dollhouse[\\/]state[\\/]deadlock-relief[\\/]/);
       expect(personaHandler.deactivatePersona).toHaveBeenCalledWith('Locked Persona');
       expect(skillManager.deactivateSkill).toHaveBeenCalledWith('locked-skill');
       expect(agentManager.deactivateAgent).toHaveBeenCalledWith('locked-agent');
