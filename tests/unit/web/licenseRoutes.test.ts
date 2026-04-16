@@ -8,7 +8,7 @@
  * Covers: validation, sanitization, rate limiting, error handling, security.
  */
 
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeEach, beforeAll, afterAll, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
@@ -24,6 +24,7 @@ const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
 
 /** Save the existing license.json (if any) before tests, restore after. */
 let savedLicense: string | null = null;
+const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   try {
@@ -43,6 +44,10 @@ afterAll(async () => {
   } else {
     await writeFile(LICENSE_PATH, savedLicense, { mode: 0o600 });
   }
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
 });
 
 // ── API Endpoint Tests ───────────────────────────────────────────────────
@@ -637,6 +642,28 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license — Verification Required', () => {
+    it('returns success even if the direct worker call times out', async () => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        await new Promise((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
+          setTimeout(resolve, 5_000);
+        });
+        return new Response(null, { status: 204 });
+      });
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('workers.dev'),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
     it('commercial license returns verificationRequired: true', async () => {
       const res = await request(app)
         .post('/api/setup/license')
@@ -752,6 +779,33 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license/resend', () => {
+    it('still succeeds when the resend worker call times out', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+        const signal = init?.signal as AbortSignal | undefined;
+        await new Promise((resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
+          setTimeout(resolve, 5_000);
+        });
+        return new Response(null, { status: 204 });
+      });
+
+      const res = await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('workers.dev'),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    });
+
     it('generates a new code for pending license', async () => {
       await request(app)
         .post('/api/setup/license')

@@ -17,11 +17,13 @@
  */
 
 import { describe, it, expect, jest } from '@jest/globals';
+import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
+  resolveFollowerAuthority,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -41,6 +43,13 @@ import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/co
  * avoids the false positive without suppressing the rule globally.
  */
 const FIXTURE_LEGACY_LOCK_PATH = '/sonar-fixture/legacy.lock';
+
+function makeNewerVersion(version: string): string {
+  const [mainVersion] = version.replace(/^v/, '').split('-');
+  const parts = mainVersion.split('.').map(part => Number.parseInt(part, 10) || 0);
+  const [major = 0, minor = 0, patch = 0] = parts;
+  return `${major}.${minor}.${patch + 1}`;
+}
 
 /** Build a minimal logger stub with jest mocks for .warn and .debug. */
 function makeLoggerStub() {
@@ -197,9 +206,10 @@ describe('discoverLeaderServingPort', () => {
       readLeaderLockImpl: async () => null,
     });
 
-    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', {
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', expect.objectContaining({
       headers: { Authorization: 'Bearer token-123' },
-    });
+      signal: expect.any(AbortSignal),
+    }));
     expect(result.source).toBe('api');
     expect(result.ownerPid).toBe(4567);
     expect(result.leaderInfo).toMatchObject({
@@ -237,6 +247,31 @@ describe('discoverLeaderServingPort', () => {
   it('falls back to a synthetic leader when the port owner is known but sessions are unavailable', async () => {
     const result = await discoverLeaderServingPort(41715, null, {
       fetchImpl: jest.fn<typeof fetch>().mockRejectedValue(new Error('connect ECONNRESET')),
+      findPidOnPortImpl: async () => 81234,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(result.source).toBe('synthetic');
+    expect(result.ownerPid).toBe(81234);
+    expect(result.leaderInfo).toMatchObject({
+      sessionId: 'port-owner-81234',
+      pid: 81234,
+      port: 41715,
+    });
+  });
+
+  it('falls back to a synthetic leader when the sessions API hangs', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      await new Promise((resolve, reject) => {
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        setTimeout(resolve, 5000);
+      });
+      throw new Error('unreachable');
+    });
+
+    const result = await discoverLeaderServingPort(41715, null, {
+      fetchImpl: fetchStub,
       findPidOnPortImpl: async () => 81234,
       readLeaderLockImpl: async () => null,
     });
@@ -365,6 +400,102 @@ describe('evaluatePortOwnerReplacement', () => {
     expect(decision.shouldEvict).toBe(false);
     expect(decision.preference).toMatchObject({
       reason: 'same-version',
+    });
+  });
+});
+
+describe('resolveFollowerAuthority', () => {
+  it('promotes a newer session to leader when the reachable port owner is older than the elected lock holder', async () => {
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 77290,
+      port: 41715,
+      sessionId: 'lock-holder',
+      startedAt: '2026-04-16T13:55:09.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: '2.0.19',
+      consoleProtocolVersion: 1,
+    };
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'api',
+        leaderInfo: {
+          version: 1,
+          pid: 57117,
+          port: 41715,
+          sessionId: 'legacy-console',
+          startedAt: '2026-04-13T19:07:12.895Z',
+          heartbeat: '2026-04-16T16:29:44.000Z',
+          serverVersion: undefined,
+          consoleProtocolVersion: undefined,
+        },
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.election.role).toBe('leader');
+    expect(result.election.leaderInfo).toMatchObject({
+      sessionId: 'session-newest',
+      port: 41715,
+      serverVersion: expect.any(String),
+      consoleProtocolVersion: 1,
+    });
+  });
+
+  it('follows the actual port owner when split-brain is present but replacement is not preferred', async () => {
+    const actualOwnerVersion = makeNewerVersion(PACKAGE_VERSION);
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 77290,
+      port: 41715,
+      sessionId: 'lock-holder',
+      startedAt: '2026-04-16T13:55:09.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: actualOwnerVersion,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 85513,
+        source: 'api',
+        leaderInfo: {
+          version: 1,
+          pid: 85513,
+          port: 41715,
+          sessionId: 'actual-owner',
+          startedAt: '2026-04-16T16:29:44.000Z',
+          heartbeat: '2026-04-16T16:29:44.000Z',
+          serverVersion: actualOwnerVersion,
+          consoleProtocolVersion: 1,
+        },
+      }),
+    });
+
+    expect(result.election).toEqual({
+      role: 'follower',
+      leaderInfo: {
+        version: 1,
+        pid: 85513,
+        port: 41715,
+        sessionId: 'actual-owner',
+        startedAt: '2026-04-16T16:29:44.000Z',
+        heartbeat: '2026-04-16T16:29:44.000Z',
+        serverVersion: actualOwnerVersion,
+        consoleProtocolVersion: 1,
+      },
     });
   });
 });

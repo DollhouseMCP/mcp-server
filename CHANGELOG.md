@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.24] - 2026-04-16
+
+- Fix web console authority convergence so newer sessions replace stale listeners, register correctly, and serve current assets.
+
 ## [2.0.23] - 2026-04-16
 
 - Expand npm package keywords for broader discovery across MCP clients, AI tool ecosystems, and Dollhouse element primitives.
