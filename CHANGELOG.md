@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.20] - 2026-04-16
+
+Point release for console leader bind authority and follower registration recovery.
+
 ## [2.0.19] - 2026-04-16
 
 Point release for deadlock relief recovery and version-aware web console leadership.

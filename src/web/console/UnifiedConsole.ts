@@ -25,7 +25,13 @@ import {
   startHeartbeat,
   registerLeaderCleanup,
   detectLegacyLeader,
+  readLeaderLock,
+  deleteLeaderLock,
+  LOCK_VERSION,
+  CONSOLE_PROTOCOL_VERSION,
+  LEGACY_SERVER_VERSION,
   type ElectionResult,
+  type ConsoleLeaderInfo,
 } from './LeaderElection.js';
 import { createIngestRoutes } from './IngestRoutes.js';
 import {
@@ -34,6 +40,7 @@ import {
 } from './LeaderForwardingSink.js';
 import { PromotionManager } from './PromotionManager.js';
 import { ConsoleTokenStore } from './consoleToken.js';
+import { findPidOnPort } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -128,6 +135,133 @@ export async function warnIfLegacyConsolePresent(
   }
 }
 
+interface SessionApiRecord {
+  sessionId: string;
+  pid: number;
+  startedAt?: string;
+  lastHeartbeat?: string;
+  status?: string;
+  isLeader?: boolean;
+  kind?: string;
+  serverVersion?: string;
+  consoleProtocolVersion?: number;
+}
+
+export interface PortLeaderDiscovery {
+  leaderInfo: ConsoleLeaderInfo | null;
+  ownerPid: number | null;
+  source: 'api' | 'lock' | 'synthetic' | 'none';
+}
+
+interface DiscoveryDependencies {
+  fetchImpl?: typeof fetch;
+  findPidOnPortImpl?: typeof findPidOnPort;
+  readLeaderLockImpl?: typeof readLeaderLock;
+}
+
+export async function discoverLeaderServingPort(
+  port: number,
+  authToken: string | null,
+  deps: DiscoveryDependencies = {},
+): Promise<PortLeaderDiscovery> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
+  const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
+  const ownerPid = await findPidOnPortImpl(port);
+
+  if (ownerPid !== null) {
+    try {
+      const headers: Record<string, string> = {};
+      if (authToken) {
+        headers.Authorization = `Bearer ${authToken}`;
+      }
+      const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, { headers });
+      if (response.ok) {
+        const payload = await response.json() as { sessions?: SessionApiRecord[] };
+        const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+        const leaderSession = sessions.find((session) =>
+          session.pid === ownerPid &&
+          session.isLeader === true &&
+          session.kind === 'mcp' &&
+          session.status !== 'stopped'
+        );
+        if (leaderSession) {
+          return {
+            ownerPid,
+            source: 'api',
+            leaderInfo: {
+              version: LOCK_VERSION,
+              pid: ownerPid,
+              port,
+              sessionId: leaderSession.sessionId,
+              startedAt: leaderSession.startedAt ?? new Date().toISOString(),
+              heartbeat: leaderSession.lastHeartbeat ?? new Date().toISOString(),
+              serverVersion: leaderSession.serverVersion ?? LEGACY_SERVER_VERSION,
+              consoleProtocolVersion: leaderSession.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+            },
+          };
+        }
+      }
+    } catch (err) {
+      logger.debug('[UnifiedConsole] Failed to query active leader sessions', {
+        port,
+        ownerPid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  const lock = await readLeaderLockImpl();
+  if (lock && lock.port === port && (ownerPid === null || lock.pid === ownerPid)) {
+    return { leaderInfo: lock, ownerPid: ownerPid ?? lock.pid, source: 'lock' };
+  }
+
+  if (ownerPid !== null) {
+    const now = new Date().toISOString();
+    return {
+      ownerPid,
+      source: 'synthetic',
+      leaderInfo: {
+        version: LOCK_VERSION,
+        pid: ownerPid,
+        port,
+        sessionId: `port-owner-${ownerPid}`,
+        startedAt: now,
+        heartbeat: now,
+        serverVersion: LEGACY_SERVER_VERSION,
+        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+      },
+    };
+  }
+
+  return { leaderInfo: null, ownerPid: null, source: 'none' };
+}
+
+interface BindFailureRecoveryDependencies extends DiscoveryDependencies {
+  deleteLeaderLockImpl?: typeof deleteLeaderLock;
+}
+
+export async function recoverLeaderBindFailure(
+  provisionalLeader: ConsoleLeaderInfo,
+  port: number,
+  authToken: string | null,
+  deps: BindFailureRecoveryDependencies = {},
+): Promise<PortLeaderDiscovery> {
+  const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
+  const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
+  const currentLock = await readLeaderLockImpl();
+  if (
+    currentLock &&
+    currentLock.pid === provisionalLeader.pid &&
+    currentLock.port === provisionalLeader.port &&
+    currentLock.sessionId === provisionalLeader.sessionId
+  ) {
+    await deleteLeaderLockImpl();
+  }
+
+  return discoverLeaderServingPort(port, authToken, deps);
+}
+
 /**
  * Start the unified web console.
  *
@@ -204,12 +338,6 @@ async function startAsLeader(
     storeMetricsSnapshot: (snapshot) => options.metricsSink?.onSnapshot(snapshot),
   });
 
-  // Register the leader as a session
-  ingestResult.registerLeaderSession(options.sessionId, process.pid);
-
-  // Register the web console itself so the session indicator is never empty (#1805)
-  ingestResult.registerConsoleSession();
-
   // Start the web server with ingest routes mounted before the SPA fallback.
   // If the port is occupied by a stale process, retry with exponential backoff.
   const serverOpts = {
@@ -226,8 +354,32 @@ async function startAsLeader(
   const webResult = await startWebServer(serverOpts);
 
   if (webResult.bindResult && !webResult.bindResult.success) {
-    logger.error(`[UnifiedConsole] Leader failed to bind port ${consolePort} — console unavailable`);
+    const fallback = await recoverLeaderBindFailure(election.leaderInfo, consolePort, primaryToken.token);
+    if (fallback.leaderInfo) {
+      logger.warn('[UnifiedConsole] Leader role aborted: bind failed, falling back to follower', {
+        port: consolePort,
+        provisionalLeaderPid: election.leaderInfo.pid,
+        ownerPid: fallback.ownerPid,
+        source: fallback.source,
+      });
+      const followerElection: ElectionResult = { role: 'follower', leaderInfo: fallback.leaderInfo };
+      return startAsFollower(options, followerElection, consolePort, primaryToken.token);
+    }
+
+    logger.error('[UnifiedConsole] Leader failed to bind and no active leader could be identified', {
+      port: consolePort,
+      provisionalLeaderPid: election.leaderInfo.pid,
+      bindError: webResult.bindResult.error,
+      bindDetail: webResult.bindResult.detail,
+    });
+    throw new Error(`Leader failed to bind port ${consolePort} and no active leader was discoverable`);
   }
+
+  // Register the leader only after the HTTP listener is actually serving the port.
+  ingestResult.registerLeaderSession(options.sessionId, process.pid);
+
+  // Register the web console itself so the session indicator is never empty (#1805)
+  ingestResult.registerConsoleSession();
 
   // Wire SSE broadcasts for this leader's own events
   options.wireSSEBroadcasts(webResult, options.metricsSink);
@@ -275,14 +427,18 @@ async function startAsFollower(
   options: UnifiedConsoleOptions,
   election: ElectionResult,
   consolePort: number = DEFAULT_CONSOLE_PORT,
+  initialAuthToken?: string | null,
 ): Promise<UnifiedConsoleResult> {
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
   // Read the console auth token (#1780) written by the leader. May be null
   // if the file doesn't exist yet — the sinks handle that gracefully and
   // simply omit the Bearer header, which is fine when auth is not enforced.
-  const { getPrimaryTokenFromFile } = await import('./consoleToken.js');
-  const authToken = await getPrimaryTokenFromFile(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  let authToken = initialAuthToken ?? null;
+  if (authToken === null || authToken === undefined) {
+    const { getPrimaryTokenFromFile } = await import('./consoleToken.js');
+    authToken = await getPrimaryTokenFromFile(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  }
   if (authToken) {
     logger.debug('[UnifiedConsole] Follower loaded console auth token');
   } else {
