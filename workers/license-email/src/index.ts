@@ -2,8 +2,9 @@
  * DollhouseMCP License Email Worker
  *
  * Receives PostHog webhook events for `license_activation` and sends
- * confirmation emails via MailChannels (Cloudflare's transactional email
- * partner — no additional account needed).
+ * confirmation emails. It also accepts direct verification-email requests
+ * from the local setup server on a separate public endpoint with cooldowns
+ * and rate limits.
  *
  * Setup:
  *   1. Deploy: `wrangler deploy`
@@ -16,6 +17,9 @@
  * Email sending uses the MailChannels API which is available to all
  * Cloudflare Workers. Requires DNS TXT record for SPF:
  *   dollhousemcp.com TXT "v=spf1 include:_spf.mx.cloudflare.net include:relay.mailchannels.net ~all"
+ *
+ * Direct verification requests should target:
+ *   https://dollhousemcp-license-email.<your-account>.workers.dev/direct-verification
  *
  * If MailChannels is unavailable, swap sendEmail() for Resend, SendGrid,
  * or any HTTP-based email API.
@@ -46,12 +50,192 @@ interface PostHogEvent {
   timestamp?: string;
 }
 
+const DIRECT_VERIFICATION_PATH = '/direct-verification';
+const DIRECT_IP_WINDOW_SECONDS = 60;
+const DIRECT_IP_MAX_REQUESTS = 5;
+const DIRECT_EMAIL_COOLDOWN_SECONDS = 60;
+const DIRECT_STORE_PREFIX = 'https://dollhouse-cache.local/license-email/';
+const JSON_RESPONSE_HEADERS = { 'Content-Type': 'application/json' };
+const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
+const memoryStore = new Map<string, { value: string; expiresAt: number }>();
+
+interface AbuseStore {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, ttlSeconds: number): Promise<void>;
+}
+
+function makeStoreRequest(key: string): Request {
+  return new Request(`${DIRECT_STORE_PREFIX}${key}`);
+}
+
+function getAbuseStore(): AbuseStore {
+  const cacheApi = globalThis.caches?.default;
+  if (cacheApi && typeof cacheApi.match === 'function' && typeof cacheApi.put === 'function') {
+    return {
+      async get(key: string): Promise<string | null> {
+        const response = await cacheApi.match(makeStoreRequest(key));
+        return response ? response.text() : null;
+      },
+      async put(key: string, value: string, ttlSeconds: number): Promise<void> {
+        await cacheApi.put(
+          makeStoreRequest(key),
+          new Response(value, {
+            headers: {
+              'Cache-Control': `max-age=${ttlSeconds}`,
+            },
+          }),
+        );
+      },
+    };
+  }
+
+  return {
+    async get(key: string): Promise<string | null> {
+      const entry = memoryStore.get(key);
+      if (!entry) return null;
+      if (entry.expiresAt <= Date.now()) {
+        memoryStore.delete(key);
+        return null;
+      }
+      return entry.value;
+    },
+    async put(key: string, value: string, ttlSeconds: number): Promise<void> {
+      memoryStore.set(key, {
+        value,
+        expiresAt: Date.now() + ttlSeconds * 1000,
+      });
+    },
+  };
+}
+
+function normalizeEmail(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function getSafeErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isValidEmailAddress(value: unknown): boolean {
+  const email = normalizeEmail(value);
+  if (email.length < 3 || email.length > 254) return false;
+  if (email.includes(' ') || email.startsWith('@') || email.endsWith('@')) return false;
+
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@')) return false;
+
+  const localPart = email.slice(0, atIndex);
+  const domain = email.slice(atIndex + 1);
+  if (!localPart || !domain) return false;
+  if (localPart.startsWith('.') || localPart.endsWith('.')) return false;
+
+  const domainLabels = domain.split('.');
+  if (domainLabels.length < 2) return false;
+
+  for (const label of domainLabels) {
+    if (!isValidDomainLabel(label)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isValidDomainLabel(label: string): boolean {
+  if (!label || label.length > 63) return false;
+  if (label.startsWith('-') || label.endsWith('-')) return false;
+
+  for (const char of label) {
+    const code = char.codePointAt(0);
+    if (code === undefined) {
+      return false;
+    }
+    const isNumber = code >= 48 && code <= 57;
+    const isUpper = code >= 65 && code <= 90;
+    const isLower = code >= 97 && code <= 122;
+    if (!(isNumber || isUpper || isLower || char === '-')) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function getClientIp(request: Request): string {
+  const header = request.headers.get('CF-Connecting-IP');
+  return header?.trim() || 'unknown';
+}
+
+function parseIpWindowCounter(raw: string | null): { count: number; resetAt: number } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { count?: number; resetAt?: number };
+    if (typeof parsed.count !== 'number' || typeof parsed.resetAt !== 'number') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function validateDirectVerificationEvent(event: PostHogEvent): string | null {
+  if (event.event !== 'license_activation') {
+    return 'Direct verification endpoint only accepts license_activation events.';
+  }
+
+  const { tier, email, event_type, verification_code } = event.properties ?? {};
+  if (tier !== 'free-commercial' && tier !== 'paid-commercial') {
+    return 'Missing required fields: tier, email';
+  }
+  if (!isValidEmailAddress(email)) {
+    return 'Missing required fields: tier, email';
+  }
+  if (event_type !== 'verification') {
+    return 'Direct verification endpoint only accepts verification events.';
+  }
+  if (!VERIFICATION_CODE_PATTERN.test(typeof verification_code === 'string' ? verification_code : '')) {
+    return 'Missing required verification_code for verification event';
+  }
+  return null;
+}
+
+async function enforceDirectVerificationLimits(request: Request, email: string): Promise<Response | null> {
+  const store = getAbuseStore();
+  const normalizedEmail = normalizeEmail(email);
+  const emailKey = `email:${encodeURIComponent(normalizedEmail)}`;
+  if (await store.get(emailKey)) {
+    return new Response('Please wait before requesting another verification email.', { status: 429 });
+  }
+
+  const ip = getClientIp(request);
+  const ipKey = `ip:${encodeURIComponent(ip)}`;
+  const now = Date.now();
+  const existingWindow = parseIpWindowCounter(await store.get(ipKey));
+  const windowCounter = existingWindow && existingWindow.resetAt > now
+    ? existingWindow
+    : { count: 0, resetAt: now + DIRECT_IP_WINDOW_SECONDS * 1000 };
+
+  if (windowCounter.count >= DIRECT_IP_MAX_REQUESTS) {
+    return new Response('Too many verification requests. Please try again later.', { status: 429 });
+  }
+
+  windowCounter.count += 1;
+  const remainingWindowSeconds = Math.max(1, Math.ceil((windowCounter.resetAt - now) / 1000));
+  await Promise.all([
+    store.put(ipKey, JSON.stringify(windowCounter), remainingWindowSeconds),
+    store.put(emailKey, '1', DIRECT_EMAIL_COOLDOWN_SECONDS),
+  ]);
+
+  return null;
+}
+
 /** Handle verification event: send verification code email. */
 async function handleVerification(props: PostHogEvent['properties'], env: Env): Promise<void> {
   if (!props.verification_code) {
     throw new Error('Missing verification_code for verification event');
   }
-  const verificationEmail = buildVerificationEmail(props, env);
+  const verificationEmail = buildVerificationEmail(props);
   await sendEmail({
     from: { name: env.FROM_NAME, email: env.FROM_EMAIL },
     to: props.email,
@@ -90,10 +274,90 @@ async function handleActivation(props: PostHogEvent['properties'], env: Env): Pr
   }
 }
 
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: JSON_RESPONSE_HEADERS,
+  });
+}
+
+function emailDeliveryFailureResponse(error: unknown): Response {
+  console.error(`License email worker error: ${getSafeErrorMessage(error)}`);
+  return jsonResponse({ error: 'Email delivery failed', success: false }, 500);
+}
+
+function parseEventRequest(request: Request): Promise<PostHogEvent> {
+  return request.json() as Promise<PostHogEvent>;
+}
+
+async function handleDirectVerificationRequest(
+  request: Request,
+  event: PostHogEvent,
+  env: Env,
+): Promise<Response> {
+  const validationError = validateDirectVerificationEvent(event);
+  if (validationError) {
+    return new Response(validationError, { status: 400 });
+  }
+
+  const rateLimitResponse = await enforceDirectVerificationLimits(request, event.properties.email);
+  if (rateLimitResponse) {
+    return rateLimitResponse;
+  }
+
+  try {
+    await handleVerification(event.properties, env);
+    return jsonResponse({
+      success: true,
+      tier: event.properties.tier,
+      email: event.properties.email,
+      event_type: 'verification',
+    });
+  } catch (error) {
+    return emailDeliveryFailureResponse(error);
+  }
+}
+
+async function handleWebhookRequest(event: PostHogEvent, env: Env): Promise<Response> {
+  if (event.event !== 'license_activation') {
+    return new Response('Ignored: not a license_activation event', { status: 200 });
+  }
+
+  const { tier, email, event_type } = event.properties;
+  if (!email || !tier) {
+    return new Response('Missing required fields: tier, email', { status: 400 });
+  }
+
+  try {
+    if (event_type === 'verification') {
+      await handleVerification(event.properties, env);
+    } else {
+      await handleActivation(event.properties, env);
+    }
+
+    return jsonResponse({ success: true, tier, email, event_type: event_type ?? 'activation' });
+  } catch (error) {
+    return emailDeliveryFailureResponse(error);
+  }
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     if (request.method !== 'POST') {
       return new Response('Method not allowed', { status: 405 });
+    }
+
+    const url = new URL(request.url);
+
+    let event: PostHogEvent;
+    try {
+      event = await parseEventRequest(request);
+    } catch {
+      return new Response('Invalid JSON', { status: 400 });
+    }
+
+    if (url.pathname === DIRECT_VERIFICATION_PATH) {
+      return handleDirectVerificationRequest(request, event, env);
     }
 
     if (env.POSTHOG_WEBHOOK_SECRET) {
@@ -103,40 +367,7 @@ export default {
       }
     }
 
-    let event: PostHogEvent;
-    try {
-      event = await request.json() as PostHogEvent;
-    } catch {
-      return new Response('Invalid JSON', { status: 400 });
-    }
-
-    if (event.event !== 'license_activation') {
-      return new Response('Ignored: not a license_activation event', { status: 200 });
-    }
-
-    const { tier, email, event_type } = event.properties;
-    if (!email || !tier) {
-      return new Response('Missing required fields: tier, email', { status: 400 });
-    }
-
-    try {
-      if (event_type === 'verification') {
-        await handleVerification(event.properties, env);
-      } else {
-        await handleActivation(event.properties, env);
-      }
-
-      return new Response(JSON.stringify({ success: true, tier, email, event_type: event_type ?? 'activation' }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    } catch (error) {
-      console.error('License email worker error:', error);
-      return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
+    return handleWebhookRequest(event, env);
   },
 };
 
@@ -157,7 +388,6 @@ function esc(str: string | undefined | null): string {
 
 function buildVerificationEmail(
   props: PostHogEvent['properties'],
-  env: Env,
 ): { subject: string; html: string } {
   const code = esc(props.verification_code);
   const verifyUrl = `http://dollhouse.localhost:41715#verify=${code}`;
@@ -342,8 +572,8 @@ async function sendEmail(params: EmailParams): Promise<void> {
 
     if (response.ok) return;
 
-    const text = await response.text();
-    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status}):`, text);
+    await response.text();
+    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status})`);
 
     // Don't retry on client errors (400, 401, 403, 422) — only server/rate errors
     if (response.status < 500 && response.status !== 429) {

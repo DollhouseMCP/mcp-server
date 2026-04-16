@@ -47,6 +47,7 @@ function isMissingPathError(error: unknown): boolean {
 // src/telemetry/OperationalTelemetry.ts. Verified write-only 2026-04-07.
 // Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
+const LICENSE_WORKER_DIRECT_PATH = '/direct-verification';
 
 /** Supported client identifiers for one-click setup. */
 const ALLOWED_CLIENTS = new Set([
@@ -263,11 +264,15 @@ function validateClient(
   return normalized;
 }
 
-function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: string; error?: string } {
+type RequestedInstallVersionResult =
+  | { effectiveVersion: string | undefined; error: null }
+  | { effectiveVersion: null; error: string };
+
+function resolveRequestedInstallVersion(body: unknown): RequestedInstallVersionResult {
   const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
   const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
   if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-    return { error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
+    return { effectiveVersion: null, error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
   }
 
   const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
@@ -275,7 +280,7 @@ function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: str
     ? normalizedChannel
     : normalizedVersion;
 
-  return { effectiveVersion };
+  return { effectiveVersion, error: null };
 }
 
 function toNvmMitigationApplied(result: Awaited<ReturnType<typeof applyNvmLauncherIfNeeded>>): boolean | null {
@@ -290,7 +295,8 @@ const MS_PER_MINUTE = 60 * 1000;
 const VERIFICATION_CODE_TTL_MINUTES = 10;
 const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
-const LICENSE_WORKER_TIMEOUT_MS = 2_000;
+const LICENSE_WORKER_TIMEOUT_MS = 8_000;
+const LICENSE_WORKER_ERROR_BODY_LIMIT = 300;
 const DEFAULT_LICENSE_WORKER_URL = 'https://dollhousemcp-license-email.mick-eba.workers.dev';
 
 /** Generate a cryptographically random 6-digit verification code. */
@@ -463,22 +469,68 @@ async function sendLicenseWorkerVerificationEmail(
   licenseData: Record<string, unknown>,
   verificationCode: string,
   distinctId: string,
-): Promise<void> {
-  const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL;
-  const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-  const response = await fetch(workerUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-    },
-    body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
-    signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
-  });
+): Promise<{ ok: true } | { ok: false; status?: number; error: string; responseBody?: string }> {
+  const workerUrl = new URL(LICENSE_WORKER_DIRECT_PATH, process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL);
 
-  if (!response.ok) {
-    throw new Error(`Worker returned ${response.status}`);
+  try {
+    const response = await fetch(workerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
+      signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
+    });
+
+    if (response.ok) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      status: response.status,
+      error: `worker_http_${response.status}`,
+      responseBody: (await response.text()).slice(0, LICENSE_WORKER_ERROR_BODY_LIMIT),
+    };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === 'TimeoutError' ||
+        error.name === 'AbortError' ||
+        error.message.toLowerCase().includes('timeout') ||
+        error.message.toLowerCase().includes('timed out'))
+    ) {
+      return { ok: false, error: 'worker_timeout' };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function getLicenseWorkerFailureMessage(result: { status?: number; error: string }): string {
+  if (result.status === 401 || result.status === 403) {
+    return 'Verification email service rejected the request. Please check the local email delivery configuration and try again.';
+  }
+  if (result.error === 'worker_timeout') {
+    return 'Verification email service timed out. Please try again in a moment.';
+  }
+  return 'We could not send the verification email right now. Please try again in a moment.';
+}
+
+function logLicenseWorkerDeliveryFailure(
+  message: string,
+  licenseData: Record<string, unknown>,
+  deliveryResult: { status?: number; error: string; responseBody?: string },
+): void {
+  logger.error(message, {
+    email: licenseData.email,
+    tier: licenseData.tier,
+    status: deliveryResult.status ?? null,
+    error: deliveryResult.error,
+    responseBody: deliveryResult.responseBody ?? null,
+  });
 }
 
 export function createSetupRoutes(opts?: {
@@ -585,7 +637,7 @@ export function createSetupRoutes(opts?: {
     if (!normalizedClient) return;
 
     const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
-    if (error) {
+    if (error !== null) {
       res.status(400).json({ error });
       return;
     }
@@ -765,11 +817,19 @@ export function createSetupRoutes(opts?: {
       // Send verification email directly to Worker for instant delivery.
       // PostHog event also fires for analytics, but the email can't wait for
       // PostHog's event pipeline (1-5 min delay).
-      try {
-        await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
+      if (deliveryResult.ok) {
         logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
-      } catch (workerError) {
-        logger.warn(`[Setup] Direct Worker call failed, falling back to PostHog pipeline: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      } else {
+        logLicenseWorkerDeliveryFailure('[Setup] Verification email delivery failed', licenseData, deliveryResult);
+
+        const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+          license: publicData,
+        });
+        return;
       }
 
       // Also fire PostHog event for analytics (non-blocking, delay is fine)
@@ -910,10 +970,24 @@ export function createSetupRoutes(opts?: {
 
     // Send verification email directly to Worker for instant delivery
     try {
-      await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
+      if (!deliveryResult.ok) {
+        logLicenseWorkerDeliveryFailure('[Setup] Verification resend delivery failed', license, deliveryResult);
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+        });
+        return;
+      }
+
       logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
     } catch (workerError) {
-      logger.warn(`[Setup] Direct Worker call failed: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      logger.error('[Setup] Unexpected verification resend failure', {
+        email: license.email,
+        error: workerError instanceof Error ? workerError.message : String(workerError),
+      });
+      res.status(500).json({ error: 'Failed to resend verification code.' });
+      return;
     }
 
     res.json({ success: true, message: 'A new verification code has been sent to your email.' });

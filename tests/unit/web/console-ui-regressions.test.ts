@@ -499,6 +499,11 @@ describe('Web console cleanup regressions', () => {
       <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
       <div id="permissions-dashboard-root"></div>
     `);
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(win.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
 
     win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
       if (url === '/api/sessions') {
@@ -576,6 +581,15 @@ describe('Web console cleanup regressions', () => {
     const details = modalFeed?.querySelector('details') as HTMLDetailsElement | null;
     expect(details).not.toBeNull();
     details?.setAttribute('open', '');
+
+    const copyButton = win.document.getElementById('perm-audit-copy-btn') as HTMLButtonElement | null;
+    expect(copyButton).not.toBeNull();
+    copyButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain('# DollhouseMCP Permissions Audit');
+    expect(writeText.mock.calls[0][0]).toContain('## 1. Edit');
+    expect(writeText.mock.calls[0][0]).toContain('Matched Pattern: Edit:*');
 
     const closeButton = win.document.getElementById('perm-audit-modal-close') as HTMLButtonElement | null;
     closeButton?.click();
