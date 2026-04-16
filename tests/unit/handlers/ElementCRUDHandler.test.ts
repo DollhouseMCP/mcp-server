@@ -34,6 +34,8 @@ describe('ElementCRUDHandler (DI)', () => {
       create: jest.fn(),
       delete: jest.fn(),
       find: jest.fn(),
+      getActiveSkills: jest.fn().mockResolvedValue([]),
+      deactivateSkill: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<SkillManager>;
 
     templateManager = {
@@ -47,20 +49,27 @@ describe('ElementCRUDHandler (DI)', () => {
     agentManager = {
       create: jest.fn(),
       getActiveAgents: jest.fn().mockResolvedValue([]),
+      deactivateAgent: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
       list: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<AgentManager>;
 
     memoryManager = {
       save: jest.fn(),
+      getActiveMemories: jest.fn().mockResolvedValue([]),
+      deactivateMemory: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<MemoryManager>;
 
     ensembleManager = {
       list: jest.fn(),
+      getActiveEnsembles: jest.fn().mockResolvedValue([]),
+      deactivateEnsemble: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<EnsembleManager>;
 
     personaHandler = {
       getActivePersona: jest.fn(),
       getActivePersonas: jest.fn().mockReturnValue([]),
+      deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
+      findPersona: jest.fn(),
       list: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<PersonaHandler>;
 
@@ -376,6 +385,69 @@ describe('ElementCRUDHandler (DI)', () => {
           sessionIds: ['session-other'],
         }),
       ]);
+    });
+  });
+
+  describe('releaseDeadlock', () => {
+    it('should deactivate all active elements and clear persisted session state', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('session-lock'),
+        clearAll: jest.fn(),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      personaHandler.getActivePersonas.mockReturnValue([
+        { metadata: { name: 'Locked Persona' } } as any,
+      ]);
+      personaHandler.findPersona.mockReturnValue({ metadata: { name: 'Locked Persona' } } as any);
+      skillManager.getActiveSkills.mockResolvedValue([
+        { metadata: { name: 'locked-skill' } } as any,
+      ]);
+      agentManager.getActiveAgents.mockResolvedValue([
+        { metadata: { name: 'locked-agent' } } as any,
+      ]);
+      memoryManager.getActiveMemories.mockResolvedValue([
+        { metadata: { name: 'locked-memory' } } as any,
+      ]);
+      ensembleManager.getActiveEnsembles.mockResolvedValue([
+        { metadata: { name: 'locked-ensemble' } } as any,
+      ]);
+
+      const handlerWithPersistence = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await handlerWithPersistence.releaseDeadlock();
+
+      expect(result.sessionId).toBe('session-lock');
+      expect(result.failed).toEqual([]);
+      expect(result.persistedStateCleared).toBe(true);
+      expect(result.deactivated).toEqual(expect.arrayContaining([
+        { type: ElementType.PERSONA, name: 'Locked Persona' },
+        { type: ElementType.SKILL, name: 'locked-skill' },
+        { type: ElementType.AGENT, name: 'locked-agent' },
+        { type: ElementType.MEMORY, name: 'locked-memory' },
+        { type: ElementType.ENSEMBLE, name: 'locked-ensemble' },
+      ]));
+      expect(personaHandler.deactivatePersona).toHaveBeenCalledWith('Locked Persona');
+      expect(skillManager.deactivateSkill).toHaveBeenCalledWith('locked-skill');
+      expect(agentManager.deactivateAgent).toHaveBeenCalledWith('locked-agent');
+      expect(memoryManager.deactivateMemory).toHaveBeenCalledWith('locked-memory');
+      expect(ensembleManager.deactivateEnsemble).toHaveBeenCalledWith('locked-ensemble');
+      expect(activationStore.clearAll).toHaveBeenCalled();
     });
   });
 });

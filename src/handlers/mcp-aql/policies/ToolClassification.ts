@@ -57,6 +57,7 @@ export interface CliToolPolicyResult {
 const GATEKEEPER_ESSENTIAL_OPERATIONS = new Set([
   'confirm_operation',
   'verify_challenge',
+  'release_deadlock',
   'permission_prompt',
   'introspect',
   'get_active_elements',

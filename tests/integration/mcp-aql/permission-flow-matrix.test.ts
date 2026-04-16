@@ -133,6 +133,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
 
     it('should include verification flow operations', () => {
       expect(autoApproved).toContain('verify_challenge');
+      expect(autoApproved).toContain('release_deadlock');
       expect(autoApproved).toContain('beetlejuice_beetlejuice_beetlejuice');
     });
 

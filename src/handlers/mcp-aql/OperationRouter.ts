@@ -156,6 +156,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.verify',
     description: 'Submit verification code to unblock a danger zone operation',
   },
+  release_deadlock: {
+    endpoint: 'CREATE',
+    handler: 'Gatekeeper.releaseDeadlock',
+    description: 'Use out-of-band verification to deactivate all active elements and clear current-session activation state',
+  },
   // Issue #503: Beetlejuice safe-trigger for danger zone verification testing
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',

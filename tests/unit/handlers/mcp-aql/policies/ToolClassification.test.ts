@@ -150,6 +150,7 @@ describe('ToolClassification', () => {
         // These operations must never be blocked — they are the gatekeeper flow itself
         expect(classifyTool('mcp__DollhouseMCP__mcp_aql_create', { operation: 'confirm_operation' }).behavior).toBe('allow');
         expect(classifyTool('mcp__DollhouseMCP__mcp_aql_execute', { operation: 'verify_challenge' }).behavior).toBe('allow');
+        expect(classifyTool('mcp__DollhouseMCP__mcp_aql_create', { operation: 'release_deadlock' }).behavior).toBe('allow');
         expect(classifyTool('mcp__DollhouseMCP__mcp_aql_execute', { operation: 'permission_prompt' }).behavior).toBe('allow');
         expect(classifyTool('mcp__DollhouseMCP__mcp_aql_read', { operation: 'introspect' }).behavior).toBe('allow');
         expect(classifyTool('mcp__DollhouseMCP__mcp_aql_read', { operation: 'get_active_elements' }).behavior).toBe('allow');
