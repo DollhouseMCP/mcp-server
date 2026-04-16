@@ -1740,6 +1740,9 @@ codex_hooks = true`;
         });
         const json = await res.json();
         if (!res.ok) {
+          if (json.verificationRequired) {
+            showVerificationUI(body.email);
+          }
           if (statusEl) {
             statusEl.textContent = json.error || 'Failed to save';
             statusEl.className = 'license-form-status is-error';
@@ -1829,9 +1832,14 @@ codex_hooks = true`;
               verifyStatus.className = 'license-form-status is-success';
             }
             startCountdown(10 * 60);
-          } else if (verifyStatus) {
-            verifyStatus.textContent = json.error || 'Failed to resend';
-            verifyStatus.className = 'license-form-status is-error';
+          } else {
+            if (json.verificationRequired) {
+              startCountdown(10 * 60);
+            }
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Failed to resend';
+              verifyStatus.className = 'license-form-status is-error';
+            }
           }
         } catch (err) {
           console.debug('Resend failed:', err);
