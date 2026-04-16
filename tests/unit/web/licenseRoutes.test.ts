@@ -687,10 +687,12 @@ describe('License Routes — Email Verification', () => {
 
       expect(res.body.verificationRequired).toBe(true);
       expect(res.body.error).toMatch(/timed out/i);
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('workers.dev'),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      );
+      const workerCall = (globalThis.fetch as jest.Mock).mock.calls.find(([input]) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+        return url.includes('workers.dev/direct-verification');
+      });
+      expect(workerCall).toBeDefined();
+      expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('commercial license returns verificationRequired: true', async () => {
@@ -830,10 +832,12 @@ describe('License Routes — Email Verification', () => {
 
       expect(res.body.verificationRequired).toBe(true);
       expect(res.body.error).toMatch(/timed out/i);
-      expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('workers.dev'),
-        expect.objectContaining({ signal: expect.any(AbortSignal) }),
-      );
+      const workerCall = (globalThis.fetch as jest.Mock).mock.calls.find(([input]) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+        return url.includes('workers.dev/direct-verification');
+      });
+      expect(workerCall).toBeDefined();
+      expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
 
     it('generates a new code for pending license', async () => {

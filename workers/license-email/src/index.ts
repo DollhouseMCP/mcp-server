@@ -2,8 +2,9 @@
  * DollhouseMCP License Email Worker
  *
  * Receives PostHog webhook events for `license_activation` and sends
- * confirmation emails via MailChannels (Cloudflare's transactional email
- * partner — no additional account needed).
+ * confirmation emails. It also accepts direct verification-email requests
+ * from the local setup server on a separate public endpoint with cooldowns
+ * and rate limits.
  *
  * Setup:
  *   1. Deploy: `wrangler deploy`
@@ -16,6 +17,9 @@
  * Email sending uses the MailChannels API which is available to all
  * Cloudflare Workers. Requires DNS TXT record for SPF:
  *   dollhousemcp.com TXT "v=spf1 include:_spf.mx.cloudflare.net include:relay.mailchannels.net ~all"
+ *
+ * Direct verification requests should target:
+ *   https://dollhousemcp-license-email.<your-account>.workers.dev/direct-verification
  *
  * If MailChannels is unavailable, swap sendEmail() for Resend, SendGrid,
  * or any HTTP-based email API.
@@ -44,6 +48,137 @@ interface PostHogEvent {
     use_case?: string;
   };
   timestamp?: string;
+}
+
+const DIRECT_VERIFICATION_PATH = '/direct-verification';
+const DIRECT_IP_WINDOW_SECONDS = 60;
+const DIRECT_IP_MAX_REQUESTS = 5;
+const DIRECT_EMAIL_COOLDOWN_SECONDS = 60;
+const DIRECT_STORE_PREFIX = 'https://dollhouse-cache.local/license-email/';
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
+const memoryStore = new Map<string, { value: string; expiresAt: number }>();
+
+interface AbuseStore {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, ttlSeconds: number): Promise<void>;
+}
+
+function makeStoreRequest(key: string): Request {
+  return new Request(`${DIRECT_STORE_PREFIX}${key}`);
+}
+
+function getAbuseStore(): AbuseStore {
+  const cacheApi = globalThis.caches?.default;
+  if (cacheApi && typeof cacheApi.match === 'function' && typeof cacheApi.put === 'function') {
+    return {
+      async get(key: string): Promise<string | null> {
+        const response = await cacheApi.match(makeStoreRequest(key));
+        return response ? response.text() : null;
+      },
+      async put(key: string, value: string, ttlSeconds: number): Promise<void> {
+        await cacheApi.put(
+          makeStoreRequest(key),
+          new Response(value, {
+            headers: {
+              'Cache-Control': `max-age=${ttlSeconds}`,
+            },
+          }),
+        );
+      },
+    };
+  }
+
+  return {
+    async get(key: string): Promise<string | null> {
+      const entry = memoryStore.get(key);
+      if (!entry) return null;
+      if (entry.expiresAt <= Date.now()) {
+        memoryStore.delete(key);
+        return null;
+      }
+      return entry.value;
+    },
+    async put(key: string, value: string, ttlSeconds: number): Promise<void> {
+      memoryStore.set(key, {
+        value,
+        expiresAt: Date.now() + ttlSeconds * 1000,
+      });
+    },
+  };
+}
+
+function normalizeEmail(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function getClientIp(request: Request): string {
+  const header = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown';
+  return header.split(',')[0]?.trim() || 'unknown';
+}
+
+function parseIpWindowCounter(raw: string | null): { count: number; resetAt: number } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { count?: number; resetAt?: number };
+    if (typeof parsed.count !== 'number' || typeof parsed.resetAt !== 'number') {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function validateDirectVerificationEvent(event: PostHogEvent): string | null {
+  if (event.event !== 'license_activation') {
+    return 'Direct verification endpoint only accepts license_activation events.';
+  }
+
+  const { tier, email, event_type, verification_code } = event.properties ?? {};
+  if (tier !== 'free-commercial' && tier !== 'paid-commercial') {
+    return 'Missing required fields: tier, email';
+  }
+  if (!EMAIL_PATTERN.test(normalizeEmail(email))) {
+    return 'Missing required fields: tier, email';
+  }
+  if (event_type !== 'verification') {
+    return 'Direct verification endpoint only accepts verification events.';
+  }
+  if (!VERIFICATION_CODE_PATTERN.test(typeof verification_code === 'string' ? verification_code : '')) {
+    return 'Missing required verification_code for verification event';
+  }
+  return null;
+}
+
+async function enforceDirectVerificationLimits(request: Request, email: string): Promise<Response | null> {
+  const store = getAbuseStore();
+  const normalizedEmail = normalizeEmail(email);
+  const emailKey = `email:${encodeURIComponent(normalizedEmail)}`;
+  if (await store.get(emailKey)) {
+    return new Response('Please wait before requesting another verification email.', { status: 429 });
+  }
+
+  const ip = getClientIp(request);
+  const ipKey = `ip:${encodeURIComponent(ip)}`;
+  const now = Date.now();
+  const existingWindow = parseIpWindowCounter(await store.get(ipKey));
+  const windowCounter = existingWindow && existingWindow.resetAt > now
+    ? existingWindow
+    : { count: 0, resetAt: now + DIRECT_IP_WINDOW_SECONDS * 1000 };
+
+  if (windowCounter.count >= DIRECT_IP_MAX_REQUESTS) {
+    return new Response('Too many verification requests. Please try again later.', { status: 429 });
+  }
+
+  windowCounter.count += 1;
+  const remainingWindowSeconds = Math.max(1, Math.ceil((windowCounter.resetAt - now) / 1000));
+  await Promise.all([
+    store.put(ipKey, JSON.stringify(windowCounter), remainingWindowSeconds),
+    store.put(emailKey, '1', DIRECT_EMAIL_COOLDOWN_SECONDS),
+  ]);
+
+  return null;
 }
 
 /** Handle verification event: send verification code email. */
@@ -96,18 +231,51 @@ export default {
       return new Response('Method not allowed', { status: 405 });
     }
 
-    if (env.POSTHOG_WEBHOOK_SECRET) {
-      const secret = request.headers.get('x-posthog-secret');
-      if (secret !== env.POSTHOG_WEBHOOK_SECRET) {
-        return new Response('Unauthorized', { status: 401 });
-      }
-    }
+    const url = new URL(request.url);
 
     let event: PostHogEvent;
     try {
       event = await request.json() as PostHogEvent;
     } catch {
       return new Response('Invalid JSON', { status: 400 });
+    }
+
+    if (url.pathname === DIRECT_VERIFICATION_PATH) {
+      const validationError = validateDirectVerificationEvent(event);
+      if (validationError) {
+        return new Response(validationError, { status: 400 });
+      }
+
+      const rateLimitResponse = await enforceDirectVerificationLimits(request, event.properties.email);
+      if (rateLimitResponse) {
+        return rateLimitResponse;
+      }
+
+      try {
+        await handleVerification(event.properties, env);
+        return new Response(JSON.stringify({
+          success: true,
+          tier: event.properties.tier,
+          email: event.properties.email,
+          event_type: 'verification',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      } catch (error) {
+        console.error('License email worker error:', error);
+        return new Response(JSON.stringify({ error: 'Email delivery failed', success: false }), {
+          status: 500,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
+    if (env.POSTHOG_WEBHOOK_SECRET) {
+      const secret = request.headers.get('x-posthog-secret');
+      if (secret !== env.POSTHOG_WEBHOOK_SECRET) {
+        return new Response('Unauthorized', { status: 401 });
+      }
     }
 
     if (event.event !== 'license_activation') {

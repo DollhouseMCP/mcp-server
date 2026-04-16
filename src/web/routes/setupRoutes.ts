@@ -47,6 +47,7 @@ function isMissingPathError(error: unknown): boolean {
 // src/telemetry/OperationalTelemetry.ts. Verified write-only 2026-04-07.
 // Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
+const LICENSE_WORKER_DIRECT_PATH = '/direct-verification';
 
 /** Supported client identifiers for one-click setup. */
 const ALLOWED_CLIENTS = new Set([
@@ -465,15 +466,13 @@ async function sendLicenseWorkerVerificationEmail(
   verificationCode: string,
   distinctId: string,
 ): Promise<{ ok: true } | { ok: false; status?: number; error: string; responseBody?: string }> {
-  const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL;
-  const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
+  const workerUrl = new URL(LICENSE_WORKER_DIRECT_PATH, process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL);
 
   try {
     const response = await fetch(workerUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
       },
       body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
       signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
