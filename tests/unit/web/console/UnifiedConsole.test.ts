@@ -443,6 +443,7 @@ describe('resolveFollowerAuthority', () => {
   });
 
   it('follows the actual port owner when split-brain is present but replacement is not preferred', async () => {
+    const actualOwnerVersion = '999.0.0';
     const electedLeader: ConsoleLeaderInfo = {
       version: 1,
       pid: 77290,
@@ -450,7 +451,7 @@ describe('resolveFollowerAuthority', () => {
       sessionId: 'lock-holder',
       startedAt: '2026-04-16T13:55:09.000Z',
       heartbeat: '2026-04-16T16:29:44.000Z',
-      serverVersion: '2.0.23',
+      serverVersion: actualOwnerVersion,
       consoleProtocolVersion: 1,
     };
 
@@ -469,7 +470,7 @@ describe('resolveFollowerAuthority', () => {
           sessionId: 'actual-owner',
           startedAt: '2026-04-16T16:29:44.000Z',
           heartbeat: '2026-04-16T16:29:44.000Z',
-          serverVersion: '2.0.23',
+          serverVersion: actualOwnerVersion,
           consoleProtocolVersion: 1,
         },
       }),
@@ -484,7 +485,7 @@ describe('resolveFollowerAuthority', () => {
         sessionId: 'actual-owner',
         startedAt: '2026-04-16T16:29:44.000Z',
         heartbeat: '2026-04-16T16:29:44.000Z',
-        serverVersion: '2.0.23',
+        serverVersion: actualOwnerVersion,
         consoleProtocolVersion: 1,
       },
     });
