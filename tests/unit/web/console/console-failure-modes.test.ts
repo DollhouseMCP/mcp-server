@@ -13,6 +13,14 @@
 import { describe, it, expect, jest } from '@jest/globals';
 import * as net from 'node:net';
 
+function parseRequestBody(body: RequestInit['body'] | undefined): Record<string, unknown> {
+  if (typeof body !== 'string') {
+    return {};
+  }
+
+  return JSON.parse(body) as Record<string, unknown>;
+}
+
 // ─── LeaderElection: stale lock detection ────────────────────────────────────
 
 describe('Console Failure Modes', () => {
@@ -474,7 +482,7 @@ describe('Console Failure Modes', () => {
         await heartbeat.stop();
 
         const firstCall = fetchSpy.mock.calls[0];
-        const body = JSON.parse(String((firstCall?.[1] as RequestInit | undefined)?.body ?? '{}'));
+        const body = parseRequestBody((firstCall?.[1] as RequestInit | undefined)?.body);
         expect(body.serverVersion).toBe(PACKAGE_VERSION);
         expect(body.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
       } finally {

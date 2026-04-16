@@ -30,28 +30,71 @@
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
   var lastReloadTargetVersion = '';
 
+  function parseSemver(version) {
+    if (typeof version !== 'string') return null;
+    var trimmed = version.trim();
+    var match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(trimmed);
+    if (!match) return null;
+    return {
+      normalized: trimmed,
+      major: parseInt(match[1], 10) || 0,
+      minor: parseInt(match[2], 10) || 0,
+      patch: parseInt(match[3], 10) || 0,
+      prerelease: match[4] ? match[4].split('.') : [],
+    };
+  }
+
   function normalizeSemver(version) {
-    return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version)
-      ? version
-      : '';
+    var parsed = parseSemver(version);
+    return parsed ? parsed.normalized : '';
+  }
+
+  function comparePrereleaseParts(partsA, partsB) {
+    var maxLength = Math.max(partsA.length, partsB.length);
+    if (!maxLength) return 0;
+    for (var i = 0; i < maxLength; i++) {
+      var a = partsA[i];
+      var b = partsB[i];
+      if (a === undefined) return -1;
+      if (b === undefined) return 1;
+
+      var aIsNumeric = /^\d+$/.test(a);
+      var bIsNumeric = /^\d+$/.test(b);
+      if (aIsNumeric && bIsNumeric) {
+        var aNumber = parseInt(a, 10);
+        var bNumber = parseInt(b, 10);
+        if (aNumber < bNumber) return -1;
+        if (aNumber > bNumber) return 1;
+        continue;
+      }
+
+      if (aIsNumeric) return -1;
+      if (bIsNumeric) return 1;
+
+      var lexical = a.localeCompare(b);
+      if (lexical !== 0) return lexical;
+    }
+    return 0;
   }
 
   function compareSemver(versionA, versionB) {
-    var a = normalizeSemver(versionA);
-    var b = normalizeSemver(versionB);
+    var a = parseSemver(versionA);
+    var b = parseSemver(versionB);
     if (!a && !b) return 0;
     if (!a) return -1;
     if (!b) return 1;
-    var aParts = a.replace(/^v/, '').split('-')[0].split('.');
-    var bParts = b.replace(/^v/, '').split('-')[0].split('.');
-    var maxLength = Math.max(aParts.length, bParts.length);
-    for (var i = 0; i < maxLength; i++) {
-      var aPart = parseInt(aParts[i] || '0', 10) || 0;
-      var bPart = parseInt(bParts[i] || '0', 10) || 0;
+    var versionKeys = ['major', 'minor', 'patch'];
+    for (var i = 0; i < versionKeys.length; i++) {
+      var key = versionKeys[i];
+      var aPart = a[key];
+      var bPart = b[key];
       if (aPart < bPart) return -1;
       if (aPart > bPart) return 1;
     }
-    return 0;
+
+    if (!a.prerelease.length && b.prerelease.length) return 1;
+    if (a.prerelease.length && !b.prerelease.length) return -1;
+    return comparePrereleaseParts(a.prerelease, b.prerelease);
   }
 
   function getCurrentConsoleVersion() {

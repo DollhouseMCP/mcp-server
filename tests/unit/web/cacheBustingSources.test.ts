@@ -28,6 +28,6 @@ describe('cache busting source wiring', () => {
     expect(appJs).toContain('dollhousemcp-last-forced-reload');
     expect(appJs).toContain('buildCacheBustedConsoleUrl');
     expect(appJs).toContain('globalThis.DollhouseConsole.forceReload = forceConsoleReload');
-    expect(appJs).toContain("window.DollhouseConsole.forceReload(\\'session-expired\\')");
+    expect(appJs).toContain(String.raw`window.DollhouseConsole.forceReload(\'session-expired\')`);
   });
 });

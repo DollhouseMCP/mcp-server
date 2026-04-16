@@ -437,16 +437,16 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('has setup.css linked', () => {
-      expect(html).toContain('href="setup.css"');
+      expect(html).toContain('href="setup.css?v={{DOLLHOUSE_ASSET_VERSION}}"');
     });
 
     it('has setup.js loaded', () => {
-      expect(html).toContain('src="setup.js"');
+      expect(html).toContain('src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
     });
 
     it('loads setup.js before app.js', () => {
-      const setupIdx = html.indexOf('src="setup.js"');
-      const appIdx = html.indexOf('src="app.js"');
+      const setupIdx = html.indexOf('src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
+      const appIdx = html.indexOf('src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
       expect(setupIdx).toBeLessThan(appIdx);
     });
   });

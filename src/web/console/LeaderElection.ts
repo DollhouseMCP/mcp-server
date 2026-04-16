@@ -286,7 +286,13 @@ export async function readLeaderLock(): Promise<ConsoleLeaderInfo | null> {
       return null;
     }
     return data;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      logger.debug('[LeaderElection] Ignoring unreadable or invalid leader lock', {
+        lockFile: LOCK_FILE,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return null;
   }
 }

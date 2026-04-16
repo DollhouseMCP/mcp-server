@@ -127,4 +127,30 @@ describe('sessions.js forced reload path', () => {
       env.cleanup();
     }
   });
+
+  it('treats a stable release as newer than a prerelease of the same version', async () => {
+    const env = await createBrowserEnv({
+      currentVersion: '2.0.18-beta.1',
+      sessions: [{
+        sessionId: 'leader-1',
+        displayName: 'Kermit',
+        color: '#00aa00',
+        pid: 1234,
+        startedAt: new Date().toISOString(),
+        lastHeartbeat: new Date().toISOString(),
+        status: 'active',
+        isLeader: true,
+        authenticated: true,
+        kind: 'mcp',
+        serverVersion: '2.0.18',
+        consoleProtocolVersion: 1,
+      }],
+    });
+
+    try {
+      expect(env.reloadSpy).toHaveBeenCalledWith('leader-upgraded', '2.0.18');
+    } finally {
+      env.cleanup();
+    }
+  });
 });
