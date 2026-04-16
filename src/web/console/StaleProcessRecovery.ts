@@ -104,8 +104,8 @@ function isDollhouseProcessCommand(cmdLine: string): boolean {
 function parsePidToken(value: string): number | null {
   if (!value) return null;
   for (let i = 0; i < value.length; i++) {
-    const code = value.charCodeAt(i);
-    if (code < 48 || code > 57) {
+    const codePoint = value.codePointAt(i);
+    if (codePoint === undefined || codePoint < 48 || codePoint > 57) {
       return null;
     }
   }
@@ -119,6 +119,85 @@ function parsePidToken(value: string): number | null {
 
 function isWhitespaceChar(value: string): boolean {
   return value === ' ' || value === '\t' || value === '\n' || value === '\r' || value === '\f' || value === '\v';
+}
+
+function buildKillOutcome(
+  killed: boolean,
+  reason: KillStaleProcessOutcome['reason'],
+  processInfo: ProcessInspection,
+  parentCommand?: string,
+  detail?: string,
+): KillStaleProcessOutcome {
+  return {
+    killed,
+    reason,
+    pid: processInfo.pid,
+    parentPid: processInfo.parentPid,
+    command: processInfo.command,
+    parentCommand,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+async function getKillGuardFailure(
+  processInfo: ProcessInspection,
+  port: number,
+): Promise<KillStaleProcessOutcome | null> {
+  const currentUser = (await import('node:os')).userInfo().username;
+  if (processInfo.user !== currentUser) {
+    await logger.warn(`[WebUI] Port ${port} held by different user (pid ${processInfo.pid}) — not killing`);
+    return buildKillOutcome(false, 'different_user', processInfo);
+  }
+
+  if (!isDollhouseProcessCommand(processInfo.command)) {
+    await logger.warn(`[WebUI] Port ${port} held by non-DollhouseMCP process (pid ${processInfo.pid}) — not killing`, {
+      cmdLine: processInfo.command,
+    });
+    return buildKillOutcome(false, 'not_dollhouse_process', processInfo);
+  }
+
+  if (processInfo.parentPid <= ROOT_PARENT_PID || !isPidAlive(processInfo.parentPid)) {
+    return null;
+  }
+
+  const parentCommand = (await getProcessCommand(processInfo.parentPid)) ?? undefined;
+  if (parentCommand && isRecognizedMcpHostParent(parentCommand)) {
+    await logger.warn(`[WebUI] Port ${port} held by active client-backed DollhouseMCP process (pid ${processInfo.pid}) — not killing`, {
+      cmdLine: processInfo.command,
+      parentPid: processInfo.parentPid,
+      parentCommand,
+    });
+    return buildKillOutcome(false, 'active_host_parent', processInfo, parentCommand);
+  }
+
+  return null;
+}
+
+async function terminateProcess(
+  processInfo: ProcessInspection,
+  port: number,
+  parentCommand?: string,
+): Promise<KillStaleProcessOutcome> {
+  process.kill(processInfo.pid, 'SIGTERM');
+  logger.warn(`[WebUI] Sent SIGTERM to stale process ${processInfo.pid} on port ${port}`, {
+    cmdLine: processInfo.command,
+    parentPid: processInfo.parentPid,
+    parentCommand,
+  });
+
+  for (let i = 0; i < KILL_POLL_COUNT; i++) {
+    await new Promise(r => setTimeout(r, SIGTERM_POLL_MS));
+    if (!isPidAlive(processInfo.pid)) {
+      return buildKillOutcome(true, 'terminated', processInfo, parentCommand);
+    }
+  }
+
+  process.kill(processInfo.pid, 'SIGKILL');
+  logger.warn(`[WebUI] Sent SIGKILL to stale process ${processInfo.pid} on port ${port}`);
+  await new Promise(r => setTimeout(r, SIGKILL_WAIT_MS));
+  return isPidAlive(processInfo.pid)
+    ? buildKillOutcome(false, 'still_alive', processInfo, parentCommand)
+    : buildKillOutcome(true, 'terminated', processInfo, parentCommand);
 }
 
 function splitProcessInspectionFields(line: string): string[] | null {
@@ -256,104 +335,23 @@ export async function killStaleProcessDetailed(pid: number, port: number): Promi
     return { killed: false, reason: 'inspect_failed', pid };
   }
 
-  const currentUser = (await import('node:os')).userInfo().username;
-  if (processInfo.user !== currentUser) {
-    await logger.warn(`[WebUI] Port ${port} held by different user (pid ${pid}) — not killing`);
-    return { killed: false, reason: 'different_user', pid, parentPid: processInfo.parentPid, command: processInfo.command };
+  const guardFailure = await getKillGuardFailure(processInfo, port);
+  if (guardFailure) {
+    return guardFailure;
   }
-
-  if (!isDollhouseProcessCommand(processInfo.command)) {
-    await logger.warn(`[WebUI] Port ${port} held by non-DollhouseMCP process (pid ${pid}) — not killing`, {
-      cmdLine: processInfo.command,
-    });
-    return {
-      killed: false,
-      reason: 'not_dollhouse_process',
-      pid,
-      parentPid: processInfo.parentPid,
-      command: processInfo.command,
-    };
-  }
-
-  let parentCommand: string | undefined;
-  if (processInfo.parentPid > ROOT_PARENT_PID && isPidAlive(processInfo.parentPid)) {
-    parentCommand = (await getProcessCommand(processInfo.parentPid)) ?? undefined;
-    if (parentCommand && isRecognizedMcpHostParent(parentCommand)) {
-      await logger.warn(`[WebUI] Port ${port} held by active client-backed DollhouseMCP process (pid ${pid}) — not killing`, {
-        cmdLine: processInfo.command,
-        parentPid: processInfo.parentPid,
-        parentCommand,
-      });
-      return {
-        killed: false,
-        reason: 'active_host_parent',
-        pid,
-        parentPid: processInfo.parentPid,
-        command: processInfo.command,
-        parentCommand,
-      };
-    }
-  }
+  const parentCommand = processInfo.parentPid > ROOT_PARENT_PID
+    ? (await getProcessCommand(processInfo.parentPid)) ?? undefined
+    : undefined;
 
   await logger.debug(`[WebUI] Verified stale process ${pid} is DollhouseMCP`, { cmdLine: processInfo.command, parentPid: processInfo.parentPid, parentCommand });
 
   try {
-    process.kill(pid, 'SIGTERM');
-    logger.warn(`[WebUI] Sent SIGTERM to stale process ${pid} on port ${port}`, { cmdLine: processInfo.command, parentPid: processInfo.parentPid, parentCommand });
-    for (let i = 0; i < KILL_POLL_COUNT; i++) {
-      await new Promise(r => setTimeout(r, SIGTERM_POLL_MS));
-      if (!isPidAlive(pid)) {
-        return {
-          killed: true,
-          reason: 'terminated',
-          pid,
-          parentPid: processInfo.parentPid,
-          command: processInfo.command,
-          parentCommand,
-        };
-      }
-    }
-    process.kill(pid, 'SIGKILL');
-    logger.warn(`[WebUI] Sent SIGKILL to stale process ${pid} on port ${port}`);
-    await new Promise(r => setTimeout(r, SIGKILL_WAIT_MS));
-    if (!isPidAlive(pid)) {
-      return {
-        killed: true,
-        reason: 'terminated',
-        pid,
-        parentPid: processInfo.parentPid,
-        command: processInfo.command,
-        parentCommand,
-      };
-    }
-    return {
-      killed: false,
-      reason: 'still_alive',
-      pid,
-      parentPid: processInfo.parentPid,
-      command: processInfo.command,
-      parentCommand,
-    };
+    return await terminateProcess(processInfo, port, parentCommand);
   } catch (err) {
     if (!isPidAlive(pid)) {
-      return {
-        killed: true,
-        reason: 'already_dead',
-        pid,
-        parentPid: processInfo.parentPid,
-        command: processInfo.command,
-        parentCommand,
-      };
+      return buildKillOutcome(true, 'already_dead', processInfo, parentCommand);
     }
-    return {
-      killed: false,
-      reason: 'signal_failed',
-      pid,
-      parentPid: processInfo.parentPid,
-      command: processInfo.command,
-      parentCommand,
-      detail: err instanceof Error ? err.message : String(err),
-    };
+    return buildKillOutcome(false, 'signal_failed', processInfo, parentCommand, err instanceof Error ? err.message : String(err));
   }
 }
 

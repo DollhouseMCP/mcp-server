@@ -171,6 +171,61 @@ interface DiscoveryDependencies {
   readLeaderLockImpl?: typeof readLeaderLock;
 }
 
+function buildDiscoveryHeaders(authToken: string | null): Record<string, string> {
+  return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+function buildLeaderInfoFromSession(port: number, ownerPid: number, leaderSession: SessionApiRecord): ConsoleLeaderInfo {
+  return {
+    version: LOCK_VERSION,
+    pid: ownerPid,
+    port,
+    sessionId: UnicodeValidator.normalize(leaderSession.sessionId).normalizedContent,
+    startedAt: leaderSession.startedAt ?? currentTimestamp(),
+    heartbeat: leaderSession.lastHeartbeat ?? currentTimestamp(),
+    serverVersion: leaderSession.serverVersion ?? LEGACY_SERVER_VERSION,
+    consoleProtocolVersion: leaderSession.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+  };
+}
+
+function buildSyntheticLeaderInfo(port: number, ownerPid: number): ConsoleLeaderInfo {
+  const now = currentTimestamp();
+  return {
+    version: LOCK_VERSION,
+    pid: ownerPid,
+    port,
+    sessionId: `${SYNTHETIC_PORT_OWNER_SESSION_PREFIX}${ownerPid}`,
+    startedAt: now,
+    heartbeat: now,
+    serverVersion: LEGACY_SERVER_VERSION,
+    consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+  };
+}
+
+async function discoverLeaderViaSessionsApi(
+  port: number,
+  ownerPid: number,
+  authToken: string | null,
+  fetchImpl: typeof fetch,
+): Promise<ConsoleLeaderInfo | null> {
+  const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, {
+    headers: buildDiscoveryHeaders(authToken),
+  });
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = await response.json() as { sessions?: SessionApiRecord[] };
+  const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
+  const leaderSession = sessions.find((session) =>
+    session.pid === ownerPid &&
+    session.isLeader === true &&
+    session.kind === 'mcp' &&
+    session.status !== 'stopped'
+  );
+  return leaderSession ? buildLeaderInfoFromSession(port, ownerPid, leaderSession) : null;
+}
+
 export async function discoverLeaderServingPort(
   port: number,
   authToken: string | null,
@@ -183,37 +238,9 @@ export async function discoverLeaderServingPort(
 
   if (ownerPid !== null) {
     try {
-      const headers: Record<string, string> = {};
-      if (authToken) {
-        headers.Authorization = `Bearer ${authToken}`;
-      }
-      const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, { headers });
-      if (response.ok) {
-        const payload = await response.json() as { sessions?: SessionApiRecord[] };
-        const sessions = Array.isArray(payload.sessions) ? payload.sessions : [];
-        const leaderSession = sessions.find((session) =>
-          session.pid === ownerPid &&
-          session.isLeader === true &&
-          session.kind === 'mcp' &&
-          session.status !== 'stopped'
-        );
-        if (leaderSession) {
-          const normalizedSessionId = UnicodeValidator.normalize(leaderSession.sessionId).normalizedContent;
-          return {
-            ownerPid,
-            source: 'api',
-            leaderInfo: {
-              version: LOCK_VERSION,
-              pid: ownerPid,
-              port,
-              sessionId: normalizedSessionId,
-              startedAt: leaderSession.startedAt ?? currentTimestamp(),
-              heartbeat: leaderSession.lastHeartbeat ?? currentTimestamp(),
-              serverVersion: leaderSession.serverVersion ?? LEGACY_SERVER_VERSION,
-              consoleProtocolVersion: leaderSession.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
-            },
-          };
-        }
+      const leaderInfo = await discoverLeaderViaSessionsApi(port, ownerPid, authToken, fetchImpl);
+      if (leaderInfo) {
+        return { ownerPid, source: 'api', leaderInfo };
       }
     } catch (err) {
       logger.debug('[UnifiedConsole] Failed to query active leader sessions', {
@@ -225,7 +252,7 @@ export async function discoverLeaderServingPort(
   }
 
   const lock = await readLeaderLockImpl();
-  if (lock && lock.port === port && (ownerPid === null || lock.pid === ownerPid)) {
+  if (lock?.port === port && (ownerPid === null || lock.pid === ownerPid)) {
     return {
       ownerPid: ownerPid ?? lock.pid,
       source: 'lock',
@@ -237,20 +264,10 @@ export async function discoverLeaderServingPort(
   }
 
   if (ownerPid !== null) {
-    const now = currentTimestamp();
     return {
       ownerPid,
       source: 'synthetic',
-      leaderInfo: {
-        version: LOCK_VERSION,
-        pid: ownerPid,
-        port,
-        sessionId: `${SYNTHETIC_PORT_OWNER_SESSION_PREFIX}${ownerPid}`,
-        startedAt: now,
-        heartbeat: now,
-        serverVersion: LEGACY_SERVER_VERSION,
-        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
-      },
+      leaderInfo: buildSyntheticLeaderInfo(port, ownerPid),
     };
   }
 
@@ -279,17 +296,15 @@ export async function recoverLeaderBindFailure(
   let lockCleanupAttempted = false;
   let lockCleanupPerformed = false;
   const currentLock = await readLeaderLockImpl();
-  const provisionalLockMatches = Boolean(
-    currentLock &&
-    currentLock.pid === provisionalLeader.pid &&
+  const provisionalLockMatches = (
+    currentLock?.pid === provisionalLeader.pid &&
     currentLock.port === provisionalLeader.port &&
-    currentLock.sessionId === provisionalLeader.sessionId,
+    currentLock.sessionId === provisionalLeader.sessionId
   );
-  const fallbackPointsToProvisionalLeader = Boolean(
-    fallback.leaderInfo &&
-    fallback.leaderInfo.pid === provisionalLeader.pid &&
+  const fallbackPointsToProvisionalLeader = (
+    fallback.leaderInfo?.pid === provisionalLeader.pid &&
     fallback.leaderInfo.port === provisionalLeader.port &&
-    fallback.leaderInfo.sessionId === provisionalLeader.sessionId,
+    fallback.leaderInfo.sessionId === provisionalLeader.sessionId
   );
 
   if (provisionalLockMatches) {
@@ -493,15 +508,15 @@ async function startAsFollower(
   options: UnifiedConsoleOptions,
   election: ElectionResult,
   consolePort: number = DEFAULT_CONSOLE_PORT,
-  initialAuthToken?: string | null,
+  initialAuthToken: string | null = null,
 ): Promise<UnifiedConsoleResult> {
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
   // Read the console auth token (#1780) written by the leader. May be null
   // if the file doesn't exist yet — the sinks handle that gracefully and
   // simply omit the Bearer header, which is fine when auth is not enforced.
-  let authToken = initialAuthToken ?? null;
-  if (authToken === null || authToken === undefined) {
+  let authToken = initialAuthToken;
+  if (authToken === null) {
     const { getPrimaryTokenFromFile } = await import('./consoleToken.js');
     authToken = await getPrimaryTokenFromFile(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
   }
