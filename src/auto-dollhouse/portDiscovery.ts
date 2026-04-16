@@ -9,12 +9,21 @@
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, writeFile, unlink, readFile } from 'node:fs/promises';
 
 const MAX_PORT_ATTEMPTS = 10;
 
 /** Directory for runtime state files (port discovery, PID files) */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
+const LATEST_PORT_FILENAME = 'permission-server.port';
+
+function pidPortFilePath(dir: string = RUN_DIR, pid: number = process.pid): string {
+  return join(dir, `permission-server-${pid}.port`);
+}
+
+function latestPortFilePath(dir: string = RUN_DIR): string {
+  return join(dir, LATEST_PORT_FILENAME);
+}
 
 /** Track port file path for cleanup */
 let portFilePath: string | null = null;
@@ -53,12 +62,35 @@ export async function findAvailablePort(startPort: number): Promise<number> {
  */
 export async function writePortFile(port: number): Promise<string> {
   await mkdir(RUN_DIR, { recursive: true });
-  const pidFile = join(RUN_DIR, `permission-server-${process.pid}.port`);
-  const latestFile = join(RUN_DIR, 'permission-server.port');
+  const pidFile = pidPortFilePath();
+  const latestFile = latestPortFilePath();
   await writeFile(pidFile, String(port), 'utf-8');
   await writeFile(latestFile, String(port), 'utf-8');
   portFilePath = pidFile;
   return pidFile;
+}
+
+/**
+ * Restore or update the shared latest port file for the active listener.
+ */
+export async function ensureLatestPortFile(port: number, customDir?: string): Promise<boolean> {
+  const dir = customDir || RUN_DIR;
+  const latestFile = latestPortFilePath(dir);
+  const desiredValue = String(port);
+
+  await mkdir(dir, { recursive: true });
+
+  try {
+    const existingValue = (await readFile(latestFile, 'utf-8')).trim();
+    if (existingValue === desiredValue) {
+      return false;
+    }
+  } catch {
+    // Missing/unreadable file — rewrite below.
+  }
+
+  await writeFile(latestFile, desiredValue, 'utf-8');
+  return true;
 }
 
 /**

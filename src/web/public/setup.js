@@ -32,12 +32,64 @@
   const HOOK_BASE_SCRIPT = `#!/bin/bash
 # pretooluse-dollhouse.sh — shared hook bridge for DollhouseMCP
 
-PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+RUN_DIR="$HOME/.dollhouse/run"
+PORT_FILE="$RUN_DIR/permission-server.port"
 HOOK_PLATFORM="\${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
 
-[[ -f "$PORT_FILE" ]] || exit 0
-PORT=$(cat "$PORT_FILE" 2>/dev/null)
-[[ "$PORT" =~ ^[0-9]+$ ]] || exit 0
+read_port_from_file() {
+  local file_path="$1"
+  local port_value
+
+  [[ -f "$file_path" ]] || return 1
+  port_value=$(cat "$file_path" 2>/dev/null)
+  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\\n' "$port_value"
+}
+
+restore_latest_port_file() {
+  local port_value="$1"
+
+  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
+  mkdir -p "$RUN_DIR" 2>/dev/null || return 1
+  printf '%s' "$port_value" > "$PORT_FILE" 2>/dev/null || return 1
+}
+
+find_latest_live_pid_port_file() {
+  local candidate
+  local file_name
+  local pid
+
+  while IFS= read -r candidate; do
+    [[ -e "$candidate" ]] || continue
+    file_name="\${candidate##*/}"
+    pid="\${file_name#permission-server-}"
+    pid="\${pid%.port}"
+
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  done < <(ls -1t "$RUN_DIR"/permission-server-*.port 2>/dev/null || true)
+
+  return 1
+}
+
+resolve_permission_port() {
+  local candidate_file
+  local port_value
+
+  if port_value=$(read_port_from_file "$PORT_FILE"); then
+    printf '%s\\n' "$port_value"
+    return 0
+  fi
+
+  candidate_file=$(find_latest_live_pid_port_file) || return 1
+  port_value=$(read_port_from_file "$candidate_file") || return 1
+  restore_latest_port_file "$port_value" >/dev/null 2>&1 || true
+  printf '%s\\n' "$port_value"
+}
+
+PORT=$(resolve_permission_port) || exit 0
 
 INPUT=$(cat)
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
