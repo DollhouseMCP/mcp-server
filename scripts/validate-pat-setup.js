@@ -24,6 +24,12 @@ import {
 import fs from 'fs/promises';
 
 // Required scopes for full DollhouseMCP functionality
+const TOKEN_REJECTED_MESSAGE = 'GitHub rejected the token or could not validate it';
+const RATE_LIMIT_LOW_MESSAGE = 'Low GitHub rate limit remaining';
+const RATE_LIMIT_AVAILABLE_MESSAGE = 'GitHub rate limit information available';
+const RESET_TIME_AVAILABLE_MESSAGE = 'Reset time available';
+const ERROR_DETAILS_SUPPRESSED_MESSAGE = 'Error details were suppressed for safety';
+
 const REQUIRED_SCOPES = [
   { scope: 'repo', description: 'Full repository access (read/write)' },
   { scope: 'read:user', description: 'Read user profile information' },
@@ -145,7 +151,7 @@ async function checkTokenValidity(token) {
     
     if (!validation.valid) {
       printStatus('error', 'Token is invalid or expired');
-      console.log('   GitHub rejected the token or could not validate it');
+      console.log(`   ${TOKEN_REJECTED_MESSAGE}`);
       return { valid: false };
     }
     
@@ -157,11 +163,11 @@ async function checkTokenValidity(token) {
       const { remaining } = validation.rateLimit;
       
       if (remaining < 100) {
-        printStatus('warning', 'Low GitHub rate limit remaining');
-        console.log('   Reset time available');
+        printStatus('warning', RATE_LIMIT_LOW_MESSAGE);
+        console.log(`   ${RESET_TIME_AVAILABLE_MESSAGE}`);
       } else {
-        printStatus('success', 'GitHub rate limit information available');
-        console.log('   Reset time available');
+        printStatus('success', RATE_LIMIT_AVAILABLE_MESSAGE);
+        console.log(`   ${RESET_TIME_AVAILABLE_MESSAGE}`);
       }
     }
     
@@ -367,7 +373,7 @@ async function main() {
   } catch {
     console.log('');
     printStatus('error', 'Validation failed with unexpected error');
-    console.log('Error details were suppressed for safety');
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     console.log('');
     console.log('This might indicate:');
     console.log('  • Network connectivity issues');

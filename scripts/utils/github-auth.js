@@ -14,6 +14,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import { homedir } from 'os';
 
+const CONFIGURED_STORAGE_MESSAGE = '✅ Using OAuth token from configured storage';
+const GITHUB_AUTH_FAILED_ERROR = 'GitHub authentication failed';
+const GITHUB_AUTH_UNAVAILABLE_ERROR = 'Unable to validate GitHub authentication';
+const INVALID_TOKEN_DETAILS = '   GitHub rejected the token or authentication could not be verified';
+
 /**
  * Check if running in test mode (PAT available)
  */
@@ -44,7 +49,7 @@ export async function getAuthToken() {
       const token = await fs.readFile(tokenPath, 'utf-8');
       const trimmed = token.trim();
       if (trimmed && (trimmed.startsWith('gho_') || trimmed.startsWith('ghp_') || trimmed.startsWith('github_pat_'))) {
-        console.log('✅ Using OAuth token from configured storage');
+        console.log(CONFIGURED_STORAGE_MESSAGE);
         return trimmed;
       }
     } catch (error) {
@@ -77,7 +82,7 @@ export async function validateToken(token) {
     if (!response.ok) {
       return { 
         valid: false, 
-        error: 'GitHub authentication failed'
+        error: GITHUB_AUTH_FAILED_ERROR
       };
     }
     
@@ -109,7 +114,7 @@ export async function validateToken(token) {
   } catch {
     return {
       valid: false,
-      error: 'Unable to validate GitHub authentication'
+      error: GITHUB_AUTH_UNAVAILABLE_ERROR
     };
   }
 }
@@ -149,7 +154,7 @@ export async function showAuthStatus() {
   
   if (!validation.valid) {
     console.log('❌ Invalid token');
-    console.log('   GitHub rejected the token or authentication could not be verified');
+    console.log(INVALID_TOKEN_DETAILS);
     return false;
   }
   

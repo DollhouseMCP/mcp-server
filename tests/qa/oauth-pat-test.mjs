@@ -25,6 +25,10 @@ import { homedir } from 'os';
 
 // Required scopes for full functionality
 const REQUIRED_SCOPES = ['repo', 'read:user', 'user:email', 'read:org'];
+const TOKEN_TYPE_RECOGNIZED_MESSAGE = '         Token type recognized';
+const VALIDATION_FAILURE_REPORTED_MESSAGE = '         Validation failure was reported';
+const ERROR_DETAILS_SUPPRESSED_MESSAGE = '         Error details suppressed for safety';
+const RATE_LIMIT_ENDPOINT_SUCCESS_MESSAGE = '   Rate limit endpoint returned successfully';
 
 async function testPATAuthentication() {
   console.log('🔑 Testing PAT Authentication...\n');
@@ -60,7 +64,7 @@ async function testPATAuthentication() {
     console.log(`Test 3 - Token Retrieval: ${hasToken ? '✅ Success' : '⚠️  No Token'}`);
     if (hasToken && hasPAT) {
       passed++;
-      console.log('         Token type recognized');
+      console.log(TOKEN_TYPE_RECOGNIZED_MESSAGE);
     } else if (!hasToken && !hasPAT) {
       passed++;
       console.log('         No PAT set, no token retrieved (expected)');
@@ -168,7 +172,7 @@ async function testOAuthFallback() {
     console.log(`Test 2 - OAuth Token Search: ${token ? '✅ Found OAuth token' : '⚠️  No OAuth token'}`);
     
     if (token) {
-      console.log('         Token type recognized');
+      console.log(TOKEN_TYPE_RECOGNIZED_MESSAGE);
       passed++;
     } else {
       console.log('         No OAuth token found (expected if not set up)');
@@ -199,13 +203,13 @@ async function testErrorHandling() {
     console.log(`Test 1 - Invalid Token: ${!validation.valid ? '✅ Correctly rejected' : '❌ Incorrectly accepted'}`);
     if (!validation.valid) {
       passed++;
-      console.log('         Validation failure was reported');
+      console.log(VALIDATION_FAILURE_REPORTED_MESSAGE);
     } else {
       failed++;
     }
   } catch {
     console.log(`Test 1 - Invalid Token: ✅ Correctly threw error`);
-    console.log('         Error details suppressed for safety');
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     passed++;
   }
   
@@ -215,13 +219,13 @@ async function testErrorHandling() {
     console.log(`Test 2 - Empty Token: ${!validation.valid ? '✅ Correctly rejected' : '❌ Incorrectly accepted'}`);
     if (!validation.valid) {
       passed++;
-      console.log('         Validation failure was reported');
+      console.log(VALIDATION_FAILURE_REPORTED_MESSAGE);
     } else {
       failed++;
     }
   } catch {
     console.log(`Test 2 - Empty Token: ✅ Correctly threw error`);
-    console.log('         Error details suppressed for safety');
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     passed++;
   }
   
@@ -231,13 +235,13 @@ async function testErrorHandling() {
     console.log(`Test 3 - Null Token: ${!validation.valid ? '✅ Correctly rejected' : '❌ Incorrectly accepted'}`);
     if (!validation.valid) {
       passed++;
-      console.log('         Validation failure was reported');
+      console.log(VALIDATION_FAILURE_REPORTED_MESSAGE);
     } else {
       failed++;
     }
   } catch {
     console.log(`Test 3 - Null Token: ✅ Correctly handled error`);
-    console.log('         Error details suppressed for safety');
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     passed++;
   }
   
@@ -248,13 +252,13 @@ async function testErrorHandling() {
     console.log(`Test 4 - Fake Token: ${!validation.valid ? '✅ Correctly rejected' : '❌ Incorrectly accepted'}`);
     if (!validation.valid) {
       passed++;
-      console.log('         Validation failure was reported');
+      console.log(VALIDATION_FAILURE_REPORTED_MESSAGE);
     } else {
       failed++;
     }
   } catch {
     console.log(`Test 4 - Fake Token: ✅ Correctly threw error`);
-    console.log('         Error details suppressed for safety');
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     passed++;
   }
   
@@ -354,7 +358,7 @@ async function testRealGitHubAPI() {
       const rateLimitResponse = await fetch('https://api.github.com/rate_limit', { headers });
       if (rateLimitResponse.ok) {
         await rateLimitResponse.json();
-        console.log('   Rate limit endpoint returned successfully');
+        console.log(RATE_LIMIT_ENDPOINT_SUCCESS_MESSAGE);
       }
       
       return true;
