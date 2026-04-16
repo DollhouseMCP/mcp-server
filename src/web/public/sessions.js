@@ -23,11 +23,121 @@
   var SESSION_POLL_INTERVAL = getConfiguredNumber('sessionPollIntervalMs', 5000);
   var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
   var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
+  var LEADER_RELOAD_DEBOUNCE_MS = getConfiguredNumber('leaderReloadDebounceMs', 150);
   var sessions = [];
   var policySessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
+  var lastReloadTargetVersion = '';
+  var pendingLeaderReloadTimer = null;
+
+  function parseSemver(version) {
+    if (typeof version !== 'string') return null;
+    var trimmed = version.trim();
+    var match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(trimmed);
+    if (!match) return null;
+    return {
+      normalized: trimmed,
+      major: parseInt(match[1], 10) || 0,
+      minor: parseInt(match[2], 10) || 0,
+      patch: parseInt(match[3], 10) || 0,
+      prerelease: match[4] ? match[4].split('.') : [],
+    };
+  }
+
+  function normalizeSemver(version) {
+    var parsed = parseSemver(version);
+    return parsed ? parsed.normalized : '';
+  }
+
+  function comparePrereleaseParts(partsA, partsB) {
+    var maxLength = Math.max(partsA.length, partsB.length);
+    if (!maxLength) return 0;
+    for (var i = 0; i < maxLength; i++) {
+      var a = partsA[i];
+      var b = partsB[i];
+      if (a === undefined) return -1;
+      if (b === undefined) return 1;
+
+      var aIsNumeric = /^\d+$/.test(a);
+      var bIsNumeric = /^\d+$/.test(b);
+      if (aIsNumeric && bIsNumeric) {
+        var aNumber = parseInt(a, 10);
+        var bNumber = parseInt(b, 10);
+        if (aNumber < bNumber) return -1;
+        if (aNumber > bNumber) return 1;
+        continue;
+      }
+
+      if (aIsNumeric) return -1;
+      if (bIsNumeric) return 1;
+
+      var lexical = a.localeCompare(b);
+      if (lexical !== 0) return lexical;
+    }
+    return 0;
+  }
+
+  function compareSemver(versionA, versionB) {
+    var a = parseSemver(versionA);
+    var b = parseSemver(versionB);
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+    var versionKeys = ['major', 'minor', 'patch'];
+    for (var i = 0; i < versionKeys.length; i++) {
+      var key = versionKeys[i];
+      var aPart = a[key];
+      var bPart = b[key];
+      if (aPart < bPart) return -1;
+      if (aPart > bPart) return 1;
+    }
+
+    if (!a.prerelease.length && b.prerelease.length) return 1;
+    if (a.prerelease.length && !b.prerelease.length) return -1;
+    return comparePrereleaseParts(a.prerelease, b.prerelease);
+  }
+
+  function getCurrentConsoleVersion() {
+    var dc = window.DollhouseConsole;
+    if (dc && typeof dc.currentServerVersion === 'string') {
+      return normalizeSemver(dc.currentServerVersion);
+    }
+    var meta = document.querySelector('meta[name="dollhouse-server-version"]');
+    return normalizeSemver(meta ? meta.getAttribute('content') || '' : '');
+  }
+
+  /**
+   * Schedule a cache-busted reload when the session poller observes that a
+   * newer MCP leader is serving the console than the version loaded in this tab.
+   * A small debounce lets rapid leadership churn settle so the browser reloads
+   * directly into the newest compatible leader rather than bouncing through
+   * intermediate versions.
+   *
+   * @param {Array<Record<string, unknown>>} list
+   */
+  function maybeForceReloadForNewLeader(list) {
+    var dc = window.DollhouseConsole;
+    if (!dc || typeof dc.forceReload !== 'function' || !Array.isArray(list)) return;
+    var currentVersion = getCurrentConsoleVersion();
+    var leader = list.find(function(session) {
+      return session && session.status === 'active' && session.isLeader && session.kind === 'mcp';
+    });
+    if (!leader) return;
+    var leaderVersion = normalizeSemver(leader.serverVersion);
+    if (!leaderVersion) return;
+    if (compareSemver(leaderVersion, currentVersion) <= 0) return;
+    if (lastReloadTargetVersion === leaderVersion) return;
+    if (pendingLeaderReloadTimer) {
+      clearTimeout(pendingLeaderReloadTimer);
+    }
+    lastReloadTargetVersion = leaderVersion;
+    pendingLeaderReloadTimer = setTimeout(function() {
+      pendingLeaderReloadTimer = null;
+      dc.forceReload('leader-upgraded', leaderVersion);
+    }, LEADER_RELOAD_DEBOUNCE_MS);
+  }
 
   function formatUptime(startedAt) {
     if (!startedAt) return '';
@@ -535,6 +645,7 @@
     }).then(function(data) {
       if (data && data.sessions) {
         sessions = data.sessions;
+        maybeForceReloadForNewLeader(sessions);
         updateSessionIndicator();
         updateSessionFilterOptions();
         clearSessionsError();

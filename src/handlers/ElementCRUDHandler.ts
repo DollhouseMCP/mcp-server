@@ -18,6 +18,8 @@
  */
 
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
+import os from 'node:os';
+import path from 'node:path';
 import { SkillManager } from '../elements/skills/index.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
@@ -56,7 +58,11 @@ import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
-import { getGatekeeperDiagnostics } from './mcp-aql/policies/ElementPolicies.js';
+import {
+  findConfirmAdvisoryElements,
+  findConfirmDenyingElement,
+  getGatekeeperDiagnostics,
+} from './mcp-aql/policies/ElementPolicies.js';
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
@@ -556,6 +562,183 @@ export class ElementCRUDHandler {
         ? { sessionIds: Array.from(entry.sessionIds).sort((a, b) => a.localeCompare(b)) }
         : {}),
     }));
+  }
+
+  async releaseDeadlock(): Promise<{
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
+  }> {
+    const activeElements = await this.collectActiveElementsForDeadlockRelief();
+    const activePolicyElements = await this.getActiveElementsForPolicy();
+    const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
+    const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
+    const deactivated: Array<{ type: string; name: string }> = [];
+    const failed: Array<{ type: string; name: string; error: string }> = [];
+
+    for (const element of activeElements) {
+      const strategy = this.strategies.get(element.type);
+      if (!strategy) {
+        failed.push({
+          type: element.type,
+          name: element.name,
+          error: `No activation strategy registered for type '${element.type}'`,
+        });
+        continue;
+      }
+
+      try {
+        await strategy.deactivate(element.name);
+        deactivated.push(element);
+      } catch (error) {
+        failed.push({
+          type: element.type,
+          name: element.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const persistedStateCleared = Boolean(this.activationStore?.isEnabled());
+    const snapshotFile = await this.writeDeadlockReliefSnapshot({
+      sessionId: this.activationStore?.getSessionId(),
+      activeBeforeReset: activeElements,
+      deactivated,
+      failed,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      persistedStateCleared,
+    });
+
+    this.activationStore?.clearAll();
+    this.policyExportService?.exportPolicies().catch(() => {});
+
+    const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DEACTIVATED',
+      severity: failed.length > 0 ? 'MEDIUM' : 'LOW',
+      source: 'ElementCRUDHandler.releaseDeadlock',
+      details: `Deadlock relief deactivated ${deactivated.length} element(s)${failureSummary}`,
+      additionalData: {
+        sessionId: this.activationStore?.getSessionId(),
+        activeBeforeReset: activeElements,
+        deactivated,
+        failed,
+        persistedStateCleared,
+        likelyDeadlockCause: {
+          ...(sandboxingElement ? { sandboxingElement } : {}),
+          advisoryElements,
+        },
+        snapshotFile,
+      },
+    });
+
+    return {
+      ...(this.activationStore?.getSessionId()
+        ? { sessionId: this.activationStore.getSessionId() }
+        : {}),
+      activeBeforeReset: activeElements,
+      deactivated,
+      failed,
+      persistedStateCleared,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      ...(snapshotFile ? { snapshotFile } : {}),
+    };
+  }
+
+  private async collectActiveElementsForDeadlockRelief(): Promise<Array<{ type: string; name: string }>> {
+    const activeElements: Array<{ type: string; name: string }> = [];
+
+    const activePersonas = this.personaManager.getActivePersonas();
+    activeElements.push(...activePersonas.map((persona) => ({
+      type: ElementType.PERSONA,
+      name: persona.metadata.name,
+    })));
+
+    const activeSkills = await this.skillManager.getActiveSkills();
+    activeElements.push(...activeSkills.map((skill) => ({
+      type: ElementType.SKILL,
+      name: skill.metadata.name,
+    })));
+
+    const activeAgents = await this.agentManager.getActiveAgents();
+    activeElements.push(...activeAgents.map((agent) => ({
+      type: ElementType.AGENT,
+      name: agent.metadata.name,
+    })));
+
+    const activeMemories = await this.memoryManager.getActiveMemories();
+    activeElements.push(...activeMemories.map((memory) => ({
+      type: ElementType.MEMORY,
+      name: memory.metadata.name,
+    })));
+
+    const activeEnsembles = await this.ensembleManager.getActiveEnsembles();
+    activeElements.push(...activeEnsembles.map((ensemble) => ({
+      type: ElementType.ENSEMBLE,
+      name: ensemble.metadata.name,
+    })));
+
+    const seen = new Set<string>();
+    return activeElements.filter((element) => {
+      const key = `${element.type}:${element.name}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private async writeDeadlockReliefSnapshot(snapshot: {
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    persistedStateCleared: boolean;
+  }): Promise<string | undefined> {
+    const snapshotDir = path.join(os.homedir(), '.dollhouse', 'state', 'deadlock-relief');
+    const safeSessionId = (snapshot.sessionId ?? 'session')
+      .replaceAll(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 64);
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+    const snapshotFile = path.join(snapshotDir, `deadlock-relief-${safeSessionId}-${timestamp}.json`);
+
+    try {
+      await this.fileOperations.createDirectory(snapshotDir);
+      await this.fileOperations.writeFile(
+        snapshotFile,
+        JSON.stringify({
+          createdAt: new Date().toISOString(),
+          ...snapshot,
+        }, null, 2),
+        { source: 'ElementCRUDHandler.releaseDeadlock' },
+      );
+      return snapshotFile;
+    } catch (error) {
+      logger.warn('Failed to write deadlock relief snapshot', {
+        snapshotFile,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async mergePersistedPolicyState(

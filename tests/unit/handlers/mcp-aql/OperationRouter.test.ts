@@ -22,6 +22,7 @@ describe('OperationRouter', () => {
         'import_element',
         'addEntry',
         'verify_challenge',
+        'release_deadlock',
         'beetlejuice_beetlejuice_beetlejuice',
         'install_collection_content',
         'submit_collection_content',
@@ -166,6 +167,7 @@ describe('OperationRouter', () => {
       expect(createOps.length).toBeGreaterThan(0);
       expect(createOps).toContain('create_element');
       expect(createOps).toContain('record_execution_step');
+      expect(createOps).toContain('release_deadlock');
     });
   });
 
