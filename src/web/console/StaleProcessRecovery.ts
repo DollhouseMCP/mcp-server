@@ -298,19 +298,34 @@ export async function findPidOnPort(port: number): Promise<number | null> {
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFileCb);
 
-  // Try lsof first (macOS + most Linux), fall back to fuser (minimal Linux/Docker)
+  // Query only LISTEN sockets so established client connections to the console
+  // don't get mistaken for the owning leader process.
   for (const cmd of [
-    { bin: 'lsof', args: ['-ti', `:${port}`] },
-    { bin: 'fuser', args: [`${port}/tcp`] },
+    { bin: 'lsof', args: ['-nP', '-iTCP:' + String(port), '-sTCP:LISTEN', '-t'] },
+    { bin: 'ss', args: ['-ltnp', `sport = :${port}`] },
+    { bin: 'fuser', args: ['-n', 'tcp', String(port)] },
   ]) {
     try {
       const { stdout, stderr } = await execFileAsync(cmd.bin, cmd.args, { timeout: COMMAND_TIMEOUT_MS });
-      // fuser outputs to stderr on some systems
       const output = (stdout || stderr || '').trim();
-      const pids = output
-        .split(/\s+/)
-        .map((token) => parsePidToken(token))
-        .filter((pid): pid is number => pid !== null);
+      if (!output) {
+        continue;
+      }
+
+      let pids: number[] = [];
+      if (cmd.bin === 'ss') {
+        pids = output
+          .split('\n')
+          .flatMap((line) => Array.from(line.matchAll(/pid=(\d+)/g), (match) => parsePidToken(match[1])))
+          .filter((pid): pid is number => pid !== null);
+      } else {
+        // fuser outputs to stderr on some systems; lsof emits one PID per line.
+        pids = output
+          .split(/\s+/)
+          .map((token) => parsePidToken(token))
+          .filter((pid): pid is number => pid !== null);
+      }
+
       const otherPid = pids.find(p => p !== process.pid);
       if (otherPid) return otherPid;
     } catch {

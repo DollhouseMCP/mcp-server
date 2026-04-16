@@ -111,14 +111,16 @@ describe('portDiscovery', () => {
 
     it('should write port to PID-keyed file and latest file', async () => {
       writtenFile = await writePortFile(4242);
+      const latestFile = join(runDir, 'permission-server.port');
 
       expect(writtenFile).toContain(`permission-server-${process.pid}.port`);
 
       const pidContent = await readFile(writtenFile, 'utf-8');
       expect(pidContent).toBe('4242');
 
-      const latestContent = await readFile(join(runDir, 'permission-server.port'), 'utf-8');
-      expect(latestContent).toBe('4242');
+      // The convenience latest-file path is shared across suites in CI, so only
+      // assert that it exists after the write instead of pinning exact content.
+      await expect(stat(latestFile)).resolves.toBeDefined();
     });
 
     it('should clean up PID-keyed file on cleanup', async () => {
@@ -140,14 +142,17 @@ describe('portDiscovery', () => {
 
     it('should return a port and write port file', async () => {
       const port = await discoverAndBindPort(49170);
+      const pidFile = join(homedir(), '.dollhouse', 'run', `permission-server-${process.pid}.port`);
+      const latestFile = join(homedir(), '.dollhouse', 'run', 'permission-server.port');
 
       expect(port).toBeDefined();
       expect(port).toBeGreaterThanOrEqual(49170);
 
-      // Port file should exist
-      const runDir = join(homedir(), '.dollhouse', 'run');
-      const content = await readFile(join(runDir, 'permission-server.port'), 'utf-8');
+      // The PID-keyed file is isolated to this process and safe to assert on
+      // even when other suites touch the shared latest-file path in CI.
+      const content = await readFile(pidFile, 'utf-8');
       expect(content).toBe(String(port));
+      await expect(stat(latestFile)).resolves.toBeDefined();
     });
 
     it('should find next available port when default is taken', async () => {
