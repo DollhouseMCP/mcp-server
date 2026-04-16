@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.23] - 2026-04-16
+
+- Expand npm package keywords for broader discovery across MCP clients, AI tool ecosystems, and Dollhouse element primitives.
+
 ## [2.0.22] - 2026-04-16
 
 - Fix legacy console leader takeover so new authenticated sessions can replace older incompatible port owners and register correctly.
