@@ -23,12 +23,14 @@
   var SESSION_POLL_INTERVAL = getConfiguredNumber('sessionPollIntervalMs', 5000);
   var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
   var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
+  var LEADER_RELOAD_DEBOUNCE_MS = getConfiguredNumber('leaderReloadDebounceMs', 150);
   var sessions = [];
   var policySessions = [];
   var filterSessionId = '';
   var dropdownBuilt = false;
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
   var lastReloadTargetVersion = '';
+  var pendingLeaderReloadTimer = null;
 
   function parseSemver(version) {
     if (typeof version !== 'string') return null;
@@ -106,6 +108,15 @@
     return normalizeSemver(meta ? meta.getAttribute('content') || '' : '');
   }
 
+  /**
+   * Schedule a cache-busted reload when the session poller observes that a
+   * newer MCP leader is serving the console than the version loaded in this tab.
+   * A small debounce lets rapid leadership churn settle so the browser reloads
+   * directly into the newest compatible leader rather than bouncing through
+   * intermediate versions.
+   *
+   * @param {Array<Record<string, unknown>>} list
+   */
   function maybeForceReloadForNewLeader(list) {
     var dc = window.DollhouseConsole;
     if (!dc || typeof dc.forceReload !== 'function' || !Array.isArray(list)) return;
@@ -118,8 +129,14 @@
     if (!leaderVersion) return;
     if (compareSemver(leaderVersion, currentVersion) <= 0) return;
     if (lastReloadTargetVersion === leaderVersion) return;
+    if (pendingLeaderReloadTimer) {
+      clearTimeout(pendingLeaderReloadTimer);
+    }
     lastReloadTargetVersion = leaderVersion;
-    dc.forceReload('leader-upgraded', leaderVersion);
+    pendingLeaderReloadTimer = setTimeout(function() {
+      pendingLeaderReloadTimer = null;
+      dc.forceReload('leader-upgraded', leaderVersion);
+    }, LEADER_RELOAD_DEBOUNCE_MS);
   }
 
   function formatUptime(startedAt) {

@@ -19,6 +19,7 @@ For a high-level overview, see the [Architecture Overview](overview.md).
 
 ### Specialized Topics
 - [Version Storage](version-storage-approach.md) - How we handle element versions
+- [ADR-002: Version-Aware Web Console Leadership](ADR-002-CONSOLE-VERSION-AWARE-LEADERSHIP.md) - Why the newest compatible console leader wins and how stale tabs recover
 
 ## For Contributors
 If you're implementing new features, start with the relevant deep dive, then refer to the [Development Guide](../developer-guide/workflow.md).
