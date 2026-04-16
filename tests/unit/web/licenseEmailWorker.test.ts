@@ -463,6 +463,26 @@ describe('License Email Worker', () => {
       expect(capturedEmails).toHaveLength(1);
     });
 
+    it('accepts root-path verification requests without the webhook secret for compatibility', async () => {
+      const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'root-compat@example.com',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { secret: null, ip: '203.0.113.15' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(200);
+
+      const body = await res.json() as { success: boolean; event_type: string };
+      expect(body.success).toBe(true);
+      expect(body.event_type).toBe('verification');
+      expect(capturedEmails).toHaveLength(1);
+    });
+
     it('rejects direct requests without a verification code', async () => {
       const env = makeEnv();
       const req = makeRequest(
@@ -520,6 +540,17 @@ describe('License Email Worker', () => {
       const res = await worker.fetch(req, env);
       expect(res.status).toBe(400);
       expect(await res.text()).toContain('verification events');
+    });
+
+    it('still rejects root-path activation events without the webhook secret', async () => {
+      const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
+      const req = makeRequest(
+        makeCommercialEvent({ email: 'root-activation@example.com' }),
+        { secret: null, ip: '203.0.113.16' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(401);
     });
 
     it('rate limits repeated direct verification requests for the same email', async () => {
