@@ -17,8 +17,12 @@
  */
 
 import { describe, it, expect, jest } from '@jest/globals';
-import { warnIfLegacyConsolePresent } from '../../../../src/web/console/UnifiedConsole.js';
-import type { LegacyLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
+import {
+  warnIfLegacyConsolePresent,
+  discoverLeaderServingPort,
+  recoverLeaderBindFailure,
+} from '../../../../src/web/console/UnifiedConsole.js';
+import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
 /**
  * Fake fixture path used in mock `LegacyLeaderInfo` return values.
@@ -155,5 +159,141 @@ describe('warnIfLegacyConsolePresent', () => {
     const warnMessage = (logStub.warn as jest.Mock).mock.calls[0][0] as string;
     expect(warnMessage).toContain('port 8080');
     expect(warnMessage).not.toMatch(/port 41715/);
+  });
+});
+
+describe('discoverLeaderServingPort', () => {
+  it('prefers the active leader session returned by /api/sessions for the port owner', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessions: [
+          {
+            sessionId: 'older-follower',
+            pid: 1234,
+            isLeader: false,
+            kind: 'mcp',
+            status: 'active',
+          },
+          {
+            sessionId: 'real-leader',
+            pid: 4567,
+            isLeader: true,
+            kind: 'mcp',
+            status: 'active',
+            startedAt: '2026-04-16T13:55:00.000Z',
+            lastHeartbeat: '2026-04-16T13:55:10.000Z',
+            serverVersion: '2.0.19',
+            consoleProtocolVersion: 1,
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await discoverLeaderServingPort(41715, 'token-123', {
+      fetchImpl: fetchStub,
+      findPidOnPortImpl: async () => 4567,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', {
+      headers: { Authorization: 'Bearer token-123' },
+    });
+    expect(result.source).toBe('api');
+    expect(result.ownerPid).toBe(4567);
+    expect(result.leaderInfo).toMatchObject({
+      sessionId: 'real-leader',
+      pid: 4567,
+      port: 41715,
+      serverVersion: '2.0.19',
+      consoleProtocolVersion: 1,
+    });
+  });
+
+  it('normalizes the discovered leader session ID from /api/sessions', async () => {
+    const result = await discoverLeaderServingPort(41715, null, {
+      fetchImpl: jest.fn<typeof fetch>().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          sessions: [
+            {
+              sessionId: 'real\u200Bleader',
+              pid: 4567,
+              isLeader: true,
+              kind: 'mcp',
+              status: 'active',
+            },
+          ],
+        }),
+      } as Response),
+      findPidOnPortImpl: async () => 4567,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(result.leaderInfo?.sessionId).toBe('realleader');
+  });
+
+  it('falls back to a synthetic leader when the port owner is known but sessions are unavailable', async () => {
+    const result = await discoverLeaderServingPort(41715, null, {
+      fetchImpl: jest.fn<typeof fetch>().mockRejectedValue(new Error('connect ECONNRESET')),
+      findPidOnPortImpl: async () => 81234,
+      readLeaderLockImpl: async () => null,
+    });
+
+    expect(result.source).toBe('synthetic');
+    expect(result.ownerPid).toBe(81234);
+    expect(result.leaderInfo).toMatchObject({
+      sessionId: 'port-owner-81234',
+      pid: 81234,
+      port: 41715,
+    });
+  });
+});
+
+describe('recoverLeaderBindFailure', () => {
+  it('removes the provisional self-lock before following the real leader on the bound port', async () => {
+    const provisionalLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 99123,
+      port: 41715,
+      sessionId: 'burattino',
+      startedAt: '2026-04-16T13:55:09.000Z',
+      heartbeat: '2026-04-16T13:55:09.000Z',
+      serverVersion: '2.0.19',
+      consoleProtocolVersion: 1,
+    };
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+
+    const result = await recoverLeaderBindFailure(provisionalLeader, 41715, 'token-123', {
+      deleteLeaderLockImpl,
+      readLeaderLockImpl: async () => provisionalLeader,
+      findPidOnPortImpl: async () => 57117,
+      fetchImpl: jest.fn<typeof fetch>().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          sessions: [
+            {
+              sessionId: 'ollie',
+              pid: 57117,
+              isLeader: true,
+              kind: 'mcp',
+              status: 'active',
+              serverVersion: '2.0.18',
+              consoleProtocolVersion: 1,
+            },
+          ],
+        }),
+      } as Response),
+    });
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.source).toBe('api');
+    expect(result.lockCleanupAttempted).toBe(true);
+    expect(result.lockCleanupPerformed).toBe(true);
+    expect(result.leaderInfo).toMatchObject({
+      sessionId: 'ollie',
+      pid: 57117,
+      port: 41715,
+    });
   });
 });
