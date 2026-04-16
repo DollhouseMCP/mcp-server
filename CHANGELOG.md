@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.25] - 2026-04-16
+
+Restore audit markdown export and harden direct commercial license email delivery
+
 ## [2.0.24] - 2026-04-16
 
 - Fix web console authority convergence so newer sessions replace stale listeners, register correctly, and serve current assets.
