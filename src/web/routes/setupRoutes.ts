@@ -189,8 +189,8 @@ function parseTomlSectionConfig(
   raw: string,
   caseSensitive = false,
 ): Record<string, unknown> | null {
-  const escapedSectionName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const sectionRegex = new RegExp(`\\[mcp_servers\\.${escapedSectionName}\\]`, caseSensitive ? '' : 'i');
+  const escapedSectionName = sectionName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const sectionRegex = new RegExp(String.raw`\[mcp_servers\.${escapedSectionName}\]`, caseSensitive ? '' : 'i');
   const sectionMatch = sectionRegex.exec(raw);
   if (!sectionMatch) return null;
 
