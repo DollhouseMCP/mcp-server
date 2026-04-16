@@ -17,6 +17,7 @@ import type { UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
+import type { WebServerOptions, WebServerResult } from '../server.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 import {
@@ -28,11 +29,15 @@ import {
   detectLegacyLeader,
   readLeaderLock,
   deleteLeaderLock,
+  claimLeadership,
+  createLeaderInfo,
   LOCK_VERSION,
   CONSOLE_PROTOCOL_VERSION,
   LEGACY_SERVER_VERSION,
+  evaluateLeaderPreference,
   type ElectionResult,
   type ConsoleLeaderInfo,
+  type LeaderPreferenceDecision,
 } from './LeaderElection.js';
 import { createIngestRoutes } from './IngestRoutes.js';
 import {
@@ -41,7 +46,11 @@ import {
 } from './LeaderForwardingSink.js';
 import { PromotionManager } from './PromotionManager.js';
 import { ConsoleTokenStore } from './consoleToken.js';
-import { findPidOnPort } from './StaleProcessRecovery.js';
+import {
+  findPidOnPort,
+  killStaleProcessDetailed,
+  type KillStaleProcessOutcome,
+} from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -163,6 +172,22 @@ export interface PortLeaderDiscovery {
 export interface BindFailureRecoveryResult extends PortLeaderDiscovery {
   lockCleanupAttempted: boolean;
   lockCleanupPerformed: boolean;
+}
+
+export interface PortOwnerReplacementDecision {
+  shouldEvict: boolean;
+  ownerPid: number | null;
+  preference: LeaderPreferenceDecision | null;
+}
+
+interface ForceTakeoverAttemptResult {
+  webResult: WebServerResult;
+  election: ElectionResult;
+  fallback: PortLeaderDiscovery;
+  replacement: PortOwnerReplacementDecision;
+  forcedKill: KillStaleProcessOutcome | null;
+  takeoverAttempted: boolean;
+  reboundLockClaimed: boolean;
 }
 
 interface DiscoveryDependencies {
@@ -338,6 +363,182 @@ export async function recoverLeaderBindFailure(
   };
 }
 
+export function evaluatePortOwnerReplacement(
+  candidateLeader: ConsoleLeaderInfo,
+  fallback: PortLeaderDiscovery,
+): PortOwnerReplacementDecision {
+  if (!fallback.leaderInfo || fallback.ownerPid === null || fallback.ownerPid === candidateLeader.pid) {
+    return {
+      shouldEvict: false,
+      ownerPid: fallback.ownerPid,
+      preference: null,
+    };
+  }
+
+  const preference = evaluateLeaderPreference(candidateLeader, fallback.leaderInfo);
+  return {
+    shouldEvict: preference.shouldReplace,
+    ownerPid: fallback.ownerPid,
+    preference,
+  };
+}
+
+function buildBindFailureLogContext(
+  consolePort: number,
+  provisionalLeader: ConsoleLeaderInfo,
+  bindResult: WebServerResult['bindResult'],
+  fallback: PortLeaderDiscovery,
+  replacement?: PortOwnerReplacementDecision,
+  forcedKill?: KillStaleProcessOutcome | null,
+) {
+  return {
+    port: consolePort,
+    bindError: bindResult?.error,
+    bindDetail: bindResult?.detail,
+    provisionalLeaderPid: provisionalLeader.pid,
+    provisionalLeaderSessionId: provisionalLeader.sessionId,
+    provisionalLeaderVersion: provisionalLeader.serverVersion ?? LEGACY_SERVER_VERSION,
+    provisionalLeaderProtocolVersion: provisionalLeader.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+    fallbackOwnerPid: fallback.ownerPid,
+    fallbackSource: fallback.source,
+    fallbackLeaderPid: fallback.leaderInfo?.pid,
+    fallbackLeaderSessionId: fallback.leaderInfo?.sessionId,
+    fallbackLeaderVersion: fallback.leaderInfo?.serverVersion ?? LEGACY_SERVER_VERSION,
+    fallbackLeaderProtocolVersion: fallback.leaderInfo?.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+    replacementShouldEvict: replacement?.shouldEvict ?? false,
+    replacementReason: replacement?.preference?.reason,
+    forcedKillReason: forcedKill?.reason,
+    forcedKillPid: forcedKill?.pid,
+    forcedKillDetail: forcedKill?.detail,
+  };
+}
+
+async function attemptForceTakeover(
+  options: UnifiedConsoleOptions,
+  currentElection: ElectionResult,
+  consolePort: number,
+  primaryToken: string,
+  serverOpts: WebServerOptions,
+  startWebServerImpl: (options: WebServerOptions) => Promise<WebServerResult>,
+): Promise<ForceTakeoverAttemptResult> {
+  const initialFallback = await recoverLeaderBindFailure(currentElection.leaderInfo, consolePort, primaryToken);
+  const initialReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, initialFallback);
+
+  if (!initialReplacement.shouldEvict || initialReplacement.ownerPid === null) {
+    return {
+      webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
+      election: currentElection,
+      fallback: initialFallback,
+      replacement: initialReplacement,
+      forcedKill: null,
+      takeoverAttempted: false,
+      reboundLockClaimed: false,
+    };
+  }
+
+  const latestFallback = await discoverLeaderServingPort(consolePort, primaryToken);
+  const latestReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, latestFallback);
+  if (!latestReplacement.shouldEvict || latestReplacement.ownerPid === null) {
+    logger.warn('[UnifiedConsole] Forced takeover target changed before eviction; skipping forced kill', {
+      ...buildBindFailureLogContext(
+        consolePort,
+        currentElection.leaderInfo,
+        { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` },
+        latestFallback,
+        latestReplacement,
+      ),
+      previousOwnerPid: initialReplacement.ownerPid,
+    });
+    return {
+      webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
+      election: currentElection,
+      fallback: latestFallback,
+      replacement: latestReplacement,
+      forcedKill: null,
+      takeoverAttempted: false,
+      reboundLockClaimed: false,
+    };
+  }
+
+  logger.warn('[UnifiedConsole] Attempting forced takeover from older or incompatible active leader', {
+    ...buildBindFailureLogContext(
+      consolePort,
+      currentElection.leaderInfo,
+      { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` },
+      latestFallback,
+      latestReplacement,
+    ),
+  });
+
+  const forcedKill = await killStaleProcessDetailed(latestReplacement.ownerPid, consolePort, {
+    allowActiveHostParent: true,
+  });
+  if (!forcedKill.killed) {
+    logger.warn('[UnifiedConsole] Forced takeover skipped or failed after identifying replaceable leader', {
+      ...buildBindFailureLogContext(
+        consolePort,
+        currentElection.leaderInfo,
+        { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` },
+        latestFallback,
+        latestReplacement,
+        forcedKill,
+      ),
+    });
+    return {
+      webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
+      election: currentElection,
+      fallback: latestFallback,
+      replacement: latestReplacement,
+      forcedKill,
+      takeoverAttempted: true,
+      reboundLockClaimed: false,
+    };
+  }
+
+  const reboundWebResult = await startWebServerImpl(serverOpts);
+  let reboundElection = currentElection;
+  let reboundLockClaimed = false;
+
+  if (!reboundWebResult.bindResult || reboundWebResult.bindResult.success) {
+    const reboundLeaderInfo = createLeaderInfo(options.sessionId, consolePort);
+    reboundLockClaimed = await claimLeadership(reboundLeaderInfo);
+    if (!reboundLockClaimed) {
+      logger.warn('[UnifiedConsole] Rebound leader bound port but could not immediately re-claim lock', {
+        ...buildBindFailureLogContext(
+          consolePort,
+          reboundLeaderInfo,
+          reboundWebResult.bindResult,
+          latestFallback,
+          latestReplacement,
+          forcedKill,
+        ),
+      });
+    }
+    reboundElection = { role: 'leader', leaderInfo: reboundLeaderInfo };
+  } else {
+    logger.warn('[UnifiedConsole] Forced takeover killed old leader but bind retry still failed', {
+      ...buildBindFailureLogContext(
+        consolePort,
+        currentElection.leaderInfo,
+        reboundWebResult.bindResult,
+        latestFallback,
+        latestReplacement,
+        forcedKill,
+      ),
+    });
+  }
+
+  return {
+    webResult: reboundWebResult,
+    election: reboundElection,
+    fallback: latestFallback,
+    replacement: latestReplacement,
+    forcedKill,
+    takeoverAttempted: true,
+    reboundLockClaimed,
+  };
+}
+
 /**
  * Start the unified web console.
  *
@@ -427,33 +628,53 @@ async function startAsLeader(
   };
   // bindAndListen now handles EADDRINUSE by finding and killing the stale
   // process on the port, then retrying. No external retry loop needed.
-  const webResult = await startWebServer(serverOpts);
+  let webResult = await startWebServer(serverOpts);
 
   if (webResult.bindResult && !webResult.bindResult.success) {
-    const fallback = await recoverLeaderBindFailure(election.leaderInfo, consolePort, primaryToken.token);
-    if (fallback.leaderInfo) {
-      logger.warn('[UnifiedConsole] Leader role aborted: bind failed, falling back to follower', {
-        port: consolePort,
-        bindError: webResult.bindResult.error,
-        bindDetail: webResult.bindResult.detail,
-        provisionalLeaderPid: election.leaderInfo.pid,
-        provisionalLeaderSessionId: election.leaderInfo.sessionId,
-        ownerPid: fallback.ownerPid,
-        source: fallback.source,
-        lockCleanupAttempted: fallback.lockCleanupAttempted,
-        lockCleanupPerformed: fallback.lockCleanupPerformed,
-      });
-      const followerElection: ElectionResult = { role: 'follower', leaderInfo: fallback.leaderInfo };
-      return startAsFollower(options, followerElection, consolePort, primaryToken.token);
-    }
+    const forceTakeover = await attemptForceTakeover(
+      options,
+      election,
+      consolePort,
+      primaryToken.token,
+      serverOpts,
+      startWebServer,
+    );
+    webResult = forceTakeover.webResult;
+    election = forceTakeover.election;
 
-    logger.error('[UnifiedConsole] Leader failed to bind and no active leader could be identified', {
-      port: consolePort,
-      provisionalLeaderPid: election.leaderInfo.pid,
-      bindError: webResult.bindResult.error,
-      bindDetail: webResult.bindResult.detail,
-    });
-    throw new Error(`Leader failed to bind port ${consolePort} and no active leader was discoverable`);
+    if (webResult.bindResult && !webResult.bindResult.success) {
+      if (forceTakeover.fallback.leaderInfo) {
+      logger.warn('[UnifiedConsole] Leader role aborted: bind failed, falling back to follower', {
+        ...buildBindFailureLogContext(
+          consolePort,
+          election.leaderInfo,
+          webResult.bindResult,
+          forceTakeover.fallback,
+          forceTakeover.replacement,
+          forceTakeover.forcedKill,
+        ),
+        takeoverAttempted: forceTakeover.takeoverAttempted,
+        reboundLockClaimed: forceTakeover.reboundLockClaimed,
+        lockCleanupAttempted: forceTakeover.fallback.source !== 'none',
+      });
+      const followerElection: ElectionResult = { role: 'follower', leaderInfo: forceTakeover.fallback.leaderInfo };
+      return startAsFollower(options, followerElection, consolePort, primaryToken.token);
+      }
+
+      logger.error('[UnifiedConsole] Leader failed to bind and no active leader could be identified', {
+        ...buildBindFailureLogContext(
+          consolePort,
+          election.leaderInfo,
+          webResult.bindResult,
+          forceTakeover.fallback,
+          forceTakeover.replacement,
+          forceTakeover.forcedKill,
+        ),
+        takeoverAttempted: forceTakeover.takeoverAttempted,
+        reboundLockClaimed: forceTakeover.reboundLockClaimed,
+      });
+      throw new Error(`Leader failed to bind port ${consolePort} and no active leader was discoverable`);
+    }
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.

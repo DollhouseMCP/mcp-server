@@ -21,6 +21,7 @@ import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
   recoverLeaderBindFailure,
+  evaluatePortOwnerReplacement,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -294,6 +295,76 @@ describe('recoverLeaderBindFailure', () => {
       sessionId: 'ollie',
       pid: 57117,
       port: 41715,
+    });
+  });
+});
+
+describe('evaluatePortOwnerReplacement', () => {
+  it('prefers evicting an older legacy leader that still owns the console port', () => {
+    const candidateLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 83150,
+      port: 41715,
+      sessionId: 'session-new',
+      startedAt: '2026-04-16T15:45:00.000Z',
+      heartbeat: '2026-04-16T15:45:00.000Z',
+      serverVersion: '2.0.21',
+      consoleProtocolVersion: 1,
+    };
+
+    const decision = evaluatePortOwnerReplacement(candidateLeader, {
+      ownerPid: 57117,
+      source: 'api',
+      leaderInfo: {
+        version: 1,
+        pid: 57117,
+        port: 41715,
+        sessionId: 'session-old',
+        startedAt: '2026-04-09T23:21:46.000Z',
+        heartbeat: '2026-04-16T15:45:00.000Z',
+        serverVersion: undefined,
+        consoleProtocolVersion: undefined,
+      },
+    });
+
+    expect(decision.shouldEvict).toBe(true);
+    expect(decision.ownerPid).toBe(57117);
+    expect(decision.preference).toMatchObject({
+      reason: 'newer-compatible-version',
+      existingVersion: '0.0.0',
+    });
+  });
+
+  it('does not evict a port owner when there is no preference to replace it', () => {
+    const candidateLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 83150,
+      port: 41715,
+      sessionId: 'session-new',
+      startedAt: '2026-04-16T15:45:00.000Z',
+      heartbeat: '2026-04-16T15:45:00.000Z',
+      serverVersion: '2.0.21',
+      consoleProtocolVersion: 1,
+    };
+
+    const decision = evaluatePortOwnerReplacement(candidateLeader, {
+      ownerPid: 57117,
+      source: 'api',
+      leaderInfo: {
+        version: 1,
+        pid: 57117,
+        port: 41715,
+        sessionId: 'session-current',
+        startedAt: '2026-04-16T15:44:00.000Z',
+        heartbeat: '2026-04-16T15:45:00.000Z',
+        serverVersion: '2.0.21',
+        consoleProtocolVersion: 1,
+      },
+    });
+
+    expect(decision.shouldEvict).toBe(false);
+    expect(decision.preference).toMatchObject({
+      reason: 'same-version',
     });
   });
 });

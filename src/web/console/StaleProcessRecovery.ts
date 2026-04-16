@@ -87,6 +87,10 @@ export interface KillStaleProcessOutcome {
   detail?: string;
 }
 
+export interface KillStaleProcessOptions {
+  allowActiveHostParent?: boolean;
+}
+
 export function isRecognizedMcpHostParent(command: string): boolean {
   const normalizedCommand = UnicodeValidator.normalize(command).normalizedContent;
   return MCP_HOST_PARENT_PATTERNS.some((pattern) => pattern.test(normalizedCommand));
@@ -142,6 +146,7 @@ function buildKillOutcome(
 async function getKillGuardFailure(
   processInfo: ProcessInspection,
   port: number,
+  options: KillStaleProcessOptions = {},
 ): Promise<KillStaleProcessOutcome | null> {
   const currentUser = (await import('node:os')).userInfo().username;
   if (processInfo.user !== currentUser) {
@@ -161,7 +166,7 @@ async function getKillGuardFailure(
   }
 
   const parentCommand = (await getProcessCommand(processInfo.parentPid)) ?? undefined;
-  if (parentCommand && isRecognizedMcpHostParent(parentCommand)) {
+  if (!options.allowActiveHostParent && parentCommand && isRecognizedMcpHostParent(parentCommand)) {
     await logger.warn(`[WebUI] Port ${port} held by active client-backed DollhouseMCP process (pid ${processInfo.pid}) — not killing`, {
       cmdLine: processInfo.command,
       parentPid: processInfo.parentPid,
@@ -328,14 +333,18 @@ export async function killStaleProcess(pid: number, port: number): Promise<boole
   return outcome.killed;
 }
 
-export async function killStaleProcessDetailed(pid: number, port: number): Promise<KillStaleProcessOutcome> {
+export async function killStaleProcessDetailed(
+  pid: number,
+  port: number,
+  options: KillStaleProcessOptions = {},
+): Promise<KillStaleProcessOutcome> {
   const processInfo = await inspectProcess(pid);
   if (!processInfo) {
     await logger.debug(`[WebUI] Cannot verify process ${pid} — skipping kill`);
     return { killed: false, reason: 'inspect_failed', pid };
   }
 
-  const guardFailure = await getKillGuardFailure(processInfo, port);
+  const guardFailure = await getKillGuardFailure(processInfo, port, options);
   if (guardFailure) {
     return guardFailure;
   }
