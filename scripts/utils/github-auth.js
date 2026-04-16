@@ -106,7 +106,7 @@ export async function validateToken(token) {
       },
       isTestMode: isTestMode()
     };
-  } catch (error) {
+  } catch {
     return {
       valid: false,
       error: 'Unable to validate GitHub authentication'

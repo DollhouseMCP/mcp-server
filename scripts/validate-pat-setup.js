@@ -154,8 +154,7 @@ async function checkTokenValidity(token) {
     
     // Check rate limits
     if (validation.rateLimit) {
-      const { remaining, limit, reset } = validation.rateLimit;
-      const percentage = Math.round((remaining / limit) * 100);
+      const { remaining } = validation.rateLimit;
       
       if (remaining < 100) {
         printStatus('warning', 'Low GitHub rate limit remaining');
@@ -168,7 +167,7 @@ async function checkTokenValidity(token) {
     
     console.log('');
     return { valid: true, validation };
-  } catch (error) {
+  } catch {
     printStatus('error', 'Failed to validate token');
     console.log('   Validation failed while contacting GitHub');
     console.log('   This could indicate network issues or an invalid token');
@@ -365,7 +364,7 @@ async function main() {
     // Exit with appropriate code
     process.exit(isFullyConfigured ? 0 : 1);
     
-  } catch (error) {
+  } catch {
     console.log('');
     printStatus('error', 'Validation failed with unexpected error');
     console.log('Error details were suppressed for safety');

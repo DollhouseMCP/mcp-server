@@ -67,7 +67,7 @@ async function testPATAuthentication() {
     } else {
       failed++;
     }
-  } catch (error) {
+  } catch {
     console.log('Test 3 - Token Retrieval: ❌ Error');
     failed++;
   }
@@ -134,7 +134,7 @@ async function testScopeValidation() {
       }
     }
     
-  } catch (error) {
+  } catch {
     console.log('❌ Error validating token');
     failed++;
   }
@@ -203,7 +203,7 @@ async function testErrorHandling() {
     } else {
       failed++;
     }
-  } catch (error) {
+  } catch {
     console.log(`Test 1 - Invalid Token: ✅ Correctly threw error`);
     console.log('         Error details suppressed for safety');
     passed++;
@@ -219,7 +219,7 @@ async function testErrorHandling() {
     } else {
       failed++;
     }
-  } catch (error) {
+  } catch {
     console.log(`Test 2 - Empty Token: ✅ Correctly threw error`);
     console.log('         Error details suppressed for safety');
     passed++;
@@ -235,7 +235,7 @@ async function testErrorHandling() {
     } else {
       failed++;
     }
-  } catch (error) {
+  } catch {
     console.log(`Test 3 - Null Token: ✅ Correctly handled error`);
     console.log('         Error details suppressed for safety');
     passed++;
@@ -252,7 +252,7 @@ async function testErrorHandling() {
     } else {
       failed++;
     }
-  } catch (error) {
+  } catch {
     console.log(`Test 4 - Fake Token: ✅ Correctly threw error`);
     console.log('         Error details suppressed for safety');
     passed++;
@@ -319,7 +319,7 @@ async function testAuthHeaders() {
       console.log('         Authorization header format was incorrect');
     }
     
-  } catch (error) {
+  } catch {
     console.log('❌ Error getting auth headers');
     failed++;
   }
@@ -346,7 +346,7 @@ async function testRealGitHubAPI() {
     const response = await fetch('https://api.github.com/user', { headers });
     
     if (response.ok) {
-      const user = await response.json();
+      await response.json();
       console.log(`✅ GitHub API Integration successful`);
       console.log('   User profile endpoint returned successfully');
       
@@ -362,7 +362,7 @@ async function testRealGitHubAPI() {
       console.log('❌ GitHub API request failed');
       return false;
     }
-  } catch (error) {
+  } catch {
     console.log('❌ Error testing GitHub API');
     return false;
   }

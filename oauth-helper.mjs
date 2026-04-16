@@ -130,7 +130,7 @@ async function storeToken(token) {
     await TokenManager.storeGitHubToken(token);
     await log('Token stored successfully using TokenManager');
     return true;
-  } catch (error) {
+  } catch {
     await log('Failed to store token using TokenManager');
     
     // Fallback: Write to a temporary file for the MCP server to pick up
@@ -192,7 +192,7 @@ async function writePidFile() {
     await fs.mkdir(pidDir, { recursive: true, mode: 0o700 });
     await fs.writeFile(pidFile, process.pid.toString(), { mode: 0o600 });
     await log(`PID file written: ${pidFile}`);
-  } catch (error) {
+  } catch {
     await log('Failed to write PID file');
   }
 }
@@ -355,7 +355,7 @@ async function main() {
 }
 
 // Run the main function
-main().catch(async (error) => {
+main().catch(async () => {
   await log('Fatal error');
   console.error('Fatal error in OAuth helper');
   await cleanupPidFile();
