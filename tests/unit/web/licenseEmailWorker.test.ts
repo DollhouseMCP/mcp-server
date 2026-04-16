@@ -13,8 +13,7 @@
  *   - Assert on HTTP status, response body, and email HTML content
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import { jest } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
 // The Worker exports a default object with a fetch method.
 // TypeScript needs the path to resolve; Jest will handle the TS transform.
@@ -29,6 +28,8 @@ interface Env {
   POSTHOG_WEBHOOK_SECRET?: string;
   RESEND_API_KEY: string;
 }
+
+const DIRECT_VERIFICATION_PATH = '/direct-verification';
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -450,7 +451,7 @@ describe('License Email Worker', () => {
           event_type: 'verification',
           verification_code: '123456',
         }),
-        { path: '/direct-verification', secret: null, ip: '203.0.113.10' },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.10' },
       );
 
       const res = await worker.fetch(req, env);
@@ -469,7 +470,7 @@ describe('License Email Worker', () => {
           email: 'direct-missing-code@example.com',
           event_type: 'verification',
         }),
-        { path: '/direct-verification', secret: null, ip: '203.0.113.11' },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.11' },
       );
 
       const res = await worker.fetch(req, env);
@@ -481,7 +482,7 @@ describe('License Email Worker', () => {
       const env = makeEnv();
       const req = makeRequest(
         makeCommercialEvent({ email: 'direct-activation@example.com' }),
-        { path: '/direct-verification', secret: null, ip: '203.0.113.12' },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.12' },
       );
 
       const res = await worker.fetch(req, env);
@@ -497,7 +498,7 @@ describe('License Email Worker', () => {
           event_type: 'verification',
           verification_code: '654321',
         }),
-        { path: '/direct-verification', secret: null, ip: '203.0.113.13' },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.13' },
       );
 
       const secondReq = makeRequest(
@@ -506,7 +507,7 @@ describe('License Email Worker', () => {
           event_type: 'verification',
           verification_code: '654321',
         }),
-        { path: '/direct-verification', secret: null, ip: '203.0.113.13' },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.13' },
       );
 
       expect((await worker.fetch(firstReq, env)).status).toBe(200);
@@ -527,7 +528,7 @@ describe('License Email Worker', () => {
             event_type: 'verification',
             verification_code: '111111',
           }),
-          { path: '/direct-verification', secret: null, ip },
+          { path: DIRECT_VERIFICATION_PATH, secret: null, ip },
         );
         expect((await worker.fetch(req, env)).status).toBe(200);
       }
@@ -538,7 +539,7 @@ describe('License Email Worker', () => {
           event_type: 'verification',
           verification_code: '111111',
         }),
-        { path: '/direct-verification', secret: null, ip },
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip },
       );
 
       const blockedRes = await worker.fetch(blockedReq, env);

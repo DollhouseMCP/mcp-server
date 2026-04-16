@@ -127,10 +127,7 @@ function isValidEmailAddress(value: unknown): boolean {
   const domain = email.slice(atIndex + 1);
   if (!localPart || !domain) return false;
   if (domain.startsWith('.') || domain.endsWith('.')) return false;
-
-  const domainLabels = domain.split('.');
-  if (domainLabels.length < 2) return false;
-  if (domainLabels.some(label => label.length === 0)) return false;
+  if (!domain.includes('.') || domain.includes('..')) return false;
 
   return true;
 }

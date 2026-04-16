@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
+const DIRECT_WORKER_PATH_SUFFIX = 'workers.dev/direct-verification';
 
 function mockFetchResponse(ok: boolean, status: number, body: Record<string, unknown> | string) {
   const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
@@ -28,6 +29,24 @@ function mockFetchResponse(ok: boolean, status: number, body: Record<string, unk
     text: async () => responseBody,
     json: async () => (typeof body === 'string' ? { message: body } : body),
   }) as Promise<Response>;
+}
+
+function installWorkerTimeoutFetchMock() {
+  globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    await new Promise((resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
+      setTimeout(resolve, 15_000);
+    });
+    return new Response(null, { status: 204 });
+  });
+}
+
+function findDirectWorkerCall(fetchMock: jest.Mock): unknown[] | undefined {
+  return fetchMock.mock.calls.find(([input]) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
+    return url.includes(DIRECT_WORKER_PATH_SUFFIX);
+  });
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -671,14 +690,7 @@ describe('License Routes — Email Verification', () => {
 
   describe('POST /api/setup/license — Verification Required', () => {
     it('returns a delivery error if the direct worker call times out', async () => {
-      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
-        const signal = init?.signal as AbortSignal | undefined;
-        await new Promise((resolve, reject) => {
-          signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
-          setTimeout(resolve, 15_000);
-        });
-        return new Response(null, { status: 204 });
-      });
+      installWorkerTimeoutFetchMock();
 
       const res = await request(app)
         .post('/api/setup/license')
@@ -687,10 +699,7 @@ describe('License Routes — Email Verification', () => {
 
       expect(res.body.verificationRequired).toBe(true);
       expect(res.body.error).toMatch(/timed out/i);
-      const workerCall = (globalThis.fetch as jest.Mock).mock.calls.find(([input]) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
-        return url.includes('workers.dev/direct-verification');
-      });
+      const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
       expect(workerCall).toBeDefined();
       expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });
@@ -816,14 +825,7 @@ describe('License Routes — Email Verification', () => {
         .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
         .expect(200);
 
-      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
-        const signal = init?.signal as AbortSignal | undefined;
-        await new Promise((resolve, reject) => {
-          signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
-          setTimeout(resolve, 15_000);
-        });
-        return new Response(null, { status: 204 });
-      });
+      installWorkerTimeoutFetchMock();
 
       const res = await request(app)
         .post('/api/setup/license/resend')
@@ -832,10 +834,7 @@ describe('License Routes — Email Verification', () => {
 
       expect(res.body.verificationRequired).toBe(true);
       expect(res.body.error).toMatch(/timed out/i);
-      const workerCall = (globalThis.fetch as jest.Mock).mock.calls.find(([input]) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : '';
-        return url.includes('workers.dev/direct-verification');
-      });
+      const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
       expect(workerCall).toBeDefined();
       expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
     });

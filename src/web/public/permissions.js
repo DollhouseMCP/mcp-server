@@ -798,7 +798,7 @@
   }
 
   async function copyAuditViewAsMarkdown(button) {
-    const decisions = latestAggregateData?.recentDecisions || [];
+    const decisions = latestAggregateData?.recentDecisions ?? [];
     const markdown = buildAuditMarkdown(decisions);
     const originalLabel = button.textContent;
 
@@ -808,7 +808,7 @@
       window.setTimeout(function () {
         button.textContent = originalLabel;
       }, 1500);
-    } catch (_error) {
+    } catch {
       button.textContent = 'Copy failed';
       window.setTimeout(function () {
         button.textContent = originalLabel;
