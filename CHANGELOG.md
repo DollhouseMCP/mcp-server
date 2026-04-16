@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.19] - 2026-04-16
+
+Point release for deadlock relief recovery and version-aware web console leadership.
+
 ## [2.0.18] - 2026-04-16
 
 - Expanded permission setup and support-matrix clarity across supported clients.
