@@ -18,8 +18,8 @@
  */
 
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
-import os from 'os';
-import path from 'path';
+import os from 'node:os';
+import path from 'node:path';
 import { SkillManager } from '../elements/skills/index.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
@@ -622,11 +622,13 @@ export class ElementCRUDHandler {
     this.activationStore?.clearAll();
     this.policyExportService?.exportPolicies().catch(() => {});
 
+    const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
+
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_DEACTIVATED',
       severity: failed.length > 0 ? 'MEDIUM' : 'LOW',
       source: 'ElementCRUDHandler.releaseDeadlock',
-      details: `Deadlock relief deactivated ${deactivated.length} element(s)${failed.length > 0 ? ` with ${failed.length} failure(s)` : ''}`,
+      details: `Deadlock relief deactivated ${deactivated.length} element(s)${failureSummary}`,
       additionalData: {
         sessionId: this.activationStore?.getSessionId(),
         activeBeforeReset: activeElements,
@@ -690,9 +692,15 @@ export class ElementCRUDHandler {
       name: ensemble.metadata.name,
     })));
 
-    return activeElements.filter((element, index, all) =>
-      all.findIndex((candidate) => candidate.type === element.type && candidate.name === element.name) === index,
-    );
+    const seen = new Set<string>();
+    return activeElements.filter((element) => {
+      const key = `${element.type}:${element.name}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
   }
 
   private async writeDeadlockReliefSnapshot(snapshot: {
@@ -708,7 +716,8 @@ export class ElementCRUDHandler {
   }): Promise<string | undefined> {
     const snapshotDir = path.join(os.homedir(), '.dollhouse', 'state', 'deadlock-relief');
     const safeSessionId = (snapshot.sessionId ?? 'session')
-      .replaceAll(/[^a-zA-Z0-9_-]/g, '-');
+      .replaceAll(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 64);
     const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
     const snapshotFile = path.join(snapshotDir, `deadlock-relief-${safeSessionId}-${timestamp}.json`);
 

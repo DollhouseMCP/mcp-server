@@ -2494,13 +2494,18 @@ export class MCPAQLHandler {
       },
     });
 
+    const snapshotSuffix = reset.snapshotFile
+      ? ` A recovery snapshot was saved to ${reset.snapshotFile}.`
+      : '';
+    const message = reset.failed.length > 0
+      ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list, likely deadlock cause, and recovery snapshot before reactivating elements.`
+      : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared.${snapshotSuffix}`;
+
     return {
       released: true,
       challenge_id: challengeId,
       ...reset,
-      message: reset.failed.length > 0
-        ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list, likely deadlock cause, and recovery snapshot before reactivating elements.`
-        : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared${reset.snapshotFile ? `; a recovery snapshot was saved to ${reset.snapshotFile}` : ''}.`,
+      message,
     };
   }
 
