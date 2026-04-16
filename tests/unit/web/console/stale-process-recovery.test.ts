@@ -307,6 +307,10 @@ describe('Stale Process Recovery (#1850)', () => {
       expect(Recovery.isRecognizedMcpHostParent('/Applications/Codex.app/Contents/Resources/codex app-server')).toBe(true);
     });
 
+    it('normalizes hidden Unicode characters before matching host parents', () => {
+      expect(Recovery.isRecognizedMcpHostParent('/Applications/Co\u200Bdex.app/Contents/Resources/codex app-server')).toBe(true);
+    });
+
     it('does not treat launchd or plain shells as active MCP hosts', () => {
       expect(Recovery.isRecognizedMcpHostParent('/sbin/launchd')).toBe(false);
       expect(Recovery.isRecognizedMcpHostParent('/bin/zsh -lc npm exec @dollhousemcp/mcp-server')).toBe(false);

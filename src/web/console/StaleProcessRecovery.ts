@@ -9,6 +9,8 @@
  * the full Express server and its dependency chain.
  */
 
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+
 // Use lazy import for logger to avoid pulling in the full env.ts/config chain
 // at module load time. This keeps the module independently testable.
 /** Timeout for lsof/fuser/ps system calls (ms) */
@@ -25,6 +27,8 @@ const LOCK_RECHECK_DELAY_MS = 500;
 const LOCK_RECHECK_ATTEMPTS = 2;
 /** PID used by the OS init/launchd process; direct children are effectively orphaned. */
 const ROOT_PARENT_PID = 1;
+/** Number of `ps` columns requested by inspectProcess: user, pid, ppid, command. */
+const PROCESS_INSPECTION_FIELD_COUNT = 4;
 
 let _logger: typeof import('../../utils/logger.js').logger | null = null;
 async function getLogger() {
@@ -84,15 +88,65 @@ export interface KillStaleProcessOutcome {
 }
 
 export function isRecognizedMcpHostParent(command: string): boolean {
-  return MCP_HOST_PARENT_PATTERNS.some((pattern) => pattern.test(command));
+  const normalizedCommand = UnicodeValidator.normalize(command).normalizedContent;
+  return MCP_HOST_PARENT_PATTERNS.some((pattern) => pattern.test(normalizedCommand));
 }
 
 function isDollhouseProcessCommand(cmdLine: string): boolean {
-  const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
-    cmdLine.includes('.bin/dollhousemcp');
-  const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
-    /(?:dollhousemcp|mcp-server)[/\\]dist[/\\]index\.js/.test(cmdLine);
+  const normalizedCommand = UnicodeValidator.normalize(cmdLine).normalizedContent;
+  const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(normalizedCommand) ||
+    normalizedCommand.includes('.bin/dollhousemcp');
+  const isMcpServerBin = normalizedCommand.includes('.bin/mcp-server') ||
+    /(?:dollhousemcp|mcp-server)[/\\]dist[/\\]index\.js/.test(normalizedCommand);
   return isDollhouseBin || isMcpServerBin;
+}
+
+function parsePidToken(value: string): number | null {
+  if (!value) return null;
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code < 48 || code > 57) {
+      return null;
+    }
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < ROOT_PARENT_PID) {
+    return null;
+  }
+  return parsed;
+}
+
+function isWhitespaceChar(value: string): boolean {
+  return value === ' ' || value === '\t' || value === '\n' || value === '\r' || value === '\f' || value === '\v';
+}
+
+function splitProcessInspectionFields(line: string): string[] | null {
+  const fields: string[] = [];
+  let index = 0;
+  const normalizedLine = UnicodeValidator.normalize(line).normalizedContent.trim();
+
+  while (index < normalizedLine.length && fields.length < PROCESS_INSPECTION_FIELD_COUNT - 1) {
+    while (index < normalizedLine.length && isWhitespaceChar(normalizedLine[index])) {
+      index++;
+    }
+    if (index >= normalizedLine.length) break;
+
+    const fieldStart = index;
+    while (index < normalizedLine.length && !isWhitespaceChar(normalizedLine[index])) {
+      index++;
+    }
+    fields.push(normalizedLine.slice(fieldStart, index));
+  }
+
+  while (index < normalizedLine.length && isWhitespaceChar(normalizedLine[index])) {
+    index++;
+  }
+  if (index < normalizedLine.length) {
+    fields.push(normalizedLine.slice(index));
+  }
+
+  return fields.length === PROCESS_INSPECTION_FIELD_COUNT ? fields : null;
 }
 
 async function inspectProcess(pid: number): Promise<ProcessInspection | null> {
@@ -106,14 +160,18 @@ async function inspectProcess(pid: number): Promise<ProcessInspection | null> {
       ['-p', String(pid), '-o', 'user=,pid=,ppid=,command='],
       { timeout: COMMAND_TIMEOUT_MS },
     );
-    const line = stdout.trim();
-    const match = line.match(/^(\S+)\s+(\d+)\s+(\d+)\s+(.+)$/);
-    if (!match) return null;
+    const fields = splitProcessInspectionFields(stdout);
+    if (!fields) return null;
+    const [user, pidToken, parentPidToken, command] = fields;
+    const parsedPid = parsePidToken(pidToken);
+    const parsedParentPid = parsePidToken(parentPidToken);
+    if (parsedPid === null || parsedParentPid === null) return null;
+
     return {
-      user: match[1],
-      pid: Number(match[2]),
-      parentPid: Number(match[3]),
-      command: match[4],
+      user: UnicodeValidator.normalize(user).normalizedContent,
+      pid: parsedPid,
+      parentPid: parsedParentPid,
+      command: UnicodeValidator.normalize(command).normalizedContent,
     };
   } catch {
     return null;
@@ -127,7 +185,8 @@ async function getProcessCommand(pid: number): Promise<string | null> {
 
   try {
     const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'command='], { timeout: COMMAND_TIMEOUT_MS });
-    return stdout.trim() || null;
+    const normalized = UnicodeValidator.normalize(stdout).normalizedContent.trim();
+    return normalized || null;
   } catch {
     return null;
   }
@@ -164,7 +223,10 @@ export async function findPidOnPort(port: number): Promise<number | null> {
       const { stdout, stderr } = await execFileAsync(cmd.bin, cmd.args, { timeout: COMMAND_TIMEOUT_MS });
       // fuser outputs to stderr on some systems
       const output = (stdout || stderr || '').trim();
-      const pids = output.split(/\s+/).map(Number).filter(n => !Number.isNaN(n) && n > 0);
+      const pids = output
+        .split(/\s+/)
+        .map((token) => parsePidToken(token))
+        .filter((pid): pid is number => pid !== null);
       const otherPid = pids.find(p => p !== process.pid);
       if (otherPid) return otherPid;
     } catch {
