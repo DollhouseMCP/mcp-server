@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.22] - 2026-04-16
+
+- Fix legacy console leader takeover so new authenticated sessions can replace older incompatible port owners and register correctly.
+
 ## [2.0.21] - 2026-04-16
 
 - Sanitize OAuth and PAT helper logging to restore SonarCloud security quality
