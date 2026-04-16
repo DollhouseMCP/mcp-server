@@ -15,7 +15,6 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
-import { parse as parseToml } from 'smol-toml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -179,23 +178,29 @@ interface DetectResult {
 
 function parseTomlSectionConfig(
   sectionName: string,
-  mcpServers: Record<string, unknown>,
+  raw: string,
 ): Record<string, unknown> | null {
-  const serverConfig = mcpServers[sectionName];
-  if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
-    return { serverName: sectionName };
-  }
+  const escapedSectionName = sectionName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const sectionRegex = new RegExp(`\\[mcp_servers\\.${escapedSectionName}\\]`, 'i');
+  const sectionMatch = sectionRegex.exec(raw);
+  if (!sectionMatch) return null;
 
   const tomlConfig: Record<string, unknown> = { serverName: sectionName };
-  const { command, args, enabled } = serverConfig as {
-    command?: unknown;
-    args?: unknown;
-    enabled?: unknown;
-  };
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const nextSection = raw.indexOf('\n[', sectionStart);
+  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
 
-  if (typeof command === 'string') tomlConfig.command = command;
-  if (Array.isArray(args)) tomlConfig.args = args;
-  if (typeof enabled === 'boolean') tomlConfig.enabled = enabled;
+  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
+  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
+  const enabledMatch = /enabled\s*=\s*(true|false)/i.exec(sectionContent);
+
+  if (commandMatch) tomlConfig.command = commandMatch[1];
+  if (argsMatch) {
+    tomlConfig.args = argsMatch[1].split(',').map((arg) => arg.trim().replaceAll('"', ''));
+  }
+  if (enabledMatch) {
+    tomlConfig.enabled = enabledMatch[1].toLowerCase() === 'true';
+  }
 
   return tomlConfig;
 }
@@ -206,29 +211,16 @@ export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
     return { installed: false };
   }
 
-  try {
-    const parsed = parseToml(raw) as Record<string, unknown>;
-    const mcpServers = parsed.mcp_servers;
-    if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const exactConfig = parseTomlSectionConfig('dollhousemcp', mcpServers as Record<string, unknown>);
-    if (exactConfig) {
-      return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
-    }
-
-    const fallbackKey = Object.keys(mcpServers).find((key) => key.toLowerCase().includes('dollhousemcp'));
-    if (!fallbackKey) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const fallbackConfig = parseTomlSectionConfig(fallbackKey, mcpServers as Record<string, unknown>)
-      ?? { serverName: fallbackKey };
-    return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
-  } catch {
-    return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+  const exactConfig = parseTomlSectionConfig('dollhousemcp', raw);
+  if (exactConfig) {
+    return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
   }
+
+  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
+  if (!sectionMatch) return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+
+  const fallbackConfig = parseTomlSectionConfig(sectionMatch[1], raw) ?? { serverName: sectionMatch[1] };
+  return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
 }
 
 /** Parse a JSON config file for a DollhouseMCP server entry */
