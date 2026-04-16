@@ -24,7 +24,7 @@ const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
 
 /** Save the existing license.json (if any) before tests, restore after. */
 let savedLicense: string | null = null;
-const originalFetch = global.fetch;
+const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   try {
@@ -47,7 +47,7 @@ afterAll(async () => {
 });
 
 afterEach(() => {
-  global.fetch = originalFetch;
+  globalThis.fetch = originalFetch;
 });
 
 // ── API Endpoint Tests ───────────────────────────────────────────────────
@@ -643,7 +643,7 @@ describe('License Routes — Email Verification', () => {
 
   describe('POST /api/setup/license — Verification Required', () => {
     it('returns success even if the direct worker call times out', async () => {
-      global.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
         const signal = init?.signal as AbortSignal | undefined;
         await new Promise((resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
@@ -658,7 +658,7 @@ describe('License Routes — Email Verification', () => {
         .expect(200);
 
       expect(res.body.verificationRequired).toBe(true);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('workers.dev'),
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
@@ -785,7 +785,7 @@ describe('License Routes — Email Verification', () => {
         .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
         .expect(200);
 
-      global.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+      globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
         const signal = init?.signal as AbortSignal | undefined;
         await new Promise((resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
@@ -800,7 +800,7 @@ describe('License Routes — Email Verification', () => {
         .expect(200);
 
       expect(res.body.success).toBe(true);
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('workers.dev'),
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
       );
