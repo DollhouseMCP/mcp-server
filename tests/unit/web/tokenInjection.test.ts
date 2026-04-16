@@ -19,11 +19,14 @@ const INDEX_TEMPLATE = `<!DOCTYPE html>
 <html>
 <head>
   <meta name="dollhouse-console-token" content="{{CONSOLE_TOKEN}}">
+  <meta name="dollhouse-console-asset-version" content="{{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="styles.css?v={{DOLLHOUSE_ASSET_VERSION}}">
 </head>
-<body><h1>DollhouseMCP Console</h1></body>
+<body><h1>DollhouseMCP Console</h1><script src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script></body>
 </html>`;
 
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
+const ASSET_VERSION_PLACEHOLDER = '{{DOLLHOUSE_ASSET_VERSION}}';
 
 /** A valid 64-hex-char token. */
 const TEST_TOKEN = 'a'.repeat(64);
@@ -37,6 +40,7 @@ const ROTATED_TOKEN = 'b'.repeat(64);
 async function buildTestApp(options: {
   publicDir: string;
   getToken: () => string;
+  getAssetVersion?: () => string;
 }) {
   const app = express();
 
@@ -48,6 +52,7 @@ async function buildTestApp(options: {
 
   app.get('/{*path}', async (_req, res) => {
     const currentToken = options.getToken();
+    const currentAssetVersion = options.getAssetVersion ? options.getAssetVersion() : '2.0.18';
     if (cachedHtml !== null && cachedToken === currentToken) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.send(cachedHtml);
@@ -62,6 +67,7 @@ async function buildTestApp(options: {
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
     cachedHtml = template.replaceAll(TOKEN_META_PLACEHOLDER, escaped);
+    cachedHtml = cachedHtml.replaceAll(ASSET_VERSION_PLACEHOLDER, currentAssetVersion);
     cachedToken = currentToken;
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.send(cachedHtml);
@@ -88,6 +94,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => TEST_TOKEN,
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/');
@@ -95,12 +102,17 @@ describe('token injection into index.html (#1804)', () => {
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain(`content="${TEST_TOKEN}"`);
     expect(res.text).not.toContain('{{CONSOLE_TOKEN}}');
+    expect(res.text).toContain('content="2.0.18"');
+    expect(res.text).toContain('styles.css?v=2.0.18');
+    expect(res.text).toContain('app.js?v=2.0.18');
+    expect(res.text).not.toContain('{{DOLLHOUSE_ASSET_VERSION}}');
   });
 
   it('serves empty token when no token is available', async () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => '',
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/');
@@ -113,6 +125,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => TEST_TOKEN,
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/styles.css');
@@ -125,6 +138,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => TEST_TOKEN,
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/app.js');
@@ -137,6 +151,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => currentToken,
+      getAssetVersion: () => '2.0.18',
     });
 
     // First request caches with TEST_TOKEN
@@ -156,6 +171,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => 'a"b<c&d',
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/');
@@ -167,6 +183,7 @@ describe('token injection into index.html (#1804)', () => {
     const app = await buildTestApp({
       publicDir: testDir,
       getToken: () => TEST_TOKEN,
+      getAssetVersion: () => '2.0.18',
     });
 
     const res = await request(app).get('/some/deep/path');
