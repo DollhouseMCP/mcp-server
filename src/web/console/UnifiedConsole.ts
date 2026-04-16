@@ -28,11 +28,15 @@ import {
   detectLegacyLeader,
   readLeaderLock,
   deleteLeaderLock,
+  claimLeadership,
+  createLeaderInfo,
   LOCK_VERSION,
   CONSOLE_PROTOCOL_VERSION,
   LEGACY_SERVER_VERSION,
+  evaluateLeaderPreference,
   type ElectionResult,
   type ConsoleLeaderInfo,
+  type LeaderPreferenceDecision,
 } from './LeaderElection.js';
 import { createIngestRoutes } from './IngestRoutes.js';
 import {
@@ -41,7 +45,7 @@ import {
 } from './LeaderForwardingSink.js';
 import { PromotionManager } from './PromotionManager.js';
 import { ConsoleTokenStore } from './consoleToken.js';
-import { findPidOnPort } from './StaleProcessRecovery.js';
+import { findPidOnPort, killStaleProcessDetailed } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
 
 /**
@@ -163,6 +167,12 @@ export interface PortLeaderDiscovery {
 export interface BindFailureRecoveryResult extends PortLeaderDiscovery {
   lockCleanupAttempted: boolean;
   lockCleanupPerformed: boolean;
+}
+
+export interface PortOwnerReplacementDecision {
+  shouldEvict: boolean;
+  ownerPid: number | null;
+  preference: LeaderPreferenceDecision | null;
 }
 
 interface DiscoveryDependencies {
@@ -338,6 +348,26 @@ export async function recoverLeaderBindFailure(
   };
 }
 
+export function evaluatePortOwnerReplacement(
+  candidateLeader: ConsoleLeaderInfo,
+  fallback: PortLeaderDiscovery,
+): PortOwnerReplacementDecision {
+  if (!fallback.leaderInfo || fallback.ownerPid === null || fallback.ownerPid === candidateLeader.pid) {
+    return {
+      shouldEvict: false,
+      ownerPid: fallback.ownerPid,
+      preference: null,
+    };
+  }
+
+  const preference = evaluateLeaderPreference(candidateLeader, fallback.leaderInfo);
+  return {
+    shouldEvict: preference.shouldReplace,
+    ownerPid: fallback.ownerPid,
+    preference,
+  };
+}
+
 /**
  * Start the unified web console.
  *
@@ -427,10 +457,59 @@ async function startAsLeader(
   };
   // bindAndListen now handles EADDRINUSE by finding and killing the stale
   // process on the port, then retrying. No external retry loop needed.
-  const webResult = await startWebServer(serverOpts);
+  let webResult = await startWebServer(serverOpts);
 
   if (webResult.bindResult && !webResult.bindResult.success) {
     const fallback = await recoverLeaderBindFailure(election.leaderInfo, consolePort, primaryToken.token);
+    const replacement = evaluatePortOwnerReplacement(election.leaderInfo, fallback);
+
+    if (replacement.shouldEvict && replacement.ownerPid !== null) {
+      logger.warn('[UnifiedConsole] Attempting forced takeover from older or incompatible active leader', {
+        port: consolePort,
+        ownerPid: replacement.ownerPid,
+        source: fallback.source,
+        candidateSessionId: election.leaderInfo.sessionId,
+        candidateVersion: replacement.preference?.candidateVersion,
+        existingSessionId: fallback.leaderInfo?.sessionId,
+        existingVersion: replacement.preference?.existingVersion,
+        reason: replacement.preference?.reason,
+      });
+
+      const forcedKill = await killStaleProcessDetailed(replacement.ownerPid, consolePort, {
+        allowActiveHostParent: true,
+      });
+      if (forcedKill.killed) {
+        webResult = await startWebServer(serverOpts);
+        if (!webResult.bindResult || webResult.bindResult.success) {
+          const reboundLeaderInfo = createLeaderInfo(options.sessionId, consolePort);
+          const claimed = await claimLeadership(reboundLeaderInfo);
+          if (!claimed) {
+            logger.warn('[UnifiedConsole] Rebound leader bound port but could not immediately re-claim lock', {
+              sessionId: reboundLeaderInfo.sessionId,
+              pid: reboundLeaderInfo.pid,
+              port: reboundLeaderInfo.port,
+            });
+          }
+          election = { role: 'leader', leaderInfo: reboundLeaderInfo };
+        } else {
+          logger.warn('[UnifiedConsole] Forced takeover killed old leader but bind retry still failed', {
+            port: consolePort,
+            bindError: webResult.bindResult.error,
+            bindDetail: webResult.bindResult.detail,
+            ownerPid: replacement.ownerPid,
+          });
+        }
+      } else {
+        logger.warn('[UnifiedConsole] Forced takeover skipped or failed after identifying replaceable leader', {
+          port: consolePort,
+          ownerPid: replacement.ownerPid,
+          reason: forcedKill.reason,
+          detail: forcedKill.detail,
+        });
+      }
+    }
+
+    if (webResult.bindResult && !webResult.bindResult.success) {
     if (fallback.leaderInfo) {
       logger.warn('[UnifiedConsole] Leader role aborted: bind failed, falling back to follower', {
         port: consolePort,
@@ -447,13 +526,14 @@ async function startAsLeader(
       return startAsFollower(options, followerElection, consolePort, primaryToken.token);
     }
 
-    logger.error('[UnifiedConsole] Leader failed to bind and no active leader could be identified', {
-      port: consolePort,
-      provisionalLeaderPid: election.leaderInfo.pid,
-      bindError: webResult.bindResult.error,
-      bindDetail: webResult.bindResult.detail,
-    });
-    throw new Error(`Leader failed to bind port ${consolePort} and no active leader was discoverable`);
+      logger.error('[UnifiedConsole] Leader failed to bind and no active leader could be identified', {
+        port: consolePort,
+        provisionalLeaderPid: election.leaderInfo.pid,
+        bindError: webResult.bindResult.error,
+        bindDetail: webResult.bindResult.detail,
+      });
+      throw new Error(`Leader failed to bind port ${consolePort} and no active leader was discoverable`);
+    }
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.
