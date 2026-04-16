@@ -2387,9 +2387,15 @@ describe('MCPAQLHandler', () => {
         ...mockRegistry.elementCRUD,
         releaseDeadlock: jest.fn().mockResolvedValue({
           sessionId: 'test-session',
+          activeBeforeReset: [{ type: 'persona', name: 'locked-persona' }],
           deactivated: [{ type: 'persona', name: 'locked-persona' }],
           failed: [],
+          likelyDeadlockCause: {
+            sandboxingElement: { type: 'persona', name: 'locked-persona' },
+            advisoryElements: [],
+          },
           persistedStateCleared: true,
+          snapshotFile: '/tmp/deadlock-relief-test.json',
         }),
       };
 
@@ -2409,7 +2415,13 @@ describe('MCPAQLHandler', () => {
         expect(result.data).toEqual(expect.objectContaining({
           released: true,
           persistedStateCleared: true,
+          activeBeforeReset: [{ type: 'persona', element_name: 'locked-persona' }],
           deactivated: [{ type: 'persona', element_name: 'locked-persona' }],
+          likelyDeadlockCause: {
+            sandboxingElement: { type: 'persona', element_name: 'locked-persona' },
+            advisoryElements: [],
+          },
+          snapshotFile: '/tmp/deadlock-relief-test.json',
         }));
       }
       expect(verificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'RELIEF1');

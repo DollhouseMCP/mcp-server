@@ -1423,7 +1423,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       challenge_id: { type: 'string', description: 'Challenge ID from the first release_deadlock call' },
       code: { type: 'string', description: 'Verification code displayed to the user for deadlock relief' },
     },
-    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Two-step flow. First call returns { pending, challenge_id, message }. Second call with challenge_id + code returns { released, deactivated, failed, persistedStateCleared, message }.' },
+    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Two-step flow. First call returns { pending, challenge_id, message }. Second call with challenge_id + code returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
     examples: [
       '{ operation: "release_deadlock" }',
       '{ operation: "release_deadlock", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',

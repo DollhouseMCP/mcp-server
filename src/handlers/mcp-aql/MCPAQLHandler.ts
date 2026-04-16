@@ -2435,9 +2435,15 @@ export class MCPAQLHandler {
     released: true;
     challenge_id: string;
     sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
     deactivated: Array<{ type: string; name: string }>;
     failed: Array<{ type: string; name: string; error: string }>;
     persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
     message: string;
   }> {
     const store = this.handlers.verificationStore;
@@ -2493,8 +2499,8 @@ export class MCPAQLHandler {
       challenge_id: challengeId,
       ...reset,
       message: reset.failed.length > 0
-        ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list and re-check active elements.`
-        : 'Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared.',
+        ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list, likely deadlock cause, and recovery snapshot before reactivating elements.`
+        : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared${reset.snapshotFile ? `; a recovery snapshot was saved to ${reset.snapshotFile}` : ''}.`,
     };
   }
 

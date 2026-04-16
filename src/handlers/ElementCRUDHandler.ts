@@ -18,6 +18,8 @@
  */
 
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
+import os from 'os';
+import path from 'path';
 import { SkillManager } from '../elements/skills/index.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
@@ -56,7 +58,11 @@ import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
-import { getGatekeeperDiagnostics } from './mcp-aql/policies/ElementPolicies.js';
+import {
+  findConfirmAdvisoryElements,
+  findConfirmDenyingElement,
+  getGatekeeperDiagnostics,
+} from './mcp-aql/policies/ElementPolicies.js';
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
@@ -560,11 +566,20 @@ export class ElementCRUDHandler {
 
   async releaseDeadlock(): Promise<{
     sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
     deactivated: Array<{ type: string; name: string }>;
     failed: Array<{ type: string; name: string; error: string }>;
     persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
   }> {
     const activeElements = await this.collectActiveElementsForDeadlockRelief();
+    const activePolicyElements = await this.getActiveElementsForPolicy();
+    const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
+    const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
     const deactivated: Array<{ type: string; name: string }> = [];
     const failed: Array<{ type: string; name: string; error: string }> = [];
 
@@ -592,6 +607,18 @@ export class ElementCRUDHandler {
     }
 
     const persistedStateCleared = Boolean(this.activationStore?.isEnabled());
+    const snapshotFile = await this.writeDeadlockReliefSnapshot({
+      sessionId: this.activationStore?.getSessionId(),
+      activeBeforeReset: activeElements,
+      deactivated,
+      failed,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      persistedStateCleared,
+    });
+
     this.activationStore?.clearAll();
     this.policyExportService?.exportPolicies().catch(() => {});
 
@@ -602,9 +629,15 @@ export class ElementCRUDHandler {
       details: `Deadlock relief deactivated ${deactivated.length} element(s)${failed.length > 0 ? ` with ${failed.length} failure(s)` : ''}`,
       additionalData: {
         sessionId: this.activationStore?.getSessionId(),
+        activeBeforeReset: activeElements,
         deactivated,
         failed,
         persistedStateCleared,
+        likelyDeadlockCause: {
+          ...(sandboxingElement ? { sandboxingElement } : {}),
+          advisoryElements,
+        },
+        snapshotFile,
       },
     });
 
@@ -612,9 +645,15 @@ export class ElementCRUDHandler {
       ...(this.activationStore?.getSessionId()
         ? { sessionId: this.activationStore.getSessionId() }
         : {}),
+      activeBeforeReset: activeElements,
       deactivated,
       failed,
       persistedStateCleared,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      ...(snapshotFile ? { snapshotFile } : {}),
     };
   }
 
@@ -654,6 +693,43 @@ export class ElementCRUDHandler {
     return activeElements.filter((element, index, all) =>
       all.findIndex((candidate) => candidate.type === element.type && candidate.name === element.name) === index,
     );
+  }
+
+  private async writeDeadlockReliefSnapshot(snapshot: {
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    persistedStateCleared: boolean;
+  }): Promise<string | undefined> {
+    const snapshotDir = path.join(os.homedir(), '.dollhouse', 'state', 'deadlock-relief');
+    const safeSessionId = (snapshot.sessionId ?? 'session')
+      .replaceAll(/[^a-zA-Z0-9_-]/g, '-');
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+    const snapshotFile = path.join(snapshotDir, `deadlock-relief-${safeSessionId}-${timestamp}.json`);
+
+    try {
+      await this.fileOperations.createDirectory(snapshotDir);
+      await this.fileOperations.writeFile(
+        snapshotFile,
+        JSON.stringify({
+          createdAt: new Date().toISOString(),
+          ...snapshot,
+        }, null, 2),
+        { source: 'ElementCRUDHandler.releaseDeadlock' },
+      );
+      return snapshotFile;
+    } catch (error) {
+      logger.warn('Failed to write deadlock relief snapshot', {
+        snapshotFile,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
   }
 
   private async mergePersistedPolicyState(

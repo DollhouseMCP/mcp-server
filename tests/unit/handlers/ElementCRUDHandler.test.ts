@@ -435,6 +435,13 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(result.sessionId).toBe('session-lock');
       expect(result.failed).toEqual([]);
       expect(result.persistedStateCleared).toBe(true);
+      expect(result.activeBeforeReset).toEqual(expect.arrayContaining([
+        { type: ElementType.PERSONA, name: 'Locked Persona' },
+        { type: ElementType.SKILL, name: 'locked-skill' },
+        { type: ElementType.AGENT, name: 'locked-agent' },
+        { type: ElementType.MEMORY, name: 'locked-memory' },
+        { type: ElementType.ENSEMBLE, name: 'locked-ensemble' },
+      ]));
       expect(result.deactivated).toEqual(expect.arrayContaining([
         { type: ElementType.PERSONA, name: 'Locked Persona' },
         { type: ElementType.SKILL, name: 'locked-skill' },
@@ -442,12 +449,18 @@ describe('ElementCRUDHandler (DI)', () => {
         { type: ElementType.MEMORY, name: 'locked-memory' },
         { type: ElementType.ENSEMBLE, name: 'locked-ensemble' },
       ]));
+      expect(result.likelyDeadlockCause).toEqual({
+        advisoryElements: [],
+      });
+      expect(result.snapshotFile).toContain('/.dollhouse/state/deadlock-relief/');
       expect(personaHandler.deactivatePersona).toHaveBeenCalledWith('Locked Persona');
       expect(skillManager.deactivateSkill).toHaveBeenCalledWith('locked-skill');
       expect(agentManager.deactivateAgent).toHaveBeenCalledWith('locked-agent');
       expect(memoryManager.deactivateMemory).toHaveBeenCalledWith('locked-memory');
       expect(ensembleManager.deactivateEnsemble).toHaveBeenCalledWith('locked-ensemble');
       expect(activationStore.clearAll).toHaveBeenCalled();
+      expect(fileOperations.createDirectory).toHaveBeenCalled();
+      expect(fileOperations.writeFile).toHaveBeenCalled();
     });
   });
 });
