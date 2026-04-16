@@ -190,6 +190,20 @@ interface ForceTakeoverAttemptResult {
   reboundLockClaimed: boolean;
 }
 
+interface FollowerAuthorityResolution {
+  election: ElectionResult;
+  discovery: PortLeaderDiscovery | null;
+  replacement: PortOwnerReplacementDecision | null;
+  forcedClaim: boolean;
+}
+
+interface FollowerAuthorityDependencies {
+  isLeaderWebConsoleReachableImpl?: typeof isLeaderWebConsoleReachable;
+  discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
+  forceClaimLeadershipImpl?: typeof forceClaimLeadership;
+  deleteLeaderLockImpl?: typeof deleteLeaderLock;
+}
+
 interface DiscoveryDependencies {
   fetchImpl?: typeof fetch;
   findPidOnPortImpl?: typeof findPidOnPort;
@@ -413,6 +427,106 @@ function buildBindFailureLogContext(
   };
 }
 
+function buildAuthorityResolutionLogContext(
+  consolePort: number,
+  electedLeader: ConsoleLeaderInfo,
+  discovery: PortLeaderDiscovery | null,
+  replacement: PortOwnerReplacementDecision | null,
+) {
+  return {
+    port: consolePort,
+    electedLeaderPid: electedLeader.pid,
+    electedLeaderSessionId: electedLeader.sessionId,
+    electedLeaderVersion: electedLeader.serverVersion ?? LEGACY_SERVER_VERSION,
+    electedLeaderProtocolVersion: electedLeader.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+    servingOwnerPid: discovery?.ownerPid ?? null,
+    servingSource: discovery?.source ?? 'none',
+    servingLeaderPid: discovery?.leaderInfo?.pid ?? null,
+    servingLeaderSessionId: discovery?.leaderInfo?.sessionId ?? null,
+    servingLeaderVersion: discovery?.leaderInfo?.serverVersion ?? LEGACY_SERVER_VERSION,
+    servingLeaderProtocolVersion: discovery?.leaderInfo?.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
+    replacementShouldEvict: replacement?.shouldEvict ?? false,
+    replacementReason: replacement?.preference?.reason ?? null,
+  };
+}
+
+export async function resolveFollowerAuthority(
+  sessionId: string,
+  consolePort: number,
+  election: ElectionResult,
+  deps: FollowerAuthorityDependencies = {},
+): Promise<FollowerAuthorityResolution> {
+  const isLeaderWebConsoleReachableImpl = deps.isLeaderWebConsoleReachableImpl ?? isLeaderWebConsoleReachable;
+  const discoverLeaderServingPortImpl = deps.discoverLeaderServingPortImpl ?? discoverLeaderServingPort;
+  const forceClaimLeadershipImpl = deps.forceClaimLeadershipImpl ?? forceClaimLeadership;
+  const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
+
+  const reachable = await isLeaderWebConsoleReachableImpl(election.leaderInfo);
+  if (!reachable) {
+    logger.warn('[UnifiedConsole] Elected leader is not serving the console port; forcing takeover', {
+      port: consolePort,
+      electedLeaderPid: election.leaderInfo.pid,
+      electedLeaderSessionId: election.leaderInfo.sessionId,
+    });
+    return {
+      election: await forceClaimLeadershipImpl(sessionId, consolePort),
+      discovery: null,
+      replacement: null,
+      forcedClaim: true,
+    };
+  }
+
+  const candidateLeader = createLeaderInfo(sessionId, consolePort);
+  const discovery = await discoverLeaderServingPortImpl(consolePort, null);
+  if (!discovery.leaderInfo || discovery.ownerPid === null) {
+    return {
+      election,
+      discovery,
+      replacement: null,
+      forcedClaim: false,
+    };
+  }
+
+  const replacement = evaluatePortOwnerReplacement(candidateLeader, discovery);
+  if (discovery.ownerPid !== election.leaderInfo.pid) {
+    if (replacement.shouldEvict) {
+      await deleteLeaderLockImpl();
+      logger.warn('[UnifiedConsole] Split-brain console authority detected; newer session will replace the actual port owner', buildAuthorityResolutionLogContext(
+        consolePort,
+        election.leaderInfo,
+        discovery,
+        replacement,
+      ));
+      return {
+        election: { role: 'leader', leaderInfo: candidateLeader },
+        discovery,
+        replacement,
+        forcedClaim: false,
+      };
+    }
+
+    logger.warn('[UnifiedConsole] Split-brain console authority detected; following the actual port owner', buildAuthorityResolutionLogContext(
+      consolePort,
+      election.leaderInfo,
+      discovery,
+      replacement,
+    ));
+    return {
+      election: { role: 'follower', leaderInfo: discovery.leaderInfo },
+      discovery,
+      replacement,
+      forcedClaim: false,
+    };
+  }
+
+  return {
+    election,
+    discovery,
+    replacement,
+    forcedClaim: false,
+  };
+}
+
 async function attemptForceTakeover(
   options: UnifiedConsoleOptions,
   currentElection: ElectionResult,
@@ -560,14 +674,9 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
 
   let election = await electLeader(options.sessionId, consolePort);
 
-  // If we lost the election, check if the leader is actually running a web console.
-  // An MCP stdio process may hold leadership but not serve web routes.
-  // In that case, force a takeover so the web console works properly.
   if (election.role === 'follower') {
-    const reachable = await isLeaderWebConsoleReachable(election.leaderInfo);
-    if (!reachable) {
-      election = await forceClaimLeadership(options.sessionId, consolePort);
-    }
+    const resolved = await resolveFollowerAuthority(options.sessionId, consolePort, election);
+    election = resolved.election;
   }
 
   if (election.role === 'leader') {

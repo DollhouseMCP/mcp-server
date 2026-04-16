@@ -22,6 +22,7 @@ import {
   discoverLeaderServingPort,
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
+  resolveFollowerAuthority,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -365,6 +366,101 @@ describe('evaluatePortOwnerReplacement', () => {
     expect(decision.shouldEvict).toBe(false);
     expect(decision.preference).toMatchObject({
       reason: 'same-version',
+    });
+  });
+});
+
+describe('resolveFollowerAuthority', () => {
+  it('promotes a newer session to leader when the reachable port owner is older than the elected lock holder', async () => {
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 77290,
+      port: 41715,
+      sessionId: 'lock-holder',
+      startedAt: '2026-04-16T13:55:09.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: '2.0.19',
+      consoleProtocolVersion: 1,
+    };
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'api',
+        leaderInfo: {
+          version: 1,
+          pid: 57117,
+          port: 41715,
+          sessionId: 'legacy-console',
+          startedAt: '2026-04-13T19:07:12.895Z',
+          heartbeat: '2026-04-16T16:29:44.000Z',
+          serverVersion: undefined,
+          consoleProtocolVersion: undefined,
+        },
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.election.role).toBe('leader');
+    expect(result.election.leaderInfo).toMatchObject({
+      sessionId: 'session-newest',
+      port: 41715,
+      serverVersion: expect.any(String),
+      consoleProtocolVersion: 1,
+    });
+  });
+
+  it('follows the actual port owner when split-brain is present but replacement is not preferred', async () => {
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 77290,
+      port: 41715,
+      sessionId: 'lock-holder',
+      startedAt: '2026-04-16T13:55:09.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: '2.0.23',
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 85513,
+        source: 'api',
+        leaderInfo: {
+          version: 1,
+          pid: 85513,
+          port: 41715,
+          sessionId: 'actual-owner',
+          startedAt: '2026-04-16T16:29:44.000Z',
+          heartbeat: '2026-04-16T16:29:44.000Z',
+          serverVersion: '2.0.23',
+          consoleProtocolVersion: 1,
+        },
+      }),
+    });
+
+    expect(result.election).toEqual({
+      role: 'follower',
+      leaderInfo: {
+        version: 1,
+        pid: 85513,
+        port: 41715,
+        sessionId: 'actual-owner',
+        startedAt: '2026-04-16T16:29:44.000Z',
+        heartbeat: '2026-04-16T16:29:44.000Z',
+        serverVersion: '2.0.23',
+        consoleProtocolVersion: 1,
+      },
     });
   });
 });
