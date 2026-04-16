@@ -14,6 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { jest } from '@jest/globals';
 
 // The Worker exports a default object with a fetch method.
 // TypeScript needs the path to resolve; Jest will handle the TS transform.
@@ -578,6 +579,23 @@ describe('License Email Worker', () => {
       expect(text).not.toContain('Resend secret');
       expect(text).not.toContain('stack');
       expect(text).not.toContain('at ');
+    });
+
+    it('sanitizes Resend error logging output', async () => {
+      restoreFetch();
+      installFetchMock({ ok: false, status: 500, text: 'Resend secret: sk_live_abc123' });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const env = makeEnv();
+      const req = makeRequest(makeCommercialEvent());
+
+      await worker.fetch(req, env);
+
+      const logged = errorSpy.mock.calls.flat().join(' ');
+      expect(logged).not.toContain('sk_live_abc123');
+      expect(logged).not.toContain('Resend secret');
+
+      errorSpy.mockRestore();
     });
   });
 });

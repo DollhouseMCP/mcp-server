@@ -55,7 +55,6 @@ const DIRECT_IP_WINDOW_SECONDS = 60;
 const DIRECT_IP_MAX_REQUESTS = 5;
 const DIRECT_EMAIL_COOLDOWN_SECONDS = 60;
 const DIRECT_STORE_PREFIX = 'https://dollhouse-cache.local/license-email/';
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VERIFICATION_CODE_PATTERN = /^\d{6}$/;
 const memoryStore = new Map<string, { value: string; expiresAt: number }>();
 
@@ -112,6 +111,26 @@ function normalizeEmail(value: unknown): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
+function isValidEmailAddress(value: unknown): boolean {
+  const email = normalizeEmail(value);
+  if (email.length < 3 || email.length > 254) return false;
+  if (email.includes(' ') || email.startsWith('@') || email.endsWith('@')) return false;
+
+  const atIndex = email.indexOf('@');
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@')) return false;
+
+  const localPart = email.slice(0, atIndex);
+  const domain = email.slice(atIndex + 1);
+  if (!localPart || !domain) return false;
+  if (domain.startsWith('.') || domain.endsWith('.')) return false;
+
+  const domainLabels = domain.split('.');
+  if (domainLabels.length < 2) return false;
+  if (domainLabels.some(label => label.length === 0)) return false;
+
+  return true;
+}
+
 function getClientIp(request: Request): string {
   const header = request.headers.get('CF-Connecting-IP') || request.headers.get('x-forwarded-for') || 'unknown';
   return header.split(',')[0]?.trim() || 'unknown';
@@ -139,7 +158,7 @@ function validateDirectVerificationEvent(event: PostHogEvent): string | null {
   if (tier !== 'free-commercial' && tier !== 'paid-commercial') {
     return 'Missing required fields: tier, email';
   }
-  if (!EMAIL_PATTERN.test(normalizeEmail(email))) {
+  if (!isValidEmailAddress(email)) {
     return 'Missing required fields: tier, email';
   }
   if (event_type !== 'verification') {
@@ -510,8 +529,8 @@ async function sendEmail(params: EmailParams): Promise<void> {
 
     if (response.ok) return;
 
-    const text = await response.text();
-    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status}):`, text);
+    await response.text();
+    console.error(`Resend API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}, status ${response.status})`);
 
     // Don't retry on client errors (400, 401, 403, 422) — only server/rate errors
     if (response.status < 500 && response.status !== 429) {
