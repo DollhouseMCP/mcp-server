@@ -448,5 +448,38 @@ describe('Console Failure Modes', () => {
       await heartbeat.stop(); // second stop should be safe
       expect(true).toBe(true);
     });
+
+    it('sends server version metadata with session events', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+      } as Response);
+
+      try {
+        const { SessionHeartbeat } = await import(
+          '../../../../src/web/console/LeaderForwardingSink.js'
+        );
+        const { PACKAGE_VERSION } = await import('../../../../src/generated/version.js');
+        const { CONSOLE_PROTOCOL_VERSION } = await import(
+          '../../../../src/web/console/LeaderElection.js'
+        );
+
+        const heartbeat = new SessionHeartbeat(
+          'http://127.0.0.1:41715',
+          'test-session',
+          process.pid,
+          null,
+        );
+
+        await heartbeat.start();
+        await heartbeat.stop();
+
+        const firstCall = fetchSpy.mock.calls[0];
+        const body = JSON.parse(String((firstCall?.[1] as RequestInit | undefined)?.body ?? '{}'));
+        expect(body.serverVersion).toBe(PACKAGE_VERSION);
+        expect(body.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
   });
 });

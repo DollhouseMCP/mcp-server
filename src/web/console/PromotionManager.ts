@@ -15,9 +15,8 @@ import {
   deleteLeaderLock,
   claimLeadership,
   readLeaderLock,
-  LOCK_VERSION,
+  createLeaderInfo,
   type ElectionResult,
-  type ConsoleLeaderInfo,
 } from './LeaderElection.js';
 import type { LeaderForwardingLogSink, SessionHeartbeat } from './LeaderForwardingSink.js';
 import type { UnifiedConsoleOptions } from './UnifiedConsole.js';
@@ -74,15 +73,7 @@ export class PromotionManager {
       await forwardingSink.close();
       await deleteLeaderLock();
 
-      const now = new Date().toISOString();
-      const myInfo: ConsoleLeaderInfo = {
-        version: LOCK_VERSION,
-        pid: process.pid,
-        port: this.consolePort,
-        sessionId: this.options.sessionId,
-        startedAt: now,
-        heartbeat: now,
-      };
+      const myInfo = createLeaderInfo(this.options.sessionId, this.consolePort);
 
       const claimed = await claimLeadership(myInfo);
       const durationMs = Date.now() - startMs;

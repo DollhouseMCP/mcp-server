@@ -10,7 +10,7 @@
  * recovery, and follower re-election.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as net from 'node:net';
 import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';

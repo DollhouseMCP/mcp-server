@@ -23,7 +23,9 @@ import { join } from 'node:path';
 import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { env } from '../../config/env.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
 import { logger } from '../../utils/logger.js';
+import { compareVersions } from '../../utils/version.js';
 
 /** Directory for runtime state files */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
@@ -65,6 +67,18 @@ const HEARTBEAT_STALE_MS = 30_000;
 export const LOCK_VERSION = 1;
 
 /**
+ * Version of the leader-election/session metadata contract used by the
+ * authenticated web console. Older leaders will not have this field.
+ */
+export const CONSOLE_PROTOCOL_VERSION = 1;
+
+/** Missing protocol metadata means the leader predates version-aware election. */
+export const LEGACY_CONSOLE_PROTOCOL_VERSION = 0;
+
+/** Old lock files do not carry package version metadata. Treat them as oldest. */
+export const LEGACY_SERVER_VERSION = '0.0.0';
+
+/**
  * Information stored in the leader lock file.
  */
 export interface ConsoleLeaderInfo {
@@ -74,6 +88,8 @@ export interface ConsoleLeaderInfo {
   sessionId: string;
   startedAt: string;
   heartbeat: string;
+  serverVersion?: string;
+  consoleProtocolVersion?: number;
 }
 
 /**
@@ -83,6 +99,15 @@ export interface ElectionResult {
   role: 'leader' | 'follower';
   /** Leader info — for followers, this is the existing leader's info */
   leaderInfo: ConsoleLeaderInfo;
+}
+
+export interface LeaderPreferenceDecision {
+  shouldReplace: boolean;
+  reason: 'newer-compatible-version' | 'same-version' | 'older-version' | 'incompatible-protocol';
+  candidateVersion: string;
+  existingVersion: string;
+  candidateProtocolVersion: number;
+  existingProtocolVersion: number;
 }
 
 /**
@@ -97,6 +122,106 @@ export function isProcessAlive(pid: number): boolean {
     // EPERM = process exists but owned by another user — still alive
     return err?.code === 'EPERM';
   }
+}
+
+/**
+ * Normalize the server version present in the leader lock.
+ * Missing metadata means "legacy leader" for election purposes.
+ */
+export function getLeaderServerVersion(info: ConsoleLeaderInfo): string {
+  if (typeof info.serverVersion === 'string' && info.serverVersion.trim().length > 0) {
+    return info.serverVersion.trim();
+  }
+  return LEGACY_SERVER_VERSION;
+}
+
+/**
+ * Normalize the console protocol version present in the leader lock.
+ * Missing metadata means a leader from before version-aware election.
+ */
+export function getLeaderConsoleProtocolVersion(info: ConsoleLeaderInfo): number {
+  const raw = info.consoleProtocolVersion;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0) {
+    return raw;
+  }
+  return LEGACY_CONSOLE_PROTOCOL_VERSION;
+}
+
+/**
+ * Create this process's leader metadata in one place so all leadership paths
+ * publish the same version and protocol information.
+ */
+export function createLeaderInfo(sessionId: string, port: number): ConsoleLeaderInfo {
+  const now = new Date().toISOString();
+  return {
+    version: LOCK_VERSION,
+    pid: process.pid,
+    port,
+    sessionId: UnicodeValidator.normalize(sessionId).normalizedContent,
+    startedAt: now,
+    heartbeat: now,
+    serverVersion: PACKAGE_VERSION,
+    consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+  };
+}
+
+/**
+ * Decide whether this process should replace the current live leader based on
+ * compatibility first, then package version.
+ */
+export function evaluateLeaderPreference(
+  candidate: ConsoleLeaderInfo,
+  existing: ConsoleLeaderInfo,
+): LeaderPreferenceDecision {
+  const candidateVersion = getLeaderServerVersion(candidate);
+  const existingVersion = getLeaderServerVersion(existing);
+  const candidateProtocolVersion = getLeaderConsoleProtocolVersion(candidate);
+  const existingProtocolVersion = getLeaderConsoleProtocolVersion(existing);
+
+  const compatible =
+    existingProtocolVersion === candidateProtocolVersion ||
+    existingProtocolVersion === LEGACY_CONSOLE_PROTOCOL_VERSION;
+
+  if (!compatible) {
+    return {
+      shouldReplace: false,
+      reason: 'incompatible-protocol',
+      candidateVersion,
+      existingVersion,
+      candidateProtocolVersion,
+      existingProtocolVersion,
+    };
+  }
+
+  const versionComparison = compareVersions(candidateVersion, existingVersion);
+  if (versionComparison > 0) {
+    return {
+      shouldReplace: true,
+      reason: 'newer-compatible-version',
+      candidateVersion,
+      existingVersion,
+      candidateProtocolVersion,
+      existingProtocolVersion,
+    };
+  }
+  if (versionComparison === 0) {
+    return {
+      shouldReplace: false,
+      reason: 'same-version',
+      candidateVersion,
+      existingVersion,
+      candidateProtocolVersion,
+      existingProtocolVersion,
+    };
+  }
+  return {
+    shouldReplace: false,
+    reason: 'older-version',
+    candidateVersion,
+    existingVersion,
+    candidateProtocolVersion,
+    existingProtocolVersion,
+  };
 }
 
 /**
@@ -221,19 +346,46 @@ export async function deleteLeaderLock(): Promise<void> {
  * @returns Election result with role and leader info
  */
 export async function electLeader(sessionId: string, port: number): Promise<ElectionResult> {
-  sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
+  const myInfo = createLeaderInfo(sessionId, port);
+  sessionId = myInfo.sessionId;
   const existingLock = await readLeaderLock();
 
   if (existingLock && !isLockStale(existingLock)) {
-    logger.info('[LeaderElection] Existing leader found — becoming follower', {
-      leaderSession: existingLock.sessionId, leaderPid: existingLock.pid,
-      leaderPort: existingLock.port, mySession: sessionId, myPid: process.pid,
-    });
-    return { role: 'follower', leaderInfo: existingLock };
+    const preference = evaluateLeaderPreference(myInfo, existingLock);
+    if (preference.shouldReplace) {
+      logger.info('[LeaderElection] Replacing leader with newer compatible version', {
+        staleSession: existingLock.sessionId,
+        stalePid: existingLock.pid,
+        stalePort: existingLock.port,
+        staleVersion: preference.existingVersion,
+        staleProtocolVersion: preference.existingProtocolVersion,
+        mySession: sessionId,
+        myPid: process.pid,
+        myVersion: preference.candidateVersion,
+        myProtocolVersion: preference.candidateProtocolVersion,
+      });
+      await deleteLeaderLock();
+    } else {
+      logger.info('[LeaderElection] Existing leader found — becoming follower', {
+        leaderSession: existingLock.sessionId,
+        leaderPid: existingLock.pid,
+        leaderPort: existingLock.port,
+        leaderVersion: preference.existingVersion,
+        leaderProtocolVersion: preference.existingProtocolVersion,
+        mySession: sessionId,
+        myPid: process.pid,
+        myVersion: preference.candidateVersion,
+        myProtocolVersion: preference.candidateProtocolVersion,
+        reason: preference.reason,
+      });
+      return { role: 'follower', leaderInfo: existingLock };
+    }
   }
 
-  // No valid leader — try to claim
-  if (existingLock) {
+  if (existingLock && !isLockStale(existingLock)) {
+    // Leader was intentionally replaced above. Continue to the claim path.
+  } else if (existingLock) {
+    // No valid leader — try to claim
     const alive = isProcessAlive(existingLock.pid);
     const heartbeatAge = Date.now() - new Date(existingLock.heartbeat).getTime();
     logger.info('[LeaderElection] Stale leader lock — taking over', {
@@ -242,16 +394,6 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
     });
     await deleteLeaderLock();
   }
-
-  const now = new Date().toISOString();
-  const myInfo: ConsoleLeaderInfo = {
-    version: LOCK_VERSION,
-    pid: process.pid,
-    port,
-    sessionId,
-    startedAt: now,
-    heartbeat: now,
-  };
 
   const claimed = await claimLeadership(myInfo);
   if (claimed) {
@@ -270,7 +412,7 @@ export async function electLeader(sessionId: string, port: number): Promise<Elec
 
   // Extremely unlikely: lock disappeared between our claim and re-read. Retry once.
   logger.warn('[LeaderElection] Lock vanished after failed claim. Retrying.');
-  const retryInfo: ConsoleLeaderInfo = { ...myInfo, heartbeat: new Date().toISOString() };
+  const retryInfo: ConsoleLeaderInfo = { ...createLeaderInfo(sessionId, port) };
   const retryClaimed = await claimLeadership(retryInfo);
   if (retryClaimed) {
     return { role: 'leader', leaderInfo: retryInfo };
@@ -304,16 +446,7 @@ export async function isLeaderWebConsoleReachable(leaderInfo: ConsoleLeaderInfo)
 export async function forceClaimLeadership(sessionId: string, port: number): Promise<ElectionResult> {
   logger.info('[LeaderElection] Forcing leadership takeover — existing leader has no web console');
   await deleteLeaderLock();
-
-  const now = new Date().toISOString();
-  const myInfo: ConsoleLeaderInfo = {
-    version: LOCK_VERSION,
-    pid: process.pid,
-    port,
-    sessionId: UnicodeValidator.normalize(sessionId).normalizedContent,
-    startedAt: now,
-    heartbeat: now,
-  };
+  const myInfo = createLeaderInfo(sessionId, port);
 
   const claimed = await claimLeadership(myInfo);
   if (claimed) {
