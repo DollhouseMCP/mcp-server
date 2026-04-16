@@ -45,6 +45,12 @@ export interface ActiveElement {
   metadata: ElementMetadataWithPolicy;
 }
 
+export interface GatekeeperPolicyDiagnostics {
+  valid: false;
+  enforceable: false;
+  message: string;
+}
+
 /**
  * Result of element policy resolution.
  * Contains the effective permission level and policy source.
@@ -725,14 +731,16 @@ export function sanitizeGatekeeperPolicy(
   rawPolicy: unknown,
   elementName: string,
   elementType: string,
+  diagnosticsTarget?: Record<string, unknown>,
 ): ElementGatekeeperPolicy | undefined {
-  if (!rawPolicy || typeof rawPolicy !== 'object') {
+  if (rawPolicy === undefined || rawPolicy === null) {
     return undefined;
   }
 
   try {
     // Wrap in a metadata envelope so parseElementPolicy can extract it
     const validated = parseElementPolicy({ gatekeeper: rawPolicy });
+    clearGatekeeperDiagnostics(diagnosticsTarget ?? rawPolicy);
     if (validated) {
       // Issue #758: Strip gatekeeper infrastructure operations from element policies
       // to prevent cascading confirmation loops
@@ -749,7 +757,7 @@ export function sanitizeGatekeeperPolicy(
     }
     return validated;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = formatGatekeeperDiagnosticMessage(error instanceof Error ? error.message : String(error));
     SecurityMonitor.logSecurityEvent({
       type: 'YAML_PARSING_WARNING',
       severity: 'MEDIUM',
@@ -757,6 +765,79 @@ export function sanitizeGatekeeperPolicy(
       details: `Malformed gatekeeper policy in "${elementName}" stripped during load: ${message}`,
     });
     logger.warn(`Stripped malformed gatekeeper policy from ${elementType} "${elementName}": ${message}`);
+    attachGatekeeperDiagnostics(diagnosticsTarget ?? rawPolicy, message);
     return undefined;
   }
+}
+
+function formatGatekeeperDiagnosticMessage(message: string): string {
+  const normalized = message.trim();
+  const guidance = getGatekeeperFixGuidance(normalized);
+  return guidance ? `${normalized} Fix: ${guidance}` : normalized;
+}
+
+function getGatekeeperFixGuidance(message: string): string | undefined {
+  if (message.includes('externalRestrictions must be nested under gatekeeper.externalRestrictions')) {
+    return 'Move externalRestrictions under gatekeeper.externalRestrictions and keep allowPatterns, confirmPatterns, and denyPatterns inside that nested object.';
+  }
+
+  if (message.includes('externalRestrictions.description is required')) {
+    return 'Add gatekeeper.externalRestrictions.description with a short explanation, for example description: "Read-only shell policy".';
+  }
+
+  if (message.includes('must be an array') || message.includes('must contain only strings')) {
+    return 'Use YAML arrays of strings, for example denyPatterns: ["Bash:rm *"] or allow: ["read_*"].';
+  }
+
+  if (message.includes('scopeRestrictions must be an object')) {
+    return 'Use scopeRestrictions as an object, for example scopeRestrictions: { allowedTypes: ["persona", "skill"] }.';
+  }
+
+  if (message.includes('must be an object')) {
+    return 'Use gatekeeper as an object, for example gatekeeper: { deny: ["delete_element"] }.';
+  }
+
+  return 'Compare the element against the gatekeeper examples from introspection or the security docs, then reactivate it after fixing the structure.';
+}
+
+export function attachGatekeeperDiagnostics(target: unknown, message: string): void {
+  if (!target || typeof target !== 'object') {
+    return;
+  }
+
+  (target as Record<string, unknown>).gatekeeperDiagnostics = {
+    valid: false,
+    enforceable: false,
+    message,
+  } satisfies GatekeeperPolicyDiagnostics;
+}
+
+export function clearGatekeeperDiagnostics(target: unknown): void {
+  if (!target || typeof target !== 'object') {
+    return;
+  }
+
+  delete (target as Record<string, unknown>).gatekeeperDiagnostics;
+}
+
+export function getGatekeeperDiagnostics(target: unknown): GatekeeperPolicyDiagnostics | undefined {
+  if (!target || typeof target !== 'object') {
+    return undefined;
+  }
+
+  const diagnostics = (target as Record<string, unknown>).gatekeeperDiagnostics;
+  if (!diagnostics || typeof diagnostics !== 'object') {
+    return undefined;
+  }
+
+  const record = diagnostics as Record<string, unknown>;
+  if (record.valid === false && record.enforceable === false && typeof record.message === 'string' && record.message.trim() !== '') {
+    return {
+      valid: false,
+      enforceable: false,
+      message: record.message,
+    };
+  }
+
+  return undefined;
 }

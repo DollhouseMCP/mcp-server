@@ -158,7 +158,7 @@ export class ElementFileOperations {
 
     // Clean metadata to remove undefined values
     const cleanMetadata = Object.entries(metadata).reduce((acc, [key, value]) => {
-      if (value !== undefined) {
+      if (key !== 'gatekeeperDiagnostics' && value !== undefined) {
         acc[key] = value;
       }
       return acc;

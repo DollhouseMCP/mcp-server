@@ -12,7 +12,15 @@ import { registerPermissionRoutes } from '../../../src/web/routes/permissionRout
 function createMockHandler(readResult?: unknown) {
   return {
     handleRead: jest.fn().mockResolvedValue(
-      readResult ?? [{ success: true, data: { decision: 'allow' } }]
+      readResult ?? [{
+        success: true,
+        data: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+          },
+        },
+      }]
     ),
   } as any;
 }
@@ -36,7 +44,12 @@ describe('permissionRoutes', () => {
         .send({ tool_name: 'Bash', input: { command: 'npm test' }, platform: 'claude_code' });
 
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ decision: 'allow' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
       expect(handler.handleRead).toHaveBeenCalledWith({
         operation: 'evaluate_permission',
         params: {
@@ -143,7 +156,13 @@ describe('permissionRoutes', () => {
     it('should return deny response from handler', async () => {
       const handler = createMockHandler([{
         success: true,
-        data: { decision: 'deny', reason: 'Blocked by policy' },
+        data: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: 'Blocked by policy',
+          },
+        },
       }]);
       const app = createApp(handler);
 
@@ -151,7 +170,33 @@ describe('permissionRoutes', () => {
         .post('/api/evaluate_permission')
         .send({ tool_name: 'Bash', input: { command: 'git push --force' } });
 
-      expect(res.body).toEqual({ decision: 'deny', reason: 'Blocked by policy' });
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
+    });
+
+    it('should wrap legacy flat Claude responses into hookSpecificOutput', async () => {
+      const handler = createMockHandler([{
+        success: true,
+        data: { decision: 'deny', reason: 'Blocked by policy' },
+      }]);
+      const app = createApp(handler);
+
+      const res = await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Bash', input: { command: 'git push --force' }, platform: 'claude_code' });
+
+      expect(res.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
     });
   });
 
@@ -290,6 +335,49 @@ describe('permissionRoutes', () => {
           allowRules: ['read_*'],
           confirmRules: ['edit_*'],
           denyRules: ['delete_*'],
+        }),
+      ]);
+    });
+
+    it('should surface invalid gatekeeper policy state without hiding the active element', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 1,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            combinedDenyOperations: [],
+            combinedAllowOperations: [],
+            combinedConfirmOperations: [],
+            elements: [
+              {
+                name: 'broken-guardian',
+                type: 'skill',
+                invalidGatekeeperPolicy: true,
+                invalidGatekeeperMessage: 'gatekeeper.externalRestrictions.description is required',
+              },
+            ],
+            invalidPolicyElementCount: 1,
+            permissionPromptActive: false,
+            advisory: '1 active element has malformed gatekeeper policy. The element remains active, but that policy is not enforceable until fixed.',
+          },
+        }]),
+      } as any;
+      const app = createApp(handler);
+
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.invalidPolicyElementCount).toBe(1);
+      expect(res.body.advisory).toContain('malformed gatekeeper policy');
+      expect(res.body.elements).toEqual([
+        expect.objectContaining({
+          name: 'broken-guardian',
+          invalidGatekeeperPolicy: true,
+          invalidGatekeeperMessage: 'gatekeeper.externalRestrictions.description is required',
         }),
       ]);
     });
@@ -476,6 +564,57 @@ describe('permissionRoutes', () => {
           reason: 'Blocked by policy',
         }),
       ]);
+    });
+
+    it('should include useful audit detail fields for tracked decisions', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              decision: 'ask',
+              reason: 'Needs confirmation',
+              matched_pattern: 'Edit:*',
+            },
+          }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Edit',
+          input: { file_path: '/opt/dollhouse/example.txt' },
+          platform: 'cursor',
+        });
+
+      const status = await request(app).get('/api/permissions/status');
+
+      expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
+        tool_name: 'Edit',
+        decision: 'ask',
+        platform: 'cursor',
+        target: '/opt/dollhouse/example.txt',
+        targetLabel: 'File',
+      }));
+      expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
+        { label: 'Platform', value: 'cursor', monospace: true },
+        { label: 'File', value: '/opt/dollhouse/example.txt', monospace: true },
+        { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+      ]));
     });
   });
 });

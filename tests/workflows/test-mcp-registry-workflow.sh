@@ -243,13 +243,13 @@ validate_workflow_oidc_permissions() {
 validate_workflow_uses_pinned_version() {
     print_test "Workflow uses pinned mcp-publisher version (not latest)"
 
-    if grep -q "releases/download/v[0-9]" "$WORKFLOW_FILE"; then
-        local version=$(grep -o "releases/download/v[0-9]\.[0-9]\.[0-9]" "$WORKFLOW_FILE" | head -1)
+    if grep -Eq 'VERSION[[:space:]]*=[[:space:]]*["'\'']v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9._-]+)?["'\'']' "$WORKFLOW_FILE"; then
+        local version=$(grep -Eo 'VERSION[[:space:]]*=[[:space:]]*["'\'']v[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9._-]+)?["'\'']' "$WORKFLOW_FILE" | head -1)
         print_pass
-        print_info "Using pinned version: $version"
+        print_info "Using pinned version declaration: $version"
         return 0
     else
-        print_fail "Workflow not using pinned version (should use releases/download/vX.Y.Z, not latest)"
+        print_fail "Workflow not using pinned VERSION declaration (should use VERSION=\"vX.Y.Z\", not latest)"
         return 1
     fi
 }

@@ -7,6 +7,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -1224,6 +1226,62 @@ describe('permission_prompt Integration', () => {
         expect(text).toContain('CLI Policies Loaded');
         expect(text).toContain('Hook Not Detected');
         expect(text).toContain('No network access');
+      }
+    });
+
+    it('should warn on malformed gatekeeper policy while keeping the element active and reportable', async () => {
+      const malformedSkillPath = path.join(env.testDir, 'skills', 'broken-gatekeeper.md');
+      await writeFile(
+        malformedSkillPath,
+        `---
+name: broken-gatekeeper
+description: Skill with malformed gatekeeper policy
+gatekeeper:
+  externalRestrictions:
+    denyPatterns:
+      - Bash:rm *
+---
+# Broken Gatekeeper
+
+This skill should still activate.
+`,
+        'utf8',
+      );
+
+      await waitForCacheSettle();
+
+      const activateResult = await mcpAqlHandler.handleRead({
+        operation: 'activate_element',
+        params: { element_name: 'broken-gatekeeper', element_type: 'skills' },
+      });
+
+      expect(activateResult.success).toBe(true);
+      if (activateResult.success) {
+        const text = JSON.stringify(activateResult.data);
+        expect(text).toContain('Gatekeeper Policy Warning');
+        expect(text).toContain('externalRestrictions.description is required');
+        expect(text).toContain('Fix: Add gatekeeper.externalRestrictions.description');
+      }
+
+      const policiesResult = await mcpAqlHandler.handleRead({
+        operation: 'get_effective_cli_policies',
+        params: {},
+      });
+
+      expect(policiesResult.success).toBe(true);
+      if (policiesResult.success) {
+        const data = policiesResult.data as Record<string, unknown>;
+        expect(data.invalidPolicyElementCount).toBe(1);
+        expect(data.advisory).toEqual(expect.stringContaining('malformed gatekeeper policy'));
+        expect(data.elements).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              element_name: 'broken-gatekeeper',
+              invalidGatekeeperPolicy: true,
+              invalidGatekeeperMessage: expect.stringContaining('Fix: Add gatekeeper.externalRestrictions.description'),
+            }),
+          ]),
+        );
       }
     });
 

@@ -57,6 +57,11 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
       text += restrictionWarning;
     }
 
+    const gatekeeperWarning = this.formatGatekeeperValidityWarning(persona.metadata as unknown as Record<string, unknown>);
+    if (gatekeeperWarning) {
+      text += gatekeeperWarning;
+    }
+
     return {
       content: [{
         type: "text",

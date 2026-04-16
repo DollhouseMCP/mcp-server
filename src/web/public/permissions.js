@@ -217,16 +217,14 @@
     const selectedSessionId = selectedData?.sessionId;
     if (elements.length === 0) {
       list.innerHTML = '<li class="perm-pattern-empty">No active elements with policies</li>';
+      renderInvalidPolicySummary('perm-all-invalid-policy-summary', []);
       return;
     }
 
-    list.innerHTML = elements.map(el => `
-      <li class="perm-source-item${elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : ''}">
-        <span class="perm-source-type">${esc(el.type)}</span>
-        <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
-        ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
-      </li>
-    `).join('');
+    renderInvalidPolicySummary('perm-all-invalid-policy-summary', elements);
+    list.innerHTML = elements.map(el =>
+      renderPolicySourceItem(el, elementMatchesSelected(el, selectedSessionId) ? ' perm-source-item--selected' : '')
+    ).join('');
   }
 
   function renderSelectedSessionDetail(selectedData) {
@@ -267,15 +265,10 @@
     }
 
     const elements = selectedData.elements || [];
+    renderInvalidPolicySummary('perm-selected-invalid-policy-summary', elements);
     sourceList.innerHTML = elements.length === 0
       ? '<li class="perm-pattern-empty">No policy-bearing elements found for this session</li>'
-      : elements.map(el => `
-          <li class="perm-source-item perm-source-item--detail">
-            <span class="perm-source-type">${esc(el.type)}</span>
-            <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
-            ${el.description ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>` : ''}
-          </li>
-        `).join('');
+      : elements.map(el => renderPolicySourceItem(el, ' perm-source-item--detail')).join('');
 
     renderPatternList('perm-selected-deny-list', selectedData.denyRules || [], 'deny');
     renderPatternList('perm-selected-allow-list', selectedData.allowRules || [], 'allow');
@@ -331,27 +324,150 @@
     if (latestId === lastDecisionId) return; // no change
     lastDecisionId = latestId;
 
-    const html = decisions.map(d => {
-      const time = new Date(d.timestamp).toLocaleTimeString();
-      const toolDisplay = d.tool_name === 'Bash'
-        ? `Bash: ${esc(truncate(d.command || '', 60))}`
-        : esc(d.tool_name);
-
-      return `
-        <div class="perm-feed-row">
-          <span class="perm-feed-time">${time}</span>
-          <span class="perm-feed-decision perm-feed-decision--${d.decision}">${d.decision.toUpperCase()}</span>
-          <span class="perm-feed-tool" title="${esc(d.command || d.tool_name)}">${toolDisplay}</span>
-          <span class="perm-feed-reason" title="${esc(d.reason || '')}">${esc(d.reason || '')}</span>
-        </div>
-      `;
-    }).join('');
+    const html = decisions.map(renderCompactDecisionRow).join('');
 
     feed.innerHTML = html;
-    if (modalFeed) modalFeed.innerHTML = html;
+    if (modalFeed) modalFeed.innerHTML = renderAuditModal(decisions);
     if (modalCount) {
       modalCount.textContent = `${decisions.length} captured ${decisions.length === 1 ? 'entry' : 'entries'}`;
     }
+  }
+
+  function renderCompactDecisionRow(decision) {
+    const toolDisplay = decision.tool_name === 'Bash'
+      ? `Bash: ${esc(truncate(decision.command || '', 60))}`
+      : esc(decision.tool_name);
+
+    return `
+      <div class="perm-feed-row">
+        <span class="perm-feed-time">${esc(formatShortTime(decision.timestamp))}</span>
+        <span class="perm-feed-decision perm-feed-decision--${decision.decision}">${esc(getDecisionLabel(decision.decision))}</span>
+        <span class="perm-feed-tool" title="${esc(decision.command || decision.tool_name)}">${toolDisplay}</span>
+        <span class="perm-feed-reason" title="${esc(decision.reason || '')}">${esc(decision.reason || '')}</span>
+      </div>
+    `;
+  }
+
+  function renderAuditModal(decisions) {
+    if (!decisions || decisions.length === 0) {
+      return '<div class="perm-feed-empty">No permission decisions yet. Waiting for tool calls...</div>';
+    }
+
+    return decisions.map(renderAuditDecisionEntry).join('');
+  }
+
+  function renderAuditDecisionEntry(decision) {
+    const compactContext = getCompactContext(decision);
+    const detailRows = Array.isArray(decision.details) ? decision.details : [];
+    const reasonBlock = decision.reason
+      ? `
+        <div class="perm-audit-reason-block">
+          <div class="perm-audit-meta-label">Reason</div>
+          <p class="perm-audit-reason-text">${esc(decision.reason)}</p>
+        </div>
+      `
+      : '';
+    const detailList = detailRows.length > 0
+      ? `
+        <dl class="perm-audit-detail-list">
+          ${detailRows.map(detail => `
+            <div class="perm-audit-detail-row">
+              <dt class="perm-audit-meta-label">${esc(detail.label)}</dt>
+              <dd class="perm-audit-meta-value${detail.monospace ? ' perm-audit-detail-value--mono' : ''}">${esc(detail.value)}</dd>
+            </div>
+          `).join('')}
+          <div class="perm-audit-detail-row">
+            <dt class="perm-audit-meta-label">Exact Time</dt>
+            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
+          </div>
+        </dl>
+      `
+      : `
+        <dl class="perm-audit-detail-list">
+          <div class="perm-audit-detail-row">
+            <dt class="perm-audit-meta-label">Exact Time</dt>
+            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
+          </div>
+        </dl>
+      `;
+
+    return `
+      <details class="perm-audit-entry">
+        <summary class="perm-audit-summary-row">
+          <span class="perm-audit-time-group">
+            <span class="perm-audit-time">${esc(formatShortTime(decision.timestamp))}</span>
+            <span class="perm-audit-date">${esc(formatShortDate(decision.timestamp))}</span>
+          </span>
+          <span class="perm-feed-decision perm-feed-decision--${decision.decision}">${esc(getDecisionLabel(decision.decision))}</span>
+          <span class="perm-audit-tool">${esc(decision.tool_name)}</span>
+          <span class="perm-audit-context">${esc(compactContext)}</span>
+        </summary>
+        <div class="perm-audit-entry-body">
+          ${reasonBlock}
+          ${detailList}
+        </div>
+      </details>
+    `;
+  }
+
+  function formatShortTime(timestamp) {
+    return new Date(timestamp).toLocaleTimeString([], {
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  }
+
+  function formatShortDate(timestamp) {
+    return new Date(timestamp).toLocaleDateString([], {
+      month: 'short',
+      day: 'numeric',
+    });
+  }
+
+  function formatExactTimestamp(timestamp) {
+    const date = new Date(timestamp);
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZoneName: 'short',
+    });
+  }
+
+  function getDecisionLabel(decision) {
+    return String(decision || '').toUpperCase();
+  }
+
+  function getCompactContext(decision) {
+    if (decision.targetLabel && decision.target) {
+      return `${decision.targetLabel}: ${truncate(decision.target, 96)}`;
+    }
+    if (decision.command) {
+      return truncate(decision.command, 96);
+    }
+    return decision.reason || 'No extra context captured';
+  }
+
+  function renderPolicySourceItem(el, extraClass = '') {
+    const invalidBadge = el.invalidGatekeeperPolicy
+      ? `<span class="perm-source-warning" title="${esc(el.invalidGatekeeperMessage || '')}">policy invalid</span>`
+      : '';
+    const description = el.description
+      ? `<span style="color:var(--ink-400);font-size:0.75rem;margin-left:auto">${esc(el.description)}</span>`
+      : '';
+
+    return `
+      <li class="perm-source-item${extraClass}">
+        <span class="perm-source-type">${esc(el.type)}</span>
+        <span class="perm-source-name">${esc(el.element_name || el.name || '')}</span>
+        ${invalidBadge}
+        ${description}
+      </li>
+    `;
   }
 
   function deriveSelectedSessionData(aggregateData, sessionId) {
@@ -375,6 +491,8 @@
           type: element.type,
           element_name: element.element_name,
           description: element.description,
+          invalidGatekeeperPolicy: !!element.invalidGatekeeperPolicy,
+          invalidGatekeeperMessage: element.invalidGatekeeperMessage,
         };
       }),
       permissionPromptActive: !!aggregateData?.permissionPromptActive,
@@ -501,6 +619,7 @@
               <div>
                 <div class="perm-selected-title" id="perm-selected-title">Selected Session</div>
                 <div class="perm-selected-subtitle" id="perm-selected-subtitle"></div>
+                <div class="perm-inline-warning" id="perm-selected-invalid-policy-summary" hidden></div>
               </div>
               <span class="perm-selected-badge" id="perm-selected-badge" hidden>Persisted Policy State (Debug Info)</span>
             </div>
@@ -544,6 +663,7 @@
               <div>
                 <div class="perm-selected-title">All Sessions</div>
                 <div class="perm-selected-subtitle">${esc('Aggregate policy state across all live and persisted sessions. Rules shown here include both Dollhouse operation policies and external tool restrictions.')}${dataAdvisoryPlaceholder()}</div>
+                <div class="perm-inline-warning" id="perm-all-invalid-policy-summary" hidden></div>
               </div>
             </div>
 
@@ -695,6 +815,27 @@
 
   function dataAdvisoryPlaceholder() {
     return '<span id="perm-all-sessions-advisory" class="perm-inline-advisory" hidden></span>';
+  }
+
+  function renderInvalidPolicySummary(elementId, elements) {
+    const banner = document.getElementById(elementId);
+    if (!banner) return;
+
+    const invalid = (elements || []).filter(function (element) {
+      return !!element.invalidGatekeeperPolicy;
+    });
+
+    if (invalid.length === 0) {
+      banner.hidden = true;
+      banner.textContent = '';
+      return;
+    }
+
+    const names = invalid.map(function (element) {
+      return element.element_name || element.name || 'unknown';
+    });
+    banner.hidden = false;
+    banner.textContent = `${invalid.length} active element${invalid.length === 1 ? '' : 's'} ha${invalid.length === 1 ? 's' : 've'} malformed gatekeeper policy. These elements remain active, but that policy is not being enforced: ${names.join(', ')}`;
   }
 
 })();

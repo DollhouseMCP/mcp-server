@@ -24,7 +24,7 @@
 import { CRUDEndpoint } from './OperationRouter.js';
 import { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, translateToolConfigToPolicy, canOperationBeElevated } from './policies/index.js';
-import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements } from './policies/ElementPolicies.js';
+import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode } from './GatekeeperTypes.js';
 import { getRoute } from './OperationRouter.js';
 import { ALL_OPERATION_SCHEMAS } from './OperationSchema.js';
@@ -667,6 +667,7 @@ export class MCPAQLHandler {
           name: el.name,
           description: (el.metadata.description as string) ?? undefined,
           gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...this.copyGatekeeperDiagnostics(el.metadata),
         },
       }));
 
@@ -703,6 +704,7 @@ export class MCPAQLHandler {
           name: el.name,
           description: (el.metadata.description as string) ?? undefined,
           gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...this.copyGatekeeperDiagnostics(el.metadata),
           ...(Array.isArray((el as { sessionIds?: string[] }).sessionIds)
             ? { sessionIds: (el as { sessionIds?: string[] }).sessionIds }
             : {}),
@@ -712,6 +714,11 @@ export class MCPAQLHandler {
       logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
       return sessionId ? [] : this.getActiveElements();
     }
+  }
+
+  private copyGatekeeperDiagnostics(metadata: unknown): Record<string, unknown> {
+    const diagnostics = getGatekeeperDiagnostics(metadata);
+    return diagnostics ? { gatekeeperDiagnostics: diagnostics } : {};
   }
 
   /**
@@ -2967,18 +2974,23 @@ export class MCPAQLHandler {
           : await this.getActiveElements();
 
         // 2. Extract externalRestrictions from each element
-        const elementPolicies = policyElements.map(el => ({
-          type: el.type,
-          name: el.name,
-          allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
-          confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
-          denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
-          allowOperations: el.metadata?.gatekeeper?.allow ?? [],
-          confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
-          denyOperations: el.metadata?.gatekeeper?.deny ?? [],
-          description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
-          sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
-        }));
+        const elementPolicies = policyElements.map(el => {
+          const diagnostics = getGatekeeperDiagnostics(el.metadata);
+          return {
+            type: el.type,
+            name: el.name,
+            allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
+            confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
+            denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
+            allowOperations: el.metadata?.gatekeeper?.allow ?? [],
+            confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
+            denyOperations: el.metadata?.gatekeeper?.deny ?? [],
+            description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+            invalidGatekeeperPolicy: !!diagnostics,
+            invalidGatekeeperMessage: diagnostics?.message,
+            sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
+          };
+        });
 
         // 3. Build combined view
         const combinedAllow = elementPolicies.flatMap(p => p.allowPatterns);
@@ -3024,6 +3036,7 @@ export class MCPAQLHandler {
         const hasOperationRestrictions = combinedAllowOperations.length > 0
           || combinedDenyOperations.length > 0
           || combinedConfirmOperations.length > 0;
+        const invalidPolicyElements = elementPolicies.filter(policy => policy.invalidGatekeeperPolicy);
         let advisory: string | undefined;
         if (hasCliRestrictions) {
           if (!enforcementReady) {
@@ -3033,6 +3046,11 @@ export class MCPAQLHandler {
           }
         } else if (hasOperationRestrictions) {
           advisory = 'MCP-AQL operation policies are active for Dollhouse actions in this session.';
+        }
+
+        if (invalidPolicyElements.length > 0) {
+          const invalidAdvisory = buildInvalidPolicyAdvisory(invalidPolicyElements.length);
+          advisory = advisory ? `${advisory} ${invalidAdvisory}` : invalidAdvisory;
         }
 
         return {
@@ -3050,6 +3068,7 @@ export class MCPAQLHandler {
           hookInstalled,
           enforcementReady,
           hookHost: hookStatus.host,
+          invalidPolicyElementCount: invalidPolicyElements.length,
           advisory,
         };
       }
@@ -4310,6 +4329,11 @@ export class MCPAQLHandler {
       Array.isArray((result as Record<string, unknown>).content)
     );
   }
+}
+
+function buildInvalidPolicyAdvisory(invalidPolicyCount: number): string {
+  const singular = invalidPolicyCount === 1;
+  return `${invalidPolicyCount} active element${singular ? '' : 's'} ha${singular ? 's' : 've'} malformed gatekeeper policy. The element${singular ? ' remains' : 's remain'} active, but that policy is not enforceable until fixed.`;
 }
 
 /**

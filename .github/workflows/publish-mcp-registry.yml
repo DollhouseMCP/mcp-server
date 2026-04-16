@@ -149,6 +149,35 @@ jobs:
       - name: Login to MCP Registry (OIDC)
         run: mcp-publisher login github-oidc
 
+      - name: Wait for npm package propagation
+        if: ${{ github.event.inputs.dry_run != 'true' && startsWith(steps.source-ref.outputs.ref, 'refs/tags/') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PACKAGE_NAME="$(node -p "require('./package.json').name")"
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          MAX_ATTEMPTS=20
+          SLEEP_SECONDS=30
+
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if PUBLISHED_VERSION="$(npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version --registry https://registry.npmjs.org --silent 2>/dev/null)" \
+              && [[ "$PUBLISHED_VERSION" == "$PACKAGE_VERSION" ]]; then
+              echo "Detected ${PACKAGE_NAME}@${PACKAGE_VERSION} on npm."
+              exit 0
+            fi
+
+            if [[ "$attempt" -eq "$MAX_ATTEMPTS" ]]; then
+              break
+            fi
+
+            echo "Waiting for ${PACKAGE_NAME}@${PACKAGE_VERSION} to propagate to npm (${attempt}/${MAX_ATTEMPTS})..."
+            sleep "$SLEEP_SECONDS"
+          done
+
+          echo "::error::Timed out waiting for ${PACKAGE_NAME}@${PACKAGE_VERSION} to appear on npm. Rerun the workflow after npm propagation completes."
+          exit 1
+
       - name: Publish to MCP Registry
         shell: bash
         run: |

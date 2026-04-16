@@ -10,6 +10,7 @@ import { findElementFlexibly as findHelper } from '../element-crud/helpers.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { MCPResponse } from './ElementActivationStrategy.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
+import { getGatekeeperDiagnostics } from '../mcp-aql/policies/ElementPolicies.js';
 
 /**
  * Base class with shared utilities for activation strategies
@@ -124,5 +125,20 @@ export abstract class BaseActivationStrategy {
       );
     }
     return parts.join('\n');
+  }
+
+  protected formatGatekeeperValidityWarning(metadata: Record<string, unknown>): string {
+    const diagnostics = getGatekeeperDiagnostics(metadata);
+    if (!diagnostics) {
+      return '';
+    }
+
+    return [
+      '\n---',
+      '**Gatekeeper Policy Warning:**',
+      `> ${diagnostics.message}`,
+      '> This element can still activate and do its normal work, but its malformed gatekeeper policy is not being enforced.',
+      '> Fix the policy structure and reactivate if you want permission rules to apply.',
+    ].join('\n');
   }
 }

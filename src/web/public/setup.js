@@ -18,13 +18,13 @@
   const PLATFORMS = [
     // Claude Desktop & Claude Code panels are handwritten in HTML (unique structure)
     { id: 'claude-desktop', rootKey: 'mcpServers' },
-    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookSupport: 'verified', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
+    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
     // These panels are generated from this data by renderGeneratedPanels()
-    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects' },
-    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-vscode.sh`, hookConfigPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> plus <code>chat.hookFilesLocations</code> in VS Code user settings' },
-    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>' },
-    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
-    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookSupport: 'partial', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project' },
+    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects' },
+    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-vscode.sh`, hookConfigPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> plus <code>chat.hookFilesLocations</code> in VS Code user settings' },
+    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>' },
+    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
+    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project' },
     { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      openClient: 'cline',      configPath: 'Cline stores MCP servers in <code>cline_mcp_settings.json</code> inside its extension settings. Use Configure Now or open the file directly.' },
     { id: 'lmstudio',  rootKey: 'mcpServers', installClient: 'lmstudio',   openClient: 'lmstudio',   configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
@@ -888,6 +888,7 @@ codex_hooks = true`;
     'claude': 'claude-desktop',
     'claude-code': 'claude-code',
     'cursor': 'cursor',
+    'cline': 'cline',
     'windsurf': 'windsurf',
     'lmstudio': 'lmstudio',
     'gemini-cli': 'gemini',
@@ -965,32 +966,29 @@ codex_hooks = true`;
     }
   };
 
-  const PERMISSION_PLATFORM_LABELS = {
-    'claude-desktop': 'Claude Desktop',
-    'claude-code': 'Claude Code',
-    cursor: 'Cursor',
-    vscode: 'VS Code',
-    codex: 'Codex',
-    gemini: 'Gemini CLI',
-    windsurf: 'Windsurf',
-    cline: 'Cline',
-    lmstudio: 'LM Studio',
-  };
-
-  const VERIFIED_PERMISSION_PLATFORMS = {
+  const PERMISSION_SUPPORT_MATRIX = {
+    'claude-desktop': {
+      label: 'Claude Desktop',
+      supportLevel: 'unsupported',
+      statusTag: 'coming soon',
+      badgeClass: 'unsupported',
+      limitation: 'Claude Desktop can host DollhouseMCP, but this release does not ship a native permissions setup flow for it yet.',
+    },
     'claude-code': {
       label: 'Claude Code',
+      supportLevel: 'full_native',
       statusTag: 'claude code',
+      badgeClass: 'verified',
       configPath: '<code>~/.claude/settings.json</code>',
       scriptPath: HOOK_BASE_SCRIPT_PATH,
       settingsBlock: CLAUDE_CODE_HOOK_SETTINGS,
+      limitation: 'Claude Code has the full native permission-hook path in this release.',
     },
-  };
-
-  const PARTIAL_PERMISSION_PLATFORMS = {
     gemini: {
       label: 'Gemini CLI',
+      supportLevel: 'partial_native',
       statusTag: 'allow / deny',
+      badgeClass: 'manual',
       configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project',
       scriptPath: `${HOOKS_DIR}/pretooluse-gemini.sh`,
       settingsBlock: GEMINI_HOOK_SETTINGS,
@@ -998,7 +996,9 @@ codex_hooks = true`;
     },
     cursor: {
       label: 'Cursor',
+      supportLevel: 'partial_native',
       statusTag: 'native hooks',
+      badgeClass: 'manual',
       configPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects',
       scriptPath: `${HOOKS_DIR}/pretooluse-cursor.sh`,
       settingsBlock: CURSOR_HOOK_SETTINGS,
@@ -1006,7 +1006,9 @@ codex_hooks = true`;
     },
     vscode: {
       label: 'VS Code',
+      supportLevel: 'partial_native',
       statusTag: 'native hooks',
+      badgeClass: 'manual',
       configPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> and VS Code user settings',
       scriptPath: `${HOOKS_DIR}/pretooluse-vscode.sh`,
       settingsBlock: VSCODE_HOOK_SETTINGS,
@@ -1017,7 +1019,9 @@ codex_hooks = true`;
     },
     windsurf: {
       label: 'Windsurf',
+      supportLevel: 'partial_native',
       statusTag: 'allow / deny',
+      badgeClass: 'manual',
       configPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project',
       scriptPath: `${HOOKS_DIR}/pretooluse-windsurf.sh`,
       settingsBlock: WINDSURF_HOOK_SETTINGS,
@@ -1025,20 +1029,46 @@ codex_hooks = true`;
     },
     codex: {
       label: 'Codex',
+      supportLevel: 'partial_native',
       statusTag: 'bash only',
+      badgeClass: 'manual',
       configPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>',
       scriptPath: `${HOOKS_DIR}/pretooluse-codex.sh`,
       settingsBlock: CODEX_HOOK_SETTINGS,
       featureBlock: CODEX_HOOK_FEATURES_TOML,
       limitation: 'Codex currently only supports native PreToolUse hooks for Bash, so this turns on Bash permission guardrails only.',
     },
+    cline: {
+      label: 'Cline',
+      supportLevel: 'mcp_only',
+      statusTag: 'mcp only',
+      badgeClass: 'manual',
+      limitation: 'Cline MCP setup is supported here, but native permission-hook automation is still incomplete in this release.',
+    },
+    lmstudio: {
+      label: 'LM Studio',
+      supportLevel: 'mcp_only',
+      statusTag: 'mcp only',
+      badgeClass: 'manual',
+      limitation: 'LM Studio MCP setup is supported here, but permission enforcement currently relies on LM Studio built-in confirmations or a future fallback adapter.',
+    },
   };
 
-  const getVerifiedPermissionStatusCopy = (verified, detected) => {
+  const getPermissionSupport = (platformId, detected) => {
+    if (detected?.support) {
+      return {
+        ...PERMISSION_SUPPORT_MATRIX[platformId],
+        supportLevel: detected.support.level || PERMISSION_SUPPORT_MATRIX[platformId]?.supportLevel,
+      };
+    }
+    return PERMISSION_SUPPORT_MATRIX[platformId];
+  };
+
+  const getFullNativePermissionStatusCopy = (support, detected) => {
     if (detected?.hookInstalled) {
       return {
         tone: 'info',
-        titleText: `${verified.label} permission enforcement is enabled.`,
+        titleText: `${support.label} permission enforcement is enabled.`,
         messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
       };
     }
@@ -1046,44 +1076,60 @@ codex_hooks = true`;
     if (detected?.installed) {
       return {
         tone: 'warning',
-        titleText: `${verified.label} is connected for this client.`,
-        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the ${verified.label} permission hook.`,
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the ${support.label} permission hook.`,
       };
     }
 
     return {
       tone: 'info',
-      titleText: `${verified.label} permissions are not configured yet.`,
-      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the ${verified.label} permission hook.`,
+      titleText: `${support.label} permissions are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the ${support.label} permission hook.`,
     };
   };
 
-  const getPartialPermissionStatusCopy = (partial, detected) => {
-    const activationLabel = partial.label === 'Codex' ? 'Bash guardrails' : 'permission hooks';
+  const getPartialPermissionStatusCopy = (support, detected) => {
+    const activationLabel = support.label === 'Codex' ? 'Bash guardrails' : 'permission hooks';
     if (detected?.hookInstalled) {
       return {
         tone: 'info',
-        titleText: `${partial.label} ${activationLabel} are enabled.`,
-        messageText: partial.limitation,
+        titleText: `${support.label} ${activationLabel} are enabled.`,
+        messageText: support.limitation,
       };
     }
 
     if (detected?.installed) {
       return {
         tone: 'warning',
-        titleText: `${partial.label} is connected for this client.`,
-        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${partial.label}'s native ${activationLabel}.`,
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${support.label}'s native ${activationLabel}.`,
       };
     }
 
     return {
       tone: 'info',
-      titleText: `${partial.label} ${activationLabel} are not configured yet.`,
-      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install ${partial.label}'s native ${activationLabel}.`,
+      titleText: `${support.label} ${activationLabel} are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install ${support.label}'s native ${activationLabel}.`,
     };
   };
 
-  const getManualPermissionStatusCopy = (detected) => {
+  const getMcpOnlyPermissionStatusCopy = (support, detected) => {
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `${support.limitation} This release keeps that client in the MCP and fallback lane for now.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${support.label} supports MCP setup in this release.`,
+      messageText: `${support.limitation} Use Auto-updating or Pinned version above to connect DollhouseMCP first.`,
+    };
+  };
+
+  const getManualPermissionStatusCopy = (support, detected) => {
     if (detected?.hookAssetsPrepared) {
       return {
         tone: 'info',
@@ -1106,32 +1152,40 @@ codex_hooks = true`;
     };
   };
 
-  const getUnsupportedPermissionStatusCopy = (platformLabel, detected) => ({
+  const getUnsupportedPermissionStatusCopy = (support, detected) => ({
     tone: detected?.installed ? 'warning' : 'neutral',
-    titleText: `Permissions & security tools are unavailable for ${platformLabel} right now.`,
+    titleText: `Permissions & security tools are unavailable for ${support.label} right now.`,
     messageText: detected?.installed
       ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
-      : 'This release does not include a supported permissions setup flow for this client yet.',
+      : support.limitation,
   });
 
   const getPermissionStatusCopy = (platformId, detected) => {
-    const verified = VERIFIED_PERMISSION_PLATFORMS[platformId];
-    if (verified) {
-      return getVerifiedPermissionStatusCopy(verified, detected);
+    const support = getPermissionSupport(platformId, detected);
+    if (!support) {
+      return getUnsupportedPermissionStatusCopy({
+        label: 'this client',
+        limitation: 'This release does not include a supported permissions setup flow for this client yet.',
+      }, detected);
     }
 
-    const partial = PARTIAL_PERMISSION_PLATFORMS[platformId];
-    if (partial) {
-      return getPartialPermissionStatusCopy(partial, detected);
+    if (support.supportLevel === 'full_native') {
+      return getFullNativePermissionStatusCopy(support, detected);
     }
 
-    const support = PLATFORMS.find((platform) => platform.id === platformId)?.hookSupport || 'unsupported';
-    if (support === 'manual') {
-      return getManualPermissionStatusCopy(detected);
+    if (support.supportLevel === 'partial_native') {
+      return getPartialPermissionStatusCopy(support, detected);
     }
 
-    const platformLabel = PERMISSION_PLATFORM_LABELS[platformId] || 'this client';
-    return getUnsupportedPermissionStatusCopy(platformLabel, detected);
+    if (support.supportLevel === 'mcp_only') {
+      return getMcpOnlyPermissionStatusCopy(support, detected);
+    }
+
+    if (support.supportLevel === 'manual') {
+      return getManualPermissionStatusCopy(support, detected);
+    }
+
+    return getUnsupportedPermissionStatusCopy(support, detected);
   };
 
   const updatePermissionStatus = (panel, platformId, detected) => {
@@ -1418,24 +1472,41 @@ codex_hooks = true`;
     </div>`;
   };
 
+  const renderMcpOnlyPermissionSection = (support) => `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <p class="setup-hint">${support.limitation}</p>
+    </div>`;
+
   const renderPermissionSection = (p) => {
-    const hookSupport = p.hookSupport || 'unsupported';
+    const support = getPermissionSupport(p.id);
     const configPath = p.hookConfigPath || p.configPath || p.tomlPath || 'this client’s user configuration';
 
-    if (hookSupport === 'verified' && VERIFIED_PERMISSION_PLATFORMS[p.id]) {
-      return renderVerifiedPermissionSection(p, VERIFIED_PERMISSION_PLATFORMS[p.id]);
+    if (!support) {
+      return '';
     }
 
-    if (hookSupport === 'partial' && PARTIAL_PERMISSION_PLATFORMS[p.id]) {
-      return renderPartialPermissionSection(p, PARTIAL_PERMISSION_PLATFORMS[p.id]);
+    if (support.supportLevel === 'full_native') {
+      return renderVerifiedPermissionSection(p, support);
     }
 
-    if (hookSupport === 'manual') {
+    if (support.supportLevel === 'partial_native') {
+      return renderPartialPermissionSection(p, support);
+    }
+
+    if (support.supportLevel === 'mcp_only') {
+      return renderMcpOnlyPermissionSection(support);
+    }
+
+    if (support.supportLevel === 'manual') {
       const platformName = p.id === 'gemini' ? 'gemini' : p.id;
       const wrapperFilename = `pretooluse-${platformName}.sh`;
       const wrapperScript = buildHookWrapperScript(platformName);
       return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">manual setup</span></h3>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
         <div class="setup-permission-status" data-state="info">
           <strong class="setup-permission-status-title"></strong>
           <p class="setup-permission-status-msg"></p>
@@ -1453,7 +1524,7 @@ codex_hooks = true`;
     }
 
     return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
-      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--unsupported">coming soon</span></h3>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
       <div class="setup-permission-status" data-state="neutral">
         <strong class="setup-permission-status-title"></strong>
         <p class="setup-permission-status-msg"></p>
@@ -1467,7 +1538,7 @@ codex_hooks = true`;
 
     intro.innerHTML = `<div class="setup-permissions-note">
         <strong>Permissions &amp; Security</strong>
-        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release, and Gemini CLI, Cursor, VS Code, Windsurf, plus Codex have native partial support. Where we have workable manual steps for other clients, they are shown here. Otherwise, the client will be marked as coming soon.</p>
+        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release. Gemini CLI, Cursor, VS Code, Windsurf, and Codex have native partial support, while Cline and LM Studio stay in the MCP and fallback lane for now. Other clients will be marked as coming soon.</p>
       </div>`;
   };
 

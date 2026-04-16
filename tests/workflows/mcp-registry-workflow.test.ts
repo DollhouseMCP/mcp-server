@@ -174,6 +174,13 @@ describe('MCP Registry Workflow Configuration', () => {
       expect(hasDryRun).toBe(true);
     });
 
+    test('should wait for npm package propagation before publishing tags', () => {
+      expect(workflowContent).toMatch(/name:\s*Wait for npm package propagation/);
+      expect(workflowContent).toMatch(/npm view "\$\{PACKAGE_NAME\}@\$\{PACKAGE_VERSION\}" version/);
+      expect(workflowContent).toMatch(/startsWith\(steps\.source-ref\.outputs\.ref,\s*'refs\/tags\/'\)/);
+      expect(workflowContent).toMatch(/github\.event\.inputs\.dry_run != 'true'/);
+    });
+
     test('should use workflow_dispatch for manual triggers', () => {
       expect(workflowContent).toMatch(/workflow_dispatch/);
     });

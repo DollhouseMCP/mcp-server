@@ -93,6 +93,16 @@ export interface IElementMetadata {
    * @see resolveElementPolicy
    */
   gatekeeper?: ElementGatekeeperPolicy;
+
+  /**
+   * Runtime-only diagnostics for malformed gatekeeper policy discovered during load.
+   * This is reporting state, not enforceable policy, and must never be persisted.
+   */
+  gatekeeperDiagnostics?: {
+    valid: false;
+    enforceable: false;
+    message: string;
+  };
 }
 
 // Reference to external or internal resources

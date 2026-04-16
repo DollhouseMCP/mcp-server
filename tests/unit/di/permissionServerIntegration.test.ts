@@ -11,12 +11,14 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 
 const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
+const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+const BASH_BINARY = '/bin/bash';
 
 describe('Permission Server Integration', () => {
 
@@ -75,7 +77,13 @@ describe('Permission Server Integration', () => {
               ? `Tool "${parsed.tool_name}" denied by policy`
               : undefined;
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ decision, ...(reason && { reason }) }));
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: decision,
+                ...(reason && { permissionDecisionReason: reason }),
+              },
+            }));
           });
         } else {
           res.writeHead(404);
@@ -91,7 +99,7 @@ describe('Permission Server Integration', () => {
         input: {},
         platform: 'claude_code',
       });
-      expect(allowResponse.decision).toBe('allow');
+      expect(allowResponse.hookSpecificOutput.permissionDecision).toBe('allow');
 
       // Test dangerous tool
       const denyResponse = await httpPost(testPort, {
@@ -99,8 +107,8 @@ describe('Permission Server Integration', () => {
         input: { command: 'rm -rf /' },
         platform: 'claude_code',
       });
-      expect(denyResponse.decision).toBe('deny');
-      expect(denyResponse.reason).toContain('denied');
+      expect(denyResponse.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(denyResponse.hookSpecificOutput.permissionDecisionReason).toContain('denied');
     });
   });
 
@@ -156,8 +164,8 @@ describe('Permission Server Integration', () => {
     itBash('hook script should fail open when port file is missing', (done) => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
-        execFile('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
+        execFile(BASH_BINARY, [HOOK_SCRIPT], {
+          env: { HOME: os.homedir(), PATH: SAFE_TEST_PATH },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
           expect(error).toBeNull();
@@ -199,10 +207,10 @@ describe('Permission Server Integration', () => {
       // Run hook script
       const { spawn } = await import('node:child_process');
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
-        const hookProc = spawn('bash', [HOOK_SCRIPT], {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
           env: {
             HOME: os.homedir(),
-            PATH: '/usr/local/bin:/usr/bin:/bin',
+            PATH: SAFE_TEST_PATH,
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
           },
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -232,6 +240,104 @@ describe('Permission Server Integration', () => {
         const response = JSON.parse(stdout.trim());
         expect(response.hookSpecificOutput.permissionDecision).toBe('allow');
       }
+    });
+
+    itBash('hook script should translate legacy flat Claude responses', async () => {
+      const testPort = 49361;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            decision: 'deny',
+            reason: 'Blocked by policy',
+          }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { stdout } = await runHookScript({
+        tool_name: 'Bash',
+        tool_input: { command: 'git push --force' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: 'Blocked by policy',
+        },
+      });
+    });
+
+    itBash('hook script should pass through already-wrapped Claude responses unchanged', async () => {
+      const testPort = 49362;
+      const wrappedResponse = {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'ask',
+          permissionDecisionReason: 'Needs approval',
+        },
+      };
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(wrappedResponse));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { stdout } = await runHookScript({
+        tool_name: 'Edit',
+        tool_input: { file_path: 'src/index.ts' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
+    });
+
+    itBash('hook script should fail open silently on malformed Claude responses', async () => {
+      const testPort = 49363;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ nope: true }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript({
+        tool_name: 'Read',
+        tool_input: { file_path: './test-fixture.txt' },
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
     });
   });
 
@@ -299,5 +405,23 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
     req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
     req.write(data);
     req.end();
+  });
+}
+
+function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+      env: {
+        HOME: os.homedir(),
+        PATH: SAFE_TEST_PATH,
+        DOLLHOUSE_SESSION_ID: 'session-hook-test',
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let out = '';
+    hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+    hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+    hookProc.stdin.write(JSON.stringify(payload));
+    hookProc.stdin.end();
   });
 }
