@@ -177,8 +177,31 @@ interface DetectResult {
   serverKey?: string;
 }
 
+function parseTomlSectionConfig(
+  sectionName: string,
+  mcpServers: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const serverConfig = mcpServers[sectionName];
+  if (!serverConfig || typeof serverConfig !== 'object' || Array.isArray(serverConfig)) {
+    return { serverName: sectionName };
+  }
+
+  const tomlConfig: Record<string, unknown> = { serverName: sectionName };
+  const { command, args, enabled } = serverConfig as {
+    command?: unknown;
+    args?: unknown;
+    enabled?: unknown;
+  };
+
+  if (typeof command === 'string') tomlConfig.command = command;
+  if (Array.isArray(args)) tomlConfig.args = args;
+  if (typeof enabled === 'boolean') tomlConfig.enabled = enabled;
+
+  return tomlConfig;
+}
+
 /** Parse a TOML config file for a DollhouseMCP server entry */
-function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
+export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   if (!raw.toLowerCase().includes('dollhousemcp')) {
     return { installed: false };
   }
@@ -190,21 +213,19 @@ function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
       return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
     }
 
-    const matchingEntry = Object.entries(mcpServers).find(([key]) =>
-      key.toLowerCase().includes('dollhousemcp'));
-    if (!matchingEntry) {
+    const exactConfig = parseTomlSectionConfig('dollhousemcp', mcpServers as Record<string, unknown>);
+    if (exactConfig) {
+      return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
+    }
+
+    const fallbackKey = Object.keys(mcpServers).find((key) => key.toLowerCase().includes('dollhousemcp'));
+    if (!fallbackKey) {
       return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
     }
 
-    const [serverName, serverConfig] = matchingEntry;
-    const tomlConfig: Record<string, unknown> = { serverName };
-    if (serverConfig && typeof serverConfig === 'object' && !Array.isArray(serverConfig)) {
-      const { command, args } = serverConfig as { command?: unknown; args?: unknown };
-      if (typeof command === 'string') tomlConfig.command = command;
-      if (Array.isArray(args)) tomlConfig.args = args;
-    }
-
-    return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
+    const fallbackConfig = parseTomlSectionConfig(fallbackKey, mcpServers as Record<string, unknown>)
+      ?? { serverName: fallbackKey };
+    return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
   } catch {
     return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
   }

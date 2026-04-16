@@ -416,6 +416,58 @@ describe('Setup Routes — direct JSON MCP installs', () => {
   });
 });
 
+describe('Setup Routes — TOML detection', () => {
+  it('prefers the exact codex dollhousemcp entry over legacy similarly named sections', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP-V2-Refactor]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/mcp-server-v2-refactor/dist/index.js"]',
+      'enabled = false',
+      '',
+      '[mcp_servers.dollhousemcp]',
+      'command = "npx"',
+      'args = ["-y", "@dollhousemcp/mcp-server@latest"]',
+      'enabled = true',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.serverKey).toBe('mcp_servers');
+    expect(result.currentConfig).toEqual({
+      serverName: 'dollhousemcp',
+      command: 'npx',
+      args: ['-y', '@dollhousemcp/mcp-server@latest'],
+      enabled: true,
+    });
+  });
+
+  it('falls back to a legacy dollhouse-style section when no exact entry exists', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP-V2-Refactor]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/mcp-server-v2-refactor/dist/index.js"]',
+      'enabled = false',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.currentConfig).toEqual({
+      serverName: 'DollhouseMCP-V2-Refactor',
+      command: '/bin/zsh',
+      args: ['-lc', 'node /tmp/mcp-server-v2-refactor/dist/index.js'],
+      enabled: false,
+    });
+  });
+});
+
 // ── HTML content integrity tests ──────────────────────────────────────
 
 describe('Setup Tab — HTML Content Integrity', () => {
