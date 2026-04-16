@@ -290,7 +290,8 @@ const MS_PER_MINUTE = 60 * 1000;
 const VERIFICATION_CODE_TTL_MINUTES = 10;
 const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
-const LICENSE_WORKER_TIMEOUT_MS = 2_000;
+const LICENSE_WORKER_TIMEOUT_MS = 8_000;
+const LICENSE_WORKER_ERROR_BODY_LIMIT = 300;
 const DEFAULT_LICENSE_WORKER_URL = 'https://dollhousemcp-license-email.mick-eba.workers.dev';
 
 /** Generate a cryptographically random 6-digit verification code. */
@@ -463,22 +464,56 @@ async function sendLicenseWorkerVerificationEmail(
   licenseData: Record<string, unknown>,
   verificationCode: string,
   distinctId: string,
-): Promise<void> {
+): Promise<{ ok: true } | { ok: false; status?: number; error: string; responseBody?: string }> {
   const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL;
   const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-  const response = await fetch(workerUrl, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-    },
-    body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
-    signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
-  });
 
-  if (!response.ok) {
-    throw new Error(`Worker returned ${response.status}`);
+  try {
+    const response = await fetch(workerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
+      },
+      body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
+      signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
+    });
+
+    if (response.ok) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      status: response.status,
+      error: `worker_http_${response.status}`,
+      responseBody: (await response.text()).slice(0, LICENSE_WORKER_ERROR_BODY_LIMIT),
+    };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === 'TimeoutError' ||
+        error.name === 'AbortError' ||
+        error.message.toLowerCase().includes('timeout') ||
+        error.message.toLowerCase().includes('timed out'))
+    ) {
+      return { ok: false, error: 'worker_timeout' };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function getLicenseWorkerFailureMessage(result: { status?: number; error: string }): string {
+  if (result.status === 401 || result.status === 403) {
+    return 'Verification email service rejected the request. Please check the local email delivery configuration and try again.';
+  }
+  if (result.error === 'worker_timeout') {
+    return 'Verification email service timed out. Please try again in a moment.';
+  }
+  return 'We could not send the verification email right now. Please try again in a moment.';
 }
 
 export function createSetupRoutes(opts?: {
@@ -765,11 +800,25 @@ export function createSetupRoutes(opts?: {
       // Send verification email directly to Worker for instant delivery.
       // PostHog event also fires for analytics, but the email can't wait for
       // PostHog's event pipeline (1-5 min delay).
-      try {
-        await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
+      if (deliveryResult.ok) {
         logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
-      } catch (workerError) {
-        logger.warn(`[Setup] Direct Worker call failed, falling back to PostHog pipeline: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      } else {
+        logger.error('[Setup] Verification email delivery failed', {
+          email: licenseData.email,
+          tier: licenseData.tier,
+          status: deliveryResult.status ?? null,
+          error: deliveryResult.error,
+          responseBody: deliveryResult.responseBody ?? null,
+        });
+
+        const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+          license: publicData,
+        });
+        return;
       }
 
       // Also fire PostHog event for analytics (non-blocking, delay is fine)
@@ -910,10 +959,30 @@ export function createSetupRoutes(opts?: {
 
     // Send verification email directly to Worker for instant delivery
     try {
-      await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
+      if (!deliveryResult.ok) {
+        logger.error('[Setup] Verification resend delivery failed', {
+          email: license.email,
+          tier: license.tier,
+          status: deliveryResult.status ?? null,
+          error: deliveryResult.error,
+          responseBody: deliveryResult.responseBody ?? null,
+        });
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+        });
+        return;
+      }
+
       logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
     } catch (workerError) {
-      logger.warn(`[Setup] Direct Worker call failed: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      logger.error('[Setup] Unexpected verification resend failure', {
+        email: license.email,
+        error: workerError instanceof Error ? workerError.message : String(workerError),
+      });
+      res.status(500).json({ error: 'Failed to resend verification code.' });
+      return;
     }
 
     res.json({ success: true, message: 'A new verification code has been sent to your email.' });

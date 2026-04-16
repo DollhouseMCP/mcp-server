@@ -20,6 +20,16 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
 
+function mockFetchResponse(ok: boolean, status: number, body: Record<string, unknown> | string) {
+  const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
+  return Promise.resolve({
+    ok,
+    status,
+    text: async () => responseBody,
+    json: async () => (typeof body === 'string' ? { message: body } : body),
+  }) as Promise<Response>;
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Save the existing license.json (if any) before tests, restore after. */
@@ -56,6 +66,7 @@ describe('License Routes — API Endpoints', () => {
   let app: express.Express;
 
   beforeEach(async () => {
+    globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(true, 200, { success: true }));
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
     const { getLicenseHandler, setLicenseHandler } = createSetupRoutes();
 
@@ -92,6 +103,22 @@ describe('License Routes — API Endpoints', () => {
       expect(res.body.license.tier).toBe('free-commercial');
       expect(res.body.license.email).toBe('dev@example.com');
       expect(res.body.license.attestedAt).toBeDefined();
+    });
+
+    it('returns a delivery error when the verification worker rejects the request', async () => {
+      globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(false, 401, 'Unauthorized'));
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'dev@example.com', ...COMMERCIAL_ACKS })
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/Verification email service rejected the request/);
+
+      const saved = JSON.parse(await readFile(LICENSE_PATH, 'utf-8'));
+      expect(saved.status).toBe('pending');
+      expect(saved.verificationCode).toHaveLength(6);
     });
 
     it('accepts valid paid-commercial with all fields', async () => {
@@ -630,6 +657,7 @@ describe('License Routes — Email Verification', () => {
   const COMMERCIAL_ACKS = { telemetryAcknowledged: true, attributionAcknowledged: true, revenueAttested: true };
 
   beforeEach(async () => {
+    globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(true, 200, { success: true }));
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
     const { getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler } = createSetupRoutes();
 
@@ -642,12 +670,12 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license — Verification Required', () => {
-    it('returns success even if the direct worker call times out', async () => {
+    it('returns a delivery error if the direct worker call times out', async () => {
       globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
         const signal = init?.signal as AbortSignal | undefined;
         await new Promise((resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
-          setTimeout(resolve, 5_000);
+          setTimeout(resolve, 15_000);
         });
         return new Response(null, { status: 204 });
       });
@@ -655,9 +683,10 @@ describe('License Routes — Email Verification', () => {
       const res = await request(app)
         .post('/api/setup/license')
         .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
-        .expect(200);
+        .expect(502);
 
       expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/timed out/i);
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('workers.dev'),
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -779,7 +808,7 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license/resend', () => {
-    it('still succeeds when the resend worker call times out', async () => {
+    it('returns a delivery error when the resend worker call times out', async () => {
       await request(app)
         .post('/api/setup/license')
         .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
@@ -789,7 +818,7 @@ describe('License Routes — Email Verification', () => {
         const signal = init?.signal as AbortSignal | undefined;
         await new Promise((resolve, reject) => {
           signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
-          setTimeout(resolve, 5_000);
+          setTimeout(resolve, 15_000);
         });
         return new Response(null, { status: 204 });
       });
@@ -797,9 +826,10 @@ describe('License Routes — Email Verification', () => {
       const res = await request(app)
         .post('/api/setup/license/resend')
         .send({})
-        .expect(200);
+        .expect(502);
 
-      expect(res.body.success).toBe(true);
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/timed out/i);
       expect(globalThis.fetch).toHaveBeenCalledWith(
         expect.stringContaining('workers.dev'),
         expect.objectContaining({ signal: expect.any(AbortSignal) }),
@@ -835,6 +865,23 @@ describe('License Routes — Email Verification', () => {
         .post('/api/setup/license/resend')
         .send({})
         .expect(400);
+    });
+
+    it('reports resend delivery failures instead of claiming success', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(false, 500, 'Worker error'));
+
+      const res = await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/could not send the verification email/i);
     });
   });
 });

@@ -710,6 +710,7 @@
               <span>Aggregate decision log across all sessions</span>
               <span id="perm-audit-modal-count">0 captured entries</span>
             </div>
+            <button type="button" class="modal-action-btn" id="perm-audit-copy-btn">Copy Markdown</button>
             <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
           </header>
           <div class="modal-body">
@@ -741,6 +742,7 @@
     const expandBtn = document.getElementById('perm-feed-expand-btn');
     const auditModal = document.getElementById('perm-audit-modal');
     const closeBtn = document.getElementById('perm-audit-modal-close');
+    const copyBtn = document.getElementById('perm-audit-copy-btn');
     if (expandBtn && auditModal) {
       expandBtn.addEventListener('click', function (e) {
         e.stopPropagation();
@@ -750,6 +752,12 @@
 
     if (closeBtn) {
       closeBtn.addEventListener('click', closeAuditModal);
+    }
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', function () {
+        copyAuditViewAsMarkdown(copyBtn);
+      });
     }
 
     if (auditModal) {
@@ -789,6 +797,42 @@
     document.body.classList.remove('modal-open');
   }
 
+  async function copyAuditViewAsMarkdown(button) {
+    const decisions = latestAggregateData?.recentDecisions || [];
+    const markdown = buildAuditMarkdown(decisions);
+    const originalLabel = button.textContent;
+
+    try {
+      await copyTextToClipboard(markdown);
+      button.textContent = 'Copied!';
+      window.setTimeout(function () {
+        button.textContent = originalLabel;
+      }, 1500);
+    } catch (_error) {
+      button.textContent = 'Copy failed';
+      window.setTimeout(function () {
+        button.textContent = originalLabel;
+      }, 1500);
+    }
+  }
+
+  async function copyTextToClipboard(text) {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return;
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+  }
+
   function setText(id, value) {
     const el = document.getElementById(id);
     if (el) el.textContent = String(value);
@@ -815,6 +859,51 @@
 
   function dataAdvisoryPlaceholder() {
     return '<span id="perm-all-sessions-advisory" class="perm-inline-advisory" hidden></span>';
+  }
+
+  function buildAuditMarkdown(decisions) {
+    const lines = [
+      '# DollhouseMCP Permissions Audit',
+      '',
+      `Generated: ${formatExactTimestamp(new Date().toISOString())}`,
+      `Entries: ${decisions.length}`,
+      'Scope: Aggregate decision log across all sessions',
+      '',
+    ];
+
+    if (!decisions.length) {
+      lines.push('No permission decisions recorded yet.');
+      return lines.join('\n');
+    }
+
+    decisions.forEach(function (decision, index) {
+      const entryLabel = decision.tool_name === 'Bash' && decision.command
+        ? `Bash: ${decision.command}`
+        : (decision.tool_name || 'Unknown tool');
+      lines.push(`## ${index + 1}. ${entryLabel}`);
+      lines.push(`- Decision: ${decision.decision || 'unknown'}`);
+      lines.push(`- Timestamp: ${formatExactTimestamp(decision.timestamp)}`);
+
+      const compactContext = getCompactContext(decision);
+      if (compactContext) {
+        lines.push(`- Context: ${compactContext}`);
+      }
+      if (decision.reason) {
+        lines.push(`- Reason: ${decision.reason}`);
+      }
+
+      const detailRows = Array.isArray(decision.details) ? decision.details : [];
+      if (detailRows.length) {
+        lines.push('- Details:');
+        detailRows.forEach(function (detail) {
+          lines.push(`  - ${detail.label}: ${detail.value}`);
+        });
+      }
+
+      lines.push('');
+    });
+
+    return lines.join('\n');
   }
 
   function renderInvalidPolicySummary(elementId, elements) {
