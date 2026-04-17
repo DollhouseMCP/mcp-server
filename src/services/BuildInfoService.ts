@@ -192,12 +192,17 @@ export class BuildInfoService {
     lines.push(`- **Version**: ${info.package.version}`);
     lines.push('');
 
-    lines.push('## 🪪 Session');
-    lines.push(`- **Session ID**: ${info.sessionId}`);
+    const identitySourceLabel = info.sessionSource === 'env'
+      ? 'Explicit environment'
+      : 'Derived from workspace context';
+    lines.push(
+      '## 🪪 Session',
+      `- **Session ID**: ${info.sessionId}`,
+    );
     if (info.runtimeSessionId !== info.sessionId) {
       lines.push(`- **Runtime Session ID**: ${info.runtimeSessionId}`);
     }
-    lines.push(`- **Identity Source**: ${info.sessionSource === 'env' ? 'Explicit environment' : 'Derived from workspace context'}`);
+    lines.push(`- **Identity Source**: ${identitySourceLabel}`);
     lines.push('');
     
     // Build info

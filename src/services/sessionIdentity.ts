@@ -14,7 +14,7 @@ export interface SessionIdentity {
 }
 
 interface ResolveSessionIdentityOptions {
-  envValue?: string | undefined;
+  envValue?: string;
   cwd?: string;
   homeDir?: string;
   pid?: number;

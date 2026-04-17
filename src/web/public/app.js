@@ -118,13 +118,12 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   }
 
   function renderHeaderStatsMarkup(primaryMarkup) {
+    const sessionTitle = DOLLHOUSE_RUNTIME_SESSION_ID && DOLLHOUSE_RUNTIME_SESSION_ID !== DOLLHOUSE_SESSION_ID
+      ? `Stable session ${DOLLHOUSE_SESSION_ID}; runtime ${DOLLHOUSE_RUNTIME_SESSION_ID}`
+      : `Stable session ${DOLLHOUSE_SESSION_ID}`;
     const sessionMarkup = DOLLHOUSE_SESSION_ID
       ? `
-      <span class="stat stat--session" title="${escHtml(
-        DOLLHOUSE_RUNTIME_SESSION_ID && DOLLHOUSE_RUNTIME_SESSION_ID !== DOLLHOUSE_SESSION_ID
-          ? `Stable session ${DOLLHOUSE_SESSION_ID}; runtime ${DOLLHOUSE_RUNTIME_SESSION_ID}`
-          : `Stable session ${DOLLHOUSE_SESSION_ID}`
-      )}">
+      <span class="stat stat--session" title="${escHtml(sessionTitle)}">
         <strong>${escHtml(DOLLHOUSE_SESSION_ID)}</strong> session
       </span>`
       : '';
