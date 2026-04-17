@@ -8,10 +8,9 @@ import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 
 function createMockHandler(readResult?: unknown) {

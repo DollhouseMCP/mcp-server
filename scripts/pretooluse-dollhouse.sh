@@ -42,6 +42,8 @@ authority_host_for_platform() {
     gemini) echo "gemini-cli" ;;
     *) echo "" ;;
   esac
+
+  return 0
 }
 
 resolve_authority_mode() {

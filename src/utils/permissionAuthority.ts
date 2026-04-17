@@ -1,6 +1,6 @@
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from './logger.js';
@@ -108,8 +108,10 @@ export async function writePermissionAuthorityState(
   homeDir = homedir(),
 ): Promise<void> {
   const statePath = getPermissionAuthorityStatePath(homeDir);
+  const tempPath = `${statePath}.tmp`;
   await mkdir(dirname(statePath), { recursive: true });
-  await writeFile(statePath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  await writeFile(tempPath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  await rename(tempPath, statePath);
 }
 
 export function getHostAuthorityMode(
@@ -183,7 +185,7 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
 }
 
 function normalizeHostStateMap(
-  rawHosts: Partial<Record<PermissionAuthorityHost, PermissionAuthorityHostState>> | unknown,
+  rawHosts: unknown,
 ): Partial<Record<PermissionAuthorityHost, PermissionAuthorityHostState>> {
   if (!rawHosts || typeof rawHosts !== 'object' || Array.isArray(rawHosts)) {
     return {};
@@ -191,26 +193,39 @@ function normalizeHostStateMap(
 
   const normalized: Partial<Record<PermissionAuthorityHost, PermissionAuthorityHostState>> = {};
   for (const [rawHost, rawState] of Object.entries(rawHosts as Record<string, unknown>)) {
-    if (!isPermissionAuthorityHost(rawHost) || !rawState || typeof rawState !== 'object' || Array.isArray(rawState)) {
+    if (!isPermissionAuthorityHost(rawHost)) {
       continue;
     }
 
-    const hostState = rawState as Partial<PermissionAuthorityHostState>;
-    if (!isPermissionAuthorityMode(hostState.mode)) {
+    const hostState = normalizeHostState(rawState);
+    if (!hostState) {
       continue;
     }
 
-    normalized[rawHost] = {
-      mode: hostState.mode,
-      reason: typeof hostState.reason === 'string' ? hostState.reason : undefined,
-      updatedAt: typeof hostState.updatedAt === 'string' ? hostState.updatedAt : new Date().toISOString(),
-      backupPath: typeof hostState.backupPath === 'string' ? hostState.backupPath : undefined,
-      lastSyncedAt: typeof hostState.lastSyncedAt === 'string' ? hostState.lastSyncedAt : undefined,
-      scope: hostState.scope === 'user' ? 'user' : undefined,
-    };
+    normalized[rawHost] = hostState;
   }
 
   return normalized;
+}
+
+function normalizeHostState(rawState: unknown): PermissionAuthorityHostState | null {
+  if (!rawState || typeof rawState !== 'object' || Array.isArray(rawState)) {
+    return null;
+  }
+
+  const hostState = rawState as Partial<PermissionAuthorityHostState>;
+  if (!isPermissionAuthorityMode(hostState.mode)) {
+    return null;
+  }
+
+  return {
+    mode: hostState.mode,
+    reason: typeof hostState.reason === 'string' ? hostState.reason : undefined,
+    updatedAt: typeof hostState.updatedAt === 'string' ? hostState.updatedAt : new Date().toISOString(),
+    backupPath: typeof hostState.backupPath === 'string' ? hostState.backupPath : undefined,
+    lastSyncedAt: typeof hostState.lastSyncedAt === 'string' ? hostState.lastSyncedAt : undefined,
+    scope: hostState.scope === 'user' ? 'user' : undefined,
+  };
 }
 
 function isPermissionAuthorityMode(value: unknown): value is PermissionAuthorityMode {
@@ -226,12 +241,11 @@ function isMissingFileError(error: unknown): boolean {
 }
 
 function getHostSettingsPath(host: PermissionAuthorityHost, homeDir: string): string {
-  switch (host) {
-    case 'claude-code':
-      return getClaudeHookSettingsPath(homeDir);
-    default:
-      throw new Error(`No host settings path registered for ${host}.`);
+  if (host === 'claude-code') {
+    return getClaudeHookSettingsPath(homeDir);
   }
+
+  throw new Error(`No host settings path registered for ${host}.`);
 }
 
 async function syncClaudeCodeAuthoritativeMode(input: {
@@ -361,7 +375,11 @@ function shouldStripClaudeAskEntry(entry: string, allowPatterns: string[]): bool
     return true;
   }
 
-  return entry.endsWith('*') && allowPatterns.some((pattern) => pattern.startsWith(normalizedEntry));
+  if (!entry.endsWith('*')) {
+    return false;
+  }
+
+  return allowPatterns.some((pattern) => pattern.startsWith(normalizedEntry));
 }
 
 async function createAuthorityBackup(

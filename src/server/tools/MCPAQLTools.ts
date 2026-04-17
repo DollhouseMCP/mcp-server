@@ -382,6 +382,8 @@ Gatekeeper & CLI policies:
 { operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
+{ operation: "get_permission_authority" }
+{ operation: "get_permission_authority", params: { host: "claude-code" } }
 
 Enhanced index:
 { operation: "find_similar_elements", params: { element_type: "persona", element_name: "Creative-Writer" } }
