@@ -195,15 +195,15 @@ export class BuildInfoService {
     const identitySourceLabel = info.sessionSource === 'env'
       ? 'Explicit environment'
       : 'Derived from workspace context';
-    lines.push(
+    const sessionLines = [
       '## 🪪 Session',
       `- **Session ID**: ${info.sessionId}`,
-    );
+      `- **Identity Source**: ${identitySourceLabel}`,
+    ];
     if (info.runtimeSessionId !== info.sessionId) {
-      lines.push(`- **Runtime Session ID**: ${info.runtimeSessionId}`);
+      sessionLines.splice(2, 0, `- **Runtime Session ID**: ${info.runtimeSessionId}`);
     }
-    lines.push(`- **Identity Source**: ${identitySourceLabel}`);
-    lines.push('');
+    lines.push(...sessionLines, '');
     
     // Build info
     lines.push('## 🏗️ Build');
