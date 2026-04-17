@@ -754,6 +754,7 @@
 
 .perm-audit-modal .modal-body {
   display: flex;
+  align-items: stretch;
   min-height: 0;
   padding: 0;
 }
@@ -763,10 +764,16 @@
 }
 
 .perm-audit-modal .perm-feed--modal {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
   padding: 0.875rem 1rem 1rem;
 }
 
 .perm-audit-entry {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
   border: 1px solid var(--ink-100, #e2e8f0);
   border-radius: 0.75rem;
   background: var(--paper-strong, #fff);
@@ -877,6 +884,48 @@
 .perm-audit-detail-value--mono {
   font-family: var(--font-mono, 'IBM Plex Mono', monospace);
   font-size: 0.82rem;
+}
+
+@media (max-width: 720px) {
+  .perm-audit-modal-dialog {
+    width: min(calc(100vw - 1rem), 82rem);
+  }
+
+  .perm-audit-modal .modal-header {
+    grid-template-areas:
+      "heading"
+      "meta"
+      "actions";
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .perm-audit-modal .modal-header-actions {
+    justify-self: start;
+    flex-wrap: wrap;
+  }
+
+  .perm-audit-modal .perm-feed--modal {
+    padding: 0.75rem;
+  }
+
+  .perm-audit-entry {
+    margin-bottom: 0.625rem;
+  }
+
+  .perm-audit-summary-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.45rem;
+    padding: 0.75rem 0.875rem;
+  }
+
+  .perm-audit-entry-body {
+    padding: 0.85rem 0.875rem 0.9rem;
+  }
+
+  .perm-audit-detail-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.25rem;
+  }
 }
 
 /* ── Source Elements ───────────────────────────────────────── */
@@ -1100,6 +1149,12 @@
 [data-theme="dark"] .perm-pattern-list,
 [data-theme="dark"] .perm-feed {
   background: color-mix(in srgb, var(--paper) 36%, var(--surface-1));
+}
+
+[data-theme="dark"] .perm-detail-refresh {
+  background: color-mix(in srgb, var(--signal-2) 14%, var(--surface-1));
+  border-color: color-mix(in srgb, var(--signal-2) 24%, var(--line, #2b3445));
+  color: var(--ink-300, #cbd5e1);
 }
 
 [data-theme="dark"] .perm-audit-entry {

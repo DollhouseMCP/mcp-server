@@ -87,9 +87,15 @@
           if (dc && dc.permissions) {
             if (!initialized) dc.permissions.init();
             else if (dc.permissions.refresh) dc.permissions.refresh();
-          }
-        }
-      });
+      }
+    }
+
+    window.addEventListener('dollhouse:policy-debug-visibility-changed', function () {
+      if (initialized) {
+        renderFromCache();
+      }
+    });
+  });
     }
   });
 
@@ -127,13 +133,14 @@
         return;
       }
 
+      const visibleAggregateData = getVisibleAggregateData(aggregateData);
       const currentSessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
-      const selectedData = deriveSelectedSessionData(aggregateData, currentSessionId);
+      const selectedData = deriveSelectedSessionData(visibleAggregateData, currentSessionId);
 
       latestAggregateData = aggregateData;
       latestSelectedData = selectedData;
       window.DollhouseSessions?.setPolicySessions?.(aggregateData.knownSessions || []);
-      render(aggregateData, selectedData);
+      render(visibleAggregateData, selectedData);
     } catch (err) {
       renderError(err.message);
     }
@@ -146,10 +153,9 @@
     }
 
     const sessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
-    latestSelectedData = deriveSelectedSessionData(latestAggregateData, sessionId);
-    renderAuthorityMode(latestAggregateData);
-    renderPolicySources(latestAggregateData, latestSelectedData);
-    renderSelectedSessionDetail(latestSelectedData);
+    const visibleAggregateData = getVisibleAggregateData(latestAggregateData);
+    latestSelectedData = deriveSelectedSessionData(visibleAggregateData, sessionId);
+    render(visibleAggregateData, latestSelectedData);
   }
 
   // ── Rendering ──────────────────────────────────────────────
@@ -655,6 +661,56 @@
     };
   }
 
+  function shouldShowPersistedPolicyDebug() {
+    return window.DollhouseSessions?.isPolicyDebugVisible?.() === true;
+  }
+
+  function getVisibleAggregateData(data) {
+    if (!data || shouldShowPersistedPolicyDebug()) {
+      return data;
+    }
+
+    const hiddenPolicySessions = Array.isArray(data.knownSessions) ? data.knownSessions : [];
+    if (hiddenPolicySessions.length === 0) {
+      return data;
+    }
+
+    const hiddenPolicySessionIds = new Set(
+      hiddenPolicySessions
+        .map(function (session) { return session && typeof session.sessionId === 'string' ? session.sessionId : ''; })
+        .filter(Boolean),
+    );
+
+    const filteredElements = ((data.elements || []).filter(function (element) {
+      const sessionIds = Array.isArray(element?.sessionIds) ? element.sessionIds.filter(function (sessionId) {
+        return typeof sessionId === 'string' && sessionId !== '';
+      }) : [];
+      if (sessionIds.length === 0) {
+        return true;
+      }
+      return sessionIds.some(function (sessionId) {
+        return !hiddenPolicySessionIds.has(sessionId);
+      });
+    }));
+
+    return {
+      ...data,
+      activeElementCount: filteredElements.length,
+      hasAllowlist: filteredElements.some(function (element) {
+        return (Array.isArray(element.allowRules) && element.allowRules.length > 0)
+          || (Array.isArray(element.allowPatterns) && element.allowPatterns.length > 0);
+      }),
+      elements: filteredElements,
+      knownSessions: [],
+      denyPatterns: flattenElementPatterns(filteredElements, 'denyPatterns'),
+      allowPatterns: flattenElementPatterns(filteredElements, 'allowPatterns'),
+      confirmPatterns: flattenElementPatterns(filteredElements, 'confirmPatterns'),
+      denyRules: flattenElementPatterns(filteredElements, 'denyRules'),
+      allowRules: flattenElementPatterns(filteredElements, 'allowRules'),
+      confirmRules: flattenElementPatterns(filteredElements, 'confirmRules'),
+    };
+  }
+
   function flattenElementPatterns(elements, key) {
     return elements.flatMap(function (element) {
       return Array.isArray(element[key]) ? element[key] : [];
@@ -939,8 +995,10 @@
               <span>Aggregate decision log across all sessions</span>
               <span id="perm-audit-modal-count">0 captured entries</span>
             </div>
-            <button type="button" class="modal-action-btn" id="perm-audit-copy-btn">Copy Markdown</button>
-            <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+            <div class="modal-header-actions">
+              <button type="button" class="modal-action-btn" id="perm-audit-copy-btn">Copy Markdown</button>
+              <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+            </div>
           </header>
           <div class="modal-body">
             <div class="perm-feed perm-feed--modal" id="perm-audit-modal-feed" role="log" aria-live="polite" aria-label="Full permission decision audit feed">
@@ -1093,10 +1151,52 @@
 
   async function copyTextToClipboard(text) {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Fall through to the user-gesture fallback below. Some embedded browsers
+        // expose the clipboard API but still reject writes in modal contexts.
+      }
     }
-    throw new Error('Clipboard API unavailable');
+
+    copyTextWithSelectionFallback(text);
+  }
+
+  function copyTextWithSelectionFallback(text) {
+    const textarea = document.createElement('textarea');
+    let handled = false;
+
+    function handleCopy(event) {
+      if (!event.clipboardData) {
+        return;
+      }
+      event.clipboardData.setData('text/plain', text);
+      event.preventDefault();
+      handled = true;
+    }
+
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.setAttribute('aria-hidden', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    document.addEventListener('copy', handleCopy, true);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+
+    try {
+      if (!document.execCommand || !document.execCommand('copy') || !handled) {
+        throw new Error('Clipboard copy command unavailable');
+      }
+    } finally {
+      document.removeEventListener('copy', handleCopy, true);
+      textarea.remove();
+    }
   }
 
   function setText(id, value) {
