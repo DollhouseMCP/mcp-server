@@ -218,6 +218,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -318,13 +319,17 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
     win.eval(permissionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
     win.DollhouseConsole.permissions.init();
-    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+    await wait(200);
+
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('No active elements with policies');
+    expect(win.document.getElementById('perm-selected-card')?.hidden).toBe(true);
 
     const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
     expect(sessionBox).not.toBeNull();
@@ -333,7 +338,17 @@ describe('Web console cleanup regressions', () => {
 
     const debugHeading = Array.from(win.document.querySelectorAll('.session-dropdown-heading'))
       .map(node => node.textContent);
-    expect(debugHeading).toContain('Persisted Policy State (Debug Info)');
+    expect(debugHeading.some(text => text?.includes('Persisted Policy State (Debug Info)'))).toBe(true);
+    const debugToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(debugToggle?.dataset.state).toBe('off');
+    expect(win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]')).toBeNull();
+
+    debugToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect((win.document.querySelector('.session-dropdown') as HTMLDivElement | null)?.hidden).toBe(false);
+    const enabledToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(enabledToggle?.dataset.state).toBe('on');
 
     const persistedItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]') as HTMLElement | null;
     expect(persistedItem).not.toBeNull();
@@ -360,6 +375,17 @@ describe('Web console cleanup regressions', () => {
       .map(([url]) => url)
       .filter((url): url is string => typeof url === 'string' && url.includes('sessionId=session-focus'));
     expect(selectedSessionRequests).toHaveLength(0);
+
+    const currentSessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    currentSessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const hideToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    hideToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]')).toBeNull();
+    expect(win.document.getElementById('perm-selected-card')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('No active elements with policies');
 
     cleanup();
   });
@@ -422,13 +448,14 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
     win.eval(permissionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
     win.DollhouseConsole.permissions.init();
-    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+    await wait(200);
 
     expect(win.document.getElementById('perm-all-invalid-policy-summary')?.textContent).toContain('malformed gatekeeper policy');
     expect(win.document.getElementById('perm-source-list')?.textContent).toContain('broken-guardian');
@@ -488,6 +515,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -608,6 +636,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
     win.confirm = jest.fn().mockReturnValue(true);
 
@@ -666,6 +695,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -679,6 +709,19 @@ describe('Web console cleanup regressions', () => {
       { sessionId: 'session-good', displayName: 'duplicate' },
       { sessionId: 42, displayName: 'bad-type' },
     ]);
+
+    expect(Array.from((win.document.getElementById('log-session-filter') as HTMLSelectElement | null)?.options ?? []).map(option => option.value)).toEqual([
+      '',
+      'console-1',
+    ]);
+
+    const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    sessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const debugToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(debugToggle?.dataset.state).toBe('off');
+    debugToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
 
     const select = win.document.getElementById('log-session-filter') as HTMLSelectElement | null;
     expect(select).not.toBeNull();
@@ -759,13 +802,14 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
     win.eval(permissionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
     win.DollhouseConsole.permissions.init();
-    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS + DEFAULT_WAIT_MS);
 
     const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
     expect(openButton).not.toBeNull();
@@ -788,6 +832,8 @@ describe('Web console cleanup regressions', () => {
 
     const copyButton = win.document.getElementById('perm-audit-copy-btn') as HTMLButtonElement | null;
     expect(copyButton).not.toBeNull();
+    expect(copyButton?.parentElement?.classList.contains('modal-header-actions')).toBe(true);
+    expect(copyButton?.nextElementSibling?.id).toBe('perm-audit-modal-close');
     copyButton?.click();
     await wait(DEFAULT_WAIT_MS);
     expect(writeText).toHaveBeenCalledTimes(1);
@@ -799,6 +845,107 @@ describe('Web console cleanup regressions', () => {
     closeButton?.click();
     await wait(DEFAULT_WAIT_MS);
     expect(modal?.hasAttribute('open')).toBe(false);
+
+    cleanup();
+  });
+
+  it('falls back to selection-based copy when the clipboard API write fails', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const writeText = jest.fn().mockRejectedValue(new Error('clipboard denied'));
+    Object.defineProperty(win.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const execCommand = jest.fn().mockImplementation((command: string) => {
+      if (command !== 'copy') {
+        return false;
+      }
+      const event = new win.Event('copy', { bubbles: true, cancelable: true }) as Event & {
+        clipboardData?: { setData: jest.Mock };
+      };
+      event.clipboardData = { setData: jest.fn() };
+      win.document.dispatchEvent(event);
+      return true;
+    });
+    Object.defineProperty(win.document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [
+              {
+                id: 'd-1',
+                timestamp: '2026-04-15T20:10:11.000Z',
+                tool_name: 'Edit',
+                decision: 'ask',
+                reason: 'Needs confirmation before editing a protected file.',
+                platform: 'cursor',
+                target: '/opt/dollhouse/important.txt',
+                targetLabel: 'File',
+                details: [
+                  { label: 'Platform', value: 'cursor', monospace: true },
+                ],
+              },
+            ],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const copyButton = win.document.getElementById('perm-audit-copy-btn') as HTMLButtonElement | null;
+    copyButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(copyButton?.textContent).toBe('Copied!');
 
     cleanup();
   });
@@ -848,4 +995,5 @@ describe('Web console cleanup regressions', () => {
 
     cleanup();
   });
+
 });

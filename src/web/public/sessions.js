@@ -24,6 +24,7 @@
   var SESSION_FILTER_INJECTION_RETRY_INTERVAL = getConfiguredNumber('sessionFilterInjectionRetryIntervalMs', 500);
   var SESSION_FILTER_INJECTION_MAX_RETRIES = getConfiguredNumber('sessionFilterInjectionMaxRetries', 20);
   var LEADER_RELOAD_DEBOUNCE_MS = getConfiguredNumber('leaderReloadDebounceMs', 150);
+  var POLICY_DEBUG_VISIBILITY_KEY = 'dollhouse.policyDebugVisible';
   var sessions = [];
   var policySessions = [];
   var filterSessionId = '';
@@ -31,6 +32,23 @@
   var lastSessionKey = ''; // tracks session list identity to avoid unnecessary rebuilds
   var lastReloadTargetVersion = '';
   var pendingLeaderReloadTimer = null;
+  var showPolicySessions = loadPolicyDebugVisibility();
+
+  function loadPolicyDebugVisibility() {
+    try {
+      return window.localStorage.getItem(POLICY_DEBUG_VISIBILITY_KEY) === 'true';
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function persistPolicyDebugVisibility(nextVisible) {
+    try {
+      window.localStorage.setItem(POLICY_DEBUG_VISIBILITY_KEY, nextVisible ? 'true' : 'false');
+    } catch (err) {
+      // best-effort only
+    }
+  }
 
   function parseSemver(version) {
     if (typeof version !== 'string') return null;
@@ -175,6 +193,9 @@
 
   function getSelectableSessions() {
     var live = getLiveSessions();
+    if (!showPolicySessions) {
+      return live;
+    }
     var liveIds = new Set(live.map(function(s) { return s.sessionId; }));
     var merged = live.slice();
     for (var i = 0; i < policySessions.length; i++) {
@@ -234,7 +255,31 @@
   function sessionListKey(list) {
     return list.map(function(s) {
       return s.sessionId + ':' + s.status + ':' + (isPolicyOnlySession(s) ? 'policy' : 'live');
-    }).join(',');
+    }).join(',')
+      + '|policyDebug:' + (showPolicySessions ? 'on' : 'off')
+      + '|knownPolicy:' + policySessions.map(function(session) { return session.sessionId; }).join(',');
+  }
+
+  function setPolicyDebugVisibility(nextVisible, keepDropdownOpen) {
+    var normalized = !!nextVisible;
+    if (showPolicySessions === normalized) return;
+    showPolicySessions = normalized;
+    persistPolicyDebugVisibility(showPolicySessions);
+
+    if (!showPolicySessions) {
+      var current = getSelectableSessions().find(function(session) {
+        return session.sessionId === filterSessionId;
+      });
+      if (!current && filterSessionId) {
+        applyFilter('');
+      }
+    }
+
+    updateSessionIndicator({ keepOpen: !!keepDropdownOpen });
+    updateSessionFilterOptions();
+    window.dispatchEvent(new CustomEvent('dollhouse:policy-debug-visibility-changed', {
+      detail: { visible: showPolicySessions },
+    }));
   }
 
   // Apply session filter and update all UI to reflect it
@@ -343,10 +388,11 @@
   }
 
   // Build or rebuild the session indicator — only when session list actually changes
-  function updateSessionIndicator() {
+  function updateSessionIndicator(options) {
+    var keepOpen = !!(options && options.keepOpen);
     var active = getLiveSessions();
     var selectable = getSelectableSessions();
-    var policyOnly = selectable.filter(function(s) { return isPolicyOnlySession(s); });
+    var visiblePolicyOnly = selectable.filter(function(s) { return isPolicyOnlySession(s); });
     var key = sessionListKey(selectable);
 
     // If sessions haven't changed, just refresh selection state
@@ -385,7 +431,7 @@
     var dropdown = document.createElement('div');
     dropdown.className = 'session-dropdown';
     dropdown.setAttribute('role', 'listbox');
-    dropdown.hidden = true;
+    dropdown.hidden = !keepOpen;
 
     // "All Sessions" item
     var allItem = document.createElement('div');
@@ -403,7 +449,7 @@
 
     var allCount = document.createElement('span');
     allCount.className = 'session-dropdown-role';
-    allCount.textContent = allSessionsSummary(count, policyOnly.length);
+    allCount.textContent = allSessionsSummary(count, visiblePolicyOnly.length);
     allItem.appendChild(allCount);
 
     allItem.addEventListener('click', function(e) {
@@ -422,6 +468,42 @@
       var heading = document.createElement('div');
       heading.className = 'session-dropdown-heading';
       heading.textContent = text;
+      dropdown.appendChild(heading);
+    }
+
+    function appendDebugHeading() {
+      var heading = document.createElement('div');
+      heading.className = 'session-dropdown-heading session-dropdown-heading--toggle';
+
+      var title = document.createElement('span');
+      title.className = 'session-dropdown-heading-label';
+      title.textContent = 'Persisted Policy State (Debug Info)';
+      heading.appendChild(title);
+
+      var controls = document.createElement('div');
+      controls.className = 'session-dropdown-toggle-group';
+
+      var visibleLabel = document.createElement('span');
+      visibleLabel.className = 'session-dropdown-toggle-label';
+      visibleLabel.textContent = 'Visible';
+      controls.appendChild(visibleLabel);
+
+      var toggle = document.createElement('button');
+      toggle.type = 'button';
+      toggle.className = 'session-dropdown-switch';
+      toggle.dataset.state = showPolicySessions ? 'on' : 'off';
+      toggle.setAttribute('aria-pressed', showPolicySessions ? 'true' : 'false');
+      toggle.setAttribute('aria-label', 'Toggle persisted policy state debug visibility');
+      toggle.innerHTML = '<span class="session-dropdown-switch-label session-dropdown-switch-label--off">Off</span>'
+        + '<span class="session-dropdown-switch-label session-dropdown-switch-label--on">On</span>'
+        + '<span class="session-dropdown-switch-thumb" aria-hidden="true"></span>';
+      toggle.addEventListener('click', function(e) {
+        e.stopPropagation();
+        setPolicyDebugVisibility(!showPolicySessions, true);
+      });
+      controls.appendChild(toggle);
+
+      heading.appendChild(controls);
       dropdown.appendChild(heading);
     }
 
@@ -546,11 +628,11 @@
       }
     }
 
-    if (policyOnly.length > 0) {
+    if (policySessions.length > 0) {
       appendDivider();
-      appendHeading('Persisted Policy State (Debug Info)');
-      for (var j = 0; j < policyOnly.length; j++) {
-        appendSessionItem(policyOnly[j]);
+      appendDebugHeading();
+      for (var j = 0; j < visiblePolicyOnly.length; j++) {
+        appendSessionItem(visiblePolicyOnly[j]);
       }
     }
 
@@ -561,6 +643,7 @@
     indicator.appendChild(wrapper);
 
     dropdownBuilt = true;
+    box.setAttribute('aria-expanded', keepOpen ? 'true' : 'false');
 
     // Apply current selection state
     refreshSelectionState();
@@ -661,8 +744,11 @@
     getFilterSessionId: function() { return filterSessionId; },
     displayName: displayName,
     getSessions: function() { return sessions; },
+    getLiveSessions: getLiveSessions,
     getSelectableSessions: getSelectableSessions,
     setPolicySessions: setPolicySessions,
+    isPolicyDebugVisible: function() { return showPolicySessions; },
+    setPolicyDebugVisibility: setPolicyDebugVisibility,
   };
 
   function init() {

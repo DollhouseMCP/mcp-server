@@ -59,11 +59,6 @@ describe('Permission Server Integration', () => {
     });
 
     it('should accept POST /api/evaluate_permission and return a decision', async () => {
-      const { findAvailablePort } = await import(
-        '../../../src/auto-dollhouse/portDiscovery.js'
-      );
-      testPort = await findAvailablePort(49310);
-
       // Start a minimal mock server that mimics the evaluate_permission endpoint
       server = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -91,7 +86,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => server!.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(server);
 
       // Test safe tool
       const allowResponse = await httpPost(testPort, {
@@ -227,7 +222,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should discover server via port file and get a response', async () => {
-      const testPort = 49360;
+      let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -250,7 +245,7 @@ describe('Permission Server Integration', () => {
       });
 
       // Start server and write port file
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -294,7 +289,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should translate legacy flat Claude responses', async () => {
-      const testPort = 49361;
+      let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -308,7 +303,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -331,7 +326,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should pass through already-wrapped Claude responses unchanged', async () => {
-      const testPort = 49362;
+      let testPort = 0;
       const wrappedResponse = {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -349,7 +344,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -366,7 +361,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should fail open silently on malformed Claude responses', async () => {
-      const testPort = 49363;
+      let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -377,7 +372,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -395,7 +390,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should fall back to the newest live PID-keyed port file and restore the shared file', async () => {
-      const testPort = 49364;
+      let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -417,7 +412,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.unlink(PORT_FILE).catch(() => {});
       await fs.writeFile(PID_PORT_FILE, String(testPort), 'utf-8');
@@ -469,7 +464,8 @@ describe('Permission Server Integration', () => {
 
     it('should handle unreachable server in HTTP request gracefully', async () => {
       // Hitting a port where nothing is listening should not crash
-      const response = await httpPost(49399, {
+      const unusedPort = await reserveUnusedLoopbackPort();
+      const response = await httpPost(unusedPort, {
         tool_name: 'Read',
         input: {},
         platform: 'claude_code',
@@ -515,6 +511,43 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
     req.write(data);
     req.end();
   });
+}
+
+/**
+ * Bind a test server on loopback using an OS-assigned port.
+ */
+function listenOnLoopback(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        reject(new Error('Unable to determine loopback port'));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+/**
+ * Reserve an unused loopback port, then immediately release it so the caller
+ * can verify connection-failure behavior against a realistically free port.
+ */
+async function reserveUnusedLoopbackPort(): Promise<number> {
+  const placeholderServer = http.createServer();
+  const port = await listenOnLoopback(placeholderServer);
+  await new Promise<void>((resolve, reject) => {
+    placeholderServer.close((error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  return port;
 }
 
 function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
