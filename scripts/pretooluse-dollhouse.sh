@@ -19,6 +19,7 @@
 RUN_DIR="$HOME/.dollhouse/run"
 PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
+AUTHORITY_CACHE_TTL_SECONDS=2
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
@@ -48,19 +49,47 @@ authority_host_for_platform() {
 
 resolve_authority_mode() {
   local authority_host="$1"
+  local cache_file="$RUN_DIR/permission-authority-${HOOK_PLATFORM}.cache"
+  local resolved
 
   if [[ -z "$authority_host" || ! -f "$AUTHORITY_FILE" ]]; then
     echo "shared"
     return 0
   fi
 
-  local resolved
+  if [[ -f "$cache_file" ]]; then
+    local cache_age
+    cache_age=$(cache_file_age_seconds "$cache_file")
+    if [[ -n "$cache_age" && "$cache_age" -lt "$AUTHORITY_CACHE_TTL_SECONDS" ]]; then
+      resolved=$(tr -d '\r\n' < "$cache_file" 2>/dev/null)
+      if [[ -n "$resolved" ]]; then
+        debug "Authority cache hit for ${authority_host}: $resolved"
+        echo "$resolved"
+        return 0
+      fi
+    fi
+  fi
+
   resolved=$(jq -r --arg host "$authority_host" '.hosts[$host].mode // .defaultMode // "shared"' "$AUTHORITY_FILE" 2>/dev/null)
   if [[ -z "$resolved" || "$resolved" == "null" ]]; then
-    echo "shared"
-  else
-    echo "$resolved"
+    resolved="shared"
   fi
+
+  printf '%s' "$resolved" > "$cache_file" 2>/dev/null || true
+  echo "$resolved"
+  return 0
+}
+
+cache_file_age_seconds() {
+  local file_path="$1"
+  local modified_epoch
+
+  modified_epoch=$(stat -f %m "$file_path" 2>/dev/null || stat -c %Y "$file_path" 2>/dev/null)
+  if [[ -z "$modified_epoch" ]]; then
+    return 1
+  fi
+
+  echo $(( $(date +%s) - modified_epoch ))
   return 0
 }
 

@@ -108,10 +108,8 @@ export async function writePermissionAuthorityState(
   homeDir = homedir(),
 ): Promise<void> {
   const statePath = getPermissionAuthorityStatePath(homeDir);
-  const tempPath = `${statePath}.tmp`;
   await mkdir(dirname(statePath), { recursive: true });
-  await writeFile(tempPath, JSON.stringify(state, null, 2) + '\n', 'utf-8');
-  await rename(tempPath, statePath);
+  await writeTextFileAtomically(statePath, JSON.stringify(state, null, 2) + '\n');
 }
 
 export function getHostAuthorityMode(
@@ -127,61 +125,64 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
   const state = await readPermissionAuthorityState(homeDir);
   const previousHostState = state.hosts[input.host];
   const previousMode = previousHostState?.mode ?? state.defaultMode;
+  try {
+    if (input.mode === 'authoritative') {
+      if (input.host !== 'claude-code') {
+        throw new Error(`Authoritative mode is not implemented yet for ${input.host}.`);
+      }
+      if (!input.policies) {
+        throw new Error('Authoritative mode requires a policy snapshot.');
+      }
 
-  if (input.mode === 'authoritative') {
-    if (input.host !== 'claude-code') {
-      throw new Error(`Authoritative mode is not implemented yet for ${input.host}.`);
-    }
-    if (!input.policies) {
-      throw new Error('Authoritative mode requires a policy snapshot.');
+      const syncResult = await syncClaudeCodeAuthoritativeMode({
+        homeDir,
+        host: input.host,
+        previousBackupPath: previousHostState?.backupPath,
+        policies: input.policies,
+        now,
+      });
+
+      state.hosts[input.host] = {
+        mode: 'authoritative',
+        reason: input.reason,
+        updatedAt: now.toISOString(),
+        backupPath: syncResult.backupPath,
+        lastSyncedAt: syncResult.syncedAt,
+        scope: 'user',
+      };
+    } else {
+      if (previousMode === 'authoritative' && previousHostState?.backupPath) {
+        await restoreAuthorityBackup(previousHostState.backupPath, getHostSettingsPath(input.host, homeDir));
+      }
+
+      state.hosts[input.host] = {
+        mode: input.mode,
+        reason: input.reason,
+        updatedAt: now.toISOString(),
+        scope: 'user',
+      };
     }
 
-    const syncResult = await syncClaudeCodeAuthoritativeMode({
-      homeDir,
-      host: input.host,
-      previousBackupPath: previousHostState?.backupPath,
-      policies: input.policies,
-      now,
+    state.updatedAt = now.toISOString();
+    await writePermissionAuthorityState(state, homeDir);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONFIG_UPDATED',
+      severity: 'LOW',
+      source: 'permissionAuthority.setPermissionAuthorityMode',
+      details: `Permission authority for ${input.host} changed from ${previousMode} to ${input.mode}`,
+      additionalData: {
+        host: input.host,
+        previousMode,
+        mode: input.mode,
+        reason: input.reason,
+      },
     });
 
-    state.hosts[input.host] = {
-      mode: 'authoritative',
-      reason: input.reason,
-      updatedAt: now.toISOString(),
-      backupPath: syncResult.backupPath,
-      lastSyncedAt: syncResult.syncedAt,
-      scope: 'user',
-    };
-  } else {
-    if (previousMode === 'authoritative' && previousHostState?.backupPath) {
-      await restoreAuthorityBackup(previousHostState.backupPath, getHostSettingsPath(input.host, homeDir));
-    }
-
-    state.hosts[input.host] = {
-      mode: input.mode,
-      reason: input.reason,
-      updatedAt: now.toISOString(),
-      scope: 'user',
-    };
+    return state;
+  } catch (error) {
+    throw withAuthorityContext(error, `Failed to set permission authority for ${input.host} to ${input.mode}`);
   }
-
-  state.updatedAt = now.toISOString();
-  await writePermissionAuthorityState(state, homeDir);
-
-  SecurityMonitor.logSecurityEvent({
-    type: 'CONFIG_UPDATED',
-    severity: 'LOW',
-    source: 'permissionAuthority.setPermissionAuthorityMode',
-    details: `Permission authority for ${input.host} changed from ${previousMode} to ${input.mode}`,
-    additionalData: {
-      host: input.host,
-      previousMode,
-      mode: input.mode,
-      reason: input.reason,
-    },
-  });
-
-  return state;
 }
 
 function normalizeHostStateMap(
@@ -258,19 +259,23 @@ async function syncClaudeCodeAuthoritativeMode(input: {
   const settingsPath = getHostSettingsPath(input.host, input.homeDir);
   await mkdir(dirname(settingsPath), { recursive: true });
 
-  const currentRaw = existsSync(settingsPath) ? await readFile(settingsPath, 'utf-8') : null;
-  const backupPath = input.previousBackupPath
-    ?? await createAuthorityBackup(input.homeDir, input.host, currentRaw, input.now);
+  try {
+    const currentRaw = existsSync(settingsPath) ? await readFile(settingsPath, 'utf-8') : null;
+    const backupPath = input.previousBackupPath
+      ?? await createAuthorityBackup(input.homeDir, input.host, currentRaw, input.now);
 
-  const parsed = currentRaw && currentRaw.trim().length > 0
-    ? JSON.parse(currentRaw) as Record<string, unknown>
-    : {};
+    const parsed = currentRaw && currentRaw.trim().length > 0
+      ? JSON.parse(currentRaw) as Record<string, unknown>
+      : {};
 
-  const syncedAt = input.now.toISOString();
-  const synced = buildClaudeAuthoritySettings(parsed, input.policies, syncedAt);
-  await writeFile(settingsPath, JSON.stringify(synced, null, 2) + '\n', 'utf-8');
+    const syncedAt = input.now.toISOString();
+    const synced = buildClaudeAuthoritySettings(parsed, input.policies, syncedAt);
+    await writeTextFileAtomically(settingsPath, JSON.stringify(synced, null, 2) + '\n');
 
-  return { backupPath, syncedAt };
+    return { backupPath, syncedAt };
+  } catch (error) {
+    throw withAuthorityContext(error, `Failed to sync authoritative Claude Code settings at ${settingsPath}`);
+  }
 }
 
 function buildClaudeAuthoritySettings(
@@ -397,19 +402,34 @@ async function createAuthorityBackup(
     ? { version: 1, existed: false }
     : { version: 1, existed: true, raw };
 
-  await writeFile(backupPath, JSON.stringify(backup, null, 2) + '\n', 'utf-8');
+  await writeTextFileAtomically(backupPath, JSON.stringify(backup, null, 2) + '\n');
   return backupPath;
 }
 
 async function restoreAuthorityBackup(backupPath: string, targetPath: string): Promise<void> {
-  const raw = await readFile(backupPath, 'utf-8');
-  const backup = JSON.parse(raw) as PermissionAuthorityBackup;
+  try {
+    const raw = await readFile(backupPath, 'utf-8');
+    const backup = JSON.parse(raw) as PermissionAuthorityBackup;
 
-  if (backup.existed) {
-    await mkdir(dirname(targetPath), { recursive: true });
-    await writeFile(targetPath, backup.raw ?? '', 'utf-8');
-    return;
+    if (backup.existed) {
+      await mkdir(dirname(targetPath), { recursive: true });
+      await writeTextFileAtomically(targetPath, backup.raw ?? '');
+      return;
+    }
+
+    await rm(targetPath, { force: true });
+  } catch (error) {
+    throw withAuthorityContext(error, `Failed to restore authority backup ${backupPath} to ${targetPath}`);
   }
+}
 
-  await rm(targetPath, { force: true });
+async function writeTextFileAtomically(filePath: string, contents: string): Promise<void> {
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tempPath, contents, 'utf-8');
+  await rename(tempPath, filePath);
+}
+
+function withAuthorityContext(error: unknown, context: string): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  return new Error(`${context}: ${message}`);
 }

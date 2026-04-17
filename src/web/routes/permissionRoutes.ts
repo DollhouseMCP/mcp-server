@@ -452,6 +452,9 @@ export function registerPermissionRoutes(
         hookInstalled: data.hookInstalled,
         hookHost: data.hookHost,
         authority: authorityState,
+        authoritySupportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+        authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
+        authorityAiMutable: false,
         enforcementReady: data.enforcementReady,
         invalidPolicyElementCount: data.invalidPolicyElementCount ?? 0,
         advisory: data.advisory,
@@ -526,7 +529,10 @@ export function registerPermissionRoutes(
 
       res.json({ success: true, authority: authorityState });
     } catch (err) {
-      logger.error('[WebUI/Gateway] permissions/authority update error:', err);
+      logger.error(
+        `[WebUI/Gateway] permissions/authority update error (host=${String(req.body?.host ?? '')}, mode=${String(req.body?.mode ?? '')}):`,
+        err,
+      );
       res.status(500).json({
         error: err instanceof Error ? err.message : 'Failed to update permission authority',
       });
