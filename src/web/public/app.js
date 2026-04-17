@@ -2003,12 +2003,70 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
+    const FORCED_RELOAD_KEY = 'dollhousemcp-last-forced-reload';
     // Server version injected at request time — used to show Setup tab once per version
     // so upgraders automatically see it on each new release (not just first-ever visit).
     // Validate format (semver-like) before trusting the value; malformed falls back to
     // 'unknown' which safely triggers setup on every load rather than silently skipping.
     const _rawVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
     const currentServerVersion = /^\d+\.\d+\.\d+/.test(_rawVersion) ? _rawVersion : 'unknown';
+    const _rawAssetVersion = document.querySelector('meta[name="dollhouse-console-asset-version"]')?.content || '';
+    const currentAssetVersion = /^\d+\.\d+\.\d+/.test(_rawAssetVersion) ? _rawAssetVersion : currentServerVersion;
+    let forcedReloadInFlight = false;
+
+    function normalizeReloadVersion(version) {
+      return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version)
+        ? version
+        : (currentAssetVersion || currentServerVersion || 'unknown');
+    }
+
+    function shouldThrottleForcedReload(targetVersion) {
+      try {
+        const raw = sessionStorage.getItem(FORCED_RELOAD_KEY);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        return parsed
+          && parsed.version === targetVersion
+          && typeof parsed.at === 'number'
+          && Date.now() - parsed.at < 60_000;
+      } catch {
+        return false;
+      }
+    }
+
+    function rememberForcedReload(targetVersion, reason) {
+      try {
+        sessionStorage.setItem(FORCED_RELOAD_KEY, JSON.stringify({
+          version: targetVersion,
+          reason: reason || 'manual',
+          at: Date.now(),
+        }));
+      } catch {
+        // Ignore storage failures — reload still proceeds.
+      }
+    }
+
+    function buildCacheBustedConsoleUrl(targetVersion, reason) {
+      const url = new URL(globalThis.location.href);
+      url.searchParams.set('dollhouse_bust', targetVersion + '-' + Date.now());
+      url.searchParams.set('dollhouse_asset_version', targetVersion);
+      if (reason) {
+        url.searchParams.set('dollhouse_reload_reason', reason);
+      }
+      return url.toString();
+    }
+
+    function forceConsoleReload(reason, targetVersion) {
+      const normalizedTargetVersion = normalizeReloadVersion(targetVersion);
+      if (forcedReloadInFlight || shouldThrottleForcedReload(normalizedTargetVersion)) {
+        return false;
+      }
+      forcedReloadInFlight = true;
+      rememberForcedReload(normalizedTargetVersion, reason);
+      const reloadUrl = buildCacheBustedConsoleUrl(normalizedTargetVersion, reason);
+      globalThis.location.replace(reloadUrl);
+      return true;
+    }
 
     // Determine which tab to show on load:
     // 1. URL hash (deep link)
@@ -2047,6 +2105,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     // Expose for other scripts (logs.js, metrics.js, permissions.js)
     globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
     globalThis.DollhouseConsole.getUrlParams = () => getTabAndParams().params;
+    globalThis.DollhouseConsole.currentServerVersion = currentServerVersion;
+    globalThis.DollhouseConsole.currentAssetVersion = currentAssetVersion;
+    globalThis.DollhouseConsole.forceReload = forceConsoleReload;
 
     /**
      * Apply URL params to the portfolio tab.
@@ -2200,7 +2261,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       toast.innerHTML = 'Console session token changed\u2009\u2014\u2009'
         + '<button style="background:#fff;color:#b91c1c;border:none;padding:6px 16px;'
         + 'border-radius:4px;cursor:pointer;font-weight:600;font-size:14px"'
-        + ' onclick="location.reload()">Reload</button>';
+        + ' onclick="window.DollhouseConsole.forceReload(\'session-expired\')">Reload</button>';
       document.body.appendChild(toast);
     });
 

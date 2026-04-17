@@ -16,14 +16,16 @@
   <meta name="dollhouse-server-version" content="{{DOLLHOUSE_VERSION}}">
   <meta name="dollhouse-session-id" content="{{DOLLHOUSE_SESSION_ID}}">
   <meta name="dollhouse-runtime-session-id" content="{{DOLLHOUSE_RUNTIME_SESSION_ID}}">
-  <link rel="stylesheet" href="fonts.css">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="logs.css">
-  <link rel="stylesheet" href="metrics.css">
-  <link rel="stylesheet" href="permissions.css">
-  <link rel="stylesheet" href="sessions.css">
-  <link rel="stylesheet" href="setup.css">
-  <link rel="stylesheet" href="security.css">
+  <!-- Asset version — injected at request time for cache-busting local CSS/JS/img files. -->
+  <meta name="dollhouse-console-asset-version" content="{{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="fonts.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="styles.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="logs.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="metrics.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="permissions.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="sessions.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="setup.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="security.css?v={{DOLLHOUSE_ASSET_VERSION}}">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -33,7 +35,7 @@
 
   <header class="site-header">
     <div class="header-brand">
-      <img src="dollhouse-logo.png" alt="DollhouseMCP" class="header-logo" width="32" height="32">
+      <img src="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}" alt="DollhouseMCP" class="header-logo" width="32" height="32">
       <div class="header-brand-text">
         <h1 class="site-title">DollhouseMCP</h1>
         <p class="site-tagline">Management Console</p>
@@ -79,6 +81,10 @@
           <strong>Pinned version</strong>
           <span>Lock to a specific version, update when you choose</span>
         </button>
+        <button class="setup-method-btn" data-method="permissions" aria-pressed="false">
+          <strong>Permissions &amp; Security</strong>
+          <span>Manual hook assets and enforcement guidance</span>
+        </button>
       </fieldset>
 
       <fieldset class="setup-channel-toggle" id="setup-channel-toggle">
@@ -121,6 +127,8 @@ npm install @dollhousemcp/mcp-server</code></pre>
         </div>
       </div>
 
+      <div class="setup-permissions-intro" id="setup-permissions-intro" hidden></div>
+
       <div class="setup-platforms" id="setup-platforms" role="tablist" aria-label="Platform install instructions">
         <button class="setup-platform-tab is-active" role="tab" aria-selected="true"  aria-controls="setup-panel-claude-desktop" id="setup-tab-claude-desktop">Claude Desktop</button>
         <button class="setup-platform-tab"           role="tab" aria-selected="false" aria-controls="setup-panel-claude-code"    id="setup-tab-claude-code">Claude Code</button>
@@ -135,7 +143,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
       <!-- Claude Desktop -->
       <section class="setup-panel is-active" role="tabpanel" id="setup-panel-claude-desktop" aria-labelledby="setup-tab-claude-desktop">
-        <div class="setup-method setup-method-primary">
+        <div class="setup-method setup-method-primary" data-setup-modes="npx global">
           <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Pulls the latest version of DollhouseMCP on every startup. Uses <code>npx @latest</code> under the hood. Restart Claude Desktop after.</p>
           <div class="setup-install-row">
@@ -143,12 +151,12 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <span class="setup-install-status" data-install-status="claude"></span>
           </div>
         </div>
-        <div class="setup-method setup-mcpb-option" id="setup-mcpb-section" hidden>
+        <div class="setup-method setup-mcpb-option" id="setup-mcpb-section" data-setup-modes="global" hidden>
           <h3>Or install via Desktop Extension <span class="setup-badge">pinned version</span></h3>
           <p>Download the <code>.mcpb</code> bundle and double-click it to install. Claude Desktop handles everything automatically &mdash; no terminal, no config editing. This installs a pinned copy that won't auto-update.</p>
           <a class="setup-btn setup-btn-secondary" href="/api/setup/mcpb" id="pinned-mcpb-btn">Download .mcpb <span id="pinned-mcpb-version"></span></a>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or add manually
             <button class="setup-open-btn" type="button" data-open-client="claude">Open config file</button>
           </h3>
@@ -175,7 +183,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
 
       <!-- Claude Code -->
       <section class="setup-panel" role="tabpanel" id="setup-panel-claude-code" aria-labelledby="setup-tab-claude-code" hidden>
-        <div class="setup-method setup-method-primary">
+        <div class="setup-method setup-method-primary" data-setup-modes="npx global">
           <h3>Auto-configure <span class="setup-method-badge setup-badge">auto-updating</span></h3>
           <p class="setup-method-desc">Adds DollhouseMCP to Claude Code, pulling the latest version on every startup.</p>
           <div class="setup-install-row">
@@ -183,7 +191,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <span class="setup-install-status" data-install-status="claude-code"></span>
           </div>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or run in your terminal</h3>
           <p>Start a new conversation and you're ready.</p>
           <div class="setup-code-block">
@@ -191,7 +199,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
             <pre><code>claude mcp add dollhousemcp -- npx -y @dollhousemcp/mcp-server@latest</code></pre>
           </div>
         </div>
-        <div class="setup-method">
+        <div class="setup-method" data-setup-modes="npx global">
           <h3>Or add manually
             <button class="setup-open-btn" type="button" data-open-client="claude-code">Open config file</button>
           </h3>
@@ -594,13 +602,13 @@ npm install @dollhousemcp/mcp-server</code></pre>
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
   <!-- Console auth helper must load first — it reads the token meta tag and
        exposes window.DollhouseAuth for all subsequent scripts (#1780). -->
-  <script src="consoleAuth.js"></script>
-  <script src="setup.js"></script>
-  <script src="app.js"></script>
-  <script src="logs.js"></script>
-  <script src="metrics.js"></script>
-  <script src="permissions.js"></script>
-  <script src="sessions.js"></script>
-  <script src="security.js"></script>
+  <script src="consoleAuth.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="logs.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="metrics.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="permissions.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="sessions.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="security.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
 </body>
 </html>

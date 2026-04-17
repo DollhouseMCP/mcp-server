@@ -29,6 +29,13 @@ const newVersion = args[0];
 const isDryRun = args.includes('--dry-run');
 const notesIndex = args.indexOf('--notes');
 const releaseNotes = notesIndex !== -1 && args[notesIndex + 1] ? args[notesIndex + 1] : '';
+const maxFilesEnv = process.env.MAX_FILES;
+const maxMatchedFiles = maxFilesEnv ? Number.parseInt(maxFilesEnv, 10) : 1000;
+
+if (!Number.isInteger(maxMatchedFiles) || maxMatchedFiles <= 0) {
+  console.error('❌ MAX_FILES must be a positive integer');
+  process.exit(1);
+}
 
 // Security: Validate release notes length to prevent injection attacks
 if (releaseNotes.length > 1000) {
@@ -154,6 +161,16 @@ const updateConfigs = [
     updates: [
       {
         pattern: /"version":\s*"[\d.]+(-[\w.]+)?"/g,
+        replacement: `"version": "${newVersion}"`
+      }
+    ],
+    required: true
+  },
+  {
+    name: 'manifest.json',
+    updates: [
+      {
+        pattern: /"version":\s*"[\d.]+(-[\w.]+)?"/,
         replacement: `"version": "${newVersion}"`
       }
     ],
@@ -309,8 +326,8 @@ async function handleGlobPattern(pattern, config) {
   const files = await glob(fullPattern);
   
   // Security: Limit number of files to prevent DoS
-  if (files.length > 1000) {
-    console.error(`❌ Too many files matched (${files.length}). Maximum is 1000.`);
+  if (files.length > maxMatchedFiles) {
+    console.error(`❌ Too many files matched (${files.length}). Maximum is ${maxMatchedFiles}.`);
     process.exit(1);
   }
   let updated = 0;

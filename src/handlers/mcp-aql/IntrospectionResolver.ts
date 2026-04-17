@@ -312,6 +312,10 @@ const SHARED_NAMING = [
   'Allowed: letters, digits, hyphens, underscores',
 ];
 
+const SHARED_GATEKEEPER_STRUCTURE_NOTE = 'gatekeeper: Dynamic security policy — takes effect when this element is activated, reverts when deactivated. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? }, externalRestrictions?: { description: string, allowPatterns?: string[], confirmPatterns?: string[], denyPatterns?: string[] } }. Priority: deny > confirm > allow > route default.';
+
+const SHARED_GATEKEEPER_AUTHORING_NOTE = 'gatekeeper authoring: use allow/confirm/deny for Dollhouse / MCP-AQL operation patterns like "read_*", "edit_*", "delete_element", or "execute_agent". Use externalRestrictions for external tool / hook patterns like "Read:*", "Edit:*", "Bash:git status*", or "Bash:rm *". externalRestrictions must stay nested under gatekeeper and must include a non-empty description.';
+
 /**
  * Format specifications for each element type.
  * Returned by introspect query: "format".
@@ -330,7 +334,8 @@ const FORMAT_SPECS: Record<string, FormatSpec> = {
       'Frontmatter delimited by --- on its own line',
       'Body text after frontmatter becomes the instructions field',
       'No template variable substitution in personas',
-      'gatekeeper: Dynamic security policy — takes effect when this persona is activated, reverts when deactivated. Example: a "focused-work" persona that denies web browsing tools while active, or an "open-research" persona that allows broad access. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? } }. Priority: deny > confirm > allow > route default.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `---
 name: my-persona
@@ -343,6 +348,10 @@ description: Cybersecurity specialist focused on threat modeling
 version: 1
 tags: [security, analysis]
 author: team-lead
+gatekeeper:
+  allow: [read_*, list_*, search_*, get_*]
+  confirm: [edit_*, update_*]
+  deny: [delete_*, execute_agent]
 ---
 You ARE a cybersecurity expert with 15 years of experience.
 ALWAYS consider threat models before suggesting solutions.
@@ -365,7 +374,8 @@ PRIORITIZE defense-in-depth strategies.`,
       'Frontmatter delimited by --- on its own line',
       'Body text after frontmatter becomes the content field',
       'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
-      'gatekeeper: Dynamic security policy — takes effect when this skill is activated, reverts when deactivated. Example: a "code-review" skill that auto-approves read operations but confirms edits, or a "read-only" skill that denies all write operations. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? } }.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `---
 name: code-review
@@ -379,6 +389,15 @@ version: 1
 tags: [development, quality]
 author: dev-team
 category: development
+gatekeeper:
+  allow: [read_*, list_*, search_*, get_*]
+  confirm: [create_*, edit_*, update_*]
+  deny: [delete_*, execute_agent]
+  externalRestrictions:
+    description: Review safely while this skill is active
+    allowPatterns: [Read:*, Glob:*, Grep:*]
+    confirmPatterns: [Edit:*, Write:*, Bash:git push*]
+    denyPatterns: [Bash:rm *, WebSearch:*]
 ---
 When reviewing code: ALWAYS check for security vulnerabilities first.
 ANALYZE complexity and suggest simplifications.
@@ -415,7 +434,8 @@ FORMAT feedback as actionable bullet points.
       'Declare variables in frontmatter: variables: [{ name, type, required, description }]',
       'For lists, tables, or conditional content: pass pre-formatted markdown strings as variables',
       'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
-      'gatekeeper: Dynamic security policy — takes effect when this template is activated, reverts when deactivated. Example: a sensitive report template that denies deletion while active, protecting it from accidental removal during use. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? } }.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `---
 name: bug-report
@@ -474,7 +494,9 @@ function update() { return { bar: baz }; } // }} safe here
       'autonomy: { maxAutonomousSteps, allowedActions, requireConfirmation } (defaults apply if omitted)',
       'resilience: Governs automatic recovery during execute_agent. { onStepLimitReached?: "pause"|"continue"|"restart", onExecutionFailure?: "pause"|"retry"|"restart-fresh", maxRetries?: number (default 3), maxContinuations?: number (default 10), retryBackoff?: "linear"|"exponential", preserveState?: boolean }. Without resilience, execution pauses at limits and failures (safe default).',
       'activates lifecycle: Elements in activates are automatically activated when execute_agent starts — their gatekeeper policies, instructions, and capabilities become active for the execution duration.',
-      'gatekeeper: Dynamic security policy — takes effect when this agent is activated, reverts when deactivated. Gives users composable security control: activate a locked-down agent and writes are blocked; deactivate it and full access returns. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?: string[], blockedTypes?: string[] } }. allow/confirm/deny are operation name patterns (e.g. "read_*", "execute_agent", "delete_element"). scopeRestrictions limits which element types the policy governs. Priority: deny > confirm > allow > route default. If omitted, inherits system defaults (which already require confirmation for sensitive operations).',
+      'gatekeeper: Dynamic security policy — takes effect when this agent is activated, reverts when deactivated. Gives users composable security control: activate a locked-down agent and writes are blocked; deactivate it and full access returns.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `---
 name: code-reviewer
@@ -514,6 +536,11 @@ gatekeeper:
   allow: [read_element, search_elements, query_elements, list_elements]
   confirm: [execute_agent, edit_element]
   deny: [delete_element]
+  externalRestrictions:
+    description: Let the agent inspect freely but confirm shell writes
+    allowPatterns: [Read:*, Glob:*, Grep:*]
+    confirmPatterns: [Edit:*, Write:*, Bash:git push*]
+    denyPatterns: [Bash:rm *]
 ---
 You are a thorough code reviewer who prioritizes security.`,
     namingConventions: [
@@ -536,7 +563,8 @@ You are a thorough code reviewer who prioritizes security.`,
       'category must match: ^[a-zA-Z][a-zA-Z0-9\\-_]{0,20}$',
       'Naming convention for agent-linked memories: agent-{agent-name}-context',
       'Naming convention for persona-linked memories: persona-{persona-name}-preferences',
-      'gatekeeper: Dynamic security policy — takes effect when this memory is activated, reverts when deactivated. Example: a confidential project memory that blocks deletion and confirms edits while active. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? } }.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `# Created via create_element:
 { operation: "create_element", elementType: "memory", params: {
@@ -579,7 +607,8 @@ You are a thorough code reviewer who prioritizes security.`,
       'type must be a valid ElementType: persona, skill, template, agent, memory',
       'Referenced elements must exist in the portfolio',
       'At least one element required; elements validated at creation time',
-      'gatekeeper: Dynamic security policy — takes effect when this ensemble is activated, reverts when deactivated. Ensembles can define broad security postures: activate a "production-safe" ensemble and destructive operations are blocked across all its member elements. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?, blockedTypes? } }.',
+      SHARED_GATEKEEPER_STRUCTURE_NOTE,
+      SHARED_GATEKEEPER_AUTHORING_NOTE,
     ],
     minimalExample: `---
 name: security-team

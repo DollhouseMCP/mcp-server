@@ -18,6 +18,8 @@
  */
 
 import { ElementType, PortfolioManager } from '../portfolio/PortfolioManager.js';
+import os from 'node:os';
+import path from 'node:path';
 import { SkillManager } from '../elements/skills/index.js';
 import { TemplateManager } from '../elements/templates/TemplateManager.js';
 import { TemplateRenderer } from '../utils/TemplateRenderer.js';
@@ -51,11 +53,16 @@ import {
 } from './strategies/index.js';
 import { ElementQueryService } from '../services/query/ElementQueryService.js';
 import { ValidationRegistry } from '../services/validation/ValidationRegistry.js';
-import type { ActivationStore } from '../services/ActivationStore.js';
+import type { ActivationStore, PersistedActivation, PersistedActivationStateSnapshot } from '../services/ActivationStore.js';
 import type { BackupService } from '../services/BackupService.js';
 import type { PolicyExportService } from '../services/PolicyExportService.js';
 import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { formatValidationFailedError } from './element-crud/responseFormatter.js';
+import {
+  findConfirmAdvisoryElements,
+  findConfirmDenyingElement,
+  getGatekeeperDiagnostics,
+} from './mcp-aql/policies/ElementPolicies.js';
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
@@ -138,6 +145,34 @@ export class ElementCRUDHandler {
    */
   private sanitizeMetadata(metadata: Record<string, any>): Record<string, any> {
     return sanitizeMetadataRecord(metadata);
+  }
+
+  private normalizeLookupValue(value: unknown): string {
+    return typeof value === 'string'
+      ? value.normalize('NFC').trim()
+      : '';
+  }
+
+  private hasGatekeeperPolicy(metadata: Record<string, unknown> | undefined): boolean {
+    return Boolean(metadata?.['gatekeeper'] || getGatekeeperDiagnostics(metadata));
+  }
+
+  private toPolicyElementType(type: string): string {
+    const normalizedType = this.normalizeLookupValue(type).toLowerCase();
+    switch (normalizedType) {
+      case 'personas':
+        return 'persona';
+      case 'skills':
+        return 'skill';
+      case 'agents':
+        return 'agent';
+      case 'memories':
+        return 'memory';
+      case 'ensembles':
+        return 'ensemble';
+      default:
+        return normalizedType;
+    }
   }
 
   /**
@@ -365,6 +400,22 @@ export class ElementCRUDHandler {
     }
 
     try {
+      // Active agents (async)
+      const agents = await this.agentManager.getActiveAgents();
+      for (const agent of agents) {
+        const key = `agent:${agent.metadata.name}`;
+        seen.add(key);
+        result.push({
+          type: 'agent',
+          name: agent.metadata.name,
+          metadata: agent.metadata as unknown as Record<string, unknown>,
+        });
+      }
+    } catch (error) {
+      logger.warn('Failed to gather active agents for policy evaluation', { error });
+    }
+
+    try {
       // Active ensembles (async)
       const ensembles = await this.ensembleManager.getActiveEnsembles();
       for (const e of ensembles) {
@@ -407,6 +458,312 @@ export class ElementCRUDHandler {
     }
 
     return result;
+  }
+
+  async getPolicyElementsForReport(sessionId?: string): Promise<Array<{
+    type: string;
+    name: string;
+    metadata: Record<string, unknown>;
+    sessionIds?: string[];
+  }>> {
+    const merged = new Map<string, {
+      type: string;
+      name: string;
+      metadata: Record<string, unknown>;
+      sessionIds: Set<string>;
+    }>();
+
+    const addElement = (
+      element: { type: string; name: string; metadata: Record<string, unknown> },
+      sessionIds: string[] = [],
+    ): void => {
+      if (!this.hasGatekeeperPolicy(element.metadata)) {
+        return;
+      }
+
+      const key = `${element.type}:${element.name}`;
+      const existing = merged.get(key);
+      if (existing) {
+        sessionIds.forEach(id => existing.sessionIds.add(id));
+        return;
+      }
+
+      merged.set(key, {
+        type: element.type,
+        name: element.name,
+        metadata: element.metadata,
+        sessionIds: new Set(sessionIds),
+      });
+    };
+
+    const currentSessionId = this.activationStore?.getSessionId();
+    const includeCurrentSession = !sessionId || !currentSessionId || currentSessionId === sessionId;
+
+    if (includeCurrentSession) {
+      for (const activeElement of await this.getActiveElementsForPolicy()) {
+        addElement(activeElement, currentSessionId ? [currentSessionId] : []);
+      }
+    }
+
+    if (this.activationStore?.isEnabled()) {
+      const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
+      const catalogs = new Map<string, Array<{ metadata?: Record<string, unknown>; filename?: string }>>();
+
+      const getCatalog = async (type: string) => {
+        const normalizedType = this.normalizeElementType(type);
+        if (!catalogs.has(normalizedType)) {
+          catalogs.set(
+            normalizedType,
+            (await this.getElements(normalizedType)) as Array<{ metadata?: Record<string, unknown>; filename?: string }>,
+          );
+        }
+        return catalogs.get(normalizedType) ?? [];
+      };
+
+      const findPersistedElement = async (
+        type: string,
+        activation: PersistedActivation,
+      ): Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null> => {
+        const catalog = await getCatalog(type);
+        const normalizedName = this.normalizeLookupValue(activation.name);
+        const normalizedFilename = this.normalizeLookupValue(activation.filename);
+
+        const found = catalog.find((element) => {
+          const metadata = element.metadata ?? {};
+          const elementName = this.normalizeLookupValue(metadata['name']);
+          const elementFilename = this.normalizeLookupValue(
+            element.filename ?? metadata['filename'] ?? metadata['sourceFile'],
+          );
+
+          return elementName === normalizedName || (normalizedFilename !== '' && elementFilename === normalizedFilename);
+        });
+
+        if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
+          return null;
+        }
+
+        return {
+          type: this.toPolicyElementType(type),
+          name: (found.metadata['name'] as string) ?? activation.name,
+          metadata: found.metadata,
+        };
+      };
+
+      for (const state of persistedStates) {
+        await this.mergePersistedPolicyState(state, addElement, findPersistedElement);
+      }
+    }
+
+    return Array.from(merged.values()).map((entry) => ({
+      type: entry.type,
+      name: entry.name,
+      metadata: entry.metadata,
+      ...(entry.sessionIds.size > 0
+        ? { sessionIds: Array.from(entry.sessionIds).sort((a, b) => a.localeCompare(b)) }
+        : {}),
+    }));
+  }
+
+  async releaseDeadlock(): Promise<{
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
+  }> {
+    const activeElements = await this.collectActiveElementsForDeadlockRelief();
+    const activePolicyElements = await this.getActiveElementsForPolicy();
+    const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
+    const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
+    const deactivated: Array<{ type: string; name: string }> = [];
+    const failed: Array<{ type: string; name: string; error: string }> = [];
+
+    for (const element of activeElements) {
+      const strategy = this.strategies.get(element.type);
+      if (!strategy) {
+        failed.push({
+          type: element.type,
+          name: element.name,
+          error: `No activation strategy registered for type '${element.type}'`,
+        });
+        continue;
+      }
+
+      try {
+        await strategy.deactivate(element.name);
+        deactivated.push(element);
+      } catch (error) {
+        failed.push({
+          type: element.type,
+          name: element.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    const persistedStateCleared = Boolean(this.activationStore?.isEnabled());
+    const snapshotFile = await this.writeDeadlockReliefSnapshot({
+      sessionId: this.activationStore?.getSessionId(),
+      activeBeforeReset: activeElements,
+      deactivated,
+      failed,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      persistedStateCleared,
+    });
+
+    this.activationStore?.clearAll();
+    this.policyExportService?.exportPolicies().catch(() => {});
+
+    const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_DEACTIVATED',
+      severity: failed.length > 0 ? 'MEDIUM' : 'LOW',
+      source: 'ElementCRUDHandler.releaseDeadlock',
+      details: `Deadlock relief deactivated ${deactivated.length} element(s)${failureSummary}`,
+      additionalData: {
+        sessionId: this.activationStore?.getSessionId(),
+        activeBeforeReset: activeElements,
+        deactivated,
+        failed,
+        persistedStateCleared,
+        likelyDeadlockCause: {
+          ...(sandboxingElement ? { sandboxingElement } : {}),
+          advisoryElements,
+        },
+        snapshotFile,
+      },
+    });
+
+    return {
+      ...(this.activationStore?.getSessionId()
+        ? { sessionId: this.activationStore.getSessionId() }
+        : {}),
+      activeBeforeReset: activeElements,
+      deactivated,
+      failed,
+      persistedStateCleared,
+      likelyDeadlockCause: {
+        ...(sandboxingElement ? { sandboxingElement } : {}),
+        advisoryElements,
+      },
+      ...(snapshotFile ? { snapshotFile } : {}),
+    };
+  }
+
+  private async collectActiveElementsForDeadlockRelief(): Promise<Array<{ type: string; name: string }>> {
+    const activeElements: Array<{ type: string; name: string }> = [];
+
+    const activePersonas = this.personaManager.getActivePersonas();
+    activeElements.push(...activePersonas.map((persona) => ({
+      type: ElementType.PERSONA,
+      name: persona.metadata.name,
+    })));
+
+    const activeSkills = await this.skillManager.getActiveSkills();
+    activeElements.push(...activeSkills.map((skill) => ({
+      type: ElementType.SKILL,
+      name: skill.metadata.name,
+    })));
+
+    const activeAgents = await this.agentManager.getActiveAgents();
+    activeElements.push(...activeAgents.map((agent) => ({
+      type: ElementType.AGENT,
+      name: agent.metadata.name,
+    })));
+
+    const activeMemories = await this.memoryManager.getActiveMemories();
+    activeElements.push(...activeMemories.map((memory) => ({
+      type: ElementType.MEMORY,
+      name: memory.metadata.name,
+    })));
+
+    const activeEnsembles = await this.ensembleManager.getActiveEnsembles();
+    activeElements.push(...activeEnsembles.map((ensemble) => ({
+      type: ElementType.ENSEMBLE,
+      name: ensemble.metadata.name,
+    })));
+
+    const seen = new Set<string>();
+    return activeElements.filter((element) => {
+      const key = `${element.type}:${element.name}`;
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
+  private async writeDeadlockReliefSnapshot(snapshot: {
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    persistedStateCleared: boolean;
+  }): Promise<string | undefined> {
+    const snapshotDir = path.join(os.homedir(), '.dollhouse', 'state', 'deadlock-relief');
+    const safeSessionId = (snapshot.sessionId ?? 'session')
+      .replaceAll(/[^a-zA-Z0-9_-]/g, '-')
+      .slice(0, 64);
+    const timestamp = new Date().toISOString().replaceAll(/[:.]/g, '-');
+    const snapshotFile = path.join(snapshotDir, `deadlock-relief-${safeSessionId}-${timestamp}.json`);
+
+    try {
+      await this.fileOperations.createDirectory(snapshotDir);
+      await this.fileOperations.writeFile(
+        snapshotFile,
+        JSON.stringify({
+          createdAt: new Date().toISOString(),
+          ...snapshot,
+        }, null, 2),
+        { source: 'ElementCRUDHandler.releaseDeadlock' },
+      );
+      return snapshotFile;
+    } catch (error) {
+      logger.warn('Failed to write deadlock relief snapshot', {
+        snapshotFile,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  private async mergePersistedPolicyState(
+    state: PersistedActivationStateSnapshot,
+    addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
+    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
+  ): Promise<void> {
+    const pending: Promise<void>[] = [];
+
+    for (const [type, activations] of Object.entries(state.activations)) {
+      for (const activation of activations ?? []) {
+        pending.push((async () => {
+          const found = await findPersistedElement(type, activation);
+          if (found) {
+            addElement(found, [state.sessionId]);
+          }
+        })());
+      }
+    }
+
+    if (pending.length === 0) {
+      return;
+    }
+
+    await Promise.allSettled(pending);
   }
 
   async deactivateElement(name: string, type: string) {

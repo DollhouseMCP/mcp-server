@@ -13,6 +13,7 @@ import type { PortfolioManager } from '../../../src/portfolio/PortfolioManager.j
 import type { InitializationService } from '../../../src/services/InitializationService.js';
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
 import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
+import type { ActivationStore } from '../../../src/services/ActivationStore.js';
 
 describe('ElementCRUDHandler (DI)', () => {
   let handler: ElementCRUDHandler;
@@ -33,6 +34,8 @@ describe('ElementCRUDHandler (DI)', () => {
       create: jest.fn(),
       delete: jest.fn(),
       find: jest.fn(),
+      getActiveSkills: jest.fn().mockResolvedValue([]),
+      deactivateSkill: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<SkillManager>;
 
     templateManager = {
@@ -45,18 +48,29 @@ describe('ElementCRUDHandler (DI)', () => {
 
     agentManager = {
       create: jest.fn(),
+      getActiveAgents: jest.fn().mockResolvedValue([]),
+      deactivateAgent: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
+      list: jest.fn().mockResolvedValue([]),
     } as unknown as jest.Mocked<AgentManager>;
 
     memoryManager = {
       save: jest.fn(),
+      getActiveMemories: jest.fn().mockResolvedValue([]),
+      deactivateMemory: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<MemoryManager>;
 
     ensembleManager = {
       list: jest.fn(),
+      getActiveEnsembles: jest.fn().mockResolvedValue([]),
+      deactivateEnsemble: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<EnsembleManager>;
 
     personaHandler = {
       getActivePersona: jest.fn(),
+      getActivePersonas: jest.fn().mockReturnValue([]),
+      deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
+      findPersona: jest.fn(),
+      list: jest.fn().mockReturnValue([]),
     } as unknown as jest.Mocked<PersonaHandler>;
 
     portfolioManager = {
@@ -210,6 +224,243 @@ describe('ElementCRUDHandler (DI)', () => {
       // Test with 'ensemble' (singular)
       const result2 = await handler.getElementDetails('Test', 'ensemble' as any);
       expect(result2.content[0].text).toContain('🎭');
+    });
+  });
+
+  describe('policy reporting helpers', () => {
+    it('includes active agents in getActiveElementsForPolicy()', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        {
+          metadata: {
+            name: 'autonomy-scout-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const result = await handler.getActiveElementsForPolicy();
+
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          type: 'agent',
+          name: 'autonomy-scout-demo',
+        }),
+      ]));
+    });
+
+    it('merges persisted activation snapshots into reportable policy elements', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([
+          {
+            sessionId: 'session-other',
+            lastUpdated: new Date().toISOString(),
+            activations: {
+              skill: [{ name: 'audit-trace-demo', activatedAt: new Date().toISOString() }],
+            },
+          },
+        ]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.getActiveSkills = jest.fn().mockResolvedValue([]);
+      skillManager.list = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'skill',
+          name: 'audit-trace-demo',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+      expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
+    });
+
+    it('does not leak the current session in-memory policies into another session report', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([
+          {
+            sessionId: 'session-other',
+            lastUpdated: new Date().toISOString(),
+            activations: {
+              skill: [{ name: 'audit-trace-demo', activatedAt: new Date().toISOString() }],
+            },
+          },
+        ]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.getActiveSkills = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'leader-only-skill',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+      skillManager.list = jest.fn().mockResolvedValue([
+        {
+          metadata: {
+            name: 'audit-trace-demo',
+            gatekeeper: {
+              externalRestrictions: {
+                confirmPatterns: ['Bash:git push*'],
+              },
+            },
+          },
+        } as any,
+        {
+          metadata: {
+            name: 'leader-only-skill',
+            gatekeeper: {
+              externalRestrictions: {
+                denyPatterns: ['Bash:rm*'],
+              },
+            },
+          },
+        } as any,
+      ]);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          name: 'audit-trace-demo',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+    });
+  });
+
+  describe('releaseDeadlock', () => {
+    it('should deactivate all active elements and clear persisted session state', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('session-lock'),
+        clearAll: jest.fn(),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      personaHandler.getActivePersonas.mockReturnValue([
+        { metadata: { name: 'Locked Persona' } } as any,
+      ]);
+      personaHandler.findPersona.mockReturnValue({ metadata: { name: 'Locked Persona' } } as any);
+      skillManager.getActiveSkills.mockResolvedValue([
+        { metadata: { name: 'locked-skill' } } as any,
+      ]);
+      agentManager.getActiveAgents.mockResolvedValue([
+        { metadata: { name: 'locked-agent' } } as any,
+      ]);
+      memoryManager.getActiveMemories.mockResolvedValue([
+        { metadata: { name: 'locked-memory' } } as any,
+      ]);
+      ensembleManager.getActiveEnsembles.mockResolvedValue([
+        { metadata: { name: 'locked-ensemble' } } as any,
+      ]);
+
+      const handlerWithPersistence = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await handlerWithPersistence.releaseDeadlock();
+
+      expect(result.sessionId).toBe('session-lock');
+      expect(result.failed).toEqual([]);
+      expect(result.persistedStateCleared).toBe(true);
+      expect(result.activeBeforeReset).toEqual(expect.arrayContaining([
+        { type: ElementType.PERSONA, name: 'Locked Persona' },
+        { type: ElementType.SKILL, name: 'locked-skill' },
+        { type: ElementType.AGENT, name: 'locked-agent' },
+        { type: ElementType.MEMORY, name: 'locked-memory' },
+        { type: ElementType.ENSEMBLE, name: 'locked-ensemble' },
+      ]));
+      expect(result.deactivated).toEqual(expect.arrayContaining([
+        { type: ElementType.PERSONA, name: 'Locked Persona' },
+        { type: ElementType.SKILL, name: 'locked-skill' },
+        { type: ElementType.AGENT, name: 'locked-agent' },
+        { type: ElementType.MEMORY, name: 'locked-memory' },
+        { type: ElementType.ENSEMBLE, name: 'locked-ensemble' },
+      ]));
+      expect(result.likelyDeadlockCause).toEqual({
+        advisoryElements: [],
+      });
+      expect(result.snapshotFile).toMatch(/[\\/]\.dollhouse[\\/]state[\\/]deadlock-relief[\\/]/);
+      expect(personaHandler.deactivatePersona).toHaveBeenCalledWith('Locked Persona');
+      expect(skillManager.deactivateSkill).toHaveBeenCalledWith('locked-skill');
+      expect(agentManager.deactivateAgent).toHaveBeenCalledWith('locked-agent');
+      expect(memoryManager.deactivateMemory).toHaveBeenCalledWith('locked-memory');
+      expect(ensembleManager.deactivateEnsemble).toHaveBeenCalledWith('locked-ensemble');
+      expect(activationStore.clearAll).toHaveBeenCalled();
+      expect(fileOperations.createDirectory).toHaveBeenCalled();
+      expect(fileOperations.writeFile).toHaveBeenCalled();
     });
   });
 });

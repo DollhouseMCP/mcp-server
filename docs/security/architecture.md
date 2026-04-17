@@ -111,8 +111,9 @@ gatekeeper:
     blockedTypes: [agent]
   externalRestrictions:
     description: "Restrict CLI tools to safe operations"
-    denyPatterns: ["rm -rf *", "sudo *"]
-    allowPatterns: ["git *", "npm test*"]
+    allowPatterns: ["Read:*", "Glob:*", "Bash:git status*"]
+    confirmPatterns: ["Edit:*", "Write:*", "Bash:git push*"]
+    denyPatterns: ["Bash:rm *", "Bash:sudo *"]
     approvalPolicy:
       requireApproval: [moderate, dangerous]
       defaultScope: single

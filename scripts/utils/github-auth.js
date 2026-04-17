@@ -14,6 +14,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import { homedir } from 'os';
 
+const CONFIGURED_STORAGE_MESSAGE = '✅ Using OAuth token from configured storage';
+const GITHUB_AUTH_FAILED_ERROR = 'GitHub authentication failed';
+const GITHUB_AUTH_UNAVAILABLE_ERROR = 'Unable to validate GitHub authentication';
+const INVALID_TOKEN_DETAILS = '   GitHub rejected the token or authentication could not be verified';
+
 /**
  * Check if running in test mode (PAT available)
  */
@@ -44,7 +49,7 @@ export async function getAuthToken() {
       const token = await fs.readFile(tokenPath, 'utf-8');
       const trimmed = token.trim();
       if (trimmed && (trimmed.startsWith('gho_') || trimmed.startsWith('ghp_') || trimmed.startsWith('github_pat_'))) {
-        console.log('✅ Using OAuth token from:', tokenPath);
+        console.log(CONFIGURED_STORAGE_MESSAGE);
         return trimmed;
       }
     } catch (error) {
@@ -77,7 +82,7 @@ export async function validateToken(token) {
     if (!response.ok) {
       return { 
         valid: false, 
-        error: `GitHub API returned ${response.status}: ${response.statusText}` 
+        error: GITHUB_AUTH_FAILED_ERROR
       };
     }
     
@@ -106,10 +111,10 @@ export async function validateToken(token) {
       },
       isTestMode: isTestMode()
     };
-  } catch (error) {
+  } catch {
     return {
       valid: false,
-      error: `Failed to validate token: ${error.message}`
+      error: GITHUB_AUTH_UNAVAILABLE_ERROR
     };
   }
 }
@@ -148,20 +153,20 @@ export async function showAuthStatus() {
   const validation = await validateToken(token);
   
   if (!validation.valid) {
-    console.log('❌ Invalid token:', validation.error);
+    console.log('❌ Invalid token');
+    console.log(INVALID_TOKEN_DETAILS);
     return false;
   }
   
-  console.log('✅ Authenticated as:', validation.user);
-  console.log('   Name:', validation.name || 'Not set');
+  console.log('✅ Authentication verified');
   console.log('   Mode:', validation.isTestMode ? '🧪 TEST (PAT)' : '🔐 PRODUCTION (OAuth)');
   
   if (validation.scopes.length > 0) {
-    console.log('   Scopes:', validation.scopes.join(', '));
+    console.log('   Scopes: available');
   }
   
-  console.log('   Rate Limit:', `${validation.rateLimit.remaining}/${validation.rateLimit.limit}`);
-  console.log('   Reset:', validation.rateLimit.reset.toLocaleTimeString());
+  console.log('   Rate Limit: available');
+  console.log('   Reset: available');
   
   // Warn if using PAT in what looks like production
   if (validation.isTestMode && !process.env.CI && !process.env.TEST) {

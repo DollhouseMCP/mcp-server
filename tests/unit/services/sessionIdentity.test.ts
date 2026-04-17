@@ -5,8 +5,8 @@ describe('sessionIdentity', () => {
   it('uses explicit environment identity unchanged', () => {
     const identity = resolveSessionIdentity({
       envValue: 'claude-code-main',
-      cwd: '/tmp/project',
-      homeDir: '/tmp/home',
+      cwd: '/Users/example/project',
+      homeDir: '/Users/example',
       pid: 1234,
     });
 

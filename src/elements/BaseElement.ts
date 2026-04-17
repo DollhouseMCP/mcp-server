@@ -58,6 +58,9 @@ export function normalizeVersion(version: string): string {
 }
 
 export abstract class BaseElement implements IElement {
+  private static readonly TRANSIENT_METADATA_FIELDS = new Set([
+    'gatekeeperDiagnostics',
+  ]);
   // Identity
   public id: string;
   public type: ElementType;
@@ -368,6 +371,10 @@ export abstract class BaseElement implements IElement {
     if (typeof obj === 'object') {
       const cleaned: any = {};
       for (const [key, value] of Object.entries(obj)) {
+        if (BaseElement.TRANSIENT_METADATA_FIELDS.has(key)) {
+          continue;
+        }
+
         const cleanedValue = this.deepCleanObject(value);
         if (cleanedValue !== undefined) {
           cleaned[key] = cleanedValue;
@@ -397,7 +404,7 @@ export abstract class BaseElement implements IElement {
       // Update properties
       this.id = parsed.id;
       this.type = parsed.type;
-      this.version = parsed.version || '1.0.0';
+      this.version = normalizeVersion(String(parsed.version ?? '1.0.0'));
       this.metadata = parsed.metadata;
       this.references = parsed.references || [];
       this.extensions = parsed.extensions || {};

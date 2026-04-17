@@ -69,6 +69,8 @@ html { scroll-behavior: smooth; }
 body {
   margin: 0;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   color-scheme: light;
   color: var(--ink-900);
   background:
@@ -255,6 +257,7 @@ p, li { max-width: 69ch; }
 .site-main {
   width: min(var(--max-width), calc(100% - 2 * var(--gutter)));
   margin: 0 auto;
+  flex: 1 0 auto;
   padding: clamp(1.1rem, 3vw, 2rem) 0 3rem;
 }
 
@@ -955,7 +958,7 @@ dialog.modal {
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding: 1rem var(--gutter) 0;
+  padding: 1rem var(--gutter) calc(var(--site-footer-height, 4.5rem) + 0.5rem);
   width: 100%;
 }
 dialog.modal::backdrop { display: none; }
@@ -975,14 +978,12 @@ body.modal-open { overflow: hidden; }
   position: relative;
   width: min(72rem, 100%);
   margin: 0 auto;
-  /* Fixed height = viewport minus top padding; content scrolls inside.
-     This keeps the header and toolbar at a stable screen position
-     regardless of content length or raw/rendered toggle. */
-  height: calc(100vh - 1rem);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  /* Keep the dialog fully inside the viewport and above the fixed footer. */
+  height: calc(100dvh - var(--site-footer-height, 4.5rem) - 1.5rem);
+  max-height: calc(100dvh - var(--site-footer-height, 4.5rem) - 1.5rem);
+  border-radius: var(--radius-lg);
   background: var(--paper-strong);
   border: 1px solid var(--line);
-  border-bottom: none;
   box-shadow: var(--shadow-card);
   overflow: hidden;
   display: flex;
@@ -991,7 +992,7 @@ body.modal-open { overflow: hidden; }
 
 .modal-header {
   display: grid;
-  grid-template-areas: "heading close" "meta close";
+  grid-template-areas: "heading actions" "meta actions";
   grid-template-columns: 1fr auto;
   gap: 0.2rem 0.65rem;
   padding: 0.9rem 1rem 0.75rem;
@@ -1054,8 +1055,21 @@ body.modal-open { overflow: hidden; }
   flex-wrap: wrap;
 }
 
+.modal-header-actions {
+  grid-area: actions;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  justify-self: end;
+}
+
+.modal-header-actions .modal-action-btn {
+  min-height: 1.85rem;
+  border-radius: 999px;
+  padding: 0.26rem 0.78rem;
+}
+
 .modal-close {
-  grid-area: close;
   align-self: start;
   appearance: none;
   border: 1px solid color-mix(in srgb, var(--line) 82%, var(--paper-strong));
@@ -1381,10 +1395,14 @@ body.modal-open { overflow: hidden; }
 .site-footer {
   border-top: 1px solid var(--line);
   padding: 0.85rem 0 1.35rem;
-  position: sticky;
+  margin-top: 0;
+  position: fixed;
+  left: 0;
+  right: 0;
   bottom: 0;
-  background: var(--paper);
-  z-index: 10;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(10px);
+  z-index: 40;
 }
 
 .footer-inner {

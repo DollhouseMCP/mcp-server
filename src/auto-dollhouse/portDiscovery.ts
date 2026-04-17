@@ -10,11 +10,15 @@ import { createServer } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
+import { ensureLatestPortFile } from '../web/portDiscovery.js';
 
 const MAX_PORT_ATTEMPTS = 10;
 
 /** Directory for runtime state files (port discovery, PID files) */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
+function pidPortFilePath(dir: string = RUN_DIR, pid: number = process.pid): string {
+  return join(dir, `permission-server-${pid}.port`);
+}
 
 /** Track port file path for cleanup */
 let portFilePath: string | null = null;
@@ -53,10 +57,9 @@ export async function findAvailablePort(startPort: number): Promise<number> {
  */
 export async function writePortFile(port: number): Promise<string> {
   await mkdir(RUN_DIR, { recursive: true });
-  const pidFile = join(RUN_DIR, `permission-server-${process.pid}.port`);
-  const latestFile = join(RUN_DIR, 'permission-server.port');
+  const pidFile = pidPortFilePath();
   await writeFile(pidFile, String(port), 'utf-8');
-  await writeFile(latestFile, String(port), 'utf-8');
+  await ensureLatestPortFile(port, RUN_DIR);
   portFilePath = pidFile;
   return pidFile;
 }

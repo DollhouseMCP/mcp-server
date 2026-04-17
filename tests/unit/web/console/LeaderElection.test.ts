@@ -17,6 +17,22 @@ beforeAll(async () => {
   LeaderElection = await import('../../../../src/web/console/LeaderElection.js');
 });
 
+function makeLeaderInfo(
+  overrides: Partial<import('../../../../src/web/console/LeaderElection.js').ConsoleLeaderInfo> = {},
+): import('../../../../src/web/console/LeaderElection.js').ConsoleLeaderInfo {
+  return {
+    version: 1,
+    pid: process.pid,
+    port: 41715,
+    sessionId: 'test-session',
+    startedAt: new Date().toISOString(),
+    heartbeat: new Date().toISOString(),
+    serverVersion: '2.0.18',
+    consoleProtocolVersion: LeaderElection.CONSOLE_PROTOCOL_VERSION,
+    ...overrides,
+  };
+}
+
 describe('LeaderElection', () => {
   describe('isProcessAlive', () => {
     it('should return true for the current process', () => {
@@ -129,6 +145,55 @@ describe('LeaderElection', () => {
         },
       };
       expect(result.role).toBe('follower');
+    });
+  });
+
+  describe('createLeaderInfo', () => {
+    it('stamps the current server version and console protocol version', () => {
+      const info = LeaderElection.createLeaderInfo('session-123', 41715);
+      expect(info.serverVersion).toMatch(/^\d+\.\d+\.\d+/);
+      expect(info.consoleProtocolVersion).toBe(LeaderElection.CONSOLE_PROTOCOL_VERSION);
+      expect(info.sessionId).toBe('session-123');
+      expect(info.port).toBe(41715);
+    });
+  });
+
+  describe('evaluateLeaderPreference', () => {
+    it('prefers a newer compatible candidate', () => {
+      const decision = LeaderElection.evaluateLeaderPreference(
+        makeLeaderInfo({ sessionId: 'newer', serverVersion: '2.0.19' }),
+        makeLeaderInfo({ sessionId: 'older', serverVersion: '2.0.18' }),
+      );
+      expect(decision.shouldReplace).toBe(true);
+      expect(decision.reason).toBe('newer-compatible-version');
+    });
+
+    it('does not replace on equal version', () => {
+      const decision = LeaderElection.evaluateLeaderPreference(
+        makeLeaderInfo({ sessionId: 'same-a', serverVersion: '2.0.18' }),
+        makeLeaderInfo({ sessionId: 'same-b', serverVersion: '2.0.18' }),
+      );
+      expect(decision.shouldReplace).toBe(false);
+      expect(decision.reason).toBe('same-version');
+    });
+
+    it('treats missing version metadata as a legacy leader and prefers the newer candidate', () => {
+      const decision = LeaderElection.evaluateLeaderPreference(
+        makeLeaderInfo({ sessionId: 'newer', serverVersion: '2.0.18' }),
+        makeLeaderInfo({ sessionId: 'legacy', serverVersion: undefined, consoleProtocolVersion: undefined }),
+      );
+      expect(decision.shouldReplace).toBe(true);
+      expect(decision.existingVersion).toBe(LeaderElection.LEGACY_SERVER_VERSION);
+      expect(decision.existingProtocolVersion).toBe(LeaderElection.LEGACY_CONSOLE_PROTOCOL_VERSION);
+    });
+
+    it('does not replace an incompatible leader even if the candidate version is newer', () => {
+      const decision = LeaderElection.evaluateLeaderPreference(
+        makeLeaderInfo({ sessionId: 'newer', serverVersion: '9.0.0', consoleProtocolVersion: 2 }),
+        makeLeaderInfo({ sessionId: 'incompatible', serverVersion: '1.0.0', consoleProtocolVersion: 1 }),
+      );
+      expect(decision.shouldReplace).toBe(false);
+      expect(decision.reason).toBe('incompatible-protocol');
     });
   });
 

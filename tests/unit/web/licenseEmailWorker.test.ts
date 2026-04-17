@@ -13,7 +13,7 @@
  *   - Assert on HTTP status, response body, and email HTML content
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 
 // The Worker exports a default object with a fetch method.
 // TypeScript needs the path to resolve; Jest will handle the TS transform.
@@ -28,6 +28,8 @@ interface Env {
   POSTHOG_WEBHOOK_SECRET?: string;
   RESEND_API_KEY: string;
 }
+
+const DIRECT_VERIFICATION_PATH = '/direct-verification';
 
 function makeEnv(overrides: Partial<Env> = {}): Env {
   return {
@@ -46,6 +48,8 @@ function makeRequest(
     method?: string;
     secret?: string | null;
     invalidJson?: boolean;
+    path?: string;
+    ip?: string;
   } = {},
 ): Request {
   const method = options.method ?? 'POST';
@@ -56,16 +60,19 @@ function makeRequest(
   if (options.secret !== null) {
     headers['x-posthog-secret'] = options.secret ?? 'test-secret';
   }
+  if (options.ip) {
+    headers['CF-Connecting-IP'] = options.ip;
+  }
 
   if (options.invalidJson) {
-    return new Request('https://worker.example.com/', {
+    return new Request(`https://worker.example.com${options.path ?? '/'}`, {
       method,
       headers,
       body: 'not-json{{{',
     });
   }
 
-  return new Request('https://worker.example.com/', {
+  return new Request(`https://worker.example.com${options.path ?? '/'}`, {
     method,
     headers,
     body: JSON.stringify(body),
@@ -323,7 +330,7 @@ describe('License Email Worker', () => {
   // ── 2. Request Validation Tests ─────────────────────────────────────
 
   describe('Request Validation', () => {
-    it('returns 401 when x-posthog-secret header is missing', async () => {
+    it('returns 401 when x-posthog-secret header is missing on the webhook endpoint', async () => {
       const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
       const req = makeRequest(makeCommercialEvent(), { secret: null });
 
@@ -331,7 +338,7 @@ describe('License Email Worker', () => {
       expect(res.status).toBe(401);
     });
 
-    it('returns 401 when secret is wrong', async () => {
+    it('returns 401 when secret is wrong on the webhook endpoint', async () => {
       const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
       const req = makeRequest(makeCommercialEvent(), { secret: 'wrong-secret' });
 
@@ -435,6 +442,173 @@ describe('License Email Worker', () => {
       // Two emails: customer confirmation + sales notification
       expect(capturedEmails).toHaveLength(2);
     });
+
+    it('accepts direct verification requests without the webhook secret', async () => {
+      const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'direct-success@example.com',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.10' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(200);
+
+      const body = await res.json() as { success: boolean; event_type: string };
+      expect(body.success).toBe(true);
+      expect(body.event_type).toBe('verification');
+      expect(capturedEmails).toHaveLength(1);
+    });
+
+    it('accepts root-path verification requests without the webhook secret for compatibility', async () => {
+      const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'root-compat@example.com',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { secret: null, ip: '203.0.113.15' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(200);
+
+      const body = await res.json() as { success: boolean; event_type: string };
+      expect(body.success).toBe(true);
+      expect(body.event_type).toBe('verification');
+      expect(capturedEmails).toHaveLength(1);
+    });
+
+    it('rejects direct requests without a verification code', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'direct-missing-code@example.com',
+          event_type: 'verification',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.11' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('verification_code');
+    });
+
+    it('rejects direct requests with malformed email domains', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'broken@domain..example',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.111' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('Missing required fields');
+    });
+
+    it('rejects direct requests with invalid domain label characters', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({
+          email: 'broken@bad_label.example',
+          event_type: 'verification',
+          verification_code: '123456',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.112' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('Missing required fields');
+    });
+
+    it('rejects activation events on the direct verification endpoint', async () => {
+      const env = makeEnv();
+      const req = makeRequest(
+        makeCommercialEvent({ email: 'direct-activation@example.com' }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.12' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('verification events');
+    });
+
+    it('still rejects root-path activation events without the webhook secret', async () => {
+      const env = makeEnv({ POSTHOG_WEBHOOK_SECRET: 'real-secret' });
+      const req = makeRequest(
+        makeCommercialEvent({ email: 'root-activation@example.com' }),
+        { secret: null, ip: '203.0.113.16' },
+      );
+
+      const res = await worker.fetch(req, env);
+      expect(res.status).toBe(401);
+    });
+
+    it('rate limits repeated direct verification requests for the same email', async () => {
+      const env = makeEnv();
+      const firstReq = makeRequest(
+        makeCommercialEvent({
+          email: 'direct-repeat@example.com',
+          event_type: 'verification',
+          verification_code: '654321',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.13' },
+      );
+
+      const secondReq = makeRequest(
+        makeCommercialEvent({
+          email: 'direct-repeat@example.com',
+          event_type: 'verification',
+          verification_code: '654321',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip: '203.0.113.13' },
+      );
+
+      expect((await worker.fetch(firstReq, env)).status).toBe(200);
+
+      const secondRes = await worker.fetch(secondReq, env);
+      expect(secondRes.status).toBe(429);
+      expect(await secondRes.text()).toContain('Please wait');
+    });
+
+    it('rate limits bursts from the same IP on the direct verification endpoint', async () => {
+      const env = makeEnv();
+      const ip = '203.0.113.14';
+
+      for (let index = 0; index < 5; index += 1) {
+        const req = makeRequest(
+          makeCommercialEvent({
+            email: `direct-ip-${index}@example.com`,
+            event_type: 'verification',
+            verification_code: '111111',
+          }),
+          { path: DIRECT_VERIFICATION_PATH, secret: null, ip },
+        );
+        expect((await worker.fetch(req, env)).status).toBe(200);
+      }
+
+      const blockedReq = makeRequest(
+        makeCommercialEvent({
+          email: 'direct-ip-blocked@example.com',
+          event_type: 'verification',
+          verification_code: '111111',
+        }),
+        { path: DIRECT_VERIFICATION_PATH, secret: null, ip },
+      );
+
+      const blockedRes = await worker.fetch(blockedReq, env);
+      expect(blockedRes.status).toBe(429);
+      expect(await blockedRes.text()).toContain('Too many verification requests');
+    });
   });
 
   // ── 3. Error Handling Tests ─────────────────────────────────────────
@@ -469,6 +643,23 @@ describe('License Email Worker', () => {
       expect(text).not.toContain('Resend secret');
       expect(text).not.toContain('stack');
       expect(text).not.toContain('at ');
+    });
+
+    it('sanitizes Resend error logging output', async () => {
+      restoreFetch();
+      installFetchMock({ ok: false, status: 500, text: 'Resend secret: sk_live_abc123' });
+      const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+      const env = makeEnv();
+      const req = makeRequest(makeCommercialEvent());
+
+      await worker.fetch(req, env);
+
+      const logged = errorSpy.mock.calls.flat().join(' ');
+      expect(logged).not.toContain('sk_live_abc123');
+      expect(logged).not.toContain('Resend secret');
+
+      errorSpy.mockRestore();
     });
   });
 });

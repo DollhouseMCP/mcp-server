@@ -24,7 +24,7 @@
 import { CRUDEndpoint } from './OperationRouter.js';
 import { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, translateToolConfigToPolicy, canOperationBeElevated } from './policies/index.js';
-import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements } from './policies/ElementPolicies.js';
+import { isGatekeeperInfraOperation, findConfirmDenyingElement, findConfirmAdvisoryElements, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode } from './GatekeeperTypes.js';
 import { getRoute } from './OperationRouter.js';
 import { ALL_OPERATION_SCHEMAS } from './OperationSchema.js';
@@ -78,6 +78,12 @@ import type { PortfolioHandler } from '../PortfolioHandler.js';
 import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
 import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
+import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
+import {
+  PERMISSION_AUTHORITY_HOSTS,
+  PERMISSION_AUTHORITY_MODES,
+  readPermissionAuthorityState,
+} from '../../utils/permissionAuthority.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
 import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
@@ -292,6 +298,11 @@ class VerificationError extends Error {
     this.name = 'VerificationError';
   }
 }
+
+const DEADLOCK_RELIEF_REASON = 'Deadlock relief requested';
+const DEADLOCK_RELIEF_TIMEOUT_MS = 5 * 60 * 1000;
+const DEADLOCK_RELIEF_DIALOG_REASON =
+  'Deadlock relief requested.\n\nThis will deactivate all active elements for the current session and clear persisted activation state.';
 
 /**
  * Global rate limiter for verification attempts.
@@ -654,9 +665,11 @@ export class MCPAQLHandler {
    * @returns Array of active elements with their gatekeeper policies, or empty
    *          array if gathering fails (fail-open: only route policies apply).
    */
-  private async getActiveElements(): Promise<ActiveElement[]> {
+  private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
-      const rawElements = await this.handlers.elementCRUD.getActiveElementsForPolicy();
+      const rawElements = sessionId
+        ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
+        : await this.handlers.elementCRUD.getActiveElementsForPolicy();
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,
@@ -664,28 +677,58 @@ export class MCPAQLHandler {
           name: el.name,
           description: (el.metadata.description as string) ?? undefined,
           gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...this.copyGatekeeperDiagnostics(el.metadata),
         },
       }));
 
       // Issue #449: Include executing agents with gatekeeper policies
-      for (const [, agentEntry] of this.executingAgents) {
-        activeElements.push({
-          type: 'agent',
-          name: agentEntry.name,
-          metadata: {
+      if (!sessionId) {
+        for (const [, agentEntry] of this.executingAgents) {
+          activeElements.push({
+            type: 'agent',
             name: agentEntry.name,
-            gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
-          },
-        });
+            metadata: {
+              name: agentEntry.name,
+              gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
+            },
+          });
+        }
       }
 
       return activeElements;
     } catch (error) {
       // Fail open — if we can't gather active elements, enforce without them
       // This means only route validation and default policies will apply
-      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error });
+      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
       return [];
     }
+  }
+
+  private async getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]> {
+    try {
+      const rawElements = await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId);
+      return rawElements.map((el) => ({
+        type: el.type,
+        name: el.name,
+        metadata: {
+          name: el.name,
+          description: (el.metadata.description as string) ?? undefined,
+          gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          ...this.copyGatekeeperDiagnostics(el.metadata),
+          ...(Array.isArray((el as { sessionIds?: string[] }).sessionIds)
+            ? { sessionIds: (el as { sessionIds?: string[] }).sessionIds }
+            : {}),
+        },
+      }));
+    } catch (error) {
+      logger.warn('Failed to gather policy elements for dashboard reporting', { error, sessionId });
+      return sessionId ? [] : this.getActiveElements();
+    }
+  }
+
+  private copyGatekeeperDiagnostics(metadata: unknown): Record<string, unknown> {
+    const diagnostics = getGatekeeperDiagnostics(metadata);
+    return diagnostics ? { gatekeeperDiagnostics: diagnostics } : {};
   }
 
   /**
@@ -2349,6 +2392,128 @@ export class MCPAQLHandler {
     }
   }
 
+  private challengeIsForDeadlockRelief(challenge: { reason: string } | undefined): boolean {
+    return typeof challenge?.reason === 'string' && challenge.reason.startsWith(DEADLOCK_RELIEF_REASON);
+  }
+
+  private issueDeadlockReliefChallenge(): {
+    pending: true;
+    challenge_id: string;
+    message: string;
+    warning: string;
+  } {
+    const store = this.handlers.verificationStore;
+    if (!store) {
+      throw new Error('Verification system not available. Ensure the server is properly configured.');
+    }
+
+    const challengeId = randomUUID();
+    const code = generateDisplayCode();
+    store.set(challengeId, {
+      code,
+      expiresAt: Date.now() + DEADLOCK_RELIEF_TIMEOUT_MS,
+      reason: DEADLOCK_RELIEF_REASON,
+    });
+
+    this.handlers.verificationNotifier?.showCode(code, DEADLOCK_RELIEF_DIALOG_REASON);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'DANGER_ZONE_TRIGGERED',
+      severity: 'MEDIUM',
+      source: 'MCPAQLHandler.issueDeadlockReliefChallenge',
+      details: `Deadlock relief challenge issued for session ${this.gatekeeper.sessionId}`,
+      additionalData: {
+        challengeId,
+        sessionId: this.gatekeeper.sessionId,
+      },
+    });
+
+    return {
+      pending: true,
+      challenge_id: challengeId,
+      message: 'Deadlock relief requires human confirmation. A verification code has been displayed to the user.',
+      warning: 'Completing this flow will deactivate all active elements for the current session and clear persisted activation state.',
+    };
+  }
+
+  private async completeDeadlockRelief(challengeId: string, code: string): Promise<{
+    released: true;
+    challenge_id: string;
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
+    message: string;
+  }> {
+    const store = this.handlers.verificationStore;
+    if (!store) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Verification system not available. Ensure the server is properly configured.',
+      );
+    }
+
+    validateChallengeIdFormat(challengeId);
+
+    const challenge = store.get(challengeId);
+    if (!challenge) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_TIMEOUT,
+        'Deadlock relief challenge not found. It may have expired or already been used. Retry release_deadlock to receive a new code.',
+      );
+    }
+
+    if (!this.challengeIsForDeadlockRelief(challenge)) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'This challenge is not for deadlock relief. Use the matching verification flow for the requested operation.',
+      );
+    }
+
+    const valid = store.verify(challengeId, code);
+    if (!valid) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Verification failed: incorrect code. The code has been consumed (one-time use). Retry release_deadlock to receive a new code.',
+      );
+    }
+
+    const reset = await this.handlers.elementCRUD.releaseDeadlock();
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'VERIFICATION_SUCCEEDED',
+      severity: 'MEDIUM',
+      source: 'MCPAQLHandler.completeDeadlockRelief',
+      details: `Deadlock relief completed for session ${this.gatekeeper.sessionId}`,
+      additionalData: {
+        challengeId,
+        sessionId: this.gatekeeper.sessionId,
+        deactivatedCount: reset.deactivated.length,
+        failedCount: reset.failed.length,
+      },
+    });
+
+    const snapshotSuffix = reset.snapshotFile
+      ? ` A recovery snapshot was saved to ${reset.snapshotFile}.`
+      : '';
+    const message = reset.failed.length > 0
+      ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list, likely deadlock cause, and recovery snapshot before reactivating elements.`
+      : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared.${snapshotSuffix}`;
+
+    return {
+      released: true,
+      challenge_id: challengeId,
+      ...reset,
+      message,
+    };
+  }
+
   /**
    * Dispatch Gatekeeper operations for confirmation management.
    *
@@ -2553,6 +2718,13 @@ export class MCPAQLHandler {
           );
         }
 
+        if (this.challengeIsForDeadlockRelief(challengePreCheck)) {
+          throw new VerificationError(
+            GatekeeperErrorCode.VERIFICATION_FAILED,
+            'This verification code is reserved for deadlock relief. Use release_deadlock with challenge_id and code to complete the reset.'
+          );
+        }
+
         // Verify the code (one-time use — store deletes challenge after this call)
         const valid = store.verify(challengeId, code);
         if (!valid) {
@@ -2622,6 +2794,27 @@ export class MCPAQLHandler {
           verified: true,
           message: 'Verification successful. You may now retry the operation.',
         };
+      }
+
+      case 'releaseDeadlock': {
+        const challengeIdValue = typeof params.challenge_id === 'string'
+          ? params.challenge_id.trim()
+          : '';
+        const codeValue = typeof params.code === 'string'
+          ? params.code.trim()
+          : '';
+
+        if ((challengeIdValue && !codeValue) || (!challengeIdValue && codeValue)) {
+          throw new Error(
+            'release_deadlock requires both challenge_id and code together, or neither for the initial challenge request.'
+          );
+        }
+
+        if (!challengeIdValue && !codeValue) {
+          return this.issueDeadlockReliefChallenge();
+        }
+
+        return this.completeDeadlockRelief(challengeIdValue, codeValue);
       }
 
       case 'beetlejuice': {
@@ -2924,7 +3117,7 @@ export class MCPAQLHandler {
           permissionPromptLimiter: this.permissionPromptLimiter,
           classifyTool,
           evaluateCliToolPolicy,
-          getActiveElements: () => this.getActiveElements(),
+          getActiveElements: (sessionId?: string) => this.getActiveElements(sessionId),
         });
       }
 
@@ -2932,23 +3125,41 @@ export class MCPAQLHandler {
         // Issue #625 Phase 2: Get effective CLI permission policies
         const toolName = params.tool_name as string | undefined;
         const toolInput = (params.tool_input as Record<string, unknown>) ?? {};
+        const reportSessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
+        const reportingScope = params.reporting_scope === 'dashboard';
 
         // 1. Get all active elements
-        const policyElements = await this.getActiveElements();
+        const policyElements = reportingScope && !toolName
+          ? await this.getPolicyReportElements(reportSessionId)
+          : await this.getActiveElements();
 
         // 2. Extract externalRestrictions from each element
-        const elementPolicies = policyElements.map(el => ({
-          type: el.type,
-          name: el.name,
-          allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
-          denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
-          description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
-        }));
+        const elementPolicies = policyElements.map(el => {
+          const diagnostics = getGatekeeperDiagnostics(el.metadata);
+          return {
+            type: el.type,
+            name: el.name,
+            allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
+            confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
+            denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
+            allowOperations: el.metadata?.gatekeeper?.allow ?? [],
+            confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
+            denyOperations: el.metadata?.gatekeeper?.deny ?? [],
+            description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+            invalidGatekeeperPolicy: !!diagnostics,
+            invalidGatekeeperMessage: diagnostics?.message,
+            sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
+          };
+        });
 
         // 3. Build combined view
         const combinedAllow = elementPolicies.flatMap(p => p.allowPatterns);
+        const combinedConfirm = elementPolicies.flatMap(p => p.confirmPatterns);
         const combinedDeny = elementPolicies.flatMap(p => p.denyPatterns);
-        const hasAllowlist = combinedAllow.length > 0;
+        const combinedAllowOperations = elementPolicies.flatMap(p => p.allowOperations);
+        const combinedConfirmOperations = elementPolicies.flatMap(p => p.confirmOperations);
+        const combinedDenyOperations = elementPolicies.flatMap(p => p.denyOperations);
+        const hasAllowlist = combinedAllow.length > 0 || combinedAllowOperations.length > 0;
 
         // 4. If tool_name provided, evaluate it against current policies
         let evaluation: Record<string, unknown> | undefined = undefined;
@@ -2978,21 +3189,64 @@ export class MCPAQLHandler {
 
         // 5. Fail-safe detection (Issue #625 Phase 4)
         const permissionPromptActive = this.gatekeeper.isPermissionPromptActive;
-        const hasRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0;
-        const advisory = (hasRestrictions && !permissionPromptActive)
-          ? 'CLI restrictions are defined but permission_prompt has not been called yet. ' +
-            'Ensure the CLI client is launched with --permission-prompt-tool to enforce these restrictions.'
-          : undefined;
+        const hookStatus = getPermissionHookStatus();
+        const hookInstalled = hookStatus.installed;
+        const enforcementReady = permissionPromptActive || hookInstalled;
+        const hasCliRestrictions = combinedAllow.length > 0 || combinedDeny.length > 0 || combinedConfirm.length > 0;
+        const hasOperationRestrictions = combinedAllowOperations.length > 0
+          || combinedDenyOperations.length > 0
+          || combinedConfirmOperations.length > 0;
+        const invalidPolicyElements = elementPolicies.filter(policy => policy.invalidGatekeeperPolicy);
+        let advisory: string | undefined;
+        if (hasCliRestrictions) {
+          if (!enforcementReady) {
+            advisory = 'Policies are loaded but NOT enforced. No permission hook detected and permission_prompt has not been called. Run open_setup and reinstall, or launch the CLI client with --permission-prompt-tool.';
+          } else if (hookInstalled && !permissionPromptActive) {
+            advisory = `Policies are loaded. Permission hook detected for ${hookStatus.host ?? 'a supported client'}, so enforcement depends on using that client configuration.`;
+          }
+        } else if (hasOperationRestrictions) {
+          advisory = 'MCP-AQL operation policies are active for Dollhouse actions in this session.';
+        }
+
+        if (invalidPolicyElements.length > 0) {
+          const invalidAdvisory = buildInvalidPolicyAdvisory(invalidPolicyElements.length);
+          advisory = advisory ? `${advisory} ${invalidAdvisory}` : invalidAdvisory;
+        }
 
         return {
           activeElementCount: policyElements.length,
           hasAllowlist,
           elements: elementPolicies,
           combinedAllowPatterns: combinedAllow,
+          combinedConfirmPatterns: combinedConfirm,
           combinedDenyPatterns: combinedDeny,
+          combinedAllowOperations,
+          combinedConfirmOperations,
+          combinedDenyOperations,
           evaluation,
           permissionPromptActive,
+          hookInstalled,
+          enforcementReady,
+          hookHost: hookStatus.host,
+          invalidPolicyElementCount: invalidPolicyElements.length,
           advisory,
+        };
+      }
+
+      case 'getPermissionAuthority': {
+        const requestedHost = typeof params.host === 'string' ? params.host : undefined;
+        const authorityState = await readPermissionAuthorityState();
+        return {
+          defaultMode: authorityState.defaultMode,
+          updatedAt: authorityState.updatedAt,
+          supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+          supportedModes: [...PERMISSION_AUTHORITY_MODES],
+          aiMutable: false,
+          hosts: authorityState.hosts,
+          host: requestedHost,
+          mode: requestedHost && requestedHost in authorityState.hosts
+            ? authorityState.hosts[requestedHost as keyof typeof authorityState.hosts]?.mode ?? authorityState.defaultMode
+            : authorityState.defaultMode,
         };
       }
 
@@ -4252,6 +4506,11 @@ export class MCPAQLHandler {
       Array.isArray((result as Record<string, unknown>).content)
     );
   }
+}
+
+function buildInvalidPolicyAdvisory(invalidPolicyCount: number): string {
+  const singular = invalidPolicyCount === 1;
+  return `${invalidPolicyCount} active element${singular ? '' : 's'} ha${singular ? 's' : 've'} malformed gatekeeper policy. The element${singular ? ' remains' : 's remain'} active, but that policy is not enforceable until fixed.`;
 }
 
 /**

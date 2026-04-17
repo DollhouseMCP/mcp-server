@@ -172,6 +172,43 @@ describe('createElement helper', () => {
       expect(Object.hasOwn(call.nested, '__proto__')).toBe(false);
     });
 
+    it('should reject top-level externalRestrictions during create', async () => {
+      const result = await createElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        description: 'Test skill',
+        metadata: { description: 'safe metadata' },
+        externalRestrictions: {
+          description: 'misnested',
+          denyPatterns: ['Bash:rm *'],
+        },
+      } as any);
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('Gatekeeper policy validation failed');
+      expect(result.content[0].text).toContain('externalRestrictions must be nested');
+      expect(mockContext.skillManager.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject gatekeeper.externalRestrictions without description during create', async () => {
+      const result = await createElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        description: 'Test skill',
+        metadata: {
+          gatekeeper: {
+            externalRestrictions: {
+              denyPatterns: ['Bash:rm *'],
+            },
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('externalRestrictions.description is required');
+      expect(mockContext.skillManager.create).not.toHaveBeenCalled();
+    });
+
     it('should reject content that is too large', async () => {
       const largeContent = 'a'.repeat(10 * 1024 * 1024 + 1); // > 10MB
 

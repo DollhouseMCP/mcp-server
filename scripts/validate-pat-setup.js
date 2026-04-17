@@ -24,6 +24,12 @@ import {
 import fs from 'fs/promises';
 
 // Required scopes for full DollhouseMCP functionality
+const TOKEN_REJECTED_MESSAGE = 'GitHub rejected the token or could not validate it';
+const RATE_LIMIT_LOW_MESSAGE = 'Low GitHub rate limit remaining';
+const RATE_LIMIT_AVAILABLE_MESSAGE = 'GitHub rate limit information available';
+const RESET_TIME_AVAILABLE_MESSAGE = 'Reset time available';
+const ERROR_DETAILS_SUPPRESSED_MESSAGE = 'Error details were suppressed for safety';
+
 const REQUIRED_SCOPES = [
   { scope: 'repo', description: 'Full repository access (read/write)' },
   { scope: 'read:user', description: 'Read user profile information' },
@@ -119,14 +125,11 @@ async function checkEnvironmentVariable() {
   if (!isValidFormat) {
     printStatus('warning', 'Token format may be incorrect');
     console.log('   Expected format: ghp_xxxx (classic) or github_pat_xxxx (fine-grained)');
-    console.log('   Your token starts with:', token.substring(0, 8) + '...');
+    console.log('   Token prefix: hidden for safety');
   } else {
     printStatus('success', 'TEST_GITHUB_TOKEN is set and has correct format');
-    const tokenType = token.startsWith('ghp_') ? 'Classic PAT' : 
-                     token.startsWith('github_pat_') ? 'Fine-grained PAT' : 
-                     'OAuth token';
-    console.log(`   Token type: ${tokenType}`);
-    console.log(`   Token prefix: ${token.substring(0, 12)}...`);
+    console.log('   Token type: recognized GitHub token format');
+    console.log('   Token prefix: hidden for safety');
   }
   
   console.log('');
@@ -148,35 +151,31 @@ async function checkTokenValidity(token) {
     
     if (!validation.valid) {
       printStatus('error', 'Token is invalid or expired');
-      console.log(`   Error: ${validation.error}`);
+      console.log(`   ${TOKEN_REJECTED_MESSAGE}`);
       return { valid: false };
     }
     
     printStatus('success', 'Token is valid and active');
-    console.log(`   Authenticated as: ${validation.user}`);
-    if (validation.name) {
-      console.log(`   Display name: ${validation.name}`);
-    }
+    console.log('   GitHub user identity verified');
     
     // Check rate limits
     if (validation.rateLimit) {
-      const { remaining, limit, reset } = validation.rateLimit;
-      const percentage = Math.round((remaining / limit) * 100);
+      const { remaining } = validation.rateLimit;
       
       if (remaining < 100) {
-        printStatus('warning', `Low rate limit remaining: ${remaining}/${limit} (${percentage}%)`);
-        console.log(`   Resets at: ${reset.toLocaleString()}`);
+        printStatus('warning', RATE_LIMIT_LOW_MESSAGE);
+        console.log(`   ${RESET_TIME_AVAILABLE_MESSAGE}`);
       } else {
-        printStatus('success', `Rate limit: ${remaining}/${limit} (${percentage}%)`);
-        console.log(`   Resets at: ${reset.toLocaleString()}`);
+        printStatus('success', RATE_LIMIT_AVAILABLE_MESSAGE);
+        console.log(`   ${RESET_TIME_AVAILABLE_MESSAGE}`);
       }
     }
     
     console.log('');
     return { valid: true, validation };
-  } catch (error) {
+  } catch {
     printStatus('error', 'Failed to validate token');
-    console.log(`   Error: ${error.message}`);
+    console.log('   Validation failed while contacting GitHub');
     console.log('   This could indicate network issues or an invalid token');
     console.log('');
     return { valid: false };
@@ -193,7 +192,7 @@ async function checkScopes(validation) {
   }
   
   const availableScopes = validation.scopes;
-  console.log(`Available scopes: ${availableScopes.join(', ') || 'None reported'}`);
+  console.log(`Available scopes: ${availableScopes.length > 0 ? 'reported by GitHub' : 'none reported'}`);
   console.log('');
   
   const missingRequired = [];
@@ -266,7 +265,7 @@ async function checkModeDetection() {
     console.log('   Neither PAT nor OAuth token available');
   } else {
     printStatus('error', 'Inconsistent authentication state');
-    console.log(`   Test mode: ${testMode}, Token available: ${!!token}`);
+    console.log('   Authentication mode and token availability do not agree');
   }
   
   console.log('');
@@ -371,10 +370,10 @@ async function main() {
     // Exit with appropriate code
     process.exit(isFullyConfigured ? 0 : 1);
     
-  } catch (error) {
+  } catch {
     console.log('');
     printStatus('error', 'Validation failed with unexpected error');
-    console.log(`Error: ${error.message}`);
+    console.log(ERROR_DETAILS_SUPPRESSED_MESSAGE);
     console.log('');
     console.log('This might indicate:');
     console.log('  • Network connectivity issues');

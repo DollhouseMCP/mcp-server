@@ -24,6 +24,11 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import { SessionNamePool } from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
+import {
+  CONSOLE_PROTOCOL_VERSION,
+  LEGACY_CONSOLE_PROTOCOL_VERSION,
+} from './LeaderElection.js';
 
 /** Maximum payload size for ingestion requests */
 const MAX_PAYLOAD_SIZE = '1mb';
@@ -68,6 +73,10 @@ export interface SessionInfo {
   authenticated: boolean;
   /** Session kind — 'mcp' for MCP stdio sessions, 'console' for the web console itself (#1805). */
   kind: 'mcp' | 'console';
+  /** DollhouseMCP package version reported by the session. */
+  serverVersion: string;
+  /** Console/session contract version used for compatibility-aware takeover. */
+  consoleProtocolVersion: number;
 }
 
 /**
@@ -94,6 +103,8 @@ export interface SessionEventPayload {
   event: 'started' | 'stopped' | 'heartbeat';
   pid: number;
   startedAt: string;
+  serverVersion?: string;
+  consoleProtocolVersion?: number;
 }
 
 /**
@@ -103,6 +114,7 @@ export interface SessionEventPayload {
 export interface IngestBroadcasts {
   logBroadcast: (entry: UnifiedLogEntry) => void;
   metricsOnSnapshot?: (snapshot: MetricSnapshot) => void;
+  storeMetricsSnapshot?: (snapshot: MetricSnapshot, sessionId: string) => void;
   sessionBroadcast?: (event: SessionInfo) => void;
 }
 
@@ -122,6 +134,20 @@ export interface IngestRoutesResult {
 /** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
 function normalizeInput(s: string): string {
   return UnicodeValidator.normalize(s).normalizedContent;
+}
+
+function normalizeServerVersion(version?: string): string {
+  if (typeof version === 'string' && version.trim().length > 0) {
+    return version.trim();
+  }
+  return 'unknown';
+}
+
+function normalizeConsoleProtocolVersion(version?: number): number {
+  if (typeof version === 'number' && Number.isInteger(version) && version >= 0) {
+    return version;
+  }
+  return LEGACY_CONSOLE_PROTOCOL_VERSION;
 }
 
 /**
@@ -165,7 +191,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   }
 
   /** Create a new session entry for an orphan. Returns null on failure. */
-  function autoRegister(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+  function autoRegister(
+    sessionId: string,
+    pid?: number,
+    authenticated = false,
+    serverVersion?: string,
+    consoleProtocolVersion?: number,
+  ): SessionInfo | null {
     try {
       const displayName = namePool.assign(sessionId);
       const color = namePool.getColor(sessionId) ?? '#3b82f6';
@@ -175,6 +207,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         pid: pid || 0,
         startedAt: now, lastHeartbeat: now,
         status: 'active', isLeader: false, authenticated, kind: 'mcp',
+        serverVersion: normalizeServerVersion(serverVersion),
+        consoleProtocolVersion: normalizeConsoleProtocolVersion(consoleProtocolVersion),
       };
       sessions.set(sessionId, info);
       logger.info('[IngestRoutes] Auto-registered orphaned session', {
@@ -194,7 +228,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
    * Auto-register or update an orphaned session from ingestion data.
    * Returns the session (existing or newly created), or null if killed/pending.
    */
-  function ensureSession(sessionId: string, pid?: number, authenticated = false): SessionInfo | null {
+  function ensureSession(
+    sessionId: string,
+    pid?: number,
+    authenticated = false,
+    serverVersion?: string,
+    consoleProtocolVersion?: number,
+  ): SessionInfo | null {
     if (killedSessions.has(sessionId)) return null;
     if (pendingKills.has(sessionId)) {
       finalizePendingKill(sessionId, pid);
@@ -202,7 +242,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     const existing = sessions.get(sessionId);
-    if (!existing) return autoRegister(sessionId, pid, authenticated);
+    if (!existing) {
+      return autoRegister(sessionId, pid, authenticated, serverVersion, consoleProtocolVersion);
+    }
 
     if (existing.status === 'ended') {
       existing.status = 'active';
@@ -216,6 +258,12 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       logger.info('[IngestRoutes] Recovered PID for orphaned session', {
         displayName: existing.displayName, sessionId, pid,
       });
+    }
+    if (serverVersion) {
+      existing.serverVersion = normalizeServerVersion(serverVersion);
+    }
+    if (consoleProtocolVersion !== undefined) {
+      existing.consoleProtocolVersion = normalizeConsoleProtocolVersion(consoleProtocolVersion);
     }
     return existing;
   }
@@ -284,6 +332,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     if (broadcasts.metricsOnSnapshot) {
       broadcasts.metricsOnSnapshot(payload.snapshot);
     }
+    if (broadcasts.storeMetricsSnapshot) {
+      broadcasts.storeMetricsSnapshot(payload.snapshot, payload.sessionId);
+    }
 
     // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
     const session = ensureSession(payload.sessionId);
@@ -319,6 +370,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           sessionId: payload.sessionId, displayName, color,
           pid: payload.pid, startedAt: payload.startedAt || now, lastHeartbeat: now,
           status: 'active', isLeader: false, authenticated: isAuthenticated, kind: 'mcp',
+          serverVersion: normalizeServerVersion(payload.serverVersion),
+          consoleProtocolVersion: normalizeConsoleProtocolVersion(payload.consoleProtocolVersion),
         });
         logger.info('[IngestRoutes] Session registered', {
           displayName, sessionId: payload.sessionId, pid: payload.pid, color,
@@ -343,7 +396,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       }
       case 'heartbeat': {
         // Auto-register or update — heartbeat includes PID for recovery (#1870)
-        ensureSession(payload.sessionId, payload.pid);
+        ensureSession(
+          payload.sessionId,
+          payload.pid,
+          false,
+          payload.serverVersion,
+          payload.consoleProtocolVersion,
+        );
         break;
       }
     }
@@ -380,6 +439,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
                 ...ls,
                 authenticated: false,
                 kind: ls.kind || 'mcp',
+                serverVersion: normalizeServerVersion(ls.serverVersion),
+                consoleProtocolVersion: normalizeConsoleProtocolVersion(ls.consoleProtocolVersion),
               });
             }
           }
@@ -441,14 +502,12 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     // SIGTERM the process. Even if it fails (ESRCH = already dead, EPERM = not ours),
     // mark the session as permanently killed so it never reappears (#1870).
-    let killed = false;
     try {
       process.kill(session.pid, 'SIGTERM');
-      killed = true;
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ESRCH') {
-        killed = true; // process already dead — treat as successful kill
+        // Process already dead — treat as successful kill.
       } else {
         logger.error('[IngestRoutes] Failed to kill session', {
           displayName: session.displayName, sessionId, pid: session.pid, error: (err as Error).message,
@@ -519,6 +578,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       isLeader: true,
       authenticated: true,
       kind: 'mcp',
+      serverVersion: PACKAGE_VERSION,
+      consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
     });
     logger.info('[IngestRoutes] Leader session registered', { displayName, sessionId, pid, color });
   }
@@ -543,6 +604,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       isLeader: false,
       authenticated: true,
       kind: 'console',
+      serverVersion: PACKAGE_VERSION,
+      consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
     });
     logger.info('[IngestRoutes] Console session registered', { sessionId: consoleId, pid: process.pid });
   }

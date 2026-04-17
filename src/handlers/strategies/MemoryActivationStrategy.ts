@@ -69,6 +69,11 @@ export class MemoryActivationStrategy extends BaseActivationStrategy implements 
     parts.push('');
     parts.push('This memory is now available for context and will be used to enhance responses.');
 
+    const gatekeeperWarning = this.formatGatekeeperValidityWarning(memory.metadata as unknown as Record<string, unknown>);
+    if (gatekeeperWarning) {
+      parts.push(gatekeeperWarning);
+    }
+
     return {
       content: [{
         type: "text",

@@ -1,5 +1,65 @@
 # Changelog
 
+## [2.0.25] - 2026-04-16
+
+Restore audit markdown export and harden direct commercial license email delivery
+
+## [2.0.24] - 2026-04-16
+
+- Fix web console authority convergence so newer sessions replace stale listeners, register correctly, and serve current assets.
+
+## [2.0.23] - 2026-04-16
+
+- Expand npm package keywords for broader discovery across MCP clients, AI tool ecosystems, and Dollhouse element primitives.
+
+## [2.0.22] - 2026-04-16
+
+- Fix legacy console leader takeover so new authenticated sessions can replace older incompatible port owners and register correctly.
+
+## [2.0.21] - 2026-04-16
+
+- Sanitize OAuth and PAT helper logging to restore SonarCloud security quality
+
+## [2.0.20] - 2026-04-16
+
+Point release for console leader bind authority and follower registration recovery.
+
+## [2.0.19] - 2026-04-16
+
+Point release for deadlock relief recovery and version-aware web console leadership.
+
+## [2.0.18] - 2026-04-16
+
+- Expanded permission setup and support-matrix clarity across supported clients.
+- Added stronger gatekeeper validation, activation diagnostics, and audit tooling.
+- Fixed Claude Code hook response-shape compatibility and stabilized release CI tests.
+
+## [2.0.17] - 2026-04-15
+
+- Expanded client setup and permission integration support across more MCP hosts.
+- Added stronger gatekeeper policy authoring guidance, examples, and introspection.
+- Reject malformed gatekeeper policy structures during create/edit flows and raw YAML/frontmatter saves.
+
+## [2.0.16] - 2026-04-14
+
+- Version bump
+
+## [2.0.15] - 2026-04-14
+
+### Fixes
+
+- Automate stable MCP bundle (.mcpb) release publishing
+- Keep manifest and package versions synchronized during releases
+- Harden release verification with signed publisher checks, checksum assets, and workflow attestations
+
+## [2.0.14] - 2026-04-14
+
+### Fixes
+
+- Permissions console reporting, audit feed routing, and session UX hardening
+- Permissions tab dark mode rendering fixes
+- Numeric YAML version deserialization fix for two-component versions like `1.1`
+
 ## [2.0.13] - 2026-04-13
 
 ### Security Fixes

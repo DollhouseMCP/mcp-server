@@ -57,6 +57,11 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
       text += restrictionWarning;
     }
 
+    const gatekeeperWarning = this.formatGatekeeperValidityWarning(persona.metadata as unknown as Record<string, unknown>);
+    if (gatekeeperWarning) {
+      text += gatekeeperWarning;
+    }
+
     return {
       content: [{
         type: "text",
@@ -144,7 +149,7 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
         const r = gk.externalRestrictions as Record<string, unknown>;
         return `  **${p.metadata.name}**: ${r.description}`;
       }).join('\n');
-      text += `\n\n**Active CLI Restrictions:**\n${summary}\n> Use \`get_effective_cli_policies\` for full details.`;
+      text += `\n\n**Loaded CLI Restrictions:**\n${summary}\n> Use \`get_effective_cli_policies\` for full details.`;
     }
 
     return {

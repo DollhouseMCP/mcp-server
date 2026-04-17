@@ -11,21 +11,216 @@
   // ── Config builders ────────────────────────────────────────────────────
 
   const PKG = '@dollhousemcp/mcp-server';
+  const HOOKS_DIR = '~/.dollhouse/hooks';
+  const HOOK_BASE_SCRIPT_PATH = `${HOOKS_DIR}/pretooluse-dollhouse.sh`;
 
   /** Platform registry — drives config generation AND panel rendering */
   const PLATFORMS = [
     // Claude Desktop & Claude Code panels are handwritten in HTML (unique structure)
     { id: 'claude-desktop', rootKey: 'mcpServers' },
-    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude' },
+    { id: 'claude-code',    rootKey: 'mcpServers', cli: 'claude', hookCommand: `bash ${HOOK_BASE_SCRIPT_PATH}`, hookConfigPath: '<code>~/.claude/settings.json</code>' },
     // These panels are generated from this data by renderGeneratedPanels()
-    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.' },
-    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.' },
-    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)' },
-    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
-    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.' },
-    { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      configPath: '<code>cline_mcp_settings.json</code> via Cline\'s top nav &gt; Configure &gt; Advanced MCP Settings' },
-    { id: 'lmstudio',  rootKey: 'mcpServers', openClient: 'lmstudio',     configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
+    { id: 'cursor',    rootKey: 'mcpServers', installClient: 'cursor',     openClient: 'cursor',     configPath: '<code>.cursor/mcp.json</code> in your project, or <code>~/.cursor/mcp.json</code> for all projects', hint: 'Or configure via Settings &gt; MCP Servers in the Cursor UI.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-cursor.sh`, hookConfigPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects' },
+    { id: 'vscode',    rootKey: 'servers',    installClient: 'vscode',     configPath: '<code>.vscode/mcp.json</code> in your workspace', hint: 'VS Code uses <code>"servers"</code>, not <code>"mcpServers"</code>.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-vscode.sh`, hookConfigPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> plus <code>chat.hookFilesLocations</code> in VS Code user settings' },
+    { id: 'codex',     rootKey: 'mcpServers', installClient: 'codex',      openClient: 'codex',      cli: 'codex', toml: true, tomlPath: '<code>~/.codex/config.toml</code> (Codex uses TOML, not JSON)', hookCommand: `bash ${HOOKS_DIR}/pretooluse-codex.sh`, hookConfigPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>' },
+    { id: 'gemini',    rootKey: 'mcpServers', installClient: 'gemini-cli', openClient: 'gemini-cli', cli: 'gemini', configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project', hookCommand: `bash ${HOOKS_DIR}/pretooluse-gemini.sh`, hookConfigPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project' },
+    { id: 'windsurf',  rootKey: 'mcpServers', installClient: 'windsurf',   openClient: 'windsurf',   configPath: '<code>~/.codeium/windsurf/mcp_config.json</code>', hint: 'Or click the MCPs icon in the Cascade panel &gt; Configure.', hookCommand: `bash ${HOOKS_DIR}/pretooluse-windsurf.sh`, hookConfigPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project' },
+    { id: 'cline',     rootKey: 'mcpServers', installClient: 'cline',      openClient: 'cline',      configPath: 'Cline stores MCP servers in <code>cline_mcp_settings.json</code> inside its extension settings. Use Configure Now or open the file directly.' },
+    { id: 'lmstudio',  rootKey: 'mcpServers', installClient: 'lmstudio',   openClient: 'lmstudio',   configPath: '<code>~/.lmstudio/mcp.json</code> (or open via Program tab &gt; Install &gt; Edit mcp.json)', hint: 'Restart LM Studio after saving.' },
   ];
+
+  const HOOK_BASE_SCRIPT = `#!/bin/bash
+# pretooluse-dollhouse.sh — shared hook bridge for DollhouseMCP
+
+RUN_DIR="$HOME/.dollhouse/run"
+PORT_FILE="$RUN_DIR/permission-server.port"
+HOOK_PLATFORM="\${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
+
+read_port_from_file() {
+  local file_path="$1"
+  local port_value
+
+  [[ -f "$file_path" ]] || return 1
+  port_value=$(cat "$file_path" 2>/dev/null)
+  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\\n' "$port_value"
+}
+
+restore_latest_port_file() {
+  local port_value="$1"
+
+  [[ "$port_value" =~ ^[0-9]+$ ]] || return 1
+  mkdir -p "$RUN_DIR" 2>/dev/null || return 1
+  printf '%s' "$port_value" > "$PORT_FILE" 2>/dev/null || return 1
+}
+
+find_latest_live_pid_port_file() {
+  local candidate
+  local file_name
+  local pid
+
+  while IFS= read -r candidate; do
+    [[ -e "$candidate" ]] || continue
+    file_name="\${candidate##*/}"
+    pid="\${file_name#permission-server-}"
+    pid="\${pid%.port}"
+
+    if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  done < <(ls -1t "$RUN_DIR"/permission-server-*.port 2>/dev/null || true)
+
+  return 1
+}
+
+resolve_permission_port() {
+  local candidate_file
+  local port_value
+
+  if port_value=$(read_port_from_file "$PORT_FILE"); then
+    printf '%s\\n' "$port_value"
+    return 0
+  fi
+
+  candidate_file=$(find_latest_live_pid_port_file) || return 1
+  port_value=$(read_port_from_file "$candidate_file") || return 1
+  restore_latest_port_file "$port_value" >/dev/null 2>&1 || true
+  printf '%s\\n' "$port_value"
+}
+
+PORT=$(resolve_permission_port) || exit 0
+
+INPUT=$(cat)
+TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
+TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2>/dev/null)
+[[ -n "$TOOL_NAME" ]] || exit 0
+
+PAYLOAD=$(jq -cn \\
+  --arg tool_name "$TOOL_NAME" \\
+  --arg platform "$HOOK_PLATFORM" \\
+  --arg session_id "\${DOLLHOUSE_SESSION_ID:-}" \\
+  --argjson input "$TOOL_INPUT" \\
+  '{ tool_name: $tool_name, input: $input, platform: $platform }
+   + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)')
+
+RESPONSE=$(curl -s --max-time 5 -X POST "http://127.0.0.1:$PORT/api/evaluate_permission" \\
+  -H "Content-Type: application/json" \\
+  -d "$PAYLOAD" 2>/dev/null)
+
+[[ -n "$RESPONSE" ]] && echo "$RESPONSE"
+exit 0`;
+
+  const buildHookWrapperScript = (platform) => `#!/bin/bash
+# pretooluse-${platform}.sh — manual hook wrapper for DollhouseMCP
+
+export DOLLHOUSE_HOOK_PLATFORM="${platform}"
+SCRIPT_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+exec bash "$SCRIPT_DIR/pretooluse-dollhouse.sh"`;
+
+  const CLAUDE_CODE_HOOK_SETTINGS = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOK_BASE_SCRIPT_PATH}"
+          }
+        ]
+      }
+    ]
+  }
+}`;
+
+  const GEMINI_HOOK_SETTINGS = `{
+  "hooks": {
+    "BeforeTool": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOKS_DIR}/pretooluse-gemini.sh"
+          }
+        ]
+      }
+    ]
+  }
+}`;
+
+  const CODEX_HOOK_SETTINGS = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOKS_DIR}/pretooluse-codex.sh",
+            "statusMessage": "Checking Bash permissions"
+          }
+        ]
+      }
+    ]
+  }
+}`;
+
+  const CURSOR_HOOK_SETTINGS = `{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-cursor.sh",
+        "matcher": ".*"
+      }
+    ]
+  }
+}`;
+
+  const VSCODE_HOOK_SETTINGS = `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${HOOKS_DIR}/pretooluse-vscode.sh"
+          }
+        ]
+      }
+    ]
+  }
+}`;
+
+  const VSCODE_HOOK_LOCATIONS_SETTINGS = `{
+  "chat.hookFilesLocations": {
+    "~/.copilot/hooks": true
+  }
+}`;
+
+  const WINDSURF_HOOK_SETTINGS = `{
+  "hooks": {
+    "pre_run_command": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-windsurf.sh"
+      }
+    ],
+    "pre_mcp_tool_use": [
+      {
+        "type": "command",
+        "command": "bash ${HOOKS_DIR}/pretooluse-windsurf.sh"
+      }
+    ]
+  }
+}`;
+
+  const CODEX_HOOK_FEATURES_TOML = `[features]
+codex_hooks = true`;
 
   /** Build a JSON config block for a given npx command string */
   function jsonConfig(rootKey, npxCmd) {
@@ -140,10 +335,11 @@
 
       if (prereq) prereq.hidden = method !== 'global';
       if (mcpbSection) mcpbSection.hidden = method !== 'global';
-      if (channelToggle) channelToggle.hidden = method === 'global';
+      if (channelToggle) channelToggle.hidden = method !== 'npx';
 
-      updateAllConfigs(method);
+      updateAllConfigs(method === 'permissions' ? 'npx' : method);
       updateInstallButtonLabels();
+      updateSetupModeSections();
       updateDetectionState();
     };
 
@@ -154,7 +350,7 @@
     // Sync initial visibility — if the browser restored a non-default
     // active button (e.g. pinned was selected before reload), apply
     // the hidden state now without waiting for a click.
-    if (channelToggle) channelToggle.hidden = currentMethod === 'global';
+    if (channelToggle) channelToggle.hidden = currentMethod !== 'npx';
   };
 
   // ── Channel selector ──────────────────────────────────────────────────
@@ -219,6 +415,24 @@
         updateCodeBlock(codeBlocks[blockIdx], platformConfigs[tomlKey]);
       }
     }
+  };
+
+  const updateSetupModeSections = () => {
+    document.querySelectorAll('[data-setup-modes]').forEach((section) => {
+      const modes = (section.dataset.setupModes || '')
+        .split(/\s+/)
+        .filter(Boolean);
+      section.hidden = !modes.includes(currentMethod);
+    });
+
+    const permissionsIntro = document.getElementById('setup-permissions-intro');
+    if (permissionsIntro) {
+      permissionsIntro.hidden = currentMethod !== 'permissions';
+    }
+
+    document.querySelectorAll('.setup-installed-notice').forEach((notice) => {
+      notice.hidden = currentMethod === 'permissions';
+    });
   };
 
   /** Update a single code block's displayed code and copy button */
@@ -385,6 +599,32 @@
       : `${msg}. Try the manual config below.`;
   };
 
+  const buildInstallPayload = (client) => {
+    const payload = { client };
+    if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
+      payload.version = pinnedVersion;
+    } else if (currentChannel !== 'latest') {
+      payload.channel = currentChannel;
+    }
+    return payload;
+  };
+
+  const applyInstallSuccessState = (btn, status, data, verified) => {
+    btn.textContent = 'Installed';
+    btn.classList.remove('is-loading');
+    btn.classList.add('is-success');
+    if (!status) return;
+
+    if (data.hookInstall?.supported && !data.hookInstall?.configured && data.hookInstall?.assetsPrepared) {
+      status.textContent = 'Configured MCP server. Dollhouse hook assets were also prepared; finish manual permission setup in Permissions & Security.';
+    } else {
+      status.textContent = verified
+        ? 'Verified — config written. Restart the application to activate.'
+        : 'Restart the application to activate.';
+    }
+    status.classList.add('is-success');
+  };
+
   /** Handle Configure Now button click */
   const handleInstallClick = async (btn) => {
     const client = btn.dataset.installClient;
@@ -402,17 +642,10 @@
     }
 
     try {
-      const payload = { client };
-      if (currentMethod === 'global' && pinnedVersion && pinnedVersion !== 'latest') {
-        payload.version = pinnedVersion;
-      } else if (currentChannel !== 'latest') {
-        payload.channel = currentChannel;
-      }
-
       const res = await DollhouseAuth.apiFetch('/api/setup/install', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(buildInstallPayload(client)),
       });
 
       const data = await res.json();
@@ -426,19 +659,72 @@
       await fetchDetection();
       updateDetectionState();
       const verified = detectedConfigs[clientToPlatformReverse[client]]?.installed;
-
-      btn.textContent = 'Installed';
-      btn.classList.remove('is-loading');
-      btn.classList.add('is-success');
-      if (status) {
-        status.textContent = verified
-          ? 'Verified — config written. Restart the application to activate.'
-          : 'Restart the application to activate.';
-        status.classList.add('is-success');
-      }
+      applyInstallSuccessState(btn, status, data, verified);
 
       // Show the completion banner after any successful install
       showCompletionBanner(client);
+    } catch (err) {
+      btn.textContent = originalText;
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      if (status) {
+        status.textContent = formatInstallError(err);
+        status.classList.add('is-error');
+      }
+    }
+  };
+
+  const updatePermissionInstallButton = (btn, detected) => {
+    if (!btn || btn.classList.contains('is-success')) return;
+
+    if (detected?.hookInstalled) {
+      btn.textContent = 'Permissions enabled';
+      btn.disabled = true;
+      btn.classList.add('is-match');
+      return;
+    }
+
+    btn.textContent = 'Configure Now';
+    btn.disabled = false;
+    btn.classList.remove('is-match');
+  };
+
+  const handlePermissionInstallClick = async (btn) => {
+    const client = btn.dataset.permissionInstallClient;
+    if (!client) return;
+
+    const status = document.querySelector(`[data-permission-install-status="${client}"]`);
+    const originalText = btn.textContent;
+
+    btn.disabled = true;
+    btn.textContent = 'Configuring...';
+    btn.classList.add('is-loading');
+    if (status) {
+      status.textContent = '';
+      status.className = 'setup-install-status';
+    }
+
+    try {
+      const res = await DollhouseAuth.apiFetch('/api/setup/install', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client }),
+      });
+
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'Installation failed');
+
+      await fetchDetection();
+      updateDetectionState();
+
+      btn.textContent = 'Permissions enabled';
+      btn.classList.remove('is-loading');
+      btn.classList.add('is-success');
+
+      if (status) {
+        status.textContent = data.hookInstall?.message || 'Permissions are enabled. Restart the client if it is already running.';
+        status.classList.add('is-success');
+      }
     } catch (err) {
       btn.textContent = originalText;
       btn.disabled = false;
@@ -551,6 +837,19 @@
     });
   };
 
+  const initPermissionInstallButtons = () => {
+    document.querySelectorAll('.setup-permission-install-btn').forEach((btn) => {
+      btn.addEventListener('click', () => handlePermissionInstallClick(btn));
+      const client = btn.dataset.permissionInstallClient;
+      const status = document.querySelector(`[data-permission-install-status="${client}"]`);
+      if (status) {
+        const statusId = `permission-install-status-${client}`;
+        status.id = statusId;
+        btn.setAttribute('aria-describedby', statusId);
+      }
+    });
+  };
+
   // ── Open config file buttons ───────────────────────────────────────────
 
   /** Handle Open config file button click */
@@ -641,6 +940,7 @@
     'claude': 'claude-desktop',
     'claude-code': 'claude-code',
     'cursor': 'cursor',
+    'cline': 'cline',
     'windsurf': 'windsurf',
     'lmstudio': 'lmstudio',
     'gemini-cli': 'gemini',
@@ -712,19 +1012,258 @@
    * Called on init and whenever the method toggle changes.
    */
   const updateDetectionState = () => {
-    for (const platformId of Object.values(clientToPlatform)) {
+    const platformIds = new Set(['claude-desktop', ...PLATFORMS.map((platform) => platform.id)]);
+    for (const platformId of platformIds) {
       updatePlatformDetectionState(platformId);
     }
+  };
+
+  const PERMISSION_SUPPORT_MATRIX = {
+    'claude-desktop': {
+      label: 'Claude Desktop',
+      supportLevel: 'unsupported',
+      statusTag: 'coming soon',
+      badgeClass: 'unsupported',
+      limitation: 'Claude Desktop can host DollhouseMCP, but this release does not ship a native permissions setup flow for it yet.',
+    },
+    'claude-code': {
+      label: 'Claude Code',
+      supportLevel: 'full_native',
+      statusTag: 'claude code',
+      badgeClass: 'verified',
+      configPath: '<code>~/.claude/settings.json</code>',
+      scriptPath: HOOK_BASE_SCRIPT_PATH,
+      settingsBlock: CLAUDE_CODE_HOOK_SETTINGS,
+      limitation: 'Claude Code has the full native permission-hook path in this release.',
+    },
+    gemini: {
+      label: 'Gemini CLI',
+      supportLevel: 'partial_native',
+      statusTag: 'allow / deny',
+      badgeClass: 'manual',
+      configPath: '<code>~/.gemini/settings.json</code> or <code>.gemini/settings.json</code> in your project',
+      scriptPath: `${HOOKS_DIR}/pretooluse-gemini.sh`,
+      settingsBlock: GEMINI_HOOK_SETTINGS,
+      limitation: 'Gemini CLI exposes native BeforeTool hooks, but it does not support an ask/confirm response path. Confirmation-style policies currently degrade to deny.',
+    },
+    cursor: {
+      label: 'Cursor',
+      supportLevel: 'partial_native',
+      statusTag: 'native hooks',
+      badgeClass: 'manual',
+      configPath: '<code>.cursor/hooks.json</code> in your project, or <code>~/.cursor/hooks.json</code> for all projects',
+      scriptPath: `${HOOKS_DIR}/pretooluse-cursor.sh`,
+      settingsBlock: CURSOR_HOOK_SETTINGS,
+      limitation: 'Cursor exposes native hooks, but its permission handling still needs broader runtime verification across allow and ask decisions.',
+    },
+    vscode: {
+      label: 'VS Code',
+      supportLevel: 'partial_native',
+      statusTag: 'native hooks',
+      badgeClass: 'manual',
+      configPath: '<code>~/.copilot/hooks/dollhouse-permissions.json</code> and VS Code user settings',
+      scriptPath: `${HOOKS_DIR}/pretooluse-vscode.sh`,
+      settingsBlock: VSCODE_HOOK_SETTINGS,
+      featureBlock: VSCODE_HOOK_LOCATIONS_SETTINGS,
+      featureHeading: '2. Enable <code>~/.copilot/hooks</code> in VS Code user settings',
+      featureCopyLabel: 'Copy VS Code hookFilesLocations settings',
+      limitation: 'VS Code exposes native PreToolUse hooks, but it ignores matcher values and uses tool names that differ from Claude Code. This adapter normalizes the common built-in tools we know about.',
+    },
+    windsurf: {
+      label: 'Windsurf',
+      supportLevel: 'partial_native',
+      statusTag: 'allow / deny',
+      badgeClass: 'manual',
+      configPath: '<code>~/.codeium/windsurf/hooks.json</code> or <code>.windsurf/hooks.json</code> in your project',
+      scriptPath: `${HOOKS_DIR}/pretooluse-windsurf.sh`,
+      settingsBlock: WINDSURF_HOOK_SETTINGS,
+      limitation: 'Windsurf exposes native pre-run and pre-MCP hooks, but they are binary allow-or-block hooks. Confirmation-style policies currently degrade to block.',
+    },
+    codex: {
+      label: 'Codex',
+      supportLevel: 'partial_native',
+      statusTag: 'bash only',
+      badgeClass: 'manual',
+      configPath: '<code>~/.codex/hooks.json</code> and <code>~/.codex/config.toml</code>',
+      scriptPath: `${HOOKS_DIR}/pretooluse-codex.sh`,
+      settingsBlock: CODEX_HOOK_SETTINGS,
+      featureBlock: CODEX_HOOK_FEATURES_TOML,
+      limitation: 'Codex currently only supports native PreToolUse hooks for Bash, so this turns on Bash permission guardrails only.',
+    },
+    cline: {
+      label: 'Cline',
+      supportLevel: 'mcp_only',
+      statusTag: 'mcp only',
+      badgeClass: 'manual',
+      limitation: 'Cline MCP setup is supported here, but native permission-hook automation is still incomplete in this release.',
+    },
+    lmstudio: {
+      label: 'LM Studio',
+      supportLevel: 'mcp_only',
+      statusTag: 'mcp only',
+      badgeClass: 'manual',
+      limitation: 'LM Studio MCP setup is supported here, but permission enforcement currently relies on LM Studio built-in confirmations or a future fallback adapter.',
+    },
+  };
+
+  const getPermissionSupport = (platformId, detected) => {
+    if (detected?.support) {
+      return {
+        ...PERMISSION_SUPPORT_MATRIX[platformId],
+        supportLevel: detected.support.level || PERMISSION_SUPPORT_MATRIX[platformId]?.supportLevel,
+      };
+    }
+    return PERMISSION_SUPPORT_MATRIX[platformId];
+  };
+
+  const getFullNativePermissionStatusCopy = (support, detected) => {
+    if (detected?.hookInstalled) {
+      return {
+        tone: 'info',
+        titleText: `${support.label} permission enforcement is enabled.`,
+        messageText: 'No further changes are needed here unless you want to reinstall the hook settings.',
+      };
+    }
+
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to also install the ${support.label} permission hook.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${support.label} permissions are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install the ${support.label} permission hook.`,
+    };
+  };
+
+  const getPartialPermissionStatusCopy = (support, detected) => {
+    const activationLabel = support.label === 'Codex' ? 'Bash guardrails' : 'permission hooks';
+    if (detected?.hookInstalled) {
+      return {
+        tone: 'info',
+        titleText: `${support.label} ${activationLabel} are enabled.`,
+        messageText: support.limitation,
+      };
+    }
+
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `DollhouseMCP is configured as an MCP server. Use Configure Now below to turn on ${support.label}'s native ${activationLabel}.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${support.label} ${activationLabel} are not configured yet.`,
+      messageText: `First connect DollhouseMCP using Auto-updating or Pinned version, then use Configure Now below to install ${support.label}'s native ${activationLabel}.`,
+    };
+  };
+
+  const getMcpOnlyPermissionStatusCopy = (support, detected) => {
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: `${support.label} is connected for this client.`,
+        messageText: `${support.limitation} This release keeps that client in the MCP and fallback lane for now.`,
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: `${support.label} supports MCP setup in this release.`,
+      messageText: `${support.limitation} Use Auto-updating or Pinned version above to connect DollhouseMCP first.`,
+    };
+  };
+
+  const getManualPermissionStatusCopy = (support, detected) => {
+    if (detected?.hookAssetsPrepared) {
+      return {
+        tone: 'info',
+        titleText: 'Hook bridge files are already prepared for this client.',
+        messageText: 'Finish the client-specific hook registration below to turn on permission enforcement.',
+      };
+    }
+    if (detected?.installed) {
+      return {
+        tone: 'warning',
+        titleText: 'DollhouseMCP is connected for this client.',
+        messageText: 'DollhouseMCP is configured here, but permission enforcement is separate. Use the manual hook steps below to turn it on for this client.',
+      };
+    }
+
+    return {
+      tone: 'info',
+      titleText: 'Manual permissions setup is available for this client.',
+      messageText: 'Use the steps below if you want to turn on permission enforcement for this client manually.',
+    };
+  };
+
+  const getUnsupportedPermissionStatusCopy = (support, detected) => ({
+    tone: detected?.installed ? 'warning' : 'neutral',
+    titleText: `Permissions & security tools are unavailable for ${support.label} right now.`,
+    messageText: detected?.installed
+      ? 'DollhouseMCP is connected for this client, but this release does not include a supported permissions setup flow here yet.'
+      : support.limitation,
+  });
+
+  const getPermissionStatusCopy = (platformId, detected) => {
+    const support = getPermissionSupport(platformId, detected);
+    if (!support) {
+      return getUnsupportedPermissionStatusCopy({
+        label: 'this client',
+        limitation: 'This release does not include a supported permissions setup flow for this client yet.',
+      }, detected);
+    }
+
+    if (support.supportLevel === 'full_native') {
+      return getFullNativePermissionStatusCopy(support, detected);
+    }
+
+    if (support.supportLevel === 'partial_native') {
+      return getPartialPermissionStatusCopy(support, detected);
+    }
+
+    if (support.supportLevel === 'mcp_only') {
+      return getMcpOnlyPermissionStatusCopy(support, detected);
+    }
+
+    if (support.supportLevel === 'manual') {
+      return getManualPermissionStatusCopy(support, detected);
+    }
+
+    return getUnsupportedPermissionStatusCopy(support, detected);
+  };
+
+  const updatePermissionStatus = (panel, platformId, detected) => {
+    const status = panel?.querySelector('.setup-permission-status');
+    if (!status) return;
+
+    const title = status.querySelector('.setup-permission-status-title');
+    const message = status.querySelector('.setup-permission-status-msg');
+    const { tone, titleText, messageText } = getPermissionStatusCopy(platformId, detected);
+
+    status.dataset.state = tone;
+    if (title) title.textContent = titleText;
+    if (message) message.textContent = messageText;
   };
 
   /** Update notice, badge, button, AND current config display for a single platform */
   const updatePlatformDetectionState = (platformId) => {
     const detected = detectedConfigs[platformId];
+    const panel = document.getElementById('setup-panel-' + platformId);
+    const tabBtn = document.getElementById('setup-tab-' + platformId);
+    updatePermissionStatus(panel, platformId, detected);
+    updatePermissionInstallButton(panel?.querySelector('.setup-permission-install-btn'), detected);
+
     if (!detected?.installed) return;
 
     const matches = configsMatch(platformId, currentMethod);
-    const panel = document.getElementById('setup-panel-' + platformId);
-    const tabBtn = document.getElementById('setup-tab-' + platformId);
 
     updateDetectionNotice(panel?.querySelector('.setup-installed-notice'), matches);
     updateDetectionBadge(tabBtn?.querySelector('.setup-tab-badge'), matches);
@@ -830,6 +1369,8 @@
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;');
 
+  const escapeAttr = (str) => escapeHtml(str).replaceAll("'", '&#39;');
+
   // ── Generate platform panels from registry ─────────────────────────────
 
   /** Build an Open config file button string, or empty if no openClient */
@@ -840,13 +1381,13 @@
   const renderInstallSection = (p) => {
     let html = '';
     if (p.installClient) {
-      html += '<div class="setup-method setup-method-primary">';
+      html += '<div class="setup-method setup-method-primary" data-setup-modes="npx global">';
       html += `<div class="setup-install-row"><button class="setup-btn setup-btn-primary setup-install-btn" type="button" data-install-client="${p.installClient}">Configure Now</button>`;
       html += `<span class="setup-install-status" data-install-status="${p.installClient}"></span></div>`;
     }
     if (p.cli) {
       const cmd = `${p.cli} mcp add dollhousemcp -- npx -y ${PKG}@latest`;
-      if (!p.installClient) html += '<div class="setup-method setup-method-primary">';
+      if (!p.installClient) html += '<div class="setup-method setup-method-primary" data-setup-modes="npx global">';
       html += '<h3>Or run in your terminal</h3><p>Run this in your terminal:</p>';
       html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${cmd}" aria-label="Copy command">Copy</button>`;
       html += `<pre><code>${cmd}</code></pre></div>`;
@@ -864,9 +1405,9 @@
     let html = '';
 
     if (hasPrimaryBlock) {
-      html += `</div><div class="setup-method"><h3>Or add config manually${openBtnHtml(p.openClient)}</h3>`;
+      html += `</div><div class="setup-method" data-setup-modes="npx global"><h3>Or add config manually${openBtnHtml(p.openClient)}</h3>`;
     } else {
-      html += `<div class="setup-method setup-method-primary"><h3>Config${openBtnHtml(p.openClient)}</h3>`;
+      html += `<div class="setup-method setup-method-primary" data-setup-modes="npx global"><h3>Config${openBtnHtml(p.openClient)}</h3>`;
     }
     html += `<p>Add to ${p.configPath}:</p>`;
     html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${copyText}' aria-label="Copy config">Copy</button>`;
@@ -881,11 +1422,187 @@
     if (!p.tomlPath) return '';
     const tomlConfig = configs[p.id]?.npxToml;
     const tomlCode = tomlConfig?.code || '';
-    let html = `<div class="setup-method"><h3>Or add to config${openBtnHtml(p.openClient)}</h3>`;
+    let html = `<div class="setup-method" data-setup-modes="npx global"><h3>Or add to config${openBtnHtml(p.openClient)}</h3>`;
     html += `<p>Add to ${p.tomlPath}:</p>`;
     html += `<div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${tomlCode}' aria-label="Copy config">Copy</button>`;
     html += `<pre><code>${tomlCode}</code></pre></div></div>`;
     return html;
+  };
+
+  const buildPartialAutoHint = (p, partial) => {
+    const base = partial.limitation;
+    if (p.id === 'codex') {
+      return `${base} This automatic path writes the shared hook bridge, updates <code>~/.codex/hooks.json</code>, and enables <code>features.codex_hooks</code> in <code>~/.codex/config.toml</code>.`;
+    }
+    if (p.id === 'vscode') {
+      return `${base} This automatic path writes the shared hook bridge, creates <code>~/.copilot/hooks/dollhouse-permissions.json</code>, and enables <code>~/.copilot/hooks</code> in VS Code's <code>chat.hookFilesLocations</code> setting.`;
+    }
+    return `${base} This automatic path writes the shared hook bridge and updates ${partial.configPath}.`;
+  };
+
+  const buildPartialFeatureHeading = (p, partial) => {
+    if (partial.featureHeading) return partial.featureHeading;
+    if (p.id === 'codex') return '2. Enable Codex hooks in <code>~/.codex/config.toml</code>';
+    return '2. Add the additional client settings';
+  };
+
+  const renderVerifiedPermissionSection = (p, verified) => {
+    const permissionInstallClient = p.installClient || p.id;
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--verified">${verified.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <div class="setup-install-row">
+        <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
+        <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
+      </div>
+      <p class="setup-hint">This writes the shared hook bridge assets and updates ${verified.configPath} automatically.</p>
+    </div>
+    <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <details class="setup-manual-fallback">
+        <summary>Manual fallback</summary>
+        <div class="setup-manual-fallback-body">
+          <h4>1. Save the shared hook bridge once</h4>
+          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+          </div>
+          <h4>2. Add the ${verified.label} hook settings</h4>
+          <p>Add this block to ${verified.configPath} so ${verified.label} can call the hook bridge before tool use.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(verified.settingsBlock)}' aria-label="Copy ${verified.label} hook settings">Copy</button>
+            <pre><code>${escapeHtml(verified.settingsBlock)}</code></pre>
+          </div>
+          <p class="setup-hint">Command hook target: <code>${verified.scriptPath}</code></p>
+        </div>
+      </details>
+    </div>`;
+  };
+
+  const renderPartialPermissionSection = (p, partial) => {
+    const permissionInstallClient = p.installClient || p.id;
+    const autoHint = buildPartialAutoHint(p, partial);
+    const featureHeading = buildPartialFeatureHeading(p, partial);
+    const featureSection = partial.featureBlock
+      ? `<h4>${featureHeading}</h4>
+            <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.featureBlock)}' aria-label="${escapeAttr(partial.featureCopyLabel || `Copy ${partial.label} settings`)}">Copy</button>
+              <pre><code>${escapeHtml(partial.featureBlock)}</code></pre>
+            </div>`
+      : '';
+    const stepNumber = partial.featureBlock ? '3' : '2';
+
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--manual">${partial.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <div class="setup-install-row">
+        <button class="setup-btn setup-btn-primary setup-permission-install-btn" type="button" data-permission-install-client="${permissionInstallClient}">Configure Now</button>
+        <span class="setup-install-status" data-permission-install-status="${permissionInstallClient}"></span>
+      </div>
+      <p class="setup-hint">${autoHint}</p>
+    </div>
+    <div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <details class="setup-manual-fallback">
+        <summary>Manual fallback</summary>
+        <div class="setup-manual-fallback-body">
+          <h4>1. Save the shared hook bridge once</h4>
+          <p>Save this file as <code>${HOOK_BASE_SCRIPT_PATH}</code>, then make it executable with <code>chmod +x ${HOOK_BASE_SCRIPT_PATH}</code>.</p>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(HOOK_BASE_SCRIPT)}' aria-label="Copy shared hook bridge">Copy</button>
+            <pre><code>${escapeHtml(HOOK_BASE_SCRIPT)}</code></pre>
+          </div>
+          ${featureSection}
+          <h4>${stepNumber}. Add the ${partial.label} hook settings in ${partial.configPath}</h4>
+          <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(partial.settingsBlock)}' aria-label="Copy ${partial.label} hook settings">Copy</button>
+            <pre><code>${escapeHtml(partial.settingsBlock)}</code></pre>
+          </div>
+          <p class="setup-hint">Command hook target: <code>${partial.scriptPath}</code></p>
+        </div>
+      </details>
+    </div>`;
+  };
+
+  const renderMcpOnlyPermissionSection = (support) => `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="info">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+      <p class="setup-hint">${support.limitation}</p>
+    </div>`;
+
+  const renderPermissionSection = (p) => {
+    const support = getPermissionSupport(p.id);
+    const configPath = p.hookConfigPath || p.configPath || p.tomlPath || 'this client’s user configuration';
+
+    if (!support) {
+      return '';
+    }
+
+    if (support.supportLevel === 'full_native') {
+      return renderVerifiedPermissionSection(p, support);
+    }
+
+    if (support.supportLevel === 'partial_native') {
+      return renderPartialPermissionSection(p, support);
+    }
+
+    if (support.supportLevel === 'mcp_only') {
+      return renderMcpOnlyPermissionSection(support);
+    }
+
+    if (support.supportLevel === 'manual') {
+      const platformName = p.id === 'gemini' ? 'gemini' : p.id;
+      const wrapperFilename = `pretooluse-${platformName}.sh`;
+      const wrapperScript = buildHookWrapperScript(platformName);
+      return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+        <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
+        <div class="setup-permission-status" data-state="info">
+          <strong class="setup-permission-status-title"></strong>
+          <p class="setup-permission-status-msg"></p>
+        </div>
+        <p>To turn on permission enforcement for this client manually, add this command anywhere the client supports a pre-tool or pre-command hook:</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text="${escapeAttr(p.hookCommand)}" aria-label="Copy hook command">Copy</button>
+          <pre><code>${escapeHtml(p.hookCommand)}</code></pre>
+        </div>
+        <p>Save this wrapper in <code>${HOOKS_DIR}</code> alongside the shared Dollhouse hook bridge:</p>
+        <div class="setup-code-block"><button class="setup-copy-btn" type="button" data-copy-text='${escapeAttr(wrapperScript)}' aria-label="Copy ${wrapperFilename}">Copy</button>
+          <pre><code>${escapeHtml(wrapperScript)}</code></pre>
+        </div>
+        <p class="setup-hint">Known config location for this client: ${configPath}</p>
+      </div>`;
+    }
+
+    return `<div class="setup-method setup-security-mode" data-setup-modes="permissions" hidden>
+      <h3>Permissions &amp; Security <span class="setup-support-badge setup-support-badge--${support.badgeClass}">${support.statusTag}</span></h3>
+      <div class="setup-permission-status" data-state="neutral">
+        <strong class="setup-permission-status-title"></strong>
+        <p class="setup-permission-status-msg"></p>
+      </div>
+    </div>`;
+  };
+
+  const renderPermissionsIntro = () => {
+    const intro = document.getElementById('setup-permissions-intro');
+    if (!intro) return;
+
+    intro.innerHTML = `<div class="setup-permissions-note">
+        <strong>Permissions &amp; Security</strong>
+        <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release. Gemini CLI, Cursor, VS Code, Windsurf, and Codex have native partial support, while Cline and LM Studio stay in the MCP and fallback lane for now. Other clients will be marked as coming soon.</p>
+      </div>`;
+  };
+
+  const injectStaticPermissionsSections = () => {
+    const claudeDesktopPanel = document.getElementById('setup-panel-claude-desktop');
+    const claudeCodePanel = document.getElementById('setup-panel-claude-code');
+    const claudeCodeConfig = PLATFORMS.find((p) => p.id === 'claude-code');
+
+    claudeDesktopPanel?.insertAdjacentHTML('beforeend', renderPermissionSection({ id: 'claude-desktop' }));
+    if (claudeCodePanel && claudeCodeConfig) {
+      claudeCodePanel.insertAdjacentHTML('beforeend', renderPermissionSection(claudeCodeConfig));
+    }
   };
 
   const renderGeneratedPanels = () => {
@@ -906,7 +1623,8 @@
       section.innerHTML =
         renderInstallSection(p) +
         renderJsonSection(p, hasPrimaryBlock) +
-        renderTomlSection(p);
+        renderTomlSection(p) +
+        renderPermissionSection(p);
 
       container.appendChild(section);
     }
@@ -1074,6 +1792,9 @@
         });
         const json = await res.json();
         if (!res.ok) {
+          if (json.verificationRequired) {
+            showVerificationUI(body.email);
+          }
           if (statusEl) {
             statusEl.textContent = json.error || 'Failed to save';
             statusEl.className = 'license-form-status is-error';
@@ -1163,9 +1884,14 @@
               verifyStatus.className = 'license-form-status is-success';
             }
             startCountdown(10 * 60);
-          } else if (verifyStatus) {
-            verifyStatus.textContent = json.error || 'Failed to resend';
-            verifyStatus.className = 'license-form-status is-error';
+          } else {
+            if (json.verificationRequired) {
+              startCountdown(10 * 60);
+            }
+            if (verifyStatus) {
+              verifyStatus.textContent = json.error || 'Failed to resend';
+              verifyStatus.className = 'license-form-status is-error';
+            }
           }
         } catch (err) {
           console.debug('Resend failed:', err);
@@ -1232,9 +1958,16 @@
         if (license.useCase) rows.push(['Use case', license.useCase]);
       }
 
-      licenseInfoTable.innerHTML = rows
-        .map(([label, value]) => `<tr><td>${label}</td><td>${value}</td></tr>`)
-        .join('');
+      const rowNodes = rows.map(([label, value]) => {
+        const tr = document.createElement('tr');
+        const labelCell = document.createElement('td');
+        const valueCell = document.createElement('td');
+        labelCell.textContent = label;
+        valueCell.textContent = value;
+        tr.append(labelCell, valueCell);
+        return tr;
+      });
+      licenseInfoTable.replaceChildren(...rowNodes);
       licenseDetailsPanel.hidden = false;
     }
 
@@ -1350,15 +2083,19 @@
   // ── Init ──────────────────────────────────────────────────────────────
 
   const os = detectOS();
+  renderPermissionsIntro();
   renderGeneratedPanels();
+  injectStaticPermissionsSections();
   highlightOSPaths(os);
   initMethodToggle();
   initChannelSelector();
   initPlatformTabs();
   initCopyButtons();
   initInstallButtons();
+  initPermissionInstallButtons();
   initOpenButtons();
   fetchVersion();
   fetchDetection();
   initLicense();
+  updateSetupModeSections();
 })();

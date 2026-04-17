@@ -10,8 +10,9 @@
  * recovery, and follower re-election.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import * as net from 'node:net';
+import { spawn } from 'node:child_process';
 import { mkdtemp, writeFile, readFile, rm, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -37,6 +38,61 @@ function listenOnPort(port?: number): Promise<{ server: net.Server; port: number
 
 function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
+}
+
+function spawnClientConnection(port: number): Promise<import('node:child_process').ChildProcess> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        String.raw`
+          import net from 'node:net';
+          const socket = net.createConnection({ host: '127.0.0.1', port: Number(process.env.TEST_PORT) }, () => {
+            process.stdout.write('CONNECTED\\n');
+          });
+          process.on('SIGTERM', () => socket.end());
+          process.on('SIGINT', () => socket.end());
+          socket.on('close', () => process.exit(0));
+          socket.on('error', (error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          setInterval(() => {}, 1000);
+        `,
+      ],
+      {
+        env: { ...process.env, TEST_PORT: String(port) },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error('Timed out waiting for client connection'));
+    }, 5000);
+
+    const handleFailure = (error: Error) => {
+      clearTimeout(timeout);
+      reject(error);
+    };
+
+    child.once('error', handleFailure);
+    child.stderr.on('data', (chunk) => {
+      const message = String(chunk).trim();
+      if (message) {
+        clearTimeout(timeout);
+        reject(new Error(message));
+      }
+    });
+    child.stdout.on('data', (chunk) => {
+      if (String(chunk).includes('CONNECTED')) {
+        clearTimeout(timeout);
+        resolve(child);
+      }
+    });
+  });
 }
 
 describe('Console Lifecycle Integration (#1850)', () => {
@@ -477,5 +533,19 @@ describe('Console Lifecycle Integration (#1850)', () => {
         await closeServer(server);
       }
     });
+
+    it('does not mistake connected clients for the listening owner', async () => {
+      const Recovery = await import('../../src/web/console/StaleProcessRecovery.js');
+      const { server, port } = await listenOnPort();
+      const client = await spawnClientConnection(port);
+
+      try {
+        expect(await Recovery.findPidOnPort(port)).toBeNull();
+      } finally {
+        client.kill('SIGTERM');
+        await new Promise((resolve) => client.once('exit', resolve));
+        await closeServer(server);
+      }
+    }, 15000);
   });
 });

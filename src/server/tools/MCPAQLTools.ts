@@ -281,6 +281,7 @@ Auth & verification:
 { operation: "setup_github_auth" }
 { operation: "configure_oauth", params: { client_id: "your-client-id" } }
 { operation: "verify_challenge", params: { code: "ABC123" } }
+{ operation: "release_deadlock" }
 { operation: "beetlejuice_beetlejuice_beetlejuice" }
 
 Batch operations: Use the operations array to execute multiple operations sequentially in a single request.
@@ -381,6 +382,8 @@ Gatekeeper & CLI policies:
 { operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
+{ operation: "get_permission_authority" }
+{ operation: "get_permission_authority", params: { host: "claude-code" } }
 
 Enhanced index:
 { operation: "find_similar_elements", params: { element_type: "persona", element_name: "Creative-Writer" } }

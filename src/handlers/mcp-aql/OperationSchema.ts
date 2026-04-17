@@ -873,7 +873,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       // Layer 2 of the 3-layer gatekeeper system. Layer 1 (route policies) provides automatic
       // baseline security for ALL elements. Layer 2 lets you customize per-element access control.
       // Policies are DYNAMIC — they take effect when the element is activated and revert when deactivated.
-      gatekeeper: { type: 'object', description: 'Per-element security policy that controls what operations are allowed when this element is active. Policies are dynamic — activate the element and the policy takes effect; deactivate it and the restrictions revert. This gives users composable security: a "no-web" persona blocks web access while active, a "read-only" skill auto-approves reads but blocks writes, an ensemble can lock down which agents may be executed. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?: string[], blockedTypes?: string[] } }. allow/confirm/deny are arrays of operation name patterns (e.g. "read_*", "execute_agent", "delete_element"). Priority: deny > confirm > allow > route default. scopeRestrictions limits which element types the policy applies to (e.g. allowedTypes: ["skill", "template"] means the policy only governs operations on those types). If omitted entirely, the element inherits system defaults which already include confirmation for sensitive operations.' },
+      gatekeeper: { type: 'object', description: 'Per-element security policy that controls what operations are allowed when this element is active. Policies are dynamic — activate the element and the policy takes effect; deactivate it and the restrictions revert. This gives users composable security: a "no-web" persona blocks web access while active, a "read-only" skill auto-approves reads but blocks writes, an ensemble can lock down which agents may be executed. Structure: { allow?: string[], confirm?: string[], deny?: string[], scopeRestrictions?: { allowedTypes?: string[], blockedTypes?: string[] }, externalRestrictions?: { description: string, allowPatterns?: string[], confirmPatterns?: string[], denyPatterns?: string[] } }. Use allow/confirm/deny for MCP-AQL operation patterns like "read_*", "edit_*", "execute_agent", or "delete_element". Use externalRestrictions for external tool or hook patterns like "Read:*", "Edit:*", "Bash:git status*", or "Bash:rm *". Priority: deny > confirm > allow > route default. scopeRestrictions limits which element types the policy applies to (e.g. allowedTypes: ["skill", "template"] means the policy only governs operations on those types). If omitted entirely, the element inherits system defaults which already include confirmation for sensitive operations.' },
       metadata: { type: 'object', description: 'Additional metadata. For ensembles: include elements array. For skills/templates/memories: category can also be passed here.' },
     },
     returns: { name: 'Element', kind: 'object', description: 'Created element with name, type, version, file path, and metadata' },
@@ -882,6 +882,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       '{ operation: "create_element", element_type: "persona", params: { element_name: "MyPersona", description: "A helpful assistant", instructions: "You ARE a helpful assistant. ALWAYS provide clear, accurate responses." } }',
       '{ operation: "create_element", element_type: "agent", params: { element_name: "CodeReviewer", description: "Automated code review agent", instructions: "You are methodical and thorough. ALWAYS check security first. Report issues by severity.", goal: { template: "Review {files} for {review_type} issues", parameters: [{ name: "files", type: "string", required: true }, { name: "review_type", type: "string", required: true }], successCriteria: ["Review completed", "Issues documented"] } } }',
       '{ operation: "create_element", element_type: "skill", params: { element_name: "CodeReview", description: "Reviews code for quality", instructions: "ANALYZE code systematically. CHECK security patterns FIRST. Report findings by severity.", content: "# Code Review Reference\\n\\n## Common Patterns\\n- OWASP Top 10\\n- CWE/SANS Top 25" } }',
+      '{ operation: "create_element", element_type: "skill", params: { element_name: "read-only-review", description: "Review session with write restrictions", instructions: "When active, ALLOW browsing and analysis but REQUIRE confirmation for edits.", gatekeeper: { allow: ["read_*", "list_*", "search_*", "get_*"], confirm: ["create_*", "edit_*", "update_*"], deny: ["delete_*"], externalRestrictions: { description: "Review shell guardrails", allowPatterns: ["Read:*", "Glob:*", "Grep:*"], confirmPatterns: ["Edit:*", "Write:*", "Bash:git push*"], denyPatterns: ["Bash:rm *", "WebSearch:*"] } } } }',
       '{ operation: "create_element", element_type: "template", params: { element_name: "BugReport", description: "Bug report template", content: "## Bug Report\\n\\n**Summary:** {{summary}}\\n**Steps:** {{steps}}\\n**Expected:** {{expected}}", instructions: "Render all sections. NEVER omit required fields." } }',
       // Memory relationship patterns - naming conventions for element-linked memories:
       // agent-{name}-context: Agent execution state and learned behaviors
@@ -1412,6 +1413,22 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       // Response: { verified: true, challenge_id: "...", agentName: "my-agent", message: "Agent unblocked" }
     ],
   },
+  release_deadlock: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
+    description: 'Recover from a restrictive permission deadlock by showing a human-only verification code, then deactivating all active elements and clearing current-session activation state',
+    params: {
+      challenge_id: { type: 'string', description: 'Challenge ID from the first release_deadlock call' },
+      code: { type: 'string', description: 'Verification code displayed to the user for deadlock relief' },
+    },
+    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Two-step flow. First call returns { pending, challenge_id, message }. Second call with challenge_id + code returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
+    examples: [
+      '{ operation: "release_deadlock" }',
+      '{ operation: "release_deadlock", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',
+    ],
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
@@ -1458,11 +1475,12 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write")' },
       input: { type: 'object', description: 'The tool input parameters to evaluate' },
       platform: { type: 'string', description: 'Target platform for response formatting (default: "claude_code"). Options: claude_code, gemini, cursor, windsurf, codex' },
+      session_id: { type: 'string', description: 'Optional persisted activation session ID to evaluate against when hooks run in a separate leader process' },
     },
-    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { decision: "allow"|"deny"|"ask", reason? }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex: { hookSpecificOutput: { permissionDecision, reason? } }.' },
+    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow"|"deny"|"ask", permissionDecisionReason? } }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex: { hookSpecificOutput: { permissionDecision, reason? } }.' },
     examples: [
       '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" } } }',
-      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git push --force" }, platform: "claude_code" } }',
+      '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git push --force" }, platform: "claude_code", session_id: "claude-code-session" } }',
     ],
   },
   // Issue #625 Phase 2: CLI policy visibility
@@ -1480,6 +1498,21 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     examples: [
       '{ operation: "get_effective_cli_policies" }',
       '{ operation: "get_effective_cli_policies", params: { tool_name: "Bash", tool_input: { command: "git push" } } }',
+    ],
+  },
+  get_permission_authority: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
+    description: 'Get the current permission-authority mode for supported hosts. Read-only: AI can inspect authority state but cannot change it.',
+    params: {
+      host: { type: 'string', description: 'Optional host to inspect (e.g., "claude-code", "codex")' },
+    },
+    returns: { name: 'PermissionAuthorityState', kind: 'object', description: '{ defaultMode, hosts, supportedHosts, supportedModes, aiMutable: false }' },
+    examples: [
+      '{ operation: "get_permission_authority" }',
+      '{ operation: "get_permission_authority", params: { host: "claude-code" } }',
     ],
   },
   // Issue #625 Phase 3: CLI approval workflow

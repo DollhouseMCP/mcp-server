@@ -18,8 +18,10 @@
 import type { ILogSink, UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
 import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
+import { CONSOLE_PROTOCOL_VERSION } from './LeaderElection.js';
 
 /** Maximum entries to buffer when leader is unreachable */
 const MAX_BUFFER_SIZE = 10_000;
@@ -253,6 +255,8 @@ export class SessionHeartbeat {
           event,
           pid: this.pid,
           startedAt: new Date().toISOString(),
+          serverVersion: PACKAGE_VERSION,
+          consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
         }),
         signal: controller.signal,
       });

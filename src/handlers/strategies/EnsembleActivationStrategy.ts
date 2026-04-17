@@ -80,6 +80,11 @@ export class EnsembleActivationStrategy extends BaseActivationStrategy implement
         details.push(restrictionWarning);
       }
 
+      const gatekeeperWarning = this.formatGatekeeperValidityWarning(ensemble.metadata as unknown as Record<string, unknown>);
+      if (gatekeeperWarning) {
+        details.push(gatekeeperWarning);
+      }
+
       return {
         content: [{
           type: "text",
