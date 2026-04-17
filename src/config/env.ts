@@ -122,8 +122,10 @@ const envSchema = z.object({
   // ============================================================================
   /** Storage backend: 'file' (default) or 'database' (PostgreSQL). */
   DOLLHOUSE_STORAGE_BACKEND: z.enum(['file', 'database']).default('file'),
-  /** PostgreSQL connection string (required when DOLLHOUSE_STORAGE_BACKEND=database). */
+  /** Application database URL (non-superuser role, RLS enforced). Required when DOLLHOUSE_STORAGE_BACKEND=database. */
   DOLLHOUSE_DATABASE_URL: z.string().optional(),
+  /** Admin database URL (superuser role, for migrations only). Falls back to DOLLHOUSE_DATABASE_URL if not set. */
+  DOLLHOUSE_DATABASE_ADMIN_URL: z.string().optional(),
   /** Maximum connection pool size. */
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   /** SSL mode for database connection. */

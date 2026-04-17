@@ -20,8 +20,9 @@ import {
   getValidatedIndexDebounce,
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import type { IStorageLayer } from '../../storage/IStorageLayer.js';
+import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { DatabaseMemoryStorageLayer } from '../../storage/DatabaseMemoryStorageLayer.js';
 import { MemoryMetadataExtractor } from '../../storage/MemoryMetadataExtractor.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -135,6 +136,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
+        databaseInstance: deps.databaseInstance,
+        getCurrentUserId: deps.getCurrentUserId,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -158,8 +161,12 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
   /**
    * Phase 2: Override factory to use MemoryStorageLayer for multi-directory scanning.
+   * Phase 4: Returns DatabaseMemoryStorageLayer when database deps are available.
    */
   protected override createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
+    if (this.databaseInstance && this.getCurrentUserId) {
+      return new DatabaseMemoryStorageLayer(this.databaseInstance, this.getCurrentUserId);
+    }
     // Note: Use this.elementDir (set by BaseElementManager before this is called),
     // not this.memoriesDir (set after super() returns).
     return new MemoryStorageLayer(fileOperationsService, {
@@ -239,126 +246,139 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
-   * Load a memory from file
-   * SECURITY FIX #1: Uses FileLockManager.atomicReadFile() instead of fs.readFile()
-   * to prevent race conditions and ensure atomic file operations
-   * @param filePath Path to the memory file to load
-   * @returns Promise resolving to the loaded Memory instance
-   * @throws {Error} When file cannot be found or path validation fails
-   * @throws {Error} When YAML parsing fails or content is malformed
-   * @throws {Error} When memory validation fails after loading
+   * Load a memory element.
+   *
+   * Resolves the file path (memories live in subdirectories: system/, adapters/,
+   * date folders) and checks the cache before delegating to super.load() for
+   * the core flow. Entries and instructions are loaded via the afterLoad hook
+   * from the parsed YAML stashed on the element during load.
    */
   override async load(filePath: string): Promise<Memory> {
-    try {
-      // Resolve path using extracted helper method
-      const fullPath = await this.resolveMemoryPath(filePath);
+    // Resolve the path: bare filenames need to search system/, adapters/, date folders.
+    // In DB mode, filePath is a UUID — pass through as-is.
+    // MEMORY_LOAD_FAILED is emitted via the onLoadError hook (base class calls it
+    // from its catch block). We do NOT wrap this in try/catch here — doing so
+    // would double-emit alongside base's element:load:error event.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.load(filePath);
+    }
 
-      // Ensure fullPath is defined
-      if (!fullPath) {
-        throw new Error(`Could not resolve path: ${filePath}`);
-      }
+    const fullPath = await this.resolveMemoryPath(filePath);
+    if (!fullPath) {
+      throw new Error(`Could not resolve memory path: ${filePath}`);
+    }
+    const resolvedRelative = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
 
-      // Phase 2: Check base class LRU cache (replaces removed memoryCache Map)
-      const cached = this.getCachedByAbsolutePath(fullPath);
-      if (cached) return cached;
+    // Check cache before reading from disk (preserves same-instance-on-repeated-load)
+    const cached = this.getCachedByAbsolutePath(fullPath);
+    if (cached) return cached;
 
-      // CRITICAL FIX: Use FileOperationsService for atomic file read
-      // Previously: const content = await fs.readFile(fullPath, 'utf-8');
-      // Now: Uses FileOperationsService which wraps FileLockManager
-      const content = await this.fileOperations.readFile(fullPath, { encoding: 'utf-8' });
-      
-      // HIGH SEVERITY FIX: Use SecureYamlParser to prevent YAML injection attacks
-      // Uses SerializationService which wraps SecureYamlParser and handles pure YAML automatically
+    // Entries/instructions are loaded in afterLoad() from the already-parsed YAML.
+    return super.load(resolvedRelative);
+  }
 
-      // Memory files are pure YAML (unlike other elements which are markdown with frontmatter)
-      // SerializationService.parseFrontmatter() automatically detects and wraps pure YAML
+  /**
+   * Emit MEMORY_LOAD_FAILED on non-ENOENT load failures. Called by the base
+   * class's catch block once per distinct error (base already dedupes repeats),
+   * so there is no risk of flooding the SecurityMonitor ring buffer.
+   */
+  protected override onLoadError(filePath: string, error: unknown): void {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return; // Missing file — not an audit event
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_LOAD_FAILED,
+      severity: 'MEDIUM',
+      source: 'MemoryManager.onLoadError',
+      details: `Failed to load memory from ${filePath}: ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
 
-      // Handle empty content edge case (for backward compatibility with existing tests/files)
-      let parsed: ParsedMemoryData;
+  /**
+   * Parse raw file content for memory elements.
+   *
+   * Memories are pure YAML (no frontmatter delimiters), so they use
+   * SerializationService.parseFrontmatter() which auto-detects the format
+   * and applies JSON schema to preserve booleans (autoLoad) and numbers (priority).
+   *
+   * This is the INPUT counterpart to serializeElement() (OUTPUT).
+   */
+  protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
+    if (!content.trim()) return { data: {}, content: '' };
 
-      if (content.trim() === '') {
-        // Empty or all whitespace file - create minimal valid structure
-        parsed = { data: {}, content: '' };
-      } else {
-        const parseResult = this.serializationService.parseFrontmatter(content, {
-          maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
-          validateContent: false,  // FIX (#1206): Local files are pre-trusted
-          source: 'MemoryManager.load',
-          schema: 'json'  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
-        });
+    const parsed = this.serializationService.parseFrontmatter(content, {
+      maxYamlSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      validateContent: false,  // FIX (#1206): Local files are pre-trusted
+      source: 'MemoryManager.parseContent',
+      schema: 'json',  // FIX #1430: Preserve booleans (autoLoad) and numbers (priority)
+    });
 
-        // Convert to ParsedMemoryData format
-        parsed = {
-          data: parseResult.data,
-          content: parseResult.content
-        };
-      }
+    return { data: parsed.data as Record<string, unknown>, content: parsed.content ?? '' };
+  }
 
-      // Extract metadata and markdown content
-      const { metadata, content: markdownContentFromFile } = this.parseMemoryFile(parsed);
+  /**
+   * Memory-specific metadata defaults.
+   *
+   * Preserves memory's existing default behavior which differs from the
+   * base class: memories use 'Unnamed Memory' (not filename-derived) for
+   * missing names, and leave author as undefined (not 'unknown').
+   */
+  protected override migrateMetadataDefaults(data: Record<string, unknown>, _filePath: string): void {
+    if (!data.type) {
+      data.type = 'memory';
+    }
+    if (!data.name) {
+      data.name = 'Unnamed Memory';
+    }
+    if (!data.version) {
+      data.version = '1.0.0';
+    }
+    // Note: author intentionally NOT defaulted — memory's parseMemoryFile
+    // leaves author as undefined when not specified, unlike other element
+    // types which default to 'unknown'.
+  }
 
-      // Create memory instance
-      const memory = new Memory(metadata, this.metadataService, this, this._retentionPolicyService);
+  /**
+   * Post-load hook: populate memory-specific fields (entries, instructions, markdown body)
+   * from the YAML already parsed by super.load(). Avoids re-reading the file/DB record.
+   */
+  protected override async afterLoad(
+    memory: Memory,
+    _filePath: string,
+    parsedData?: { data: Record<string, unknown>; content: string },
+  ): Promise<void> {
+    if (!parsedData) return; // Defensive — base always supplies it, but the hook is optional.
 
-      // Fix #918: Read instructions from root-level YAML (where serializeElement writes them).
-      // Previously instructions were written to root but never read back — silent data loss.
-      const rootInstructions = parsed.data?.instructions;
-      if (rootInstructions && typeof rootInstructions === 'string') {
-        memory.instructions = rootInstructions;
-      }
+    // Fix #918: Read instructions from root-level YAML
+    const rootInstructions = parsedData.data?.instructions;
+    if (rootInstructions && typeof rootInstructions === 'string') {
+      memory.instructions = rootInstructions;
+    }
 
-      // Strip format_version from runtime metadata (Fix #912)
-      delete (memory.metadata as any).format_version;
+    // Strip format_version from runtime metadata (Fix #912)
+    delete (memory.metadata as any).format_version;
 
-      // Load saved entries if present
-      // Memory files have entries as a top-level key in the YAML
-      const entries = parsed.data?.entries;
-      if (entries) {
-        memory.deserialize(JSON.stringify({
-          id: memory.id,
-          type: memory.type,
-          version: memory.version,
-          metadata: memory.metadata,
-          extensions: memory.extensions,
-          entries: entries
-        }));
-      }
+    // Load saved entries if present (from pure YAML entries array)
+    const entries = parsedData.data?.entries;
+    if (Array.isArray(entries) && entries.length > 0) {
+      memory.deserialize(JSON.stringify({
+        id: memory.id,
+        type: memory.type,
+        version: memory.version,
+        metadata: memory.metadata,
+        extensions: memory.extensions,
+        entries,
+      }));
+    }
 
-      // If markdown content exists after the frontmatter, add it as a memory entry
-      // This preserves content from seed memories and memory files with markdown sections
-      if (markdownContentFromFile && markdownContentFromFile.trim() && parsed.content && parsed.content.trim()) {
-        await memory.addEntry(
-          parsed.content.trim(),
-          [],  // tags
-          { loadedAt: new Date().toISOString() },  // metadata
-          'file'  // source
-        );
-      }
-      
-      // FIX #1320: Set file path on memory for persistence (store relative path)
-      // Normalize to forward slashes so paths are consistent across platforms
-      // (path.relative() returns backslashes on Windows).
-      const relativePath = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-      memory.setFilePath(relativePath);
-
-      // Cache via base class LRU cache
-      this.cacheElement(memory, relativePath);
-
-      // Routine load — debug level only. Security event for MEMORY_LOADED was
-      // generating ~128K entries/session, overwhelming the 5K security ring buffer
-      // with 25x turnover (backpressure). Downgraded per Issue #1687 analysis.
-      logger.debug(`[MemoryManager] Loaded memory from ${path.basename(fullPath)}`);
-      
-      return memory;
-      
-    } catch (error) {
-      SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_LOAD_FAILED,
-        severity: 'MEDIUM',
-        source: 'MemoryManager.load',
-        details: `Failed to load memory from ${filePath}: ${error}`
-      });
-      throw new Error(`Failed to load memory: ${error}`);
+    // If markdown content exists after frontmatter, add it as a memory entry.
+    // Preserves content from seed memories and memory files with markdown sections.
+    if (parsedData.content && parsedData.content.trim()) {
+      await memory.addEntry(
+        parsedData.content.trim(),
+        [],  // tags
+        { loadedAt: new Date().toISOString() },  // metadata
+        'file',  // source
+      );
     }
   }
 
@@ -548,156 +568,210 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When atomic write operation fails
    */
   override async save(element: Memory, filePath?: string): Promise<void> {
-    try {
-      // Issue #39: Auto-repair corrupted backup names before saving
-      const memoryName = element.metadata.name;
-      if (isCorruptedBackupName(memoryName)) {
-        const originalName = extractOriginalName(memoryName);
-        logger.warn(
-          `[MemoryManager] Issue #39: Detected corrupted backup name '${memoryName}', ` +
-          `auto-repairing to '${originalName}'`
-        );
-        element.metadata.name = originalName;
+    // Issue #39: Auto-repair corrupted backup names before saving
+    const memoryName = element.metadata.name;
+    if (isCorruptedBackupName(memoryName)) {
+      const originalName = extractOriginalName(memoryName);
+      logger.warn(
+        `[MemoryManager] Issue #39: Detected corrupted backup name '${memoryName}', ` +
+        `auto-repairing to '${originalName}'`
+      );
+      element.metadata.name = originalName;
 
-        SecurityMonitor.logSecurityEvent({
-          type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
-          severity: 'MEDIUM',
-          source: 'MemoryManager.save',
-          details: `Issue #39: Auto-repaired corrupted backup name: '${memoryName}' -> '${originalName}'`
-        });
-      }
-
-      // Validate element
-      const validation = element.validate();
-      if (!validation.valid) {
-        throw new Error(`Invalid memory: ${validation.errors?.map(e => e.message).join(', ')}`);
-      }
-
-      // Calculate content hash for deduplication
-      const contentHash = this.calculateContentHash(element);
-      const existingPath = this.contentHashIndex.get(contentHash);
-
-      if (existingPath) {
-        // Log duplicate detection
-        SecurityMonitor.logSecurityEvent({
-          type: 'MEMORY_DUPLICATE_DETECTED',
-          severity: 'LOW',
-          source: 'MemoryManager.save',
-          details: `Duplicate content detected. Existing: ${existingPath}`
-        });
-      }
-
-      // Detect memory type from metadata or default to USER
-      const memoryMeta = element.metadata as MemoryMetadata;
-      const memoryType = memoryMeta.memoryType || MemoryType.USER;
-
-      // Save path precedence:
-      // 1) explicit filePath argument
-      // 2) existing persisted path on the element (existingFilePath)
-      // 3) newly generated date/type-based path for first-time saves
-      // Keeping #2 ahead of #3 prevents loaded memories from being copied into a new
-      // date folder on each save (Issue #699).
-      const existingFilePath = element.getFilePath();
-      const fullPath = filePath
-        ? await this.validateAndResolvePath(filePath)
-        : existingFilePath
-          ? await this.validateAndResolvePath(existingFilePath)
-          : await this.generateMemoryPath(element, memoryType);
-
-      // Ensure parent directory exists
-      await this.fileOperations.createDirectory(path.dirname(fullPath));
-
-      const yamlContent = await this.serializeElement(element);
-
-      // Fix #916/#918: Size enforcement on Memory's custom save path
-      // (BaseElementManager.save() has this but Memory overrides it entirely)
-      if (yamlContent.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
-        SecurityMonitor.logSecurityEvent({
-          type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
-          severity: 'HIGH',
-          source: 'MemoryManager.save.sizeEnforcement',
-          details: `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
-          metadata: { contentLength: yamlContent.length, limit: SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES }
-        });
-        throw new Error(
-          `Memory exceeds maximum file size (${yamlContent.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
-        );
-      }
-
-      // Fix #908/#918: YAML bomb detection on Memory's custom save path
-      const validationStart = Date.now();
-      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
-        if (!ContentValidator.validateYamlContent(yamlContent)) {
-          SecurityMonitor.logSecurityEvent({
-            type: 'YAML_INJECTION_ATTEMPT',
-            severity: 'CRITICAL',
-            source: 'MemoryManager.save.yamlBombDetection',
-            details: 'Serialized memory contains malicious YAML patterns — write blocked',
-            metadata: { contentLength: yamlContent.length }
-          });
-          throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
-        }
-      }
-      const validationMs = Date.now() - validationStart;
-      if (validationMs > 50) {
-        logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
-      }
-
-      const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
-      const gatekeeperErrors = [
-        ...getGatekeeperAuthoringErrors(parsedYaml),
-        ...getGatekeeperAuthoringErrors(
-          parsedYaml.metadata && typeof parsedYaml.metadata === 'object' && !Array.isArray(parsedYaml.metadata)
-            ? parsedYaml.metadata as Record<string, unknown>
-            : undefined
-        ),
-      ];
-      if (gatekeeperErrors.length > 0) {
-        throw new Error(
-          `Invalid gatekeeper policy in serialized memory YAML: ${[...new Set(gatekeeperErrors)].join('; ')}`
-        );
-      }
-
-      // CRITICAL FIX: Use FileOperationsService for atomic file write
-      // Previously: await fs.writeFile(fullPath, yamlContent, 'utf-8');
-      // Now: Uses FileOperationsService which wraps FileLockManager
-      await this.fileOperations.writeFile(fullPath, yamlContent, { encoding: 'utf-8' });
-
-      // FIX #1320: Set file path on memory after successful save
-      // Normalize to forward slashes so paths are consistent across platforms
-      // (path.relative() returns backslashes on Windows).
-      const relativePath = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-      element.setFilePath(relativePath);
-
-      // Cache via base class LRU cache
-      this.cacheElement(element, relativePath);
-
-      // Phase 2: Notify storage layer of save
-      const relPath = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-      await this.storageLayer.notifySaved(relPath, fullPath);
-
-      // Update bounded content hash index
-      this.contentHashIndex.set(contentHash, fullPath);
-      this.contentHashByPath.set(fullPath, contentHash);
-
-      // Log successful save
-      const stats = element.getStats();
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
+        severity: 'MEDIUM',
+        source: 'MemoryManager.save',
+        details: `Issue #39: Auto-repaired corrupted backup name: '${memoryName}' -> '${originalName}'`
+      });
+    }
+
+    // Validate element structure before save
+    const validation = element.validate();
+    if (!validation.valid) {
+      throw new Error(`Invalid memory: ${validation.errors?.map(e => e.message).join(', ')}`);
+    }
+
+    // Deduplication telemetry: emit MEMORY_DUPLICATE_DETECTED if this element's
+    // content hash matches a previously saved memory (informational — does not block).
+    const contentHash = this.calculateContentHash(element);
+    const existingIndexKey = this.contentHashIndex.get(contentHash);
+    if (existingIndexKey) {
+      SecurityMonitor.logSecurityEvent({
+        type: MEMORY_SECURITY_EVENTS.MEMORY_DUPLICATE_DETECTED,
         severity: 'LOW',
         source: 'MemoryManager.save',
-        details: `Saved memory to ${path.basename(fullPath)} with ${stats.totalEntries} entries`
+        details: `Duplicate content detected. Existing: ${existingIndexKey}`,
       });
+    }
 
-    } catch (error) {
+    // Resolve the target file path using memory-specific precedence:
+    // 1) explicit filePath argument
+    // 2) existing persisted path on the element
+    // 3) newly generated date/type-based path for first-time saves
+    // Keeping #2 ahead of #3 prevents loaded memories from being copied into a new
+    // date folder on each save (Issue #699).
+    const resolvedRelativePath = await this.resolveMemorySavePath(element, filePath);
+
+    // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
+    // Validation: our validateSerializedContent override handles memory-specific checks
+    // (size enforcement, YAML bomb detection, gatekeeper policies for pure YAML).
+    // Serialization: our serializeElement override handles memory-specific YAML structure.
+    // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
+    // from its transaction rollback). No try/catch wrapper here — that would
+    // double-emit alongside base's element:save:error event.
+    await super.save(element, resolvedRelativePath);
+  }
+
+  /**
+   * Emit MEMORY_SAVE_FAILED when the base class's save transaction rolls back.
+   * Base handles the structured element:save:error event already; this is the
+   * memory-specific SecurityMonitor audit entry preserved from pre-refactor.
+   */
+  protected override onSaveError(element: Memory, _filePath: string, error: unknown): void {
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
+      severity: 'HIGH',
+      source: 'MemoryManager.onSaveError',
+      details: `Failed to save memory '${element.metadata.name}': ${error instanceof Error ? error.message : String(error)}`,
+    });
+  }
+
+  /**
+   * Resolve the target save path for a memory element.
+   * Returns a relative path within memoriesDir suitable for super.save().
+   */
+  private async resolveMemorySavePath(element: Memory, filePath?: string): Promise<string> {
+    // DB mode: the storage layer is indexed by UUID, not filesystem path.
+    // Pass UUIDs (or the element's persisted UUID) straight through without
+    // running them through validateAndResolvePath — that helper enforces the
+    // `.yaml` extension and fails for UUIDs, which would silently break save.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      if (filePath) return filePath;
+      const existingFilePath = element.getFilePath();
+      if (existingFilePath) return existingFilePath;
+      // First-time save in DB mode — the storage layer doesn't need a path;
+      // name is the logical identifier and will be used to upsert by
+      // (user_id, element_type, name). Return the element name as-is.
+      return element.metadata.name;
+    }
+
+    if (filePath) {
+      // Explicit path provided — validate and convert to relative
+      const fullPath = await this.validateAndResolvePath(filePath);
+      return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+    }
+
+    const existingFilePath = element.getFilePath();
+    if (existingFilePath) {
+      // Existing persisted path — validate and convert to relative
+      const fullPath = await this.validateAndResolvePath(existingFilePath);
+      return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+    }
+
+    // First-time save — generate a new date/type-based path
+    const memoryMeta = element.metadata as MemoryMetadata;
+    const memoryType = memoryMeta.memoryType || MemoryType.USER;
+    const fullPath = await this.generateMemoryPath(element, memoryType);
+    return path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+  }
+
+  /**
+   * Memory-specific content validation.
+   * Memories are pure YAML (no frontmatter delimiters), so they need different
+   * validation than frontmatter-based elements. The base class validateSerializedContent
+   * handles frontmatter elements; this override handles pure YAML memories.
+   *
+   * Checks: size enforcement (Fix #916/#918), YAML bomb detection (Fix #908/#918),
+   * and gatekeeper policy validation.
+   */
+  protected override validateSerializedContent(content: string): void {
+    // Size enforcement (Fix #916/#918)
+    if (content.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
-        source: 'MemoryManager.save',
-        details: `Failed to save memory to ${filePath}: ${error}`
+        source: 'MemoryManager.validateSerializedContent',
+        details: `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
       });
-      throw new Error(`Failed to save memory: ${error}`);
+      throw new Error(
+        `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
+      );
     }
+
+    // YAML bomb detection (Fix #908/#918)
+    if (content.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
+      if (!ContentValidator.validateYamlContent(content)) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_INJECTION_ATTEMPT',
+          severity: 'CRITICAL',
+          source: 'MemoryManager.validateSerializedContent',
+          details: 'Serialized memory contains malicious YAML patterns — write blocked',
+        });
+        throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
+      }
+    }
+
+    // Gatekeeper policy validation (pure YAML structure — root + nested metadata)
+    const parsedYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
+    const gatekeeperErrors = [
+      ...getGatekeeperAuthoringErrors(parsedYaml),
+      ...getGatekeeperAuthoringErrors(
+        parsedYaml.metadata && typeof parsedYaml.metadata === 'object' && !Array.isArray(parsedYaml.metadata)
+          ? parsedYaml.metadata as Record<string, unknown>
+          : undefined
+      ),
+    ];
+    if (gatekeeperErrors.length > 0) {
+      throw new Error(
+        `Invalid gatekeeper policy in serialized memory YAML: ${[...new Set(gatekeeperErrors)].join('; ')}`
+      );
+    }
+  }
+
+  /**
+   * Post-save hook: set the persisted file path and update content hash tracking.
+   * In DB mode, filePath is the element UUID. In file mode, it's the relative path.
+   */
+  protected override async afterSave(element: Memory, filePath: string): Promise<void> {
+    // Set the persisted file path on the element (FIX #1320)
+    element.setFilePath(filePath);
+
+    // Update content hash index for deduplication tracking.
+    // In DB mode, filePath is a UUID — use it directly as the key.
+    // In file mode, resolve to an absolute path so lookups match validateAndResolvePath output.
+    const contentHash = this.calculateContentHash(element);
+    const indexKey = isWritableStorageLayer(this.storageLayer)
+      ? filePath
+      : path.join(this.memoriesDir, filePath);
+    this.contentHashIndex.set(contentHash, indexKey);
+    this.contentHashByPath.set(indexKey, contentHash);
+
+    // Audit event: successful memory save (with entry count for observability)
+    const stats = element.getStats();
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_SAVED,
+      severity: 'LOW',
+      source: 'MemoryManager.afterSave',
+      details: `Saved memory '${element.metadata.name}' with ${stats.totalEntries} entries`,
+    });
+  }
+
+  /**
+   * Memory-specific post-delete hook.
+   *
+   * Emits MEMORY_DELETED to preserve the pre-refactor audit trail — the base
+   * class already emits the generic ELEMENT_DELETED (ATTEMPT) at the start of
+   * delete and `element:delete:success` via event dispatcher on commit, but
+   * external SIEM consumers filter on the memory-specific event type.
+   */
+  protected override async afterDelete(filePath: string): Promise<void> {
+    SecurityMonitor.logSecurityEvent({
+      type: MEMORY_SECURITY_EVENTS.MEMORY_DELETED,
+      severity: 'MEDIUM',
+      source: 'MemoryManager.afterDelete',
+      details: `Deleted memory: ${filePath}`,
+    });
   }
   /**
    * Handle memory load failure
@@ -730,6 +804,22 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
   override async list(): Promise<Memory[]> {
+    // Database mode: delegate to base class which uses listFromDatabase().
+    // Base class list → scan → listSummaries → load (with our parseContent override).
+    if (isWritableStorageLayer(this.storageLayer)) {
+      const memories = await super.list();
+      // Apply activation status
+      for (const memory of memories) {
+        if (this.getActivationSet().has(memory.metadata.name)) {
+          await memory.activate();
+        }
+      }
+      return memories;
+    }
+
+    // File mode: custom multi-directory listing with deduplication.
+    // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
+    // only does flat directory listing which misses the subdirectory structure.
     const failedLoads: Array<{ file: string; error: string }> = [];
 
     try {
@@ -1490,53 +1580,56 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   override async delete(filePath: string): Promise<void> {
     try {
-      const fullPath = await this.validateAndResolvePath(filePath);
-
-      // Check if file exists
-      if (!await this.fileOperations.exists(fullPath)) {
-        // File doesn't exist, not an error for delete operation
-        return;
+      // Resolve to a relative path that super.delete() can handle.
+      // In DB mode, filePath may be a name or UUID — passed through as-is.
+      // In file mode, resolve via validateAndResolvePath to find the actual file.
+      let resolvedRelative: string;
+      if (isWritableStorageLayer(this.storageLayer)) {
+        resolvedRelative = filePath;
+      } else {
+        try {
+          const fullPath = await this.validateAndResolvePath(filePath);
+          resolvedRelative = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+          throw err;
+        }
       }
 
-      // Delete the file
-      await this.fileOperations.deleteFile(fullPath, ElementType.MEMORY, {
-        source: 'MemoryManager.delete'
-      });
+      // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
+      // afterDelete() runs inside that transaction and emits MEMORY_DELETED.
+      await super.delete(resolvedRelative);
 
-      // Remove from caches
-      const relativePath = path.relative(this.memoriesDir, fullPath);
-      this.uncacheByPath(relativePath);
-
-      // Phase 2: Notify storage layer of deletion
-      this.storageLayer.notifyDeleted(relativePath);
-
-      // Phase 2: Use reverse map for O(1) hash cleanup
-      const hash = this.contentHashByPath.get(fullPath);
+      // Memory-specific cleanup: content hash index.
+      // Use the same key shape that afterSave used (UUID in DB mode, absolute path in file mode).
+      // This runs AFTER the transaction commits so the hash map only clears on
+      // a successful delete (matches pre-refactor behavior).
+      const indexKey = isWritableStorageLayer(this.storageLayer)
+        ? resolvedRelative
+        : path.join(this.memoriesDir, resolvedRelative);
+      const hash = this.contentHashByPath.get(indexKey);
       if (hash) {
         this.contentHashIndex.delete(hash);
-        this.contentHashByPath.delete(fullPath);
+        this.contentHashByPath.delete(indexKey);
       }
-
-      SecurityMonitor.logSecurityEvent({
-        type: MEMORY_SECURITY_EVENTS.MEMORY_DELETED,
-        severity: 'MEDIUM',
-        source: 'MemoryManager.delete',
-        details: `Deleted memory file: ${path.basename(fullPath)}`
-      });
-
     } catch (error) {
-      if ((error as any).code === 'ENOENT') {
-        // File doesn't exist, not an error for delete operation
-        return;
-      }
+      // Preserve idempotent delete semantics: ENOENT is not an error
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw error;
     }
   }
   
   /**
-   * Check if a memory file exists
+   * Check if a memory exists.
+   *
+   * DB mode: delegate to base, which consults the storage-layer name index.
+   * File mode: use memory-specific multi-directory path resolver (system/, adapters/,
+   * date folders) before the disk existence check.
    */
   override async exists(filePath: string): Promise<boolean> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.exists(filePath);
+    }
     try {
       const fullPath = await this.validateAndResolvePath(filePath);
       return await this.fileOperations.exists(fullPath);

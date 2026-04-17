@@ -29,13 +29,21 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
 /**
+ * Validate that a value is a UUID v4.
+ * Used by storage layers and stores that receive userId from the DI container.
+ */
+export function validateUserId(userId: string): void {
+  if (!UUID_PATTERN.test(userId)) {
+    throw new Error(`[db-persistence-utils] Invalid userId — expected UUID v4, got '${userId.slice(0, 40)}'`);
+  }
+}
+
+/**
  * Validate userId and sessionId for database store construction.
  * Throws on invalid input to fail early rather than producing confusing DB errors.
  */
 export function validateDbStoreParams(userId: string, sessionId: string): void {
-  if (!UUID_PATTERN.test(userId)) {
-    throw new Error(`[db-persistence-utils] Invalid userId — expected UUID v4, got '${userId.slice(0, 40)}'`);
-  }
+  validateUserId(userId);
   if (!SESSION_ID_PATTERN.test(sessionId)) {
     throw new Error(`[db-persistence-utils] Invalid sessionId — must match [a-zA-Z][a-zA-Z0-9_-]{0,63}, got '${sessionId.slice(0, 40)}'`);
   }

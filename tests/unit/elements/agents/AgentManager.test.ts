@@ -64,8 +64,7 @@ describe('AgentManager', () => {
     container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
     container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
     
-    // Mock FileOperationsService
-    const mockFileOperations = {
+    const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(false),
       readFile: jest.fn().mockResolvedValue(''),
@@ -76,6 +75,9 @@ describe('AgentManager', () => {
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
     };
+    // BaseElementManager.load uses readElementFile. Wire dynamically so tests
+    // that reassign readFile via mockResolvedValue still flow through.
+    mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
     container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -135,7 +137,7 @@ describe('AgentManager', () => {
       expect(fileOperationsService.createFileExclusive).toHaveBeenCalledWith(
         expect.stringContaining('test-agent.md'),
         expect.any(String),
-        expect.objectContaining({ source: 'AgentManager.create' })
+        expect.objectContaining({ source: expect.stringContaining('.save') })
       );
     });
 

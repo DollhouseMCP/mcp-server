@@ -21,18 +21,21 @@ import type { DatabaseInstance } from './connection.js';
  * Used for background tasks, migrations, session reaping, and
  * startup operations that need to access data across all users.
  *
- * The caller must have a database role that bypasses RLS
- * (e.g., the migration user or superuser). If the application
- * pool role does not have BYPASSRLS, queries inside this context
- * will return empty results rather than failing visibly.
+ * The caller MUST use a database role that bypasses RLS (e.g. the
+ * superuser role used for migrations). If the caller uses the app
+ * role (NOBYPASSRLS), queries against RLS-enabled tables will throw
+ * `invalid_text_representation` when the empty-string context is
+ * cast to uuid — the policy expression fails visibly, which is
+ * preferable to silent data loss. Do not assume silent fallback.
  */
 export async function withSystemContext<T>(
   db: DatabaseInstance,
   fn: (tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0]) => Promise<T>,
 ): Promise<T> {
   return db.transaction(async (tx) => {
-    // Reset any previously set user context
-    await tx.execute(sql`RESET app.current_user_id`);
+    // Reset any previously set user context.
+    // set_config with empty string + is_local=true clears the setting for this transaction.
+    await tx.execute(sql`SELECT set_config('app.current_user_id', '', true)`);
     return fn(tx);
   });
 }

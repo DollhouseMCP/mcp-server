@@ -93,6 +93,8 @@ import { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js
 import { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
+import { bootstrapDatabase } from "../database/bootstrap.js";
+import { createUserIdResolver } from "../database/UserContext.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -253,6 +255,28 @@ export class DollhouseContainer {
     return this.services.has(name);
   }
 
+  /**
+   * Resolve database deps for element managers (Phase 4).
+   *
+   * Returns the DatabaseInstance plus a per-call userId resolver. The resolver
+   * reads from ContextTracker's active session context, so each HTTP request's
+   * scope supplies its own user identity — no singleton, no tenant bleed.
+   *
+   * Returns {} when database mode is inactive, so spreading into deps is a no-op.
+   */
+  private resolveDatabaseDeps(): {
+    databaseInstance?: import('../database/connection.js').DatabaseInstance;
+    getCurrentUserId?: import('../database/UserContext.js').UserIdResolver;
+  } {
+    if (this.hasRegistration('DatabaseInstance')) {
+      return {
+        databaseInstance: this.resolve<import('../database/connection.js').DatabaseInstance>('DatabaseInstance'),
+        getCurrentUserId: this.resolve<import('../database/UserContext.js').UserIdResolver>('UserIdResolver'),
+      };
+    }
+    return {};
+  }
+
   public resolve<T>(name: string): T {
     const service = this.services.get(name);
     if (!service) {
@@ -388,6 +412,7 @@ export class DollhouseContainer {
       fileWatchService: this.resolve('FileWatchService'),
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
+      ...this.resolveDatabaseDeps(),
     }));
     this.register('InitializationService', () => new InitializationService(
       this.resolve('PersonaManager')
@@ -535,6 +560,7 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
+      ...this.resolveDatabaseDeps(),
     }));
     this.register('TemplateManager', () => new TemplateManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -547,6 +573,7 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
+      ...this.resolveDatabaseDeps(),
     }));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
     this.register('AgentManager', () => new AgentManager({
@@ -567,6 +594,7 @@ export class DollhouseContainer {
       elementManagerResolver: (name: string) => this.resolve(name) as import('../elements/agents/AgentManager.js').ResolvedElementManager,
       dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
       verificationStore: this.resolve('ChallengeStore'),
+      ...this.resolveDatabaseDeps(),
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -581,6 +609,7 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
+      ...this.resolveDatabaseDeps(),
     }));
     this.register('EnsembleManager', () => new EnsembleManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -595,6 +624,7 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
+      ...this.resolveDatabaseDeps(),
     }));
     // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
     // to avoid eager resolution during constructor (breaks test containers).
@@ -627,7 +657,13 @@ export class DollhouseContainer {
     this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService')
     ));
-    // Shared stdio session — single source of truth for session identity
+    // Shared stdio session — single source of truth for session identity.
+    // In file-mode and when no DB is bootstrapped, `createStdioSession()` uses
+    // DOLLHOUSE_USER / OS username. When database mode is active,
+    // `preparePortfolio()` re-registers this service with the bootstrapped DB
+    // UUID as userId so SessionContext carries an RLS-valid identity. That
+    // re-registration is the single source of truth for DB mode — do not add
+    // a BootstrappedUserId check here, which would duplicate the mechanism.
     this.register('StdioSession', () => createStdioSession());
     // Issue #1946: Session activation registry — maps sessionId → SessionActivationState
     this.register('SessionActivationRegistry', () => {
@@ -863,6 +899,64 @@ export class DollhouseContainer {
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
   public async preparePortfolio(): Promise<void> {
+    // Phase 4: Bootstrap database connection when storage backend is 'database'.
+    // Must happen before any manager resolution so DatabaseInstance is available.
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      if (!env.DOLLHOUSE_DATABASE_URL) {
+        throw new Error(
+          'DOLLHOUSE_STORAGE_BACKEND=database requires DOLLHOUSE_DATABASE_URL to be set',
+        );
+      }
+      const result = await bootstrapDatabase({
+        connectionUrl: env.DOLLHOUSE_DATABASE_URL,
+        adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
+        poolSize: env.DOLLHOUSE_DATABASE_POOL_SIZE,
+        ssl: env.DOLLHOUSE_DATABASE_SSL,
+      });
+      // Register connection object (has .close() — picked up by dispose() automatically)
+      this.register('DatabaseConnection', () => result.connection);
+      // Register Drizzle instance (resolved by stores and storage layers)
+      this.register('DatabaseInstance', () => result.db);
+
+      // The bootstrapped DB UUID is the identity every session binds to by default.
+      // Per-session scoping is enforced by ContextTracker/AsyncLocalStorage: stdio
+      // sessions and single-tenant HTTP sessions both carry this UUID as their
+      // SessionContext.userId. When multi-tenant auth lands, HTTP sessions
+      // override it at session creation time. Either way, storage layers read the
+      // userId out of the active session context per call, NOT from a singleton.
+      this.register('BootstrappedUserId', () => result.userId);
+
+      // 'CurrentUserId' still exists for legacy per-session constructors
+      // (ActivationStore/ConfirmationStore/ChallengeStore) that are resolved at
+      // startup/session-init time — i.e. OUTSIDE a request scope, where there
+      // is no active ContextTracker session yet. For stdio, this is safe because
+      // there's only one tenant. For HTTP+DB, each HTTP session resolves it
+      // from its own child-container scope at session creation (see
+      // createServerForHttpSession) and the bootstrapped UUID is the default
+      // until per-request auth identity lands.
+      this.register('CurrentUserId', () => result.userId);
+
+      // 'UserIdResolver' is the per-call resolver used by storage layers. It
+      // reads from the active ContextTracker session scope, so each MCP tool
+      // call sees its own session's userId. stdio has one static session, HTTP
+      // has one per connection — the resolver is the same code.
+      this.register('UserIdResolver', () => {
+        const tracker = this.resolve<ContextTracker>('ContextTracker');
+        return createUserIdResolver(tracker);
+      });
+
+      // Re-register StdioSession with the bootstrapped DB UUID. registerServices()
+      // already set up a fallback factory that checks BootstrappedUserId, but by
+      // the time we get here the original factory may have been invoked eagerly
+      // (e.g. during ServerSetup construction) and its result cached. Re-
+      // registering clears the cached instance so the next resolve picks up the
+      // UUID-bearing session. See register() which resets `instance: null`.
+      this.register('StdioSession', () => Object.freeze({
+        ...createStdioSession(),
+        userId: result.userId,
+      }));
+    }
+
     // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)
     try {
       const mm = this.resolve<MemoryManager>('MemoryManager');
@@ -1003,16 +1097,29 @@ export class DollhouseContainer {
    *
    * Called by completeDeferredSetup() in MCP stdio mode, and directly
    * by the --web standalone path which IS the server (#1866).
+   *
+   * Phase 4: this runs OUTSIDE any MCP tool-call's session scope (deferred
+   * post-connect work). Storage layers resolve `this.userId` from the active
+   * ContextTracker session, so without a scope they'd throw. Wrap the whole
+   * deferred batch in the stdio session's context so autoload, seed install,
+   * and activation restore all see a valid user identity in DB mode.
    */
   public async completeSinkSetup(timer?: StartupTimer): Promise<void> {
-    await this.deferredMemoryAutoload(timer);
-    await this.deferredActivationRestore(timer);
-    await this.deferredPolicyExport();
-    await this.deferredLogHooks(timer);
-    await this.deferredMetricsCollectors(timer);
-    await this.deferredDangerZoneInit(timer);
-    await this.deferredPatternEncryption(timer);
-    await this.deferredBackgroundValidator(timer);
+    const tracker = this.resolve<ContextTracker>('ContextTracker');
+    const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+    const context = tracker.createSessionContext('background-task', stdioSession, {
+      source: 'completeSinkSetup',
+    });
+    await tracker.runAsync(context, async () => {
+      await this.deferredMemoryAutoload(timer);
+      await this.deferredActivationRestore(timer);
+      await this.deferredPolicyExport();
+      await this.deferredLogHooks(timer);
+      await this.deferredMetricsCollectors(timer);
+      await this.deferredDangerZoneInit(timer);
+      await this.deferredPatternEncryption(timer);
+      await this.deferredBackgroundValidator(timer);
+    });
   }
 
   /**
@@ -1640,12 +1747,27 @@ export class DollhouseContainer {
     // Register per-session persistence stores.
     // HTTP sessions are ephemeral — ActivationStore.initialize() is intentionally
     // NOT called here (unlike stdio). Activation state starts fresh per connection.
-    child.register('ActivationStore', () =>
-      new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
-    child.register('ConfirmationStore', () =>
-      new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
-    child.register('GatekeeperSession', () =>
-      new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+    //
+    // Phase 4: when DB mode is active, HTTP sessions use the Database* stores
+    // scoped to this session's userId. File* stores are used for file-backed
+    // deployments only.
+    if (this.hasRegistration('DatabaseInstance')) {
+      const db = this.resolve<DatabaseInstance>('DatabaseInstance');
+      const httpUserId = sessionContext.userId;
+      child.register('ActivationStore', () =>
+        new DatabaseActivationStateStore(db, httpUserId, sid));
+      child.register('ConfirmationStore', () =>
+        new DatabaseConfirmationStore(db, httpUserId, sid));
+      child.register('GatekeeperSession', () =>
+        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+    } else {
+      child.register('ActivationStore', () =>
+        new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
+      child.register('ConfirmationStore', () =>
+        new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
+      child.register('GatekeeperSession', () =>
+        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+    }
 
     // Bridge: attach per-session activation store to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');

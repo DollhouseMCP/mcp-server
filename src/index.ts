@@ -947,8 +947,16 @@ async function startStreamableHttpServer(
   // Activate HTTP mode error handling (no process.exit on uncaught exceptions)
   setHttpModeActive(true);
 
+  // Phase 4: when database mode is active, the session's userId must be the
+  // bootstrapped DB UUID so SessionContext carries a RLS-compatible identity.
+  // Multi-tenant auth (Phase 3+) will override this at the session edge with
+  // the authenticated user's UUID per request.
+  const httpSessionUserId = container.hasRegistration('BootstrappedUserId')
+    ? container.resolve<string>('BootstrappedUserId')
+    : undefined;
+
   return createStreamableHttpRuntime(async (transport) => {
-    const sessionContext = createHttpSession();
+    const sessionContext = createHttpSession({ userId: httpSessionUserId });
     const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);
 

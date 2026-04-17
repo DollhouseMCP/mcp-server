@@ -4,12 +4,20 @@
 # Usage:
 #   docker compose -f docker/docker-compose.db.yml up -d
 #
-# Connection string for DollhouseMCP:
-#   DOLLHOUSE_DATABASE_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp
-#   DOLLHOUSE_STORAGE_BACKEND=database
+# Two-role architecture:
+#   dollhouse      — superuser, used for migrations only
+#   dollhouse_app  — application role, RLS enforced, used by the server
+#
+# Connection strings:
+#   Application (server):
+#     DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp
+#     DOLLHOUSE_STORAGE_BACKEND=database
+#
+#   Migrations (admin):
+#     DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp
 #
 # For production, use a managed PostgreSQL instance (RDS, Cloud SQL, etc.)
-# and set DOLLHOUSE_DATABASE_URL to the managed connection string.
+# with a dedicated application role that has NOSUPERUSER NOBYPASSRLS.
 ###############################################################################
 
 services:
@@ -25,6 +33,7 @@ services:
       - "5432:5432"
     volumes:
       - dollhouse-pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init-app-role.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dollhouse -d dollhousemcp"]
       interval: 5s

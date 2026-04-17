@@ -31,7 +31,12 @@ export async function withUserContext<T>(
   fn: (tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0]) => Promise<T>,
 ): Promise<T> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL app.current_user_id = ${userId}`);
+    // set_config(..., is_local=true) is the parameterized equivalent of SET LOCAL.
+    // The sql`` tag parameterizes ${userId} via a prepared-statement bind — it is
+    // NOT sql.raw()/string interpolation. Transaction-local scope means the value
+    // is reset at COMMIT/ROLLBACK, so it cannot leak across pooled connections.
+    // userId is additionally pre-validated as a UUID v4 before reaching this call.
+    await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
     return fn(tx);
   });
 }
@@ -51,7 +56,8 @@ export async function withUserRead<T>(
   fn: (tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0]) => Promise<T>,
 ): Promise<T> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL app.current_user_id = ${userId}`);
+    // Parameterized set_config (see withUserContext for full rationale).
+    await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
     await tx.execute(sql`SET TRANSACTION READ ONLY`);
     return fn(tx);
   });

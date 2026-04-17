@@ -39,7 +39,9 @@ import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
-import type { IStorageLayer } from '../../storage/IStorageLayer.js';
+import { DatabaseStorageLayer } from '../../storage/DatabaseStorageLayer.js';
+import { AbstractDatabaseStorageLayer } from '../../storage/AbstractDatabaseStorageLayer.js';
+import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import {
@@ -69,6 +71,15 @@ export interface BaseElementManagerOptions {
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
+  /** Phase 4: Database instance for database-backed storage */
+  databaseInstance?: import('../../database/connection.js').DatabaseInstance;
+  /**
+   * Phase 4: Per-call resolver returning the current user's UUID. In DB mode,
+   * storage layers invoke this on every query. Resolves from ContextTracker's
+   * session context, so in HTTP transport each request's scope supplies its
+   * own userId — no stale singleton. Required when `databaseInstance` is set.
+   */
+  getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
 }
 
 /**
@@ -91,6 +102,13 @@ export interface ElementManagerDeps {
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
+  /** Phase 4: Database instance for database-backed storage */
+  databaseInstance?: import('../../database/connection.js').DatabaseInstance;
+  /**
+   * Phase 4: Per-call user UUID resolver. See BaseElementManagerOptions
+   * for details. Required when `databaseInstance` is set.
+   */
+  getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
 }
 
 /**
@@ -141,6 +159,13 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected readonly contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   protected readonly activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
+  /** Phase 4: Database instance for database-backed storage */
+  protected readonly databaseInstance?: import('../../database/connection.js').DatabaseInstance;
+  /**
+   * Phase 4: Per-call user UUID resolver — reads from the active session
+   * context every time. Undefined in file-backed mode.
+   */
+  protected readonly getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
 
   /** Map plural ElementType enum values to singular ContentValidator context.
    *  Partial because not all element types have a content context (e.g., ensembles). */
@@ -179,11 +204,38 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this.suppressedLoadPaths.has(filePath);
   }
 
-  protected afterLoad?(element: T, filePath: string): Promise<void>;
+  protected afterLoad?(
+    element: T,
+    filePath: string,
+    parsedData?: { data: Record<string, unknown>; content: string },
+  ): Promise<void>;
   protected beforeSave?(element: T, filePath: string): Promise<void>;
   protected afterSave?(element: T, filePath: string): Promise<void>;
+  /**
+   * Post-delete hook. Called AFTER the underlying persistence (disk or DB)
+   * has successfully removed the element, but BEFORE the ElementTransactionScope
+   * commit callback emits `element:delete:success`.
+   *
+   * Note: in DB mode the storage layer's own transaction has already committed
+   * by the time this hook runs — a throw here CANNOT undo the DB delete, it
+   * only triggers the scope's rollback callbacks (which emit an error event).
+   * In file mode the unlink is similarly already done. Use this hook for
+   * post-persistence work like emitting element-type-specific audit events
+   * (e.g. `MEMORY_DELETED`) or clearing sidecar caches — not for anything that
+   * assumes the underlying delete can be undone.
+   */
+  protected afterDelete?(filePath: string): Promise<void>;
   protected findByIdentifier?(identifier: string): Promise<T | undefined>;
   protected canDelete?(element: T): Promise<{ allowed: boolean; reason?: string }>;
+  /**
+   * Error hooks — called from the base-class load/save/delete catch blocks
+   * before the exception is re-thrown. Subclasses override these to emit
+   * element-type-specific audit events WITHOUT having to wrap the entire
+   * super-call in their own try/catch (which double-emits the base's
+   * element:*:error event). The hook itself must not throw.
+   */
+  protected onLoadError?(filePath: string, error: unknown): void;
+  protected onSaveError?(element: T, filePath: string, error: unknown): void;
 
   /**
    * Create a backup before overwriting an existing file.
@@ -283,6 +335,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.backupService = options.backupService;
     this.contextTracker = options.contextTracker;
     this.activationRegistry = options.activationRegistry;
+    this.databaseInstance = options.databaseInstance;
+    this.getCurrentUserId = options.getCurrentUserId;
 
     // Get the specialized validator for this element type
     this.validator = validationRegistry.getValidator(elementType);
@@ -346,15 +400,49 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
   /**
    * Factory method for creating the storage layer.
-   * Default returns ElementStorageLayer for .md elements.
-   * Subclasses (e.g. MemoryManager) can override to return a different implementation.
+   * Returns DatabaseStorageLayer when database deps are available,
+   * otherwise ElementStorageLayer for file-backed .md elements.
+   * Subclasses (e.g. MemoryManager) can override for type-specific behavior.
    */
   protected createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
+    if (this.databaseInstance && this.getCurrentUserId) {
+      return new DatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
+    }
     return new ElementStorageLayer(fileOperationsService, {
       elementDir: this.elementDir,
       fileExtension: this.getFileExtension(),
       scanCooldownMs: getValidatedScanCooldown(),
     });
+  }
+
+  /**
+   * Extract the element name from a relative file path.
+   * Strips directory prefix and file extension (e.g., "my-skill.md" → "my-skill").
+   * In database mode, the relativePath may already be a UUID — returned as-is.
+   */
+  protected extractNameFromPath(relativePath: string): string {
+    return path.basename(relativePath, this.getFileExtension());
+  }
+
+  /**
+   * Parse raw file content into structured data + body content.
+   *
+   * Default: SecureYamlParser.safeMatter() for markdown with YAML frontmatter.
+   * Subclasses override for different formats (e.g., MemoryManager for pure YAML).
+   *
+   * This is the INPUT counterpart to serializeElement() (OUTPUT) and
+   * validateSerializedContent() (VALIDATION) — each element type can own
+   * its parsing, serialization, and validation.
+   *
+   * @param content Raw file/record content
+   * @returns Parsed data (YAML frontmatter or full YAML) and body content
+   */
+  protected parseContent(content: string): { data: Record<string, unknown>; content: string } {
+    // Issue #810: Pass element type as contentContext so SecureYamlParser exempts
+    // legitimate patterns (e.g., <script> section tags in templates)
+    const contentContext = BaseElementManager.ELEMENT_TYPE_TO_CONTEXT[this.elementType];
+    const parsed = SecureYamlParser.safeMatter(content, undefined, { contentContext });
+    return { data: parsed.data as Record<string, unknown>, content: parsed.content };
   }
 
   /**
@@ -391,16 +479,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     );
 
     try {
-      const content = await this.fileOperations.readElementFile(absolutePath, this.elementType, {
-        source: `${this.constructor.name}.load`
-      });
-      // Issue #810: Pass element type as contentContext so SecureYamlParser exempts
-      // legitimate patterns (e.g., <script> section tags in templates)
-      const contentContext = BaseElementManager.ELEMENT_TYPE_TO_CONTEXT[this.elementType];
-      if (!contentContext) {
-        logger.debug(`[${this.constructor.name}] No contentContext mapping for elementType '${this.elementType}' — parsing without context exemptions. Available: ${Object.keys(BaseElementManager.ELEMENT_TYPE_TO_CONTEXT).join(', ')}`);
-      }
-      const parsed = SecureYamlParser.safeMatter(content, undefined, { contentContext });
+      // Phase 4: Database mode reads content from DB; file mode reads from disk
+      const content = isWritableStorageLayer(this.storageLayer)
+        ? await this.storageLayer.readContent(relativePath)
+        : await this.fileOperations.readElementFile(absolutePath, this.elementType, {
+            source: `${this.constructor.name}.load`
+          });
+      // Parse content via the template method (overridable per element type).
+      // Default: SecureYamlParser.safeMatter() for markdown+frontmatter.
+      // MemoryManager overrides for pure YAML parsing.
+      const parsed = this.parseContent(content);
 
       // Issue #695: Fill in missing metadata fields with sensible defaults
       // before parseMetadata() so older elements with sparse frontmatter
@@ -411,7 +499,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       const element = this.createElement(metadata, parsed.content);
 
       if (this.afterLoad) {
-        await this.afterLoad(element, relativePath);
+        await this.afterLoad(element, relativePath, parsed);
       }
 
       this.cacheElement(element, relativePath);
@@ -458,6 +546,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           this.createEventPayload({ correlationId, filePath: relativePath, error })
         );
         logger.error(`Failed to load ${this.getElementLabel()} from ${absolutePath}:`, error);
+        // Give subclasses a chance to emit element-type-specific audit events
+        // (e.g. MEMORY_LOAD_FAILED). Runs once per distinct error (not on
+        // repeats) so downstream SIEM consumers don't get flooded.
+        if (this.onLoadError) {
+          try {
+            this.onLoadError(relativePath, error);
+          } catch (hookErr) {
+            logger.warn(`onLoadError hook threw (swallowed): ${String(hookErr)}`);
+          }
+        }
       }
       throw error;
     }
@@ -471,7 +569,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Mutates `data` in place. Logs a warning for each defaulted field so
    * operators know which files need updating.
    */
-  private migrateMetadataDefaults(data: Record<string, unknown>, filePath: string): void {
+  protected migrateMetadataDefaults(data: Record<string, unknown>, filePath: string): void {
     const migrated: string[] = [];
 
     // Infer type from this manager's element type
@@ -543,7 +641,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * - Path validation to prevent traversal attacks
    * - Security event logging
    */
-  async save(element: T, filePath: string): Promise<void> {
+  async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
     const { relativePath, absolutePath } = await this.normalizeAndValidatePath(filePath);
 
     await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
@@ -568,12 +666,17 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         this.createEventPayload({ correlationId, filePath: relativePath, element })
       );
 
+      const isDbMode = isWritableStorageLayer(this.storageLayer);
+      let savedRelativePath = relativePath;
+
       transaction.addCommit(async () => {
-        this.cacheElement(element, relativePath);
-        await this.storageLayer.notifySaved(relativePath, absolutePath);
+        this.cacheElement(element, savedRelativePath);
+        if (!isDbMode) {
+          await this.storageLayer.notifySaved(savedRelativePath, absolutePath);
+        }
         this.eventDispatcher.emitAsync(
           'element:save:success',
-          this.createEventPayload({ correlationId, filePath: relativePath, element })
+          this.createEventPayload({ correlationId, filePath: savedRelativePath, element })
         );
       });
 
@@ -582,15 +685,22 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           'element:save:error',
           this.createEventPayload({ correlationId, filePath: relativePath, element, error })
         );
+        // Give subclasses a chance to emit element-type-specific audit events
+        // (e.g. MEMORY_SAVE_FAILED). Swallow throws from the hook so rollback
+        // cleanup can continue.
+        if (this.onSaveError) {
+          try {
+            this.onSaveError(element, relativePath, error);
+          } catch (hookErr) {
+            logger.warn(`onSaveError hook threw (swallowed): ${String(hookErr)}`);
+          }
+        }
       });
 
       await transaction.run(async () => {
         if (this.beforeSave) {
           await this.beforeSave(element, relativePath);
         }
-
-        await this.fileOperations.createDirectory(path.dirname(absolutePath));
-        await this.createBackupBeforeSave(absolutePath);
 
         const content = await this.serializeElement(element);
 
@@ -599,10 +709,46 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         // must apply the same checks to prevent saving content that would fail to load.
         this.validateSerializedContent(content);
 
-        await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+        if (isDbMode) {
+          // Database mode: storage layer IS the persistence mechanism.
+          // Pass the exclusive flag through so create-or-fail atomicity matches file-mode
+          // createFileExclusive semantics (TOCTOU protection on element creation).
+          // elementLabel carries the singular capitalized name ("Agent", "Memory") so
+          // DB-mode "already exists" errors match the file-mode format.
+          const elementId = await (this.storageLayer as IWritableStorageLayer).writeContent(
+            this.elementType,
+            element.metadata.name,
+            content,
+            {
+              author: element.metadata.author ?? '',
+              version: element.metadata.version ?? '1.0.0',
+              description: element.metadata.description ?? '',
+              tags: element.metadata.tags ?? [],
+            },
+            {
+              exclusive: options?.exclusive ?? false,
+              elementLabel: this.getElementLabelCapitalized(),
+            },
+          );
+          savedRelativePath = elementId;
+        } else if (options?.exclusive) {
+          // File mode, exclusive create: atomic create-or-fail (prevents TOCTOU on new elements)
+          await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          const created = await this.fileOperations.createFileExclusive(absolutePath, content, {
+            source: `${this.constructor.name}.save`,
+          });
+          if (!created) {
+            throw new Error(`${this.getElementLabelCapitalized()} '${element.metadata.name}' already exists`);
+          }
+        } else {
+          // File mode, normal write: overwrite existing (for updates)
+          await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          await this.createBackupBeforeSave(absolutePath);
+          await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+        }
 
         if (this.afterSave) {
-          await this.afterSave(element, relativePath);
+          await this.afterSave(element, savedRelativePath);
         }
       });
 
@@ -616,7 +762,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * to ensure write → read symmetry. Content that fails this check would also
    * fail to load, so rejecting it on write prevents permanently broken elements.
    */
-  private validateSerializedContent(content: string): void {
+  protected validateSerializedContent(content: string): void {
     const validateGatekeeperMetadata = (record: Record<string, unknown> | undefined, sourceLabel: string) => {
       const errors = getGatekeeperAuthoringErrors(record);
       if (errors.length > 0) {
@@ -672,13 +818,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           'critical'
         );
       }
-    } else if (this.elementType === ElementType.MEMORY) {
-      const rawYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
-      validateGatekeeperMetadata(rawYaml, 'YAML root');
-      if (rawYaml.metadata && typeof rawYaml.metadata === 'object' && !Array.isArray(rawYaml.metadata)) {
-        validateGatekeeperMetadata(rawYaml.metadata as Record<string, unknown>, 'metadata');
-      }
     }
+    // Pure-YAML elements (memories) override this method entirely; no fallback branch.
   }
 
   /**
@@ -687,7 +828,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    */
   async list(): Promise<T[]> {
     try {
-      // Ensure directory exists
+      // Phase 4: Database mode — list directly from storage layer
+      if (isWritableStorageLayer(this.storageLayer)) {
+        return this.listFromDatabase();
+      }
+
+      // File mode: ensure directory exists
       await this.fileOperations.createDirectory(this.elementDir);
 
       // Scan for changes — populates index for listSummaries()/findByName()
@@ -739,11 +885,45 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Database-mode list: query summaries from storage layer, then load each element.
+   * The storage layer returns element UUIDs as filePaths.
+   */
+  private async listFromDatabase(): Promise<T[]> {
+    try {
+      const diff = await this.storageLayer.scan();
+      // Evict modified/removed entries from cache
+      for (const id of [...diff.modified, ...diff.removed]) {
+        this.elements.delete(id);
+        this.filePathToId.delete(id);
+      }
+
+      const summaries = await this.storageLayer.listSummaries();
+      const elements = await Promise.all(
+        summaries.map(async (summary) => {
+          try {
+            const cached = this.elements.get(summary.filePath);
+            if (cached) return cached;
+            return await this.load(summary.filePath);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      return elements.filter((e): e is Awaited<T> => e !== null) as T[];
+    } catch (error) {
+      logger.error(`Failed to list ${this.elementType}s from database:`, error);
+      return [];
+    }
+  }
+
+  /**
    * List lightweight metadata summaries without loading full elements.
    * Useful when only names/descriptions/tags are needed.
    */
   async listSummaries(): Promise<ElementIndexEntry[]> {
-    await this.fileOperations.createDirectory(this.elementDir);
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      await this.fileOperations.createDirectory(this.elementDir);
+    }
     return this.storageLayer.listSummaries();
   }
 
@@ -924,9 +1104,13 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         this.createEventPayload({ correlationId, filePath: relativePath })
       );
 
+      const isDbMode = isWritableStorageLayer(this.storageLayer);
+
       transaction.addCommit(async () => {
         this.uncacheByPath(relativePath);
-        this.storageLayer.notifyDeleted(relativePath);
+        if (!isDbMode) {
+          this.storageLayer.notifyDeleted(relativePath);
+        }
         this.eventDispatcher.emitAsync(
           'element:delete:success',
           this.createEventPayload({ correlationId, filePath: relativePath })
@@ -942,18 +1126,36 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
       await transaction.run(async () => {
         if (this.canDelete) {
-          const elementForValidation = await this.loadElementSnapshot(absolutePath, relativePath);
+          const elementForValidation = isDbMode
+            ? await this.loadElementSnapshotFromDb(relativePath)
+            : await this.loadElementSnapshot(absolutePath, relativePath);
           const decision = await this.canDelete(elementForValidation);
           if (!decision.allowed) {
             throw new Error(decision.reason ?? `Deletion not permitted for ${this.getElementLabel()}`);
           }
         }
 
-        const movedToBackup = await this.createBackupBeforeDelete(absolutePath);
-        if (!movedToBackup) {
-          await this.fileOperations.deleteFile(absolutePath, this.elementType, {
-            source: `${this.constructor.name}.delete`
-          });
+        if (isDbMode) {
+          // Database mode: resolve element name from storage layer's reverse index
+          const dbLayer = this.storageLayer as AbstractDatabaseStorageLayer;
+          const elementName = dbLayer.getNameById(relativePath)
+            ?? this.extractNameFromPath(relativePath);
+          await (this.storageLayer as IWritableStorageLayer).deleteContent(this.elementType, elementName);
+        } else {
+          // File mode: backup then delete from disk
+          const movedToBackup = await this.createBackupBeforeDelete(absolutePath);
+          if (!movedToBackup) {
+            await this.fileOperations.deleteFile(absolutePath, this.elementType, {
+              source: `${this.constructor.name}.delete`
+            });
+          }
+        }
+
+        // Subclass hook for element-type-specific post-delete work (e.g.
+        // emitting MEMORY_DELETED, clearing sidecar state). Runs inside the
+        // transaction so a throw here rolls back the delete.
+        if (this.afterDelete) {
+          await this.afterDelete(relativePath);
         }
       });
 
@@ -966,6 +1168,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    */
   async exists(filePath: string): Promise<boolean> {
     try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        // Database mode: check if the element exists by name or ID
+        const name = this.extractNameFromPath(filePath);
+        return this.storageLayer.getPathByName(name) !== undefined
+          || this.storageLayer.getPathByName(filePath) !== undefined;
+      }
       const { absolutePath } = await this.normalizeAndValidatePath(filePath);
       return await this.fileOperations.exists(absolutePath);
     } catch {
@@ -1072,6 +1280,25 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const parsed = SecureYamlParser.safeMatter(raw, undefined, {
       contentContext: BaseElementManager.ELEMENT_TYPE_TO_CONTEXT[this.elementType],
     });
+    const metadata = await this.parseMetadata(parsed.data);
+    const element = this.createElement(metadata, parsed.content);
+    this.cacheElement(element, relativePath);
+    return element;
+  }
+
+  /**
+   * Load an element snapshot from the database for validation (e.g., canDelete guard).
+   * Uses readContent from the writable storage layer, then parses like the file path.
+   */
+  private async loadElementSnapshotFromDb(relativePath: string): Promise<T> {
+    const cached = this.elements.get(relativePath);
+    if (cached) return cached;
+
+    const raw = await (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
+    // Use parseContent() template method so subclasses with custom parsing
+    // (e.g. MemoryManager's pure-YAML parser with JSON schema) are honored.
+    const parsed = this.parseContent(raw);
+    this.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.parseMetadata(parsed.data);
     const element = this.createElement(metadata, parsed.content);
     this.cacheElement(element, relativePath);

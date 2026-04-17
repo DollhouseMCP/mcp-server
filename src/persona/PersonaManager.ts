@@ -85,6 +85,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
+        databaseInstance: deps.databaseInstance,
+        getCurrentUserId: deps.getCurrentUserId,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
