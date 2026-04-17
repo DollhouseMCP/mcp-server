@@ -232,13 +232,10 @@
 
   function renderAuthorityMode(data) {
     const card = document.getElementById('perm-authority-card');
-    const hostSelect = document.getElementById('perm-authority-host');
     const saveButton = document.getElementById('perm-authority-save-btn');
     const message = document.getElementById('perm-authority-message');
-    const currentMode = document.getElementById('perm-authority-current-mode');
-    const currentHost = document.getElementById('perm-authority-current-host');
-    const explanation = document.getElementById('perm-authority-explanation');
     const currentHostList = document.getElementById('perm-authority-current-host-list');
+    const selectedHostHeading = document.getElementById('perm-authority-selected-host');
     const reasonInput = document.getElementById('perm-authority-reason');
     const note = document.getElementById('perm-authority-note');
     const authoritativeNote = document.getElementById('perm-authority-authoritative-note');
@@ -246,7 +243,7 @@
     const saveCopy = document.getElementById('perm-authority-save-copy');
     const saveShell = document.getElementById('perm-authority-save-shell');
 
-    if (!card || !hostSelect || !saveButton || !message || !currentMode || !currentHost || !explanation || !currentHostList || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
+    if (!card || !saveButton || !message || !currentHostList || !selectedHostHeading || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
       return;
     }
 
@@ -265,10 +262,6 @@
       authorityUiState.selectedMode = serverMode;
     }
 
-    hostSelect.innerHTML = supportedHosts.map(function (host) {
-      return `<option value="${esc(host)}">${esc(formatAuthorityHost(host))}</option>`;
-    }).join('');
-    hostSelect.value = authorityUiState.selectedHost;
     reasonInput.value = authorityUiState.draftReason;
 
     const authoritativeSupported = AUTHORITY_AUTHORITATIVE_HOSTS.has(authorityUiState.selectedHost);
@@ -279,10 +272,8 @@
     setAuthorityRadioState('perm-authority-mode-shared', desiredMode === 'shared', false);
     setAuthorityRadioState('perm-authority-mode-authoritative', desiredMode === 'authoritative', !authoritativeSupported);
 
-    currentMode.textContent = formatAuthorityMode(serverMode);
-    currentHost.textContent = formatAuthorityHost(authorityUiState.selectedHost);
-    explanation.textContent = buildAuthorityExplanation(serverMode, authoritativeSupported);
     currentHostList.innerHTML = renderAuthorityCurrentHostList(authority, supportedHosts, authorityUiState.selectedHost);
+    selectedHostHeading.textContent = formatAuthorityHost(authorityUiState.selectedHost);
     note.textContent = 'Human-only control. AI can read authority mode but cannot change it through MCP.';
     authoritativeNote.hidden = authoritativeSupported;
     authoritativeNote.textContent = authoritativeSupported
@@ -750,24 +741,13 @@
             <div class="perm-selected-grid">
               <div class="perm-selected-panel">
                 <h4 class="perm-selected-panel-title">Current Permission State</h4>
-                <ul class="perm-pattern-list">
-                  <li class="perm-pattern-item">
-                    <span class="perm-pattern-badge perm-pattern-badge--allow">host</span>
-                    <span class="perm-pattern-text" id="perm-authority-current-host">Claude Code</span>
-                  </li>
-                  <li class="perm-pattern-item">
-                    <span class="perm-pattern-badge perm-pattern-badge--ask">mode</span>
-                    <span class="perm-pattern-text" id="perm-authority-current-mode">Shared Permissioning</span>
-                  </li>
-                </ul>
-                <p class="perm-selected-subtitle" id="perm-authority-explanation"></p>
                 <div class="perm-authority-current-list" id="perm-authority-current-host-list"></div>
               </div>
 
               <div class="perm-selected-panel">
                 <h4 class="perm-selected-panel-title">Change Permission Mode</h4>
-                <label class="perm-selected-subtitle perm-authority-field-label" for="perm-authority-host">Host</label>
-                <select id="perm-authority-host" class="perm-panel-action perm-authority-host-select"></select>
+                <div class="perm-authority-selected-host" id="perm-authority-selected-host">Claude Code</div>
+                <div class="perm-selected-subtitle">Choose how this host should handle permission decisions.</div>
 
                 <div class="perm-authority-options" role="radiogroup" aria-label="Authority mode">
                   <label class="perm-authority-option" id="perm-authority-option-off">
@@ -987,13 +967,21 @@
   }
 
   function attachAuthorityControls() {
-    const hostSelect = document.getElementById('perm-authority-host');
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
     const reasonInput = document.getElementById('perm-authority-reason');
     const saveButton = document.getElementById('perm-authority-save-btn');
 
-    if (hostSelect) {
-      hostSelect.addEventListener('change', function (event) {
-        authorityUiState.selectedHost = event.target.value;
+    if (currentHostList) {
+      currentHostList.addEventListener('click', function (event) {
+        const row = event.target.closest('.perm-authority-current-host[data-host]');
+        if (!row) {
+          return;
+        }
+        const host = row.getAttribute('data-host');
+        if (!host || host === authorityUiState.selectedHost) {
+          return;
+        }
+        authorityUiState.selectedHost = host;
         authorityUiState.feedback = '';
         authorityUiState.feedbackKind = 'info';
         authorityUiState.dirty = false;
@@ -1162,8 +1150,6 @@
     const explicitHosts = Object.keys(authority?.hosts || {});
     const hostIds = Array.from(new Set(explicitHosts.concat(supportedHosts || [])));
     const orderedHosts = hostIds.sort(function (left, right) {
-      if (left === selectedHost) return -1;
-      if (right === selectedHost) return 1;
       return formatAuthorityHost(left).localeCompare(formatAuthorityHost(right));
     });
 
@@ -1176,13 +1162,13 @@
       const meta = AUTHORITY_HOST_META[host] || { shortLabel: formatAuthorityHost(host).slice(0, 2).toUpperCase(), tone: 'generic' };
       const selectedAttr = host === selectedHost ? 'true' : 'false';
       return `
-        <div class="perm-authority-current-host" data-selected="${selectedAttr}">
+        <button type="button" class="perm-authority-current-host" data-selected="${selectedAttr}" data-host="${esc(host)}" aria-pressed="${selectedAttr}">
           <span class="perm-authority-host-mark perm-authority-host-mark--${esc(meta.tone || 'generic')}" aria-hidden="true">${esc(meta.shortLabel || 'DH')}</span>
           <span class="perm-authority-current-host-copy">
             <span class="perm-authority-current-host-name">${esc(formatAuthorityHost(host))}</span>
             <span class="perm-authority-current-host-mode">${esc(formatAuthorityMode(mode))}</span>
           </span>
-        </div>
+        </button>
       `;
     }).join('');
   }

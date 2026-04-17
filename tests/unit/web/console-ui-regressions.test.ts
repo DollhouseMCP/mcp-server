@@ -503,22 +503,20 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Claude Code');
     expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Codex');
     expect(win.document.getElementById('perm-authority-option-off')?.textContent).toContain('steps out of the way');
+    expect(win.document.getElementById('perm-authority-selected-host')?.textContent).toContain('Claude Code');
 
-    const hostSelect = win.document.getElementById('perm-authority-host') as HTMLSelectElement | null;
     const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
-    expect(hostSelect).not.toBeNull();
     expect(authoritativeRadio?.disabled).toBe(false);
 
-    if (hostSelect) {
-      hostSelect.value = 'codex';
-      hostSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
-    }
+    const codexHostButton = win.document.querySelector('.perm-authority-current-host[data-host="codex"]') as HTMLButtonElement | null;
+    expect(codexHostButton).not.toBeNull();
+    codexHostButton?.click();
     await wait(DEFAULT_WAIT_MS);
 
     expect(authoritativeRadio?.disabled).toBe(true);
     expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(false);
     expect(win.document.getElementById('perm-authority-authoritative-note')?.textContent).toContain('Claude Code only');
-    expect(win.document.getElementById('perm-authority-explanation')?.textContent).toContain('host handles permissions on its own');
+    expect(win.document.getElementById('perm-authority-selected-host')?.textContent).toContain('Codex');
 
     const sharedRadio = win.document.getElementById('perm-authority-mode-shared') as HTMLInputElement | null;
     sharedRadio!.checked = true;
@@ -635,7 +633,7 @@ describe('Web console cleanup regressions', () => {
     await wait(DEFAULT_WAIT_MS);
 
     expect(win.confirm).toHaveBeenCalled();
-    expect(win.document.getElementById('perm-authority-current-mode')?.textContent).toContain('Dollhouse-Controlled Permissions');
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Dollhouse-Controlled Permissions');
     expect(win.document.getElementById('perm-authority-message')?.textContent).toContain('Saved Dollhouse-Controlled Permissions mode');
     expect(win.document.getElementById('perm-authority-save-shell')?.getAttribute('data-dirty')).toBe('false');
     expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Saved for Claude Code');
