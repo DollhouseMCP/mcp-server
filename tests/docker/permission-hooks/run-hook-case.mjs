@@ -5,13 +5,15 @@ import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
 const BASH_BIN = '/bin/bash';
-const DEFAULT_MOCK_SERVER_PORT = 41715;
+// Keep the harness on the same fixed loopback port our shipped hooks expect to
+// discover so the container exercises the real leader/follower contract.
+const MOCK_PERMISSION_SERVER_PORT = 41715;
 const hookScript = process.env.HOOK_SCRIPT;
 const hookPayloadB64 = process.env.HOOK_PAYLOAD_B64;
 const mockResponseB64 = process.env.MOCK_RESPONSE_B64;
 const hookEnvB64 = process.env.HOOK_ENV_B64;
 const portDiscoveryMode = process.env.PORT_DISCOVERY_MODE ?? 'shared';
-const port = Number(process.env.MOCK_SERVER_PORT ?? String(DEFAULT_MOCK_SERVER_PORT));
+const port = Number(process.env.MOCK_SERVER_PORT ?? String(MOCK_PERMISSION_SERVER_PORT));
 
 if (!hookScript || !hookPayloadB64 || !mockResponseB64) {
   throw new Error('HOOK_SCRIPT, HOOK_PAYLOAD_B64, and MOCK_RESPONSE_B64 are required');
@@ -67,9 +69,9 @@ const server = createServer((req, res) => {
   });
 });
 
-await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+await startMockPermissionServer(server, port);
 
-const result = await new Promise((resolve) => {
+const result = await new Promise((resolve, reject) => {
   const child = spawn(BASH_BIN, [hookScript], {
     env: buildHookEnvironment(hookEnv, tempHome),
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -82,6 +84,14 @@ const result = await new Promise((resolve) => {
   });
   child.stderr.on('data', chunk => {
     stderr += chunk.toString();
+  });
+  child.on('error', error => {
+    reject(new Error(`Failed to spawn hook script ${hookScript}: ${error.message}`));
+  });
+  child.stdin.on('error', error => {
+    if (error.code !== 'EPIPE') {
+      reject(new Error(`Failed to write hook payload to ${hookScript}: ${error.message}`));
+    }
   });
   child.on('close', exitCode => {
     resolve({ exitCode: exitCode ?? 0, stdout, stderr });
@@ -139,4 +149,25 @@ function buildHookEnvironment(hookEnv, tempHomePath) {
     HOME: tempHomePath,
     DOLLHOUSE_SESSION_ID: 'docker-hook-session',
   };
+}
+
+function startMockPermissionServer(server, portNumber) {
+  return new Promise((resolve, reject) => {
+    const handleListening = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = (error) => {
+      cleanup();
+      reject(new Error(`Failed to start mock permission server on port ${portNumber}: ${error.message}`));
+    };
+    const cleanup = () => {
+      server.off('listening', handleListening);
+      server.off('error', handleError);
+    };
+
+    server.once('listening', handleListening);
+    server.once('error', handleError);
+    server.listen(portNumber, '127.0.0.1');
+  });
 }

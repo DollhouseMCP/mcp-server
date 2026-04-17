@@ -75,7 +75,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
+    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-dollhouse.sh')).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'allow',
@@ -104,7 +104,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
+    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-codex.sh')).toEqual({
       hookSpecificOutput: {
         permissionDecision: 'allow',
       },
@@ -131,7 +131,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
+    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-cursor.sh')).toEqual({
       permission: 'deny',
       reason: 'Blocked by policy',
     });
@@ -157,7 +157,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
+    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-gemini.sh')).toEqual({
       decision: 'deny',
       reason: 'Blocked by policy',
     });
@@ -184,7 +184,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(JSON.parse(result.stdout.trim())).toEqual({
+    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-vscode.sh')).toEqual({
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
@@ -231,6 +231,28 @@ suite('Dockerized permission hook adapters', () => {
       session_id: 'docker-hook-session',
     });
   });
+
+  it('surfaces a clear error when a hook exits without emitting JSON', () => {
+    const hookScript = '/workspace/tests/docker/permission-hooks/fixtures/no-output.sh';
+    expect(() => parseHookStdout(runHookCase({
+      hookScript,
+      payload: {},
+      response: { ignored: true },
+    }), hookScript)).toThrow(
+      'Hook /workspace/tests/docker/permission-hooks/fixtures/no-output.sh produced no JSON output (exit 1)',
+    );
+  });
+
+  it('surfaces malformed hook output with stdout and stderr context', () => {
+    const hookScript = '/workspace/tests/docker/permission-hooks/fixtures/invalid-json-output.sh';
+    expect(() => parseHookStdout(runHookCase({
+      hookScript,
+      payload: {},
+      response: { ignored: true },
+    }), hookScript)).toThrow(
+      'Hook /workspace/tests/docker/permission-hooks/fixtures/invalid-json-output.sh returned malformed JSON',
+    );
+  });
 });
 
 function runHookCase(testCase: HookCase): HookResult {
@@ -266,14 +288,36 @@ function runHookCase(testCase: HookCase): HookResult {
   }
 
   if (!result.stdout.trim()) {
-    throw new Error(`Docker run produced no JSON output for ${testCase.hookScript}`);
+    throw new Error(
+      `Docker run produced no JSON output for ${testCase.hookScript} (exit ${result.status})\n` +
+      `stderr:\n${result.stderr}`,
+    );
   }
 
   try {
     return JSON.parse(result.stdout.trim()) as HookResult;
   } catch (error) {
     throw new Error(
-      `Docker run returned malformed JSON for ${testCase.hookScript}: ${error instanceof Error ? error.message : String(error)}\n` +
+      `Docker run returned malformed JSON for ${testCase.hookScript} (exit ${result.status}): ${error instanceof Error ? error.message : String(error)}\n` +
+      `stdout:\n${result.stdout}\n` +
+      `stderr:\n${result.stderr}`,
+    );
+  }
+}
+
+function parseHookStdout(result: HookResult, hookScript: string): unknown {
+  if (!result.stdout.trim()) {
+    throw new Error(
+      `Hook ${hookScript} produced no JSON output (exit ${result.exitCode})\n` +
+      `stderr:\n${result.stderr}`,
+    );
+  }
+
+  try {
+    return JSON.parse(result.stdout.trim());
+  } catch (error) {
+    throw new Error(
+      `Hook ${hookScript} returned malformed JSON (exit ${result.exitCode}): ${error instanceof Error ? error.message : String(error)}\n` +
       `stdout:\n${result.stdout}\n` +
       `stderr:\n${result.stderr}`,
     );
