@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.26] - 2026-04-17
+
+- Version bump
+
 ## [2.0.25] - 2026-04-16
 
 Restore audit markdown export and harden direct commercial license email delivery
