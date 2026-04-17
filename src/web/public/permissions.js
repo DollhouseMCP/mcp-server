@@ -28,6 +28,16 @@
     feedback: '',
     feedbackKind: 'info',
   };
+  const AUTHORITY_HOST_META = {
+    'claude-code': { label: 'Claude Code', shortLabel: 'CC', tone: 'claude' },
+    'codex': { label: 'Codex', shortLabel: 'CX', tone: 'codex' },
+    'cursor': { label: 'Cursor', shortLabel: 'CU', tone: 'cursor' },
+    'vscode': { label: 'VS Code', shortLabel: 'VS', tone: 'vscode' },
+    'windsurf': { label: 'Windsurf', shortLabel: 'WS', tone: 'windsurf' },
+    'gemini': { label: 'Gemini CLI', shortLabel: 'GM', tone: 'gemini' },
+    'cline': { label: 'Cline', shortLabel: 'CL', tone: 'cline' },
+    'lmstudio': { label: 'LM Studio', shortLabel: 'LM', tone: 'lmstudio' },
+  };
 
   async function fetchPermissionStatus(sessionId) {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
@@ -228,6 +238,7 @@
     const currentMode = document.getElementById('perm-authority-current-mode');
     const currentHost = document.getElementById('perm-authority-current-host');
     const explanation = document.getElementById('perm-authority-explanation');
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
     const reasonInput = document.getElementById('perm-authority-reason');
     const note = document.getElementById('perm-authority-note');
     const authoritativeNote = document.getElementById('perm-authority-authoritative-note');
@@ -235,7 +246,7 @@
     const saveCopy = document.getElementById('perm-authority-save-copy');
     const saveShell = document.getElementById('perm-authority-save-shell');
 
-    if (!card || !hostSelect || !saveButton || !message || !currentMode || !currentHost || !explanation || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
+    if (!card || !hostSelect || !saveButton || !message || !currentMode || !currentHost || !explanation || !currentHostList || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
       return;
     }
 
@@ -271,6 +282,7 @@
     currentMode.textContent = formatAuthorityMode(serverMode);
     currentHost.textContent = formatAuthorityHost(authorityUiState.selectedHost);
     explanation.textContent = buildAuthorityExplanation(serverMode, authoritativeSupported);
+    currentHostList.innerHTML = renderAuthorityCurrentHostList(authority, supportedHosts, authorityUiState.selectedHost);
     note.textContent = 'Human-only control. AI can read authority mode but cannot change it through MCP.';
     authoritativeNote.hidden = authoritativeSupported;
     authoritativeNote.textContent = authoritativeSupported
@@ -749,6 +761,7 @@
                   </li>
                 </ul>
                 <p class="perm-selected-subtitle" id="perm-authority-explanation"></p>
+                <div class="perm-authority-current-list" id="perm-authority-current-host-list"></div>
               </div>
 
               <div class="perm-selected-panel">
@@ -762,7 +775,7 @@
                       <input type="radio" name="perm-authority-mode" id="perm-authority-mode-off" value="off">
                       <span class="perm-authority-option-copy">
                         <span class="perm-authority-option-title">Off</span>
-                        <span class="perm-authority-option-description">Dollhouse hooks no-op and the host-native permission system becomes the only gate.</span>
+                        <span class="perm-authority-option-description">Dollhouse steps out of the way. The host's own permission system handles approvals by itself.</span>
                       </span>
                     </span>
                   </label>
@@ -783,7 +796,7 @@
                           <span class="perm-authority-option-title">Authoritative</span>
                           <span class="perm-authority-inline-note" id="perm-authority-authoritative-note" hidden></span>
                         </span>
-                        <span class="perm-authority-option-description">Dollhouse writes managed allow, ask, and deny settings into the host while preserving user-authored entries outside the managed slice.</span>
+                        <span class="perm-authority-option-description">Dollhouse becomes the permission authority. It syncs Dollhouse allow, ask, and deny rules into the host so Dollhouse decides conflicts instead of the host's own approval flow.</span>
                       </span>
                     </span>
                   </label>
@@ -1089,6 +1102,10 @@
   }
 
   function formatAuthorityHost(host) {
+    const meta = AUTHORITY_HOST_META[String(host || '')];
+    if (meta?.label) {
+      return meta.label;
+    }
     return String(host || '')
       .split('-')
       .map(function (part) { return part ? part.charAt(0).toUpperCase() + part.slice(1) : part; })
@@ -1105,10 +1122,10 @@
 
   function buildAuthorityExplanation(mode, authoritativeSupported) {
     if (mode === 'off') {
-      return 'Dollhouse hooks no-op and the host-native permission system is the sole gate.';
+      return 'Dollhouse is not participating in approvals here. The host handles permissions on its own.';
     }
     if (mode === 'authoritative') {
-      return 'Dollhouse is writing managed allow/ask/deny entries into the host settings and preserving user-authored entries outside the managed slice.';
+      return 'Dollhouse is the source of truth for permissions here. The host follows Dollhouse-synced allow, ask, and deny rules, while user-authored entries outside Dollhouse-managed settings are still preserved.';
     }
     return authoritativeSupported
       ? 'Dollhouse participates in permission checks, but the host can still be more restrictive.'
@@ -1139,6 +1156,35 @@
       return `Review the change and save to apply ${formatAuthorityMode(state.desiredMode)} mode for ${formatAuthorityHost(state.host)}.`;
     }
     return `${formatAuthorityHost(state.host)} is currently saved in ${formatAuthorityMode(state.currentMode)} mode.`;
+  }
+
+  function renderAuthorityCurrentHostList(authority, supportedHosts, selectedHost) {
+    const explicitHosts = Object.keys(authority?.hosts || {});
+    const hostIds = Array.from(new Set(explicitHosts.concat(supportedHosts || [])));
+    const orderedHosts = hostIds.sort(function (left, right) {
+      if (left === selectedHost) return -1;
+      if (right === selectedHost) return 1;
+      return formatAuthorityHost(left).localeCompare(formatAuthorityHost(right));
+    });
+
+    if (orderedHosts.length === 0) {
+      return '<div class="perm-pattern-empty">No host authority settings saved yet.</div>';
+    }
+
+    return orderedHosts.map(function (host) {
+      const mode = getAuthorityModeForHost(authority, host);
+      const meta = AUTHORITY_HOST_META[host] || { shortLabel: formatAuthorityHost(host).slice(0, 2).toUpperCase(), tone: 'generic' };
+      const selectedAttr = host === selectedHost ? 'true' : 'false';
+      return `
+        <div class="perm-authority-current-host" data-selected="${selectedAttr}">
+          <span class="perm-authority-host-mark perm-authority-host-mark--${esc(meta.tone || 'generic')}" aria-hidden="true">${esc(meta.shortLabel || 'DH')}</span>
+          <span class="perm-authority-current-host-copy">
+            <span class="perm-authority-current-host-name">${esc(formatAuthorityHost(host))}</span>
+            <span class="perm-authority-current-host-mode">${esc(formatAuthorityMode(mode))}</span>
+          </span>
+        </div>
+      `;
+    }).join('');
   }
 
   async function saveAuthorityMode() {

@@ -500,6 +500,9 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Human-only control');
     expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(true);
     expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Claude Code');
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Codex');
+    expect(win.document.getElementById('perm-authority-option-off')?.textContent).toContain('steps out of the way');
 
     const hostSelect = win.document.getElementById('perm-authority-host') as HTMLSelectElement | null;
     const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
@@ -515,6 +518,7 @@ describe('Web console cleanup regressions', () => {
     expect(authoritativeRadio?.disabled).toBe(true);
     expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(false);
     expect(win.document.getElementById('perm-authority-authoritative-note')?.textContent).toContain('Claude Code only');
+    expect(win.document.getElementById('perm-authority-explanation')?.textContent).toContain('host handles permissions on its own');
 
     const sharedRadio = win.document.getElementById('perm-authority-mode-shared') as HTMLInputElement | null;
     sharedRadio!.checked = true;

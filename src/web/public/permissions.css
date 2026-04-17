@@ -348,6 +348,103 @@
   margin-top: 0.85rem;
 }
 
+.perm-authority-current-list {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.9rem;
+}
+
+.perm-authority-current-host {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--ink-100, #d8e0ea);
+  border-radius: 0.85rem;
+  background: var(--paper-strong, #fff);
+}
+
+.perm-authority-current-host[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--signal-2, #3b82f6) 42%, var(--ink-100, #d8e0ea));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-2, #3b82f6) 10%, transparent);
+}
+
+.perm-authority-host-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 0.65rem;
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.perm-authority-host-mark--claude {
+  background: #fff1e8;
+  color: #9a3412;
+}
+
+.perm-authority-host-mark--codex {
+  background: #e8f1ff;
+  color: #1d4ed8;
+}
+
+.perm-authority-host-mark--cursor {
+  background: #ecfdf3;
+  color: #047857;
+}
+
+.perm-authority-host-mark--vscode {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.perm-authority-host-mark--windsurf {
+  background: #eef2ff;
+  color: #4338ca;
+}
+
+.perm-authority-host-mark--gemini {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.perm-authority-host-mark--cline {
+  background: #f5f3ff;
+  color: #6d28d9;
+}
+
+.perm-authority-host-mark--lmstudio,
+.perm-authority-host-mark--generic {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.perm-authority-current-host-copy {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+}
+
+.perm-authority-current-host-name {
+  color: var(--ink-900, #0f172a);
+  font-family: var(--font-heading, 'Plus Jakarta Sans', sans-serif);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.perm-authority-current-host-mode {
+  color: var(--ink-500, #64748b);
+  font-size: 0.76rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
 .perm-authority-save-shell {
   margin-top: 0.85rem;
   border: 1px solid var(--ink-100, #d8e0ea);
@@ -895,6 +992,24 @@
 [data-theme="dark"] .perm-authority-save-shell {
   background: color-mix(in srgb, var(--surface-1) 82%, var(--paper-strong));
   border-color: color-mix(in srgb, var(--line, #2b3445) 92%, transparent);
+}
+
+[data-theme="dark"] .perm-authority-current-host {
+  background: color-mix(in srgb, var(--surface-1) 82%, var(--paper-strong));
+  border-color: color-mix(in srgb, var(--line, #2b3445) 92%, transparent);
+}
+
+[data-theme="dark"] .perm-authority-current-host[data-selected="true"] {
+  border-color: color-mix(in srgb, var(--signal-2) 40%, var(--line, #2b3445));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--signal-2) 16%, transparent);
+}
+
+[data-theme="dark"] .perm-authority-current-host-name {
+  color: var(--ink-200, #e2e8f0);
+}
+
+[data-theme="dark"] .perm-authority-current-host-mode {
+  color: var(--ink-400, #94a3b8);
 }
 
 [data-theme="dark"] .perm-authority-save-shell[data-dirty="true"] {
