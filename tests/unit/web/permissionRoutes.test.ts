@@ -7,7 +7,12 @@
 import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
+import { createServer } from 'node:http';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
+import { getPermissionHookMarkerPath } from '../../../src/utils/permissionHooks.js';
 
 function createMockHandler(readResult?: unknown) {
   return {
@@ -25,15 +30,28 @@ function createMockHandler(readResult?: unknown) {
   } as any;
 }
 
-function createApp(handler: any) {
+function createApp(handler: any, options?: { homeDir?: string }) {
   const app = express();
   const router = express.Router();
-  registerPermissionRoutes(router, handler);
+  registerPermissionRoutes(router, handler, options);
   app.use('/api', router);
   return app;
 }
 
 describe('permissionRoutes', () => {
+  const runDir = join(homedir(), '.dollhouse', 'run');
+  const latestPortFile = join(runDir, 'permission-server.port');
+  let tempHome: string;
+
+  beforeEach(async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'permission-routes-home-'));
+  });
+
+  afterEach(async () => {
+    await unlink(latestPortFile).catch(() => {});
+    await rm(tempHome, { recursive: true, force: true });
+  });
+
   describe('POST /api/evaluate_permission', () => {
     it('should return allow for a valid request', async () => {
       const handler = createMockHandler();
@@ -291,6 +309,102 @@ describe('permissionRoutes', () => {
           session_id: 'session-abc',
         },
       });
+    });
+
+    it('should only return installed authority hosts plus any persisted authority hosts', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 0,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [],
+            permissionPromptActive: false,
+            recentDecisions: [],
+          },
+        }]),
+      } as any;
+
+      const installedScriptPath = join(tempHome, '.dollhouse', 'hooks', 'pretooluse-codex.sh');
+      const installedSettingsPath = join(tempHome, '.codex', 'hooks.json');
+      await mkdir(join(tempHome, '.dollhouse', 'hooks'), { recursive: true });
+      await mkdir(join(tempHome, '.codex'), { recursive: true });
+      await writeFile(installedScriptPath, '#!/bin/bash\n', 'utf-8');
+      await writeFile(installedSettingsPath, '{}\n', 'utf-8');
+      await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+      await writeFile(
+        getPermissionHookMarkerPath(tempHome, 'codex'),
+        JSON.stringify({
+          host: 'codex',
+          scriptPath: installedScriptPath,
+          settingsPath: installedSettingsPath,
+          configured: true,
+          installedAt: '2026-04-17T15:00:00.000Z',
+        }),
+        'utf-8',
+      );
+
+      await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+      await writeFile(
+        join(tempHome, '.dollhouse', 'run', 'permission-authority.json'),
+        JSON.stringify({
+          version: 1,
+          defaultMode: 'shared',
+          updatedAt: '2026-04-17T15:00:00.000Z',
+          hosts: {
+            'claude-code': {
+              mode: 'authoritative',
+              updatedAt: '2026-04-17T15:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const app = createApp(handler, { homeDir: tempHome });
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.authoritySupportedHosts).toEqual(['codex', 'claude-code']);
+    });
+
+    it('should restore the shared latest port file from the active listener port', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 0,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [],
+            permissionPromptActive: false,
+            recentDecisions: [],
+          },
+        }]),
+      } as any;
+
+      await mkdir(runDir, { recursive: true });
+      await unlink(latestPortFile).catch(() => {});
+
+      const app = createApp(handler);
+      const server = createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+
+      try {
+        const res = await request(server).get('/api/permissions/status');
+
+        expect(res.status).toBe(200);
+        await expect(readFile(latestPortFile, 'utf-8')).resolves.toBe(String(port));
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     });
 
     it('should surface top-level gatekeeper rules even when no external tool patterns exist', async () => {
@@ -615,6 +729,35 @@ describe('permissionRoutes', () => {
         { label: 'File', value: '/opt/dollhouse/example.txt', monospace: true },
         { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
       ]));
+    });
+  });
+
+  describe('permission authority routes', () => {
+    it('GET /api/permissions/authority returns default shared state', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const res = await request(app).get('/api/permissions/authority');
+
+      expect(res.status).toBe(200);
+      expect(res.body.defaultMode).toBe('shared');
+      expect(res.body.aiMutable).toBe(false);
+      expect(res.body.supportedModes).toEqual(expect.arrayContaining(['off', 'shared', 'authoritative']));
+    });
+
+    it('POST /api/permissions/authority persists off mode without calling policy sync', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const res = await request(app)
+        .post('/api/permissions/authority')
+        .send({ host: 'claude-code', mode: 'off', reason: 'test' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.authority.hosts['claude-code'].mode).toBe('off');
+      expect(handler.handleRead).not.toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'get_effective_cli_policies',
+      }));
     });
   });
 });

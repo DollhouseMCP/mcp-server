@@ -16,16 +16,80 @@
 # Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
-PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+RUN_DIR="$HOME/.dollhouse/run"
+PORT_FILE="$RUN_DIR/permission-server.port"
+AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
+AUTHORITY_CACHE_TTL_SECONDS=2
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then
     echo "[pretooluse] $*" >&2
   fi
+  return 0
+}
+
+authority_host_for_platform() {
+  case "$HOOK_PLATFORM" in
+    claude_code) echo "claude-code" ;;
+    codex) echo "codex" ;;
+    cursor) echo "cursor" ;;
+    vscode) echo "vscode" ;;
+    windsurf) echo "windsurf" ;;
+    gemini) echo "gemini-cli" ;;
+    *) echo "" ;;
+  esac
+
+  return 0
+}
+
+resolve_authority_mode() {
+  local authority_host="$1"
+  local cache_file="$RUN_DIR/permission-authority-${HOOK_PLATFORM}.cache"
+  local resolved
+
+  if [[ -z "$authority_host" || ! -f "$AUTHORITY_FILE" ]]; then
+    echo "shared"
+    return 0
+  fi
+
+  if [[ -f "$cache_file" ]]; then
+    local cache_age
+    cache_age=$(cache_file_age_seconds "$cache_file")
+    if [[ -n "$cache_age" && "$cache_age" -lt "$AUTHORITY_CACHE_TTL_SECONDS" ]]; then
+      resolved=$(tr -d '\r\n' < "$cache_file" 2>/dev/null)
+      if [[ -n "$resolved" ]]; then
+        debug "Authority cache hit for ${authority_host}: $resolved"
+        echo "$resolved"
+        return 0
+      fi
+    fi
+  fi
+
+  resolved=$(jq -r --arg host "$authority_host" '.hosts[$host].mode // .defaultMode // "shared"' "$AUTHORITY_FILE" 2>/dev/null)
+  if [[ -z "$resolved" || "$resolved" == "null" ]]; then
+    resolved="shared"
+  fi
+
+  printf '%s' "$resolved" > "$cache_file" 2>/dev/null || true
+  echo "$resolved"
+  return 0
+}
+
+cache_file_age_seconds() {
+  local file_path="$1"
+  local modified_epoch
+
+  modified_epoch=$(stat -f %m "$file_path" 2>/dev/null || stat -c %Y "$file_path" 2>/dev/null)
+  if [[ -z "$modified_epoch" ]]; then
+    return 1
+  fi
+
+  echo $(( $(date +%s) - modified_epoch ))
   return 0
 }
 
@@ -58,18 +122,11 @@ normalize_response() {
   return 0
 }
 
-# Discover the port from the port file
-if [[ -f "$PORT_FILE" ]]; then
-  PORT=$(cat "$PORT_FILE" 2>/dev/null)
-  debug "Port file found: $PORT"
-else
-  debug "No port file at $PORT_FILE — fail open"
-  exit 0
-fi
+source "$SCRIPT_DIR/permission-port-discovery.sh"
 
-# Validate port is a number
-if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-  debug "Invalid port value: $PORT — fail open"
+# Discover the port from the shared file or the newest live PID-keyed file
+if ! PORT=$(resolve_permission_port); then
+  debug "No usable permission server port file found — fail open"
   exit 0
 fi
 
@@ -91,6 +148,15 @@ fi
 
 debug "Evaluating: $TOOL_NAME"
 debug "Platform: $HOOK_PLATFORM"
+
+AUTHORITY_HOST=$(authority_host_for_platform)
+AUTHORITY_MODE=$(resolve_authority_mode "$AUTHORITY_HOST")
+debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
+
+if [[ "$AUTHORITY_MODE" == "off" ]]; then
+  debug "Authority mode is off — hook no-op"
+  exit 0
+fi
 
 if [[ -n "${DOLLHOUSE_SESSION_ID:-}" ]]; then
   debug "Using DOLLHOUSE_SESSION_ID=${DOLLHOUSE_SESSION_ID}"

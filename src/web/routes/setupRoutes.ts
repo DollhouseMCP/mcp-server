@@ -15,7 +15,6 @@ import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
-import { parse as parseToml } from 'smol-toml';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -177,37 +176,66 @@ interface DetectResult {
   serverKey?: string;
 }
 
-/** Parse a TOML config file for a DollhouseMCP server entry */
-function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
+/**
+ * Parse a single `[mcp_servers.<name>]` TOML section into a config summary.
+ *
+ * When `caseSensitive` is true, the section header must match exactly. This is
+ * important for Codex because the installer writes `[mcp_servers.dollhousemcp]`
+ * in lowercase and we want to prefer that canonical entry over legacy mixed-case
+ * sections that may still be present in the file.
+ */
+function parseTomlSectionConfig(
+  sectionName: string,
+  raw: string,
+  caseSensitive = false,
+): Record<string, unknown> | null {
+  const escapedSectionName = sectionName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const sectionRegex = new RegExp(String.raw`\[mcp_servers\.${escapedSectionName}\]`, caseSensitive ? '' : 'i');
+  const sectionMatch = sectionRegex.exec(raw);
+  if (!sectionMatch) return null;
+
+  const tomlConfig: Record<string, unknown> = { serverName: sectionName };
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const nextSection = raw.indexOf('\n[', sectionStart);
+  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+
+  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
+  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
+  const enabledMatch = /enabled\s*=\s*(true|false)/i.exec(sectionContent);
+
+  if (commandMatch) tomlConfig.command = commandMatch[1];
+  if (argsMatch) {
+    tomlConfig.args = argsMatch[1].split(',').map((arg) => arg.trim().replaceAll('"', ''));
+  }
+  if (enabledMatch) {
+    tomlConfig.enabled = enabledMatch[1].toLowerCase() === 'true';
+  }
+
+  return tomlConfig;
+}
+
+/**
+ * Parse a TOML config file for a DollhouseMCP server entry.
+ *
+ * Detection prefers the canonical lowercase Codex section name first, then
+ * falls back to older Dollhouse-related section names so stale configs are
+ * still visible in the UI instead of being mistaken for a fresh install.
+ */
+export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   if (!raw.toLowerCase().includes('dollhousemcp')) {
     return { installed: false };
   }
 
-  try {
-    const parsed = parseToml(raw) as Record<string, unknown>;
-    const mcpServers = parsed.mcp_servers;
-    if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const matchingEntry = Object.entries(mcpServers).find(([key]) =>
-      key.toLowerCase().includes('dollhousemcp'));
-    if (!matchingEntry) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const [serverName, serverConfig] = matchingEntry;
-    const tomlConfig: Record<string, unknown> = { serverName };
-    if (serverConfig && typeof serverConfig === 'object' && !Array.isArray(serverConfig)) {
-      const { command, args } = serverConfig as { command?: unknown; args?: unknown };
-      if (typeof command === 'string') tomlConfig.command = command;
-      if (Array.isArray(args)) tomlConfig.args = args;
-    }
-
-    return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
-  } catch {
-    return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+  const exactConfig = parseTomlSectionConfig('dollhousemcp', raw, true);
+  if (exactConfig) {
+    return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
   }
+
+  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
+  if (!sectionMatch) return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+
+  const fallbackConfig = parseTomlSectionConfig(sectionMatch[1], raw) ?? { serverName: sectionMatch[1] };
+  return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
 }
 
 /** Parse a JSON config file for a DollhouseMCP server entry */

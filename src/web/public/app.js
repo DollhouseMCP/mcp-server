@@ -105,6 +105,30 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   let activeSort = 'date-desc';
   let activeSource = 'all'; // 'all' | 'collection' | 'portfolio'
   let searchQuery = '';
+  const DOLLHOUSE_SESSION_ID = document.querySelector('meta[name="dollhouse-session-id"]')?.content || '';
+  const DOLLHOUSE_RUNTIME_SESSION_ID = document.querySelector('meta[name="dollhouse-runtime-session-id"]')?.content || '';
+
+  function escHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function renderHeaderStatsMarkup(primaryMarkup) {
+    const sessionTitle = DOLLHOUSE_RUNTIME_SESSION_ID && DOLLHOUSE_RUNTIME_SESSION_ID !== DOLLHOUSE_SESSION_ID
+      ? `Stable session ${DOLLHOUSE_SESSION_ID}; runtime ${DOLLHOUSE_RUNTIME_SESSION_ID}`
+      : `Stable session ${DOLLHOUSE_SESSION_ID}`;
+    const sessionMarkup = DOLLHOUSE_SESSION_ID
+      ? `
+      <span class="stat stat--session" title="${escHtml(sessionTitle)}">
+        <strong>${escHtml(DOLLHOUSE_SESSION_ID)}</strong> session
+      </span>`
+      : '';
+    return `${primaryMarkup}${sessionMarkup}`;
+  }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
@@ -121,10 +145,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     renderTopicFilters();
     applyFilters();
     const statsEl = document.getElementById('stats');
-    if (statsEl) statsEl.innerHTML = `
+    if (statsEl) statsEl.innerHTML = renderHeaderStatsMarkup(`
       <span class="stat"><strong>${localElements.length}</strong> portfolio</span>
       <span class="stat"><strong>${collectionElements.length}</strong> collection</span>
-    `;
+    `);
   }
 
   async function init() {
@@ -208,10 +232,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     const el = document.getElementById('stats');
     if (!el) return;
     const types = Object.keys(data.index).length;
-    el.innerHTML = `
+    el.innerHTML = renderHeaderStatsMarkup(`
       <span class="stat"><strong>${data.total_elements}</strong> elements</span>
       <span class="stat"><strong>${types}</strong> types</span>
-    `;
+    `);
   }
 
   // ── Type filter chips ──────────────────────────────────────────────────────

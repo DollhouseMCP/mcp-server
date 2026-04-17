@@ -21,9 +21,13 @@ describe('BuildInfoTools', () => {
   beforeEach(() => {
     container = new DollhouseContainer();
     mockBuildInfoService = {
-      getBuildInfo: jest.fn<() => Promise<any>>().mockResolvedValue({}),
+      getBuildInfo: jest.fn<() => Promise<any>>().mockResolvedValue({
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
+      }),
       formatBuildInfo: jest.fn<(info: any) => string>().mockReturnValue(
-        `# 🔧 Build Information\n\n## 📦 Package\n**Name**: @dollhousemcp/mcp-server\n**Version**: 1.0.0\n\n## 🏗️ Build\n**Type**: test\n\n## 💻 Runtime\n**Node.js**: v18.0.0\n**Platform**: linux\n**Architecture**: x64\n\n## ⚙️ Environment\n**NODE_ENV**: test\n**Mode**: Development\n**Debug**: Enabled\n**Docker**: No\n\n## 🚀 Server\n**Started**: 2023-01-01T00:00:00Z\n**Uptime**: 1h 0m 0s\n**MCP Connection**: ✅ Connected\n\n**Memory Usage**: 100.00 MB / 200.00 MB\n**Process Uptime**: 1h 0m 0s`
+        `# 🔧 Build Information\n\n## 📦 Package\n**Name**: @dollhousemcp/mcp-server\n**Version**: 1.0.0\n\n## 🪪 Session\n**Session ID**: workspace-a1b2c3d4e5\n**Runtime Session ID**: workspace-a1b2c3d4e5-k9\n**Identity Source**: Derived from workspace context\n\n## 🏗️ Build\n**Type**: test\n\n## 💻 Runtime\n**Node.js**: v18.0.0\n**Platform**: linux\n**Architecture**: x64\n\n## ⚙️ Environment\n**NODE_ENV**: test\n**Mode**: Development\n**Debug**: Enabled\n**Docker**: No\n\n## 🚀 Server\n**Started**: 2023-01-01T00:00:00Z\n**Uptime**: 1h 0m 0s\n**MCP Connection**: ✅ Connected\n\n**Memory Usage**: 100.00 MB / 200.00 MB\n**Process Uptime**: 1h 0m 0s`
       ),
     } as any;
 
@@ -118,16 +122,23 @@ describe('BuildInfoTools', () => {
       // Check MCP response structure
       expect(typeof result).toBe('object');
       expect(result).toHaveProperty('content');
+      expect(result).toHaveProperty('structuredContent');
       expect(Array.isArray(result.content)).toBe(true);
       expect(result.content).toHaveLength(1);
       expect(result.content[0]).toHaveProperty('type', 'text');
       expect(result.content[0]).toHaveProperty('text');
+      expect(result.structuredContent).toMatchObject({
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
+      });
       
       // Check content
       const text = result.content[0].text;
       expect(typeof text).toBe('string');
       expect(text.length).toBeGreaterThan(0);
       expect(text).toContain('# 🔧 Build Information');
+      expect(text).toContain('## 🪪 Session');
     });
 
     it('should work with empty arguments object', async () => {

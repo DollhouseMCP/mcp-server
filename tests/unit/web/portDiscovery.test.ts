@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { readFile, unlink, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { findAvailablePort, writePortFile, cleanupPortFile, discoverAndBindPort } from '../../../src/web/portDiscovery.js';
+import { findAvailablePort, writePortFile, cleanupPortFile, discoverAndBindPort, ensureLatestPortFile } from '../../../src/web/portDiscovery.js';
 
 const MAX_PORT_ATTEMPTS = 10;
 const PORT_RANGE_DISCOVERY_ATTEMPTS = 25;
@@ -129,6 +129,16 @@ describe('portDiscovery', () => {
       await cleanupPortFile();
 
       await expect(stat(writtenFile)).rejects.toThrow();
+    });
+
+    it('should restore the shared latest file when it is missing', async () => {
+      const latestFile = join(runDir, 'permission-server.port');
+
+      await unlink(latestFile).catch(() => {});
+      const changed = await ensureLatestPortFile(4244);
+
+      expect(changed).toBe(true);
+      await expect(readFile(latestFile, 'utf-8')).resolves.toBe('4244');
     });
   });
 

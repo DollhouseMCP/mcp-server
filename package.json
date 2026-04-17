@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "2.0.25",
+  "version": "2.0.26",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -32,6 +32,7 @@
     "test:compiled": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config tests/jest.config.compiled.cjs",
     "test:compiled:ci": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config tests/jest.config.compiled.cjs --ci --watchAll=false",
     "test:integration": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs",
+    "test:integration:hooks:docker": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs tests/integration/hooks/permission-hook-docker.test.ts",
     "test:integration:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs --watch",
     "test:integration:coverage": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs --coverage",
     "test:integration:crud": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs tests/integration/crud/ --no-coverage",
@@ -173,7 +174,7 @@
     "@dollhousemcp/safety": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "chalk": "^5.6.2",
-    "dompurify": "^3.3.1",
+    "dompurify": "^3.4.0",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "extract-zip": "^2.0.1",
@@ -234,7 +235,7 @@
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "3.14.2"
     },
-    "hono": "4.12.12",
+    "hono": "4.12.14",
     "@hono/node-server": "1.19.13"
   }
 }

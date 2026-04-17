@@ -18,12 +18,51 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
+  const AUTHORITY_MODE_REQUEST_STATES = {
+    idle: 'idle',
+    saving: 'saving',
+  };
+  const AUTHORITY_AUTHORITATIVE_HOSTS = new Set(['claude-code']);
+  // Authority modes are intentionally phrased in human terms in the UI:
+  // - off => host-controlled permissions
+  // - shared => both Dollhouse and the host participate
+  // - authoritative => Dollhouse is the source of truth
+  const authorityUiState = {
+    selectedHost: 'claude-code',
+    selectedMode: 'shared',
+    draftReason: '',
+    dirty: false,
+    requestState: AUTHORITY_MODE_REQUEST_STATES.idle,
+    feedback: '',
+    feedbackKind: 'info',
+  };
+  const AUTHORITY_HOST_META = {
+    'claude-code': { label: 'Claude Code', shortLabel: 'CC', tone: 'claude' },
+    'codex': { label: 'Codex', shortLabel: 'CX', tone: 'codex' },
+    'cursor': { label: 'Cursor', shortLabel: 'CU', tone: 'cursor' },
+    'vscode': { label: 'VS Code', shortLabel: 'VS', tone: 'vscode' },
+    'windsurf': { label: 'Windsurf', shortLabel: 'WS', tone: 'windsurf' },
+    'gemini': { label: 'Gemini CLI', shortLabel: 'GM', tone: 'gemini' },
+    'cline': { label: 'Cline', shortLabel: 'CL', tone: 'cline' },
+    'lmstudio': { label: 'LM Studio', shortLabel: 'LM', tone: 'lmstudio' },
+  };
 
   async function fetchPermissionStatus(sessionId) {
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
     const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res.json();
+  }
+
+  async function updatePermissionAuthority(payload) {
+    const res = await DollhouseAuth.apiFetch('/api/permissions/authority', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(function () { return {}; });
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
   }
 
   // ── Public API ─────────────────────────────────────────────
@@ -43,15 +82,31 @@
     if (tabs) {
       tabs.addEventListener('click', function (e) {
         const btn = e.target.closest('.console-tab');
-        if (btn && btn.dataset.tab === 'permissions') {
-          var dc = window.DollhouseConsole;
-          if (dc && dc.permissions) {
-            if (!initialized) dc.permissions.init();
-            else if (dc.permissions.refresh) dc.permissions.refresh();
-          }
+        if (!btn || btn.dataset.tab !== 'permissions') {
+          return;
+        }
+
+        const dc = window.DollhouseConsole;
+        if (!dc || !dc.permissions) {
+          return;
+        }
+
+        if (!initialized) {
+          dc.permissions.init();
+          return;
+        }
+
+        if (dc.permissions.refresh) {
+          dc.permissions.refresh();
         }
       });
     }
+
+    window.addEventListener('dollhouse:policy-debug-visibility-changed', function () {
+      if (initialized) {
+        renderFromCache();
+      }
+    });
   });
 
   // ── Initialization ─────────────────────────────────────────
@@ -65,6 +120,7 @@
 
     root.innerHTML = buildDashboardHTML();
     attachCardToggles();
+    attachAuthorityControls();
     poll(); // immediate first fetch
     pollTimer = setInterval(poll, POLL_INTERVAL_MS);
   }
@@ -87,13 +143,14 @@
         return;
       }
 
+      const visibleAggregateData = getVisibleAggregateData(aggregateData);
       const currentSessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
-      const selectedData = deriveSelectedSessionData(aggregateData, currentSessionId);
+      const selectedData = deriveSelectedSessionData(visibleAggregateData, currentSessionId);
 
       latestAggregateData = aggregateData;
       latestSelectedData = selectedData;
       window.DollhouseSessions?.setPolicySessions?.(aggregateData.knownSessions || []);
-      render(aggregateData, selectedData);
+      render(visibleAggregateData, selectedData);
     } catch (err) {
       renderError(err.message);
     }
@@ -106,15 +163,16 @@
     }
 
     const sessionId = window.DollhouseSessions?.getFilterSessionId?.() || '';
-    latestSelectedData = deriveSelectedSessionData(latestAggregateData, sessionId);
-    renderPolicySources(latestAggregateData, latestSelectedData);
-    renderSelectedSessionDetail(latestSelectedData);
+    const visibleAggregateData = getVisibleAggregateData(latestAggregateData);
+    latestSelectedData = deriveSelectedSessionData(visibleAggregateData, sessionId);
+    render(visibleAggregateData, latestSelectedData);
   }
 
   // ── Rendering ──────────────────────────────────────────────
 
   function render(data, selectedData) {
     renderStatusBar(data);
+    renderAuthorityMode(data);
     renderSummaryStats(data);
     renderAdvisory(data);
     renderPolicySources(data, selectedData);
@@ -194,6 +252,119 @@
     setText('perm-stat-allowed', allowed);
     setText('perm-stat-denied', denied);
     setText('perm-stat-asked', asked);
+  }
+
+  function renderAuthorityMode(data) {
+    const card = document.getElementById('perm-authority-card');
+    const saveButton = document.getElementById('perm-authority-save-btn');
+    const message = document.getElementById('perm-authority-message');
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
+    const selectedHostHeading = document.getElementById('perm-authority-selected-host');
+    const reasonInput = document.getElementById('perm-authority-reason');
+    const note = document.getElementById('perm-authority-note');
+    const authoritativeNote = document.getElementById('perm-authority-authoritative-note');
+    const dirtyState = document.getElementById('perm-authority-dirty-state');
+    const saveCopy = document.getElementById('perm-authority-save-copy');
+    const saveShell = document.getElementById('perm-authority-save-shell');
+
+    if (!card || !saveButton || !message || !currentHostList || !selectedHostHeading || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
+      return;
+    }
+
+    const supportedHosts = Array.isArray(data?.authoritySupportedHosts)
+      ? data.authoritySupportedHosts
+      : ['claude-code'];
+    const authority = data?.authority || { defaultMode: 'shared', hosts: {} };
+
+    if (supportedHosts.length === 0) {
+      currentHostList.innerHTML = '<div class="perm-pattern-empty">No installed permission hosts detected yet.</div>';
+      selectedHostHeading.textContent = 'No installed hosts';
+      note.textContent = 'Install Dollhouse permission hooks for a host before changing permission authority mode here.';
+      authoritativeNote.hidden = true;
+      authoritativeNote.textContent = '';
+      dirtyState.hidden = true;
+      dirtyState.textContent = '';
+      message.hidden = true;
+      message.textContent = '';
+      message.dataset.kind = 'info';
+      saveCopy.textContent = 'Once a host is installed and configured, it will appear on the left for editing.';
+      saveShell.dataset.dirty = 'false';
+      saveShell.dataset.busy = 'false';
+      card.dataset.authorityDirty = 'false';
+      card.setAttribute('aria-busy', 'false');
+      reasonInput.value = authorityUiState.draftReason;
+      setAuthorityRadioState('perm-authority-mode-off', false, true);
+      setAuthorityRadioState('perm-authority-mode-shared', false, true);
+      setAuthorityRadioState('perm-authority-mode-authoritative', false, true);
+      saveButton.disabled = true;
+      saveButton.textContent = 'No Installed Hosts Yet';
+      saveButton.setAttribute('aria-busy', 'false');
+      card.hidden = false;
+      return;
+    }
+
+    if (!supportedHosts.includes(authorityUiState.selectedHost)) {
+      authorityUiState.selectedHost = supportedHosts[0];
+      authorityUiState.dirty = false;
+    }
+
+    const serverMode = getAuthorityModeForHost(authority, authorityUiState.selectedHost);
+    if (!authorityUiState.dirty) {
+      authorityUiState.selectedMode = serverMode;
+    }
+
+    reasonInput.value = authorityUiState.draftReason;
+
+    const authoritativeSupported = AUTHORITY_AUTHORITATIVE_HOSTS.has(authorityUiState.selectedHost);
+    const desiredMode = authoritativeSupported ? authorityUiState.selectedMode : fallbackAuthorityMode(authorityUiState.selectedMode);
+    const dirty = desiredMode !== serverMode;
+
+    setAuthorityRadioState('perm-authority-mode-off', desiredMode === 'off', false);
+    setAuthorityRadioState('perm-authority-mode-shared', desiredMode === 'shared', false);
+    setAuthorityRadioState('perm-authority-mode-authoritative', desiredMode === 'authoritative', !authoritativeSupported);
+
+    currentHostList.innerHTML = renderAuthorityCurrentHostList(authority, supportedHosts, authorityUiState.selectedHost);
+    selectedHostHeading.textContent = formatAuthorityHost(authorityUiState.selectedHost);
+    note.textContent = 'Human-only control. AI can read authority mode but cannot change it through MCP.';
+    authoritativeNote.hidden = authoritativeSupported;
+    authoritativeNote.textContent = authoritativeSupported
+      ? ''
+      : 'Claude Code only for now. Other hosts can use Host-Controlled or Shared Permissioning mode.';
+    dirtyState.hidden = !dirty;
+    dirtyState.textContent = dirty
+      ? `Unsaved change: ${formatAuthorityHost(authorityUiState.selectedHost)} will move from ${formatAuthorityMode(serverMode)} to ${formatAuthorityMode(desiredMode)} after you save.`
+      : '';
+    saveCopy.textContent = buildAuthoritySaveCopy({
+      host: authorityUiState.selectedHost,
+      currentMode: serverMode,
+      desiredMode,
+      dirty,
+      saving: authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving,
+    });
+    saveShell.dataset.dirty = dirty ? 'true' : 'false';
+    saveShell.dataset.busy = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false';
+    card.dataset.authorityDirty = dirty ? 'true' : 'false';
+    card.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
+
+    if (authorityUiState.feedback) {
+      message.hidden = false;
+      message.textContent = authorityUiState.feedback;
+      message.dataset.kind = authorityUiState.feedbackKind;
+    } else {
+      message.hidden = true;
+      message.textContent = '';
+      message.dataset.kind = 'info';
+    }
+
+    saveButton.disabled = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving || !dirty;
+    saveButton.textContent = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving
+      ? `Saving ${formatAuthorityMode(desiredMode)}...`
+      : dirty
+        ? `Save ${formatAuthorityMode(desiredMode)} Mode for ${formatAuthorityHost(authorityUiState.selectedHost)}`
+        : `Saved for ${formatAuthorityHost(authorityUiState.selectedHost)}`;
+    saveButton.dataset.dirty = dirty ? 'true' : 'false';
+    saveButton.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
+    card.hidden = false;
   }
 
   function renderAdvisory(data) {
@@ -500,6 +671,60 @@
     };
   }
 
+  /**
+   * Persisted policy state rows are primarily a debugging aid, so the
+   * dashboard treats them as opt-in and mirrors the explicit sessions UI flag.
+   */
+  function shouldShowPersistedPolicyDebug() {
+    return window.DollhouseSessions?.isPolicyDebugVisible?.() === true;
+  }
+
+  function getVisibleAggregateData(data) {
+    if (!data || shouldShowPersistedPolicyDebug()) {
+      return data;
+    }
+
+    const hiddenPolicySessions = Array.isArray(data.knownSessions) ? data.knownSessions : [];
+    if (hiddenPolicySessions.length === 0) {
+      return data;
+    }
+
+    const hiddenPolicySessionIds = new Set(
+      hiddenPolicySessions
+        .map(function (session) { return session && typeof session.sessionId === 'string' ? session.sessionId : ''; })
+        .filter(Boolean),
+    );
+
+    const filteredElements = ((data.elements || []).filter(function (element) {
+      const sessionIds = Array.isArray(element?.sessionIds) ? element.sessionIds.filter(function (sessionId) {
+        return typeof sessionId === 'string' && sessionId !== '';
+      }) : [];
+      if (sessionIds.length === 0) {
+        return true;
+      }
+      return sessionIds.some(function (sessionId) {
+        return !hiddenPolicySessionIds.has(sessionId);
+      });
+    }));
+
+    return {
+      ...data,
+      activeElementCount: filteredElements.length,
+      hasAllowlist: filteredElements.some(function (element) {
+        return (Array.isArray(element.allowRules) && element.allowRules.length > 0)
+          || (Array.isArray(element.allowPatterns) && element.allowPatterns.length > 0);
+      }),
+      elements: filteredElements,
+      knownSessions: [],
+      denyPatterns: flattenElementPatterns(filteredElements, 'denyPatterns'),
+      allowPatterns: flattenElementPatterns(filteredElements, 'allowPatterns'),
+      confirmPatterns: flattenElementPatterns(filteredElements, 'confirmPatterns'),
+      denyRules: flattenElementPatterns(filteredElements, 'denyRules'),
+      allowRules: flattenElementPatterns(filteredElements, 'allowRules'),
+      confirmRules: flattenElementPatterns(filteredElements, 'confirmRules'),
+    };
+  }
+
   function flattenElementPatterns(elements, key) {
     return elements.flatMap(function (element) {
       return Array.isArray(element[key]) ? element[key] : [];
@@ -608,6 +833,80 @@
           </div>
         </div>
 
+        <div class="perm-card perm-card--full" data-collapsed="false" id="perm-authority-card">
+          <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
+            <h3 class="perm-card-title">Permission Authority Mode</h3>
+            <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
+          </div>
+          <div class="perm-card-body">
+            <div class="perm-selected-header perm-selected-header--compact">
+              <div>
+                <div class="perm-selected-title">Human-Only Permission Authority</div>
+                <div class="perm-selected-subtitle">Choose whether the host's native permission system or DollhouseMCP is the final authority for tool approvals.</div>
+              </div>
+            </div>
+
+            <div class="perm-selected-grid">
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Current Permission State</h4>
+                <div class="perm-authority-current-list" id="perm-authority-current-host-list"></div>
+              </div>
+
+              <div class="perm-selected-panel">
+                <h4 class="perm-selected-panel-title">Change Permission Mode</h4>
+                <div class="perm-authority-selected-host" id="perm-authority-selected-host">Claude Code</div>
+                <div class="perm-selected-subtitle">Choose how this host should handle permission decisions.</div>
+
+                <div class="perm-authority-options" role="radiogroup" aria-label="Authority mode">
+                  <label class="perm-authority-option" id="perm-authority-option-off">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-off" value="off">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title">Host-Controlled Permissions</span>
+                        <span class="perm-authority-option-description">Dollhouse steps out of the way. The host's own permission system handles approvals by itself.</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="perm-authority-option" id="perm-authority-option-shared">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-shared" value="shared">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title">Shared Permissioning</span>
+                        <span class="perm-authority-option-description">Dollhouse stays active, but the host permission system can still be more restrictive.</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="perm-authority-option perm-authority-option--authoritative" id="perm-authority-option-authoritative">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-authoritative" value="authoritative">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title-row">
+                          <span class="perm-authority-option-title">Dollhouse-Controlled Permissions</span>
+                          <span class="perm-authority-inline-note" id="perm-authority-authoritative-note" hidden></span>
+                        </span>
+                        <span class="perm-authority-option-description">Dollhouse becomes the permission authority. It syncs Dollhouse allow, ask, and deny rules into the host so Dollhouse decides conflicts instead of the host's own approval flow.</span>
+                      </span>
+                    </span>
+                  </label>
+                </div>
+
+                <label class="perm-selected-subtitle perm-authority-field-label" for="perm-authority-reason">Reason (optional)</label>
+                <input id="perm-authority-reason" class="perm-authority-reason-input" type="text" maxlength="200" placeholder="Why are you changing the permission authority mode?">
+
+                <p class="perm-selected-subtitle perm-authority-human-note" id="perm-authority-note"></p>
+                <div class="perm-authority-save-shell" id="perm-authority-save-shell" data-dirty="false">
+                  <div class="perm-authority-dirty-state" id="perm-authority-dirty-state" hidden></div>
+                  <div class="perm-inline-warning" id="perm-authority-message" hidden></div>
+                  <div class="perm-authority-actions">
+                    <div class="perm-authority-save-copy" id="perm-authority-save-copy"></div>
+                    <button type="button" class="perm-panel-action perm-authority-save-btn" id="perm-authority-save-btn">Save Authority Mode</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Selected Session Detail -->
         <div class="perm-card perm-card--full" data-collapsed="false" id="perm-selected-card" hidden>
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
@@ -710,8 +1009,10 @@
               <span>Aggregate decision log across all sessions</span>
               <span id="perm-audit-modal-count">0 captured entries</span>
             </div>
-            <button type="button" class="modal-action-btn" id="perm-audit-copy-btn">Copy Markdown</button>
-            <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+            <div class="modal-header-actions">
+              <button type="button" class="modal-action-btn" id="perm-audit-copy-btn">Copy Markdown</button>
+              <button type="button" class="modal-close" id="perm-audit-modal-close" aria-label="Close audit view">✕</button>
+            </div>
           </header>
           <div class="modal-body">
             <div class="perm-feed perm-feed--modal" id="perm-audit-modal-feed" role="log" aria-live="polite" aria-label="Full permission decision audit feed">
@@ -775,6 +1076,52 @@
     }
   }
 
+  function attachAuthorityControls() {
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
+    const reasonInput = document.getElementById('perm-authority-reason');
+    const saveButton = document.getElementById('perm-authority-save-btn');
+
+    if (currentHostList) {
+      currentHostList.addEventListener('click', function (event) {
+        const row = event.target.closest('.perm-authority-current-host[data-host]');
+        if (!row) {
+          return;
+        }
+        const host = row.getAttribute('data-host');
+        if (!host || host === authorityUiState.selectedHost) {
+          return;
+        }
+        authorityUiState.selectedHost = host;
+        authorityUiState.feedback = '';
+        authorityUiState.feedbackKind = 'info';
+        authorityUiState.dirty = false;
+        renderAuthorityMode(latestAggregateData);
+      });
+    }
+
+    document.querySelectorAll('input[name="perm-authority-mode"]').forEach(function (input) {
+      input.addEventListener('change', function (event) {
+        authorityUiState.selectedMode = event.target.value;
+        authorityUiState.feedback = '';
+        authorityUiState.feedbackKind = 'info';
+        authorityUiState.dirty = true;
+        renderAuthorityMode(latestAggregateData);
+      });
+    });
+
+    if (reasonInput) {
+      reasonInput.addEventListener('input', function (event) {
+        authorityUiState.draftReason = event.target.value;
+      });
+    }
+
+    if (saveButton) {
+      saveButton.addEventListener('click', function () {
+        saveAuthorityMode();
+      });
+    }
+  }
+
   function openAuditModal() {
     const auditModal = document.getElementById('perm-audit-modal');
     if (!auditModal) return;
@@ -818,10 +1165,52 @@
 
   async function copyTextToClipboard(text) {
     if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return;
+      try {
+        await navigator.clipboard.writeText(text);
+        return;
+      } catch {
+        // Fall through to the user-gesture fallback below. Some embedded browsers
+        // expose the clipboard API but still reject writes in modal contexts.
+      }
     }
-    throw new Error('Clipboard API unavailable');
+
+    copyTextWithSelectionFallback(text);
+  }
+
+  function copyTextWithSelectionFallback(text) {
+    const textarea = document.createElement('textarea');
+    let handled = false;
+
+    function handleCopy(event) {
+      if (!event.clipboardData) {
+        return;
+      }
+      event.clipboardData.setData('text/plain', text);
+      event.preventDefault();
+      handled = true;
+    }
+
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.setAttribute('aria-hidden', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.left = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    document.addEventListener('copy', handleCopy, true);
+    textarea.focus();
+    textarea.select();
+    textarea.setSelectionRange(0, textarea.value.length);
+
+    try {
+      if (!document.execCommand || !document.execCommand('copy') || !handled) {
+        throw new Error('Clipboard copy command unavailable');
+      }
+    } finally {
+      document.removeEventListener('copy', handleCopy, true);
+      textarea.remove();
+    }
   }
 
   function setText(id, value) {
@@ -846,6 +1235,154 @@
 
   function truncate(str, len) {
     return str.length > len ? str.slice(0, len) + '...' : str;
+  }
+
+  function getAuthorityModeForHost(authority, host) {
+    return authority?.hosts?.[host]?.mode || authority?.defaultMode || 'shared';
+  }
+
+  function formatAuthorityHost(host) {
+    const meta = AUTHORITY_HOST_META[String(host || '')];
+    if (meta?.label) {
+      return meta.label;
+    }
+    return String(host || '')
+      .split('-')
+      .map(function (part) { return part ? part.charAt(0).toUpperCase() + part.slice(1) : part; })
+      .join(' ');
+  }
+
+  function formatAuthorityMode(mode) {
+    return mode === 'off'
+      ? 'Host-Controlled Permissions'
+      : mode === 'authoritative'
+        ? 'Dollhouse-Controlled Permissions'
+        : 'Shared Permissioning';
+  }
+
+  function buildAuthorityExplanation(mode, authoritativeSupported) {
+    if (mode === 'off') {
+      return 'Dollhouse is not participating in approvals here. The host handles permissions on its own.';
+    }
+    if (mode === 'authoritative') {
+      return 'Dollhouse is the source of truth for permissions here. The host follows Dollhouse-synced allow, ask, and deny rules, while user-authored entries outside Dollhouse-managed settings are still preserved.';
+    }
+    return authoritativeSupported
+      ? 'Dollhouse participates in permission checks, but the host can still be more restrictive.'
+      : 'This host currently supports shared/advisory mode while authoritative settings sync is still being added.';
+  }
+
+  function fallbackAuthorityMode(mode) {
+    return mode === 'authoritative' ? 'shared' : mode;
+  }
+
+  function setAuthorityRadioState(id, checked, disabled) {
+    const radio = document.getElementById(id);
+    if (!radio) return;
+    radio.checked = checked;
+    radio.disabled = disabled;
+    const option = radio.closest('.perm-authority-option');
+    if (option) {
+      option.dataset.checked = checked ? 'true' : 'false';
+      option.dataset.disabled = disabled ? 'true' : 'false';
+    }
+  }
+
+  function buildAuthoritySaveCopy(state) {
+    if (state.saving) {
+      return `Applying ${formatAuthorityMode(state.desiredMode)} mode for ${formatAuthorityHost(state.host)}...`;
+    }
+    if (state.dirty) {
+      return `Review the change and save to apply ${formatAuthorityMode(state.desiredMode)} mode for ${formatAuthorityHost(state.host)}.`;
+    }
+    return `${formatAuthorityHost(state.host)} is currently saved in ${formatAuthorityMode(state.currentMode)} mode.`;
+  }
+
+  function renderAuthorityCurrentHostList(authority, supportedHosts, selectedHost) {
+    const explicitHosts = Object.keys(authority?.hosts || {});
+    const hostIds = Array.from(new Set(explicitHosts.concat(supportedHosts || [])));
+    const orderedHosts = hostIds.sort(function (left, right) {
+      return formatAuthorityHost(left).localeCompare(formatAuthorityHost(right));
+    });
+
+    if (orderedHosts.length === 0) {
+      return '<div class="perm-pattern-empty">No host authority settings saved yet.</div>';
+    }
+
+    return orderedHosts.map(function (host) {
+      const mode = getAuthorityModeForHost(authority, host);
+      const meta = AUTHORITY_HOST_META[host] || { shortLabel: formatAuthorityHost(host).slice(0, 2).toUpperCase(), tone: 'generic' };
+      const selectedAttr = host === selectedHost ? 'true' : 'false';
+      return `
+        <button type="button" class="perm-authority-current-host" data-selected="${selectedAttr}" data-host="${esc(host)}" aria-pressed="${selectedAttr}">
+          <span class="perm-authority-host-mark perm-authority-host-mark--${esc(meta.tone || 'generic')}" aria-hidden="true">${esc(meta.shortLabel || 'DH')}</span>
+          <span class="perm-authority-current-host-copy">
+            <span class="perm-authority-current-host-name">${esc(formatAuthorityHost(host))}</span>
+            <span class="perm-authority-current-host-mode">${esc(formatAuthorityMode(mode))}</span>
+          </span>
+        </button>
+      `;
+    }).join('');
+  }
+
+  async function saveAuthorityMode() {
+    if (!latestAggregateData || authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving) {
+      return;
+    }
+
+    const authority = latestAggregateData.authority || { defaultMode: 'shared', hosts: {} };
+    const currentMode = getAuthorityModeForHost(authority, authorityUiState.selectedHost);
+    const requestedMode = AUTHORITY_AUTHORITATIVE_HOSTS.has(authorityUiState.selectedHost)
+      ? authorityUiState.selectedMode
+      : fallbackAuthorityMode(authorityUiState.selectedMode);
+
+    if (requestedMode === currentMode) {
+      authorityUiState.feedback = 'No authority-mode change to save.';
+      authorityUiState.feedbackKind = 'info';
+      renderAuthorityMode(latestAggregateData);
+      return;
+    }
+
+    const confirmMessage = [
+      `Change ${formatAuthorityHost(authorityUiState.selectedHost)} from ${formatAuthorityMode(currentMode)} to ${formatAuthorityMode(requestedMode)}?`,
+      '',
+      requestedMode === 'authoritative'
+        ? 'Dollhouse will take a backup and write managed host permission settings.'
+        : requestedMode === 'off'
+          ? 'Dollhouse hooks will no-op and the host permission system will become the only gate.'
+          : 'Dollhouse will stay active, but the host will remain authoritative on conflicts.',
+    ].join('\n');
+
+    if (!window.confirm(confirmMessage)) {
+      return;
+    }
+
+    authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.saving;
+    authorityUiState.feedback = '';
+    renderAuthorityMode(latestAggregateData);
+
+    try {
+      const response = await updatePermissionAuthority({
+        host: authorityUiState.selectedHost,
+        mode: requestedMode,
+        reason: authorityUiState.draftReason.trim() || undefined,
+      });
+
+      latestAggregateData = {
+        ...latestAggregateData,
+        authority: response.authority,
+      };
+      authorityUiState.selectedMode = requestedMode;
+      authorityUiState.dirty = false;
+      authorityUiState.feedback = `Saved ${formatAuthorityMode(requestedMode)} mode for ${formatAuthorityHost(authorityUiState.selectedHost)}.`;
+      authorityUiState.feedbackKind = 'success';
+    } catch (error) {
+      authorityUiState.feedback = error instanceof Error ? error.message : 'Failed to update permission authority.';
+      authorityUiState.feedbackKind = 'error';
+    } finally {
+      authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.idle;
+      renderAuthorityMode(latestAggregateData);
+    }
   }
 
   function dataAdvisoryPlaceholder() {

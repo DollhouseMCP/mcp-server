@@ -11,10 +11,11 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
+const PID_PORT_FILE = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
 const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -33,8 +34,7 @@ describe('Permission Server Integration', () => {
       }
       // Clean up port files
       await fs.unlink(PORT_FILE).catch(() => {});
-      const pidFile = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
-      await fs.unlink(pidFile).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
     });
 
     it('should find a port and write a discoverable port file', async () => {
@@ -59,11 +59,6 @@ describe('Permission Server Integration', () => {
     });
 
     it('should accept POST /api/evaluate_permission and return a decision', async () => {
-      const { findAvailablePort } = await import(
-        '../../../src/auto-dollhouse/portDiscovery.js'
-      );
-      testPort = await findAvailablePort(49310);
-
       // Start a minimal mock server that mimics the evaluate_permission endpoint
       server = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -91,7 +86,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => server!.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(server);
 
       // Test safe tool
       const allowResponse = await httpPost(testPort, {
@@ -154,6 +149,7 @@ describe('Permission Server Integration', () => {
 
     afterEach(async () => {
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
     });
 
     it('hook script should exist in repo at scripts/', async () => {
@@ -161,23 +157,72 @@ describe('Permission Server Integration', () => {
       expect(exists).toBe(true);
     });
 
-    itBash('hook script should fail open when port file is missing', (done) => {
-      // Ensure port file doesn't exist
-      fs.unlink(PORT_FILE).catch(() => {}).then(() => {
-        execFile(BASH_BINARY, [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: SAFE_TEST_PATH },
-        }, (error, stdout, _stderr) => {
-          // Exit code 0 = fail open (allow)
-          expect(error).toBeNull();
-          // No JSON output when failing open
-          expect(stdout.trim()).toBe('');
-          done();
+    itBash('hook script should fail open when port file is missing', async () => {
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          stdio: ['pipe', 'pipe', 'pipe'],
         });
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        }));
+        hookProc.stdin.end();
       });
+
+      await fs.rm(tempHome, { recursive: true, force: true });
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+    });
+
+    itBash('hook script should no-op when authority mode is off for Claude Code', async () => {
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const runDir = path.join(tempHome, '.dollhouse', 'run');
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(
+        path.join(runDir, 'permission-authority.json'),
+        JSON.stringify({
+          version: 1,
+          defaultMode: 'shared',
+          updatedAt: '2026-04-17T00:00:00.000Z',
+          hosts: {
+            'claude-code': {
+              mode: 'off',
+              updatedAt: '2026-04-17T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        }));
+        hookProc.stdin.end();
+      });
+
+      await fs.rm(tempHome, { recursive: true, force: true });
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
     });
 
     itBash('hook script should discover server via port file and get a response', async () => {
-      const testPort = 49360;
+      let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -200,7 +245,7 @@ describe('Permission Server Integration', () => {
       });
 
       // Start server and write port file
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -228,6 +273,7 @@ describe('Permission Server Integration', () => {
       // Cleanup and assert
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
       expect(capturedBody).toEqual({
@@ -243,7 +289,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should translate legacy flat Claude responses', async () => {
-      const testPort = 49361;
+      let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -257,7 +303,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -268,6 +314,7 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(JSON.parse(stdout.trim())).toEqual({
         hookSpecificOutput: {
@@ -279,7 +326,7 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should pass through already-wrapped Claude responses unchanged', async () => {
-      const testPort = 49362;
+      let testPort = 0;
       const wrappedResponse = {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -297,7 +344,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -308,12 +355,13 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
     });
 
     itBash('hook script should fail open silently on malformed Claude responses', async () => {
-      const testPort = 49363;
+      let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -324,7 +372,7 @@ describe('Permission Server Integration', () => {
         }
       });
 
-      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      testPort = await listenOnLoopback(mockServer);
       await fs.mkdir(RUN_DIR, { recursive: true });
       await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
 
@@ -335,9 +383,65 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('');
+    });
+
+    itBash('hook script should fall back to the newest live PID-keyed port file and restore the shared file', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'allow',
+              },
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.writeFile(PID_PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript({
+        tool_name: 'Read',
+        tool_input: { file_path: './test-fixture.txt' },
+      });
+
+      const restoredPort = await fs.readFile(PORT_FILE, 'utf-8');
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(restoredPort.trim()).toBe(String(testPort));
+      expect(capturedBody).toEqual({
+        tool_name: 'Read',
+        input: { file_path: './test-fixture.txt' },
+        platform: 'claude_code',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
   });
 
@@ -360,7 +464,8 @@ describe('Permission Server Integration', () => {
 
     it('should handle unreachable server in HTTP request gracefully', async () => {
       // Hitting a port where nothing is listening should not crash
-      const response = await httpPost(49399, {
+      const unusedPort = await reserveUnusedLoopbackPort();
+      const response = await httpPost(unusedPort, {
         tool_name: 'Read',
         input: {},
         platform: 'claude_code',
@@ -406,6 +511,43 @@ function httpPost(port: number, body: Record<string, unknown>): Promise<any> {
     req.write(data);
     req.end();
   });
+}
+
+/**
+ * Bind a test server on loopback using an OS-assigned port.
+ */
+function listenOnLoopback(server: http.Server): Promise<number> {
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      const address = server.address();
+      if (!address || typeof address === 'string') {
+        reject(new Error('Unable to determine loopback port'));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+/**
+ * Reserve an unused loopback port, then immediately release it so the caller
+ * can verify connection-failure behavior against a realistically free port.
+ */
+async function reserveUnusedLoopbackPort(): Promise<number> {
+  const placeholderServer = http.createServer();
+  const port = await listenOnLoopback(placeholderServer);
+  await new Promise<void>((resolve, reject) => {
+    placeholderServer.close((error?: Error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+  return port;
 }
 
 function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {

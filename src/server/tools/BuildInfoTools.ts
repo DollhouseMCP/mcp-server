@@ -23,6 +23,7 @@ export function getBuildInfoTools(buildInfoService: BuildInfoService) {
         const info = await buildInfoService.getBuildInfo();
         const formattedInfo = buildInfoService.formatBuildInfo(info);
         return {
+          structuredContent: info,
           content: [
             {
               type: "text",
