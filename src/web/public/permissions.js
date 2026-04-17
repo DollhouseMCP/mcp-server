@@ -287,7 +287,7 @@
     authoritativeNote.hidden = authoritativeSupported;
     authoritativeNote.textContent = authoritativeSupported
       ? ''
-      : 'Claude Code only for now. Other hosts can use Off or Shared mode.';
+      : 'Claude Code only for now. Other hosts can use Host-Controlled or Shared Permissioning mode.';
     dirtyState.hidden = !dirty;
     dirtyState.textContent = dirty
       ? `Unsaved change: ${formatAuthorityHost(authorityUiState.selectedHost)} will move from ${formatAuthorityMode(serverMode)} to ${formatAuthorityMode(desiredMode)} after you save.`
@@ -736,7 +736,7 @@
 
         <div class="perm-card perm-card--full" data-collapsed="false" id="perm-authority-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Authority Mode</h3>
+            <h3 class="perm-card-title">Permission Authority Mode</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
@@ -749,7 +749,7 @@
 
             <div class="perm-selected-grid">
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Current State</h4>
+                <h4 class="perm-selected-panel-title">Current Permission State</h4>
                 <ul class="perm-pattern-list">
                   <li class="perm-pattern-item">
                     <span class="perm-pattern-badge perm-pattern-badge--allow">host</span>
@@ -757,7 +757,7 @@
                   </li>
                   <li class="perm-pattern-item">
                     <span class="perm-pattern-badge perm-pattern-badge--ask">mode</span>
-                    <span class="perm-pattern-text" id="perm-authority-current-mode">Shared</span>
+                    <span class="perm-pattern-text" id="perm-authority-current-mode">Shared Permissioning</span>
                   </li>
                 </ul>
                 <p class="perm-selected-subtitle" id="perm-authority-explanation"></p>
@@ -765,7 +765,7 @@
               </div>
 
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Change Mode</h4>
+                <h4 class="perm-selected-panel-title">Change Permission Mode</h4>
                 <label class="perm-selected-subtitle perm-authority-field-label" for="perm-authority-host">Host</label>
                 <select id="perm-authority-host" class="perm-panel-action perm-authority-host-select"></select>
 
@@ -774,7 +774,7 @@
                     <span class="perm-authority-option-main">
                       <input type="radio" name="perm-authority-mode" id="perm-authority-mode-off" value="off">
                       <span class="perm-authority-option-copy">
-                        <span class="perm-authority-option-title">Off</span>
+                        <span class="perm-authority-option-title">Host-Controlled Permissions</span>
                         <span class="perm-authority-option-description">Dollhouse steps out of the way. The host's own permission system handles approvals by itself.</span>
                       </span>
                     </span>
@@ -783,7 +783,7 @@
                     <span class="perm-authority-option-main">
                       <input type="radio" name="perm-authority-mode" id="perm-authority-mode-shared" value="shared">
                       <span class="perm-authority-option-copy">
-                        <span class="perm-authority-option-title">Shared</span>
+                        <span class="perm-authority-option-title">Shared Permissioning</span>
                         <span class="perm-authority-option-description">Dollhouse stays active, but the host permission system can still be more restrictive.</span>
                       </span>
                     </span>
@@ -793,7 +793,7 @@
                       <input type="radio" name="perm-authority-mode" id="perm-authority-mode-authoritative" value="authoritative">
                       <span class="perm-authority-option-copy">
                         <span class="perm-authority-option-title-row">
-                          <span class="perm-authority-option-title">Authoritative</span>
+                          <span class="perm-authority-option-title">Dollhouse-Controlled Permissions</span>
                           <span class="perm-authority-inline-note" id="perm-authority-authoritative-note" hidden></span>
                         </span>
                         <span class="perm-authority-option-description">Dollhouse becomes the permission authority. It syncs Dollhouse allow, ask, and deny rules into the host so Dollhouse decides conflicts instead of the host's own approval flow.</span>
@@ -803,7 +803,7 @@
                 </div>
 
                 <label class="perm-selected-subtitle perm-authority-field-label" for="perm-authority-reason">Reason (optional)</label>
-                <input id="perm-authority-reason" class="perm-authority-reason-input" type="text" maxlength="200" placeholder="Why are you changing authority mode?">
+                <input id="perm-authority-reason" class="perm-authority-reason-input" type="text" maxlength="200" placeholder="Why are you changing the permission authority mode?">
 
                 <p class="perm-selected-subtitle perm-authority-human-note" id="perm-authority-note"></p>
                 <div class="perm-authority-save-shell" id="perm-authority-save-shell" data-dirty="false">
@@ -1114,10 +1114,10 @@
 
   function formatAuthorityMode(mode) {
     return mode === 'off'
-      ? 'Off'
+      ? 'Host-Controlled Permissions'
       : mode === 'authoritative'
-        ? 'Authoritative'
-        : 'Shared';
+        ? 'Dollhouse-Controlled Permissions'
+        : 'Shared Permissioning';
   }
 
   function buildAuthorityExplanation(mode, authoritativeSupported) {
