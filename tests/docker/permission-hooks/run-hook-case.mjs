@@ -4,21 +4,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
+const SAFE_CONTAINER_PATH = '/usr/local/bin:/usr/bin:/bin';
+const DEFAULT_MOCK_SERVER_PORT = 41715;
 const hookScript = process.env.HOOK_SCRIPT;
 const hookPayloadB64 = process.env.HOOK_PAYLOAD_B64;
 const mockResponseB64 = process.env.MOCK_RESPONSE_B64;
 const hookEnvB64 = process.env.HOOK_ENV_B64;
 const portDiscoveryMode = process.env.PORT_DISCOVERY_MODE ?? 'shared';
-const port = Number(process.env.MOCK_SERVER_PORT ?? '41715');
+const port = Number(process.env.MOCK_SERVER_PORT ?? String(DEFAULT_MOCK_SERVER_PORT));
 
 if (!hookScript || !hookPayloadB64 || !mockResponseB64) {
   throw new Error('HOOK_SCRIPT, HOOK_PAYLOAD_B64, and MOCK_RESPONSE_B64 are required');
 }
 
-const hookPayload = JSON.parse(Buffer.from(hookPayloadB64, 'base64').toString('utf-8'));
-const mockResponse = JSON.parse(Buffer.from(mockResponseB64, 'base64').toString('utf-8'));
+if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+  throw new Error(`MOCK_SERVER_PORT must be a valid TCP port, received ${process.env.MOCK_SERVER_PORT ?? 'undefined'}`);
+}
+
+const hookPayload = parseJsonEnvironmentVariable(hookPayloadB64, 'HOOK_PAYLOAD_B64');
+const mockResponse = parseJsonEnvironmentVariable(mockResponseB64, 'MOCK_RESPONSE_B64');
 const hookEnv = hookEnvB64
-  ? JSON.parse(Buffer.from(hookEnvB64, 'base64').toString('utf-8'))
+  ? parseStringRecord(parseJsonEnvironmentVariable(hookEnvB64, 'HOOK_ENV_B64'), 'HOOK_ENV_B64')
   : {};
 
 const tempHome = await mkdtemp(join(tmpdir(), 'dollhouse-hook-home-'));
@@ -48,9 +54,16 @@ const server = createServer((req, res) => {
     body += chunk.toString();
   });
   req.on('end', () => {
-    capturedRequestBody = JSON.parse(body);
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify(mockResponse));
+    try {
+      capturedRequestBody = JSON.parse(body);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(mockResponse));
+    } catch (error) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `Malformed JSON request body: ${error instanceof Error ? error.message : String(error)}`,
+      }));
+    }
   });
 });
 
@@ -59,10 +72,9 @@ await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
 const result = await new Promise((resolve) => {
   const child = spawn('bash', [hookScript], {
     env: {
-      ...process.env,
       ...hookEnv,
       HOME: tempHome,
-      PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
+      PATH: SAFE_CONTAINER_PATH,
       DOLLHOUSE_SESSION_ID: 'docker-hook-session',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -91,3 +103,33 @@ process.stdout.write(JSON.stringify({
   ...result,
   requestBody: capturedRequestBody,
 }));
+
+function parseJsonEnvironmentVariable(encodedValue, envName) {
+  let decodedValue;
+  try {
+    decodedValue = Buffer.from(encodedValue, 'base64').toString('utf-8');
+  } catch (error) {
+    throw new Error(`${envName} is not valid base64: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    return JSON.parse(decodedValue);
+  } catch (error) {
+    throw new Error(`${envName} does not contain valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function parseStringRecord(value, envName) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${envName} must decode to a JSON object`);
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entryValue]) => {
+      if (typeof entryValue !== 'string') {
+        throw new Error(`${envName}.${key} must be a string`);
+      }
+      return [key, entryValue];
+    }),
+  );
+}

@@ -5,12 +5,15 @@ import { resolve } from 'node:path';
 
 jest.setTimeout(180_000);
 
+const SAFE_HOST_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
+const DOCKER_BIN = resolveDockerBinary();
+
 const DOCKER_AVAILABLE = (() => {
   if (process.env.DOCKER_AVAILABLE === 'false') {
     return false;
   }
   try {
-    execFileSync('docker', ['--version'], { stdio: 'ignore' });
+    execFileSync(DOCKER_BIN, ['--version'], { stdio: 'ignore' });
     return true;
   } catch {
     return false;
@@ -39,7 +42,7 @@ interface HookResult {
 suite('Dockerized permission hook adapters', () => {
   beforeAll(() => {
     execFileSync(
-      'docker',
+      DOCKER_BIN,
       ['build', '-t', IMAGE_TAG, '-f', DOCKERFILE_PATH, '.'],
       { cwd: process.cwd(), stdio: 'inherit' },
     );
@@ -47,9 +50,11 @@ suite('Dockerized permission hook adapters', () => {
 
   afterAll(() => {
     try {
-      execFileSync('docker', ['image', 'rm', '-f', IMAGE_TAG], { stdio: 'ignore' });
-    } catch {
-      // Ignore cleanup failures — image may already be gone.
+      execFileSync(DOCKER_BIN, ['image', 'rm', '-f', IMAGE_TAG], { stdio: 'ignore' });
+    } catch (error) {
+      process.stderr.write(
+        `[permission-hook-docker] Failed to remove Docker image ${IMAGE_TAG}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
     }
   });
 
@@ -248,6 +253,7 @@ function runHookCase(testCase: HookCase): HookResult {
   args.push(IMAGE_TAG);
 
   const result = spawnSync('docker', args, {
+    env: { PATH: SAFE_HOST_PATH },
     cwd: resolve(process.cwd()),
     encoding: 'utf-8',
   });
@@ -264,5 +270,21 @@ function runHookCase(testCase: HookCase): HookResult {
     throw new Error(`Docker run produced no JSON output for ${testCase.hookScript}`);
   }
 
-  return JSON.parse(result.stdout.trim()) as HookResult;
+  try {
+    return JSON.parse(result.stdout.trim()) as HookResult;
+  } catch (error) {
+    throw new Error(
+      `Docker run returned malformed JSON for ${testCase.hookScript}: ${error instanceof Error ? error.message : String(error)}\n` +
+      `stdout:\n${result.stdout}\n` +
+      `stderr:\n${result.stderr}`,
+    );
+  }
+}
+
+function resolveDockerBinary(): string {
+  return execFileSync(
+    '/usr/bin/env',
+    ['-i', `PATH=${SAFE_HOST_PATH}`, 'sh', '-lc', 'command -v docker'],
+    { encoding: 'utf-8' },
+  ).trim();
 }
