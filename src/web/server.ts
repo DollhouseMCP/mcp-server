@@ -388,6 +388,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       : { maxAge: '1y', immutable: true }),
   });
   app.use((req, res, next) => {
+    // Skip shell HTML files from express.static so the SPA fallback can inject
+    // the current token, session IDs, and asset version placeholders.
     const requestedExt = extname(req.path.normalize('NFC')).toLowerCase();
     if (ALLOWED_PAGE_EXTENSIONS.has(requestedExt)) {
       next();

@@ -113,6 +113,7 @@ describe('token injection into index.html (#1804)', () => {
   beforeEach(async () => {
     testDir = await mkdtemp(join(tmpdir(), 'dollhouse-token-inject-test-'));
     await writeFile(join(testDir, 'index.html'), INDEX_TEMPLATE, 'utf8');
+    await writeFile(join(testDir, 'index.htm'), INDEX_TEMPLATE, 'utf8');
     await writeFile(join(testDir, 'styles.css'), 'body { color: red; }', 'utf8');
     await writeFile(join(testDir, 'app.js'), 'console.log("ok");', 'utf8');
   });
@@ -253,6 +254,27 @@ describe('token injection into index.html (#1804)', () => {
     });
 
     const res = await request(app).get('/index.html');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.text).toContain(`content="${TEST_TOKEN}"`);
+    expect(res.text).toContain(`content="${TEST_SESSION_ID}"`);
+    expect(res.text).toContain(`content="${TEST_RUNTIME_SESSION_ID}"`);
+    expect(res.text).not.toContain('{{CONSOLE_TOKEN}}');
+    expect(res.text).not.toContain('{{DOLLHOUSE_SESSION_ID}}');
+    expect(res.text).not.toContain('{{DOLLHOUSE_RUNTIME_SESSION_ID}}');
+    expect(res.text).not.toContain('{{DOLLHOUSE_ASSET_VERSION}}');
+  });
+
+  it('serves /index.htm through the injected shell instead of raw placeholders', async () => {
+    const app = await buildTestApp({
+      publicDir: testDir,
+      getToken: () => TEST_TOKEN,
+      getSessionId: () => TEST_SESSION_ID,
+      getRuntimeSessionId: () => TEST_RUNTIME_SESSION_ID,
+      getAssetVersion: () => '2.0.18',
+    });
+
+    const res = await request(app).get('/index.htm');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain(`content="${TEST_TOKEN}"`);
