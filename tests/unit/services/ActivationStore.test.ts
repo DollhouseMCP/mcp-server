@@ -83,9 +83,10 @@ describe('ActivationStore', () => {
   });
 
   describe('constructor', () => {
-    it('should generate unique session ID when env var not set', () => {
+    it('should derive a stable session ID when env var not set', () => {
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+      expect(s.getSessionId()).toMatch(/^local-[a-f0-9]{10}$/);
+      expect(s.getRuntimeSessionId()).toMatch(new RegExp(`^${s.getSessionId()}-[a-z0-9]+$`));
     });
 
     it('should use DOLLHOUSE_SESSION_ID when set', () => {
@@ -94,16 +95,16 @@ describe('ActivationStore', () => {
       expect(s.getSessionId()).toBe('my-session');
     });
 
-    it('should fall back to default for invalid session ID', () => {
+    it('should fall back to a derived session ID for invalid session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toMatch(/^local-[a-f0-9]{10}$/);
     });
 
-    it('should generate unique session ID for empty session ID', () => {
+    it('should derive a stable session ID for empty session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+      expect(s.getSessionId()).toMatch(/^local-[a-f0-9]{10}$/);
     });
 
     it('should accept alphanumeric with hyphens and underscores', () => {
@@ -115,7 +116,7 @@ describe('ActivationStore', () => {
     it('should reject session IDs starting with a number', () => {
       process.env.DOLLHOUSE_SESSION_ID = '123-session';
       const s = new ActivationStore(mockFileOps, '/tmp/test');
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toMatch(/^local-[a-f0-9]{10}$/);
     });
 
     it('should be enabled by default', () => {
@@ -478,7 +479,7 @@ describe('ActivationStore', () => {
       const written = JSON.parse(lastCall[1]);
 
       expect(written.version).toBe(1);
-      expect(written.sessionId).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+      expect(written.sessionId).toMatch(/^local-[a-f0-9]{10}$/);
       expect(written.lastUpdated).toBeDefined();
       expect(written.activations.skill).toHaveLength(1);
       expect(written.activations.agent).toHaveLength(1);

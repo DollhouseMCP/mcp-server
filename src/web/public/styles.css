@@ -221,6 +221,12 @@ p, li { max-width: 69ch; }
   color: var(--ink-950);
 }
 
+.stat--session strong {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+}
+
 /* Theme toggle */
 .theme-toggle {
   border: 1px solid color-mix(in srgb, var(--signal) 24%, var(--line));

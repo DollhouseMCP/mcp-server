@@ -719,6 +719,7 @@ async function handleBuildInfo(
 
   const info = await service.getBuildInfo();
   return {
+    structuredContent: info,
     content: [{
       type: 'text',
       text: service.formatBuildInfo(info),

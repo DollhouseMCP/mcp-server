@@ -34,11 +34,22 @@ describe('BuildInfoService', () => {
       const info = await service.getBuildInfo();
 
       // Verify the structure exists
+      expect(info).toHaveProperty('sessionId');
+      expect(info).toHaveProperty('runtimeSessionId');
+      expect(info).toHaveProperty('sessionSource');
       expect(info).toHaveProperty('package');
       expect(info).toHaveProperty('build');
       expect(info).toHaveProperty('runtime');
       expect(info).toHaveProperty('environment');
       expect(info).toHaveProperty('server');
+    });
+
+    it('should populate session identity information', async () => {
+      const info = await service.getBuildInfo();
+
+      expect(info.sessionId).toMatch(/^local-[a-f0-9]{10}$/);
+      expect(info.runtimeSessionId).toMatch(new RegExp(`^${info.sessionId}-[a-z0-9]+$`));
+      expect(info.sessionSource).toBe('derived');
     });
 
     it('should populate package information', async () => {
@@ -145,6 +156,9 @@ describe('BuildInfoService', () => {
 
     beforeEach(() => {
       sampleBuildInfo = {
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
         package: {
           name: '@dollhousemcp/mcp-server',
           version: '1.3.2'
@@ -191,6 +205,10 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('## 📦 Package');
       expect(formatted).toContain('**Name**: @dollhousemcp/mcp-server');
       expect(formatted).toContain('**Version**: 1.3.2');
+      expect(formatted).toContain('## 🪪 Session');
+      expect(formatted).toContain('**Session ID**: workspace-a1b2c3d4e5');
+      expect(formatted).toContain('**Runtime Session ID**: workspace-a1b2c3d4e5-k9');
+      expect(formatted).toContain('**Identity Source**: Derived from workspace context');
       expect(formatted).toContain('## 🏗️ Build');
       expect(formatted).toContain('**Type**: git');
       expect(formatted).toContain('**Timestamp**: 2024-01-01T12:00:00.000Z');
@@ -216,6 +234,9 @@ describe('BuildInfoService', () => {
 
     it('should handle missing optional fields gracefully', () => {
       const minimalInfo: BuildInfo = {
+        sessionId: 'session-from-env',
+        runtimeSessionId: 'session-from-env',
+        sessionSource: 'env',
         package: {
           name: 'test-app',
           version: '1.0.0'
@@ -255,6 +276,9 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Mode**: Unknown');
       expect(formatted).toContain('**Docker**: No');
       expect(formatted).toContain('**MCP Connection**: ❌ Disconnected');
+      expect(formatted).toContain('**Session ID**: session-from-env');
+      expect(formatted).toContain('**Identity Source**: Explicit environment');
+      expect(formatted).not.toContain('**Runtime Session ID**:');
       expect(formatted).not.toContain('**Timestamp**:');
       expect(formatted).not.toContain('**Git Commit**:');
       expect(formatted).not.toContain('**Git Branch**:');

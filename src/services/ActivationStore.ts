@@ -18,7 +18,6 @@
  * @since v2.0.0 - Issue #598
  */
 
-import { randomBytes } from 'node:crypto';
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
@@ -26,6 +25,11 @@ import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { FileOperationsService } from './FileOperationsService.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import {
+  resolveSessionIdentity,
+  SESSION_ID_PATTERN,
+  type SessionIdentity,
+} from './sessionIdentity.js';
 
 /**
  * A persisted activation record for a single element.
@@ -80,38 +84,6 @@ function normalizeActivationIdentifier(value: string): string {
   return UnicodeValidator.normalize(value).normalizedContent.trim();
 }
 
-/** Session ID validation: must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars */
-const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
-
-/**
- * Validates and returns the session ID from environment or default.
- *
- * Examples of valid session IDs:
- * - `claude-code` — Claude Code CLI sessions
- * - `zulip-bridge` — Zulip bridge integration
- * - `dev-local` — Local development
- * - `staging-v2` — Staging environment
- */
-function resolveSessionId(): string {
-  const envValue = process.env.DOLLHOUSE_SESSION_ID?.trim();
-  if (!envValue) {
-    // Generate a unique session ID per server instance to prevent
-    // cross-session activation leaking (issue #33)
-    const id = `session-${Date.now().toString(36)}-${randomBytes(4).toString('hex')}`;
-    logger.info(`[ActivationStore] No DOLLHOUSE_SESSION_ID set — generated '${id}'`);
-    return id;
-  }
-
-  if (!SESSION_ID_PATTERN.test(envValue)) {
-    logger.warn(
-      `Invalid DOLLHOUSE_SESSION_ID '${envValue}' — must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars. Falling back to 'default'.`
-    );
-    return 'default';
-  }
-
-  return envValue;
-}
-
 /**
  * Checks whether activation persistence is enabled.
  */
@@ -156,6 +128,7 @@ export class ActivationStore {
   private readonly fileOps: FileOperationsService;
   private readonly stateDir: string;
   private readonly sessionId: string;
+  private readonly runtimeSessionId: string;
   private readonly persistPath: string;
   private readonly enabled: boolean;
 
@@ -163,12 +136,15 @@ export class ActivationStore {
 
   constructor(fileOps: FileOperationsService, stateDir?: string) {
     this.fileOps = fileOps;
-    this.sessionId = resolveSessionId();
+    const identity = resolveSessionIdentity();
+    this.sessionId = identity.sessionId;
+    this.runtimeSessionId = identity.runtimeSessionId;
     this.enabled = isPersistenceEnabled();
     this.stateDir = stateDir ?? path.join(os.homedir(), '.dollhouse', 'state');
     this.persistPath = path.join(this.stateDir, `activations-${this.sessionId}.json`);
 
     this.state = this.createEmptyState();
+    this.logResolvedSessionIdentity(identity);
   }
 
   /**
@@ -445,6 +421,15 @@ export class ActivationStore {
   }
 
   /**
+   * Runtime-unique session identifier used for live console/session registry
+   * surfaces when the stable persistence identity is shared across unnamed
+   * sessions.
+   */
+  getRuntimeSessionId(): string {
+    return this.runtimeSessionId;
+  }
+
+  /**
    * Check if persistence is enabled.
    */
   isEnabled(): boolean {
@@ -527,5 +512,25 @@ export class ActivationStore {
       }
     }
     return counts;
+  }
+
+  private logResolvedSessionIdentity(identity: SessionIdentity): void {
+    const rawEnvValue = process.env.DOLLHOUSE_SESSION_ID?.trim();
+    if (identity.source === 'env') {
+      return;
+    }
+
+    if (!rawEnvValue) {
+      logger.info(
+        `[ActivationStore] No DOLLHOUSE_SESSION_ID set — derived stable session '${identity.sessionId}' from workspace context; runtime session '${identity.runtimeSessionId}' remains unique for this process.`
+      );
+      return;
+    }
+
+    if (!SESSION_ID_PATTERN.test(rawEnvValue)) {
+      logger.warn(
+        `Invalid DOLLHOUSE_SESSION_ID '${rawEnvValue}' — must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars. Using derived session '${identity.sessionId}' instead.`
+      );
+    }
   }
 }

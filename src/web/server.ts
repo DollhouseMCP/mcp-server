@@ -51,6 +51,10 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
+/** Placeholder in index.html that is replaced with the stable Dollhouse session ID. */
+const SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_SESSION_ID}}';
+/** Placeholder in index.html that is replaced with the runtime session ID. */
+const RUNTIME_SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_RUNTIME_SESSION_ID}}';
 /** Placeholder in index.html that is replaced with the asset cache-busting version. */
 const ASSET_VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_ASSET_VERSION}}';
 
@@ -143,6 +147,10 @@ export interface WebServerOptions {
    * middleware is a pass-through when the flag is false (the Phase 1 default).
    */
   tokenStore?: ConsoleTokenStore;
+  /** Stable Dollhouse session identity shown in the web console UI. */
+  sessionId?: string;
+  /** Runtime-unique session identity for diagnostics. */
+  runtimeSessionId?: string;
 }
 
 /**
@@ -406,9 +414,23 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll("'", '&#39;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
+    const escapedSessionId = (options.sessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    const escapedRuntimeSessionId = (options.runtimeSessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
     cachedIndexHtml = template
       .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
       .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION)
+      .replaceAll(SESSION_ID_META_PLACEHOLDER, escapedSessionId)
+      .replaceAll(RUNTIME_SESSION_ID_META_PLACEHOLDER, escapedRuntimeSessionId)
       .replaceAll(ASSET_VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
