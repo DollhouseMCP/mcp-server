@@ -940,9 +940,21 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
 
       // Resolve port: CLI flag → config file → env var → default (#1840)
       const resolvedPort = cliPort || await resolvePortFromConfig();
+      const activationStore = container?.resolve<{ getSessionId: () => string; getRuntimeSessionId: () => string }>('ActivationStore');
 
       const { startWebServer } = await import('./web/server.js');
-      await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+      await startWebServer({
+        portfolioDir,
+        port: resolvedPort,
+        openBrowser: !noBrowser,
+        mcpAqlHandler,
+        memorySink,
+        metricsSink,
+        additionalRouters: [ingestResult.router],
+        tokenStore,
+        sessionId: activationStore?.getSessionId(),
+        runtimeSessionId: activationStore?.getRuntimeSessionId(),
+      });
 
       // Listen for quit commands on stdin (standalone --web mode only).
       // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.

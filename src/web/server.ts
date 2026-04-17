@@ -51,6 +51,10 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
+/** Placeholder in index.html that is replaced with the stable Dollhouse session ID. */
+const SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_SESSION_ID}}';
+/** Placeholder in index.html that is replaced with the runtime session ID. */
+const RUNTIME_SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_RUNTIME_SESSION_ID}}';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 /**
@@ -141,6 +145,10 @@ export interface WebServerOptions {
    * middleware is a pass-through when the flag is false (the Phase 1 default).
    */
   tokenStore?: ConsoleTokenStore;
+  /** Stable Dollhouse session identity shown in the web console UI. */
+  sessionId?: string;
+  /** Runtime-unique session identity for diagnostics. */
+  runtimeSessionId?: string;
 }
 
 /**
@@ -402,9 +410,23 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll("'", '&#39;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
+    const escapedSessionId = (options.sessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    const escapedRuntimeSessionId = (options.runtimeSessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
     cachedIndexHtml = template
       .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
-      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION)
+      .replaceAll(SESSION_ID_META_PLACEHOLDER, escapedSessionId)
+      .replaceAll(RUNTIME_SESSION_ID_META_PLACEHOLDER, escapedRuntimeSessionId);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };
@@ -438,7 +460,6 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // Global error handler — catch Express errors and route to logger instead of terminal.
   // Without this, Express dumps stack traces to stderr (visible in --web terminal).
   // All errors still appear in the management console's Logs tab via MemoryLogSink.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   app.use((err: Error, _req: import('express').Request, res: import('express').Response, _next: import('express').NextFunction) => {
     const status = (err as any).status || (err as any).statusCode || 500;
     logger.warn(`[WebUI] ${err.name}: ${err.message}`);

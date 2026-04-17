@@ -1012,7 +1012,8 @@ export class DollhouseContainer {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return;
 
       const activationStore = this.resolve<ActivationStore>('ActivationStore');
-      const sessionId = activationStore.getSessionId();
+      const sessionId = activationStore.getRuntimeSessionId();
+      const stableSessionId = activationStore.getSessionId();
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
       const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
       const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
@@ -1026,6 +1027,7 @@ export class DollhouseContainer {
       const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
       const result = await startUnifiedConsole({
         sessionId,
+        stableSessionId,
         portfolioDir: portfolioManager.getBaseDir(),
         memorySink,
         metricsSink,

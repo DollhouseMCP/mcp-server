@@ -14,8 +14,12 @@ import { logger } from '../utils/logger.js';
 import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
+import { resolveSessionIdentity } from './sessionIdentity.js';
 
 export interface BuildInfo {
+  sessionId: string;
+  runtimeSessionId: string;
+  sessionSource: 'env' | 'derived';
   package: {
     name: string;
     version: string;
@@ -134,8 +138,12 @@ export class BuildInfoService {
       uptimeMs: Date.now() - this.startTime.getTime(),
       startupTimingMs: this.startupTimer?.getReport(),
     };
+    const sessionIdentity = resolveSessionIdentity();
 
     return {
+      sessionId: sessionIdentity.sessionId,
+      runtimeSessionId: sessionIdentity.runtimeSessionId,
+      sessionSource: sessionIdentity.source,
       package: packageInfo,
       build: {
         timestamp: buildTimestamp,
@@ -182,6 +190,14 @@ export class BuildInfoService {
     lines.push('## 📦 Package');
     lines.push(`- **Name**: ${info.package.name}`);
     lines.push(`- **Version**: ${info.package.version}`);
+    lines.push('');
+
+    lines.push('## 🪪 Session');
+    lines.push(`- **Session ID**: ${info.sessionId}`);
+    if (info.runtimeSessionId !== info.sessionId) {
+      lines.push(`- **Runtime Session ID**: ${info.runtimeSessionId}`);
+    }
+    lines.push(`- **Identity Source**: ${info.sessionSource === 'env' ? 'Explicit environment' : 'Derived from workspace context'}`);
     lines.push('');
     
     // Build info

@@ -51,6 +51,8 @@ const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 export interface UnifiedConsoleOptions {
   /** This process's unique session ID */
   sessionId: string;
+  /** Stable Dollhouse session identity shown to humans and used for persistence. */
+  stableSessionId: string;
   /** Portfolio base directory (for startWebServer) */
   portfolioDir: string;
   /** Log memory sink (for console history) */
@@ -216,6 +218,8 @@ async function startAsLeader(
     memorySink: options.memorySink,
     metricsSink: options.metricsSink,
     port: consolePort,
+    sessionId: options.stableSessionId,
+    runtimeSessionId: options.sessionId,
     additionalRouters: [ingestResult.router],
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
@@ -322,4 +326,3 @@ async function startAsFollower(
     },
   };
 }
-
