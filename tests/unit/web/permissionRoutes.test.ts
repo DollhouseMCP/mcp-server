@@ -7,6 +7,10 @@
 import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
+import { createServer } from 'node:http';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { mkdir, readFile, unlink } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 
 function createMockHandler(readResult?: unknown) {
@@ -34,6 +38,13 @@ function createApp(handler: any) {
 }
 
 describe('permissionRoutes', () => {
+  const runDir = join(homedir(), '.dollhouse', 'run');
+  const latestPortFile = join(runDir, 'permission-server.port');
+
+  afterEach(async () => {
+    await unlink(latestPortFile).catch(() => {});
+  });
+
   describe('POST /api/evaluate_permission', () => {
     it('should return allow for a valid request', async () => {
       const handler = createMockHandler();
@@ -291,6 +302,42 @@ describe('permissionRoutes', () => {
           session_id: 'session-abc',
         },
       });
+    });
+
+    it('should restore the shared latest port file from the active listener port', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 0,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [],
+            permissionPromptActive: false,
+            recentDecisions: [],
+          },
+        }]),
+      } as any;
+
+      await mkdir(runDir, { recursive: true });
+      await unlink(latestPortFile).catch(() => {});
+
+      const app = createApp(handler);
+      const server = createServer(app);
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      const port = typeof address === 'object' && address ? address.port : 0;
+
+      try {
+        const res = await request(server).get('/api/permissions/status');
+
+        expect(res.status).toBe(200);
+        await expect(readFile(latestPortFile, 'utf-8')).resolves.toBe(String(port));
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+      }
     });
 
     it('should surface top-level gatekeeper rules even when no external tool patterns exist', async () => {

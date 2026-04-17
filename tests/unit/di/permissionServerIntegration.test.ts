@@ -11,10 +11,11 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
-import { execFile, spawn } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
 const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
+const PID_PORT_FILE = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
 const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
@@ -33,8 +34,7 @@ describe('Permission Server Integration', () => {
       }
       // Clean up port files
       await fs.unlink(PORT_FILE).catch(() => {});
-      const pidFile = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
-      await fs.unlink(pidFile).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
     });
 
     it('should find a port and write a discoverable port file', async () => {
@@ -154,6 +154,7 @@ describe('Permission Server Integration', () => {
 
     afterEach(async () => {
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
     });
 
     it('hook script should exist in repo at scripts/', async () => {
@@ -161,19 +162,27 @@ describe('Permission Server Integration', () => {
       expect(exists).toBe(true);
     });
 
-    itBash('hook script should fail open when port file is missing', (done) => {
-      // Ensure port file doesn't exist
-      fs.unlink(PORT_FILE).catch(() => {}).then(() => {
-        execFile(BASH_BINARY, [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: SAFE_TEST_PATH },
-        }, (error, stdout, _stderr) => {
-          // Exit code 0 = fail open (allow)
-          expect(error).toBeNull();
-          // No JSON output when failing open
-          expect(stdout.trim()).toBe('');
-          done();
+    itBash('hook script should fail open when port file is missing', async () => {
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          stdio: ['pipe', 'pipe', 'pipe'],
         });
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        }));
+        hookProc.stdin.end();
       });
+
+      await fs.rm(tempHome, { recursive: true, force: true });
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
     });
 
     itBash('hook script should discover server via port file and get a response', async () => {
@@ -228,6 +237,7 @@ describe('Permission Server Integration', () => {
       // Cleanup and assert
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
       expect(capturedBody).toEqual({
@@ -268,6 +278,7 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(JSON.parse(stdout.trim())).toEqual({
         hookSpecificOutput: {
@@ -308,6 +319,7 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
     });
@@ -335,9 +347,65 @@ describe('Permission Server Integration', () => {
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
       await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
       expect(stdout.trim()).toBe('');
+    });
+
+    itBash('hook script should fall back to the newest live PID-keyed port file and restore the shared file', async () => {
+      const testPort = 49364;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'allow',
+              },
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      await new Promise<void>(resolve => mockServer.listen(testPort, '127.0.0.1', resolve));
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.writeFile(PID_PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript({
+        tool_name: 'Read',
+        tool_input: { file_path: './test-fixture.txt' },
+      });
+
+      const restoredPort = await fs.readFile(PORT_FILE, 'utf-8');
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(restoredPort.trim()).toBe(String(testPort));
+      expect(capturedBody).toEqual({
+        tool_name: 'Read',
+        input: { file_path: './test-fixture.txt' },
+        platform: 'claude_code',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
     });
   });
 

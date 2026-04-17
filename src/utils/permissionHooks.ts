@@ -707,8 +707,11 @@ async function installHookAssetsForHost(
   sourceScriptPath?: string,
 ): Promise<{ scriptPath: string }> {
   const normalizedClient = normalizeHookHost(client);
+  const hooksDir = dirname(getPermissionHookScriptPath(homeDir));
   const sharedTargetPath = getPermissionHookScriptPath(homeDir);
   const sharedSourcePath = sourceScriptPath ?? join(repoRootFromModule(), 'scripts', 'pretooluse-dollhouse.sh');
+  const portHelperSourcePath = join(repoRootFromModule(), 'scripts', 'permission-port-discovery.sh');
+  const portHelperTargetPath = join(hooksDir, 'permission-port-discovery.sh');
 
   const sharedStat = statSync(sharedSourcePath);
   if (!sharedStat.isFile()) {
@@ -716,6 +719,13 @@ async function installHookAssetsForHost(
     throw new Error(`Permission hook source script not found: ${sharedSourcePath}`);
   }
   await copyHookAsset(sharedSourcePath, sharedTargetPath);
+
+  const portHelperStat = statSync(portHelperSourcePath);
+  if (!portHelperStat.isFile()) {
+    logger.warn(`[PermissionHooks] Port discovery helper missing for ${normalizedClient}: ${portHelperSourcePath}`);
+    throw new Error(`Permission hook helper script not found: ${portHelperSourcePath}`);
+  }
+  await copyHookAsset(portHelperSourcePath, portHelperTargetPath);
 
   const wrapperTargetPath = getHookWrapperPath(normalizedClient, homeDir);
   if (!wrapperTargetPath) {

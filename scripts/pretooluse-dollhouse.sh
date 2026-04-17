@@ -16,10 +16,12 @@
 # Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
-PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+RUN_DIR="$HOME/.dollhouse/run"
+PORT_FILE="$RUN_DIR/permission-server.port"
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {
@@ -58,18 +60,11 @@ normalize_response() {
   return 0
 }
 
-# Discover the port from the port file
-if [[ -f "$PORT_FILE" ]]; then
-  PORT=$(cat "$PORT_FILE" 2>/dev/null)
-  debug "Port file found: $PORT"
-else
-  debug "No port file at $PORT_FILE — fail open"
-  exit 0
-fi
+source "$SCRIPT_DIR/permission-port-discovery.sh"
 
-# Validate port is a number
-if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-  debug "Invalid port value: $PORT — fail open"
+# Discover the port from the shared file or the newest live PID-keyed file
+if ! PORT=$(resolve_permission_port); then
+  debug "No usable permission server port file found — fail open"
   exit 0
 fi
 

@@ -5,10 +5,12 @@
 # tool_input field names differ from Claude Code. This adapter normalizes the
 # most relevant built-in tool names into Dollhouse's existing permission model.
 
-PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+RUN_DIR="$HOME/.dollhouse/run"
+PORT_FILE="$RUN_DIR/permission-server.port"
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
 HOOK_PLATFORM="vscode"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then
@@ -17,15 +19,10 @@ debug() {
   return 0
 }
 
-if [[ -f "$PORT_FILE" ]]; then
-  PORT=$(cat "$PORT_FILE" 2>/dev/null)
-else
-  debug "No port file at $PORT_FILE — fail open"
-  exit 0
-fi
+source "$SCRIPT_DIR/permission-port-discovery.sh"
 
-if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-  debug "Invalid port value: $PORT — fail open"
+if ! PORT=$(resolve_permission_port); then
+  debug "No usable permission server port file found — fail open"
   exit 0
 fi
 
