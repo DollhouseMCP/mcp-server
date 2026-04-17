@@ -82,12 +82,24 @@
     if (tabs) {
       tabs.addEventListener('click', function (e) {
         const btn = e.target.closest('.console-tab');
-        if (btn && btn.dataset.tab === 'permissions') {
-          var dc = window.DollhouseConsole;
-          if (dc && dc.permissions) {
-            if (!initialized) dc.permissions.init();
-            else if (dc.permissions.refresh) dc.permissions.refresh();
-      }
+        if (!btn || btn.dataset.tab !== 'permissions') {
+          return;
+        }
+
+        const dc = window.DollhouseConsole;
+        if (!dc || !dc.permissions) {
+          return;
+        }
+
+        if (!initialized) {
+          dc.permissions.init();
+          return;
+        }
+
+        if (dc.permissions.refresh) {
+          dc.permissions.refresh();
+        }
+      });
     }
 
     window.addEventListener('dollhouse:policy-debug-visibility-changed', function () {
@@ -95,8 +107,6 @@
         renderFromCache();
       }
     });
-  });
-    }
   });
 
   // ── Initialization ─────────────────────────────────────────
@@ -661,6 +671,10 @@
     };
   }
 
+  /**
+   * Persisted policy state rows are primarily a debugging aid, so the
+   * dashboard treats them as opt-in and mirrors the explicit sessions UI flag.
+   */
   function shouldShowPersistedPolicyDebug() {
     return window.DollhouseSessions?.isPolicyDebugVisible?.() === true;
   }
