@@ -14,6 +14,8 @@ COPY tests/docker/permission-hooks /workspace/tests/docker/permission-hooks
 
 RUN chown -R hookrunner:hookrunner /workspace
 
+ENV PATH=/usr/local/bin:/usr/bin:/bin
+
 USER hookrunner
 
 CMD ["node", "/workspace/tests/docker/permission-hooks/run-hook-case.mjs"]

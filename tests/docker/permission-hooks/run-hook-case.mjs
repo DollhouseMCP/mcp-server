@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-const SAFE_CONTAINER_PATH = '/usr/local/bin:/usr/bin:/bin';
 const DEFAULT_MOCK_SERVER_PORT = 41715;
 const hookScript = process.env.HOOK_SCRIPT;
 const hookPayloadB64 = process.env.HOOK_PAYLOAD_B64;
@@ -74,7 +73,6 @@ const result = await new Promise((resolve) => {
     env: {
       ...hookEnv,
       HOME: tempHome,
-      PATH: SAFE_CONTAINER_PATH,
       DOLLHOUSE_SESSION_ID: 'docker-hook-session',
     },
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -121,13 +119,13 @@ function parseJsonEnvironmentVariable(encodedValue, envName) {
 
 function parseStringRecord(value, envName) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`${envName} must decode to a JSON object`);
+    throw new TypeError(`${envName} must decode to a JSON object`);
   }
 
   return Object.fromEntries(
     Object.entries(value).map(([key, entryValue]) => {
       if (typeof entryValue !== 'string') {
-        throw new Error(`${envName}.${key} must be a string`);
+        throw new TypeError(`${envName}.${key} must be a string`);
       }
       return [key, entryValue];
     }),

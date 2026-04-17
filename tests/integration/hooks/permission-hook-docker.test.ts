@@ -252,8 +252,7 @@ function runHookCase(testCase: HookCase): HookResult {
 
   args.push(IMAGE_TAG);
 
-  const result = spawnSync('docker', args, {
-    env: { PATH: SAFE_HOST_PATH },
+  const result = spawnSync(DOCKER_BIN, args, {
     cwd: resolve(process.cwd()),
     encoding: 'utf-8',
   });
