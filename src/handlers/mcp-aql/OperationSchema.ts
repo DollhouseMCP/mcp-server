@@ -1500,6 +1500,21 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       '{ operation: "get_effective_cli_policies", params: { tool_name: "Bash", tool_input: { command: "git push" } } }',
     ],
   },
+  get_permission_authority: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
+    description: 'Get the current permission-authority mode for supported hosts. Read-only: AI can inspect authority state but cannot change it.',
+    params: {
+      host: { type: 'string', description: 'Optional host to inspect (e.g., "claude-code", "codex")' },
+    },
+    returns: { name: 'PermissionAuthorityState', kind: 'object', description: '{ defaultMode, hosts, supportedHosts, supportedModes, aiMutable: false }' },
+    examples: [
+      '{ operation: "get_permission_authority" }',
+      '{ operation: "get_permission_authority", params: { host: "claude-code" } }',
+    ],
+  },
   // Issue #625 Phase 3: CLI approval workflow
   approve_cli_permission: {
     endpoint: 'EXECUTE',

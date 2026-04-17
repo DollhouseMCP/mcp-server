@@ -619,14 +619,15 @@ describe('OperationSchema', () => {
     });
 
     describe('GATEKEEPER_SCHEMAS', () => {
-      it('should define 9 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(9);
+      it('should define 10 gatekeeper operations', () => {
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(10);
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.release_deadlock).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.permission_prompt).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.get_effective_cli_policies).toBeDefined();
+        expect(GATEKEEPER_SCHEMAS.get_permission_authority).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.approve_cli_permission).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.get_pending_cli_approvals).toBeDefined();
       });

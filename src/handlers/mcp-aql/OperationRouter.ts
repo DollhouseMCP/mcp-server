@@ -139,6 +139,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.getEffectiveCliPolicies',
     description: 'Get effective CLI permission policies for the current session (Issue #625 Phase 2)',
   },
+  get_permission_authority: {
+    endpoint: 'READ',
+    handler: 'Gatekeeper.getPermissionAuthority',
+    description: 'Get the current host vs Dollhouse permission authority mode (read-only)',
+  },
   // Issue #625 Phase 3: CLI approval workflow
   approve_cli_permission: {
     endpoint: 'EXECUTE',

@@ -8,9 +8,9 @@ import { jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { createServer } from 'node:http';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 
 function createMockHandler(readResult?: unknown) {
@@ -29,10 +29,10 @@ function createMockHandler(readResult?: unknown) {
   } as any;
 }
 
-function createApp(handler: any) {
+function createApp(handler: any, options?: { homeDir?: string }) {
   const app = express();
   const router = express.Router();
-  registerPermissionRoutes(router, handler);
+  registerPermissionRoutes(router, handler, options);
   app.use('/api', router);
   return app;
 }
@@ -40,9 +40,15 @@ function createApp(handler: any) {
 describe('permissionRoutes', () => {
   const runDir = join(homedir(), '.dollhouse', 'run');
   const latestPortFile = join(runDir, 'permission-server.port');
+  let tempHome: string;
+
+  beforeEach(async () => {
+    tempHome = await mkdtemp(join(tmpdir(), 'permission-routes-home-'));
+  });
 
   afterEach(async () => {
     await unlink(latestPortFile).catch(() => {});
+    await rm(tempHome, { recursive: true, force: true });
   });
 
   describe('POST /api/evaluate_permission', () => {
@@ -662,6 +668,35 @@ describe('permissionRoutes', () => {
         { label: 'File', value: '/opt/dollhouse/example.txt', monospace: true },
         { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
       ]));
+    });
+  });
+
+  describe('permission authority routes', () => {
+    it('GET /api/permissions/authority returns default shared state', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const res = await request(app).get('/api/permissions/authority');
+
+      expect(res.status).toBe(200);
+      expect(res.body.defaultMode).toBe('shared');
+      expect(res.body.aiMutable).toBe(false);
+      expect(res.body.supportedModes).toEqual(expect.arrayContaining(['off', 'shared', 'authoritative']));
+    });
+
+    it('POST /api/permissions/authority persists off mode without calling policy sync', async () => {
+      const handler = createMockHandler();
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const res = await request(app)
+        .post('/api/permissions/authority')
+        .send({ host: 'claude-code', mode: 'off', reason: 'test' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.authority.hosts['claude-code'].mode).toBe('off');
+      expect(handler.handleRead).not.toHaveBeenCalledWith(expect.objectContaining({
+        operation: 'get_effective_cli_policies',
+      }));
     });
   });
 });

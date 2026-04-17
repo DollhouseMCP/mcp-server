@@ -437,6 +437,190 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('renders the authority card as a human-only control and disables unsupported authoritative hosts', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            knownSessions: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': { mode: 'shared', updatedAt: '2026-04-17T14:00:00.000Z' },
+                codex: { mode: 'off', updatedAt: '2026-04-17T14:00:00.000Z' },
+              },
+            },
+            authoritySupportedHosts: ['claude-code', 'codex'],
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    expect(win.document.getElementById('perm-authority-card')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Human-only control');
+
+    const hostSelect = win.document.getElementById('perm-authority-host') as HTMLSelectElement | null;
+    const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
+    expect(hostSelect).not.toBeNull();
+    expect(authoritativeRadio?.disabled).toBe(false);
+
+    if (hostSelect) {
+      hostSelect.value = 'codex';
+      hostSelect.dispatchEvent(new win.Event('change', { bubbles: true }));
+    }
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(authoritativeRadio?.disabled).toBe(true);
+    expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Claude Code only');
+
+    cleanup();
+  });
+
+  it('posts authority-mode changes from the permissions card through the human-only local API', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const apiFetch = jest.fn((url: string, options?: any) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            knownSessions: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': { mode: 'shared', updatedAt: '2026-04-17T14:00:00.000Z' },
+              },
+            },
+            authoritySupportedHosts: ['claude-code'],
+          }),
+        });
+      }
+
+      if (url === '/api/permissions/authority') {
+        expect(options?.method).toBe('POST');
+        expect(JSON.parse(options?.body || '{}')).toEqual({
+          host: 'claude-code',
+          mode: 'authoritative',
+          reason: 'Hands-off bridge run',
+        });
+
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': {
+                  mode: 'authoritative',
+                  updatedAt: '2026-04-17T14:05:00.000Z',
+                  lastSyncedAt: '2026-04-17T14:05:00.000Z',
+                },
+              },
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseAuth.apiFetch = apiFetch;
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+    win.confirm = jest.fn().mockReturnValue(true);
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
+    authoritativeRadio!.checked = true;
+    authoritativeRadio!.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const reasonInput = win.document.getElementById('perm-authority-reason') as HTMLInputElement | null;
+    reasonInput!.value = 'Hands-off bridge run';
+    reasonInput!.dispatchEvent(new win.Event('input', { bubbles: true }));
+
+    const saveButton = win.document.getElementById('perm-authority-save-btn') as HTMLButtonElement | null;
+    saveButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.confirm).toHaveBeenCalled();
+    expect(win.document.getElementById('perm-authority-current-mode')?.textContent).toContain('Authoritative');
+    expect(win.document.getElementById('perm-authority-message')?.textContent).toContain('Saved Authoritative mode');
+
+    cleanup();
+  });
+
   it('ignores malformed persisted policy session entries in the picker', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="session-indicator"></div>
