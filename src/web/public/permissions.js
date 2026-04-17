@@ -18,13 +18,21 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
+  const AUTHORITY_MODE_REQUEST_STATES = {
+    idle: 'idle',
+    saving: 'saving',
+  };
   const AUTHORITY_AUTHORITATIVE_HOSTS = new Set(['claude-code']);
+  // Authority modes are intentionally phrased in human terms in the UI:
+  // - off => host-controlled permissions
+  // - shared => both Dollhouse and the host participate
+  // - authoritative => Dollhouse is the source of truth
   const authorityUiState = {
     selectedHost: 'claude-code',
     selectedMode: 'shared',
     draftReason: '',
     dirty: false,
-    saving: false,
+    requestState: AUTHORITY_MODE_REQUEST_STATES.idle,
     feedback: '',
     feedbackKind: 'info',
   };
@@ -265,13 +273,16 @@
       message.dataset.kind = 'info';
       saveCopy.textContent = 'Once a host is installed and configured, it will appear on the left for editing.';
       saveShell.dataset.dirty = 'false';
+      saveShell.dataset.busy = 'false';
       card.dataset.authorityDirty = 'false';
+      card.setAttribute('aria-busy', 'false');
       reasonInput.value = authorityUiState.draftReason;
       setAuthorityRadioState('perm-authority-mode-off', false, true);
       setAuthorityRadioState('perm-authority-mode-shared', false, true);
       setAuthorityRadioState('perm-authority-mode-authoritative', false, true);
       saveButton.disabled = true;
       saveButton.textContent = 'No Installed Hosts Yet';
+      saveButton.setAttribute('aria-busy', 'false');
       card.hidden = false;
       return;
     }
@@ -312,10 +323,12 @@
       currentMode: serverMode,
       desiredMode,
       dirty,
-      saving: authorityUiState.saving,
+      saving: authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving,
     });
     saveShell.dataset.dirty = dirty ? 'true' : 'false';
+    saveShell.dataset.busy = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false';
     card.dataset.authorityDirty = dirty ? 'true' : 'false';
+    card.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
 
     if (authorityUiState.feedback) {
       message.hidden = false;
@@ -327,13 +340,14 @@
       message.dataset.kind = 'info';
     }
 
-    saveButton.disabled = authorityUiState.saving || !dirty;
-    saveButton.textContent = authorityUiState.saving
+    saveButton.disabled = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving || !dirty;
+    saveButton.textContent = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving
       ? `Saving ${formatAuthorityMode(desiredMode)}...`
       : dirty
         ? `Save ${formatAuthorityMode(desiredMode)} Mode for ${formatAuthorityHost(authorityUiState.selectedHost)}`
         : `Saved for ${formatAuthorityHost(authorityUiState.selectedHost)}`;
     saveButton.dataset.dirty = dirty ? 'true' : 'false';
+    saveButton.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
     card.hidden = false;
   }
 
@@ -1198,7 +1212,7 @@
   }
 
   async function saveAuthorityMode() {
-    if (!latestAggregateData || authorityUiState.saving) {
+    if (!latestAggregateData || authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving) {
       return;
     }
 
@@ -1229,7 +1243,7 @@
       return;
     }
 
-    authorityUiState.saving = true;
+    authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.saving;
     authorityUiState.feedback = '';
     renderAuthorityMode(latestAggregateData);
 
@@ -1252,7 +1266,7 @@
       authorityUiState.feedback = error instanceof Error ? error.message : 'Failed to update permission authority.';
       authorityUiState.feedbackKind = 'error';
     } finally {
-      authorityUiState.saving = false;
+      authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.idle;
       renderAuthorityMode(latestAggregateData);
     }
   }

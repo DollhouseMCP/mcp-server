@@ -114,4 +114,16 @@ describe('permissionAuthority', () => {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     expect((parsed.hosts as Record<string, { mode: string }>)['claude-code'].mode).toBe('off');
   });
+
+  it('normalizes authority mode reasons before persisting them', async () => {
+    const state = await setPermissionAuthorityMode({
+      homeDir: tempHome,
+      host: 'claude-code',
+      mode: 'shared',
+      reason: 'Cafe\u0301 review',
+      now: new Date('2026-04-17T14:15:00.000Z'),
+    });
+
+    expect(state.hosts['claude-code']?.reason).toBe('Café review');
+  });
 });

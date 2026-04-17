@@ -526,7 +526,7 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(false);
     expect(win.document.getElementById('perm-authority-dirty-state')?.textContent).toContain('Codex');
     expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Save Shared Permissioning Mode for Codex');
-    expect(win.document.getElementById('perm-authority-save-shell')?.getAttribute('data-dirty')).toBe('true');
+    expect((win.document.getElementById('perm-authority-save-shell') as HTMLElement | null)?.dataset.dirty).toBe('true');
 
     cleanup();
   });
@@ -635,7 +635,7 @@ describe('Web console cleanup regressions', () => {
     expect(win.confirm).toHaveBeenCalled();
     expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Dollhouse-Controlled Permissions');
     expect(win.document.getElementById('perm-authority-message')?.textContent).toContain('Saved Dollhouse-Controlled Permissions mode');
-    expect(win.document.getElementById('perm-authority-save-shell')?.getAttribute('data-dirty')).toBe('false');
+    expect((win.document.getElementById('perm-authority-save-shell') as HTMLElement | null)?.dataset.dirty).toBe('false');
     expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Saved for Claude Code');
 
     cleanup();
