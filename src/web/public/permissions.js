@@ -247,10 +247,34 @@
       return;
     }
 
-    const supportedHosts = Array.isArray(data?.authoritySupportedHosts) && data.authoritySupportedHosts.length
+    const supportedHosts = Array.isArray(data?.authoritySupportedHosts)
       ? data.authoritySupportedHosts
       : ['claude-code'];
     const authority = data?.authority || { defaultMode: 'shared', hosts: {} };
+
+    if (supportedHosts.length === 0) {
+      currentHostList.innerHTML = '<div class="perm-pattern-empty">No installed permission hosts detected yet.</div>';
+      selectedHostHeading.textContent = 'No installed hosts';
+      note.textContent = 'Install Dollhouse permission hooks for a host before changing permission authority mode here.';
+      authoritativeNote.hidden = true;
+      authoritativeNote.textContent = '';
+      dirtyState.hidden = true;
+      dirtyState.textContent = '';
+      message.hidden = true;
+      message.textContent = '';
+      message.dataset.kind = 'info';
+      saveCopy.textContent = 'Once a host is installed and configured, it will appear on the left for editing.';
+      saveShell.dataset.dirty = 'false';
+      card.dataset.authorityDirty = 'false';
+      reasonInput.value = authorityUiState.draftReason;
+      setAuthorityRadioState('perm-authority-mode-off', false, true);
+      setAuthorityRadioState('perm-authority-mode-shared', false, true);
+      setAuthorityRadioState('perm-authority-mode-authoritative', false, true);
+      saveButton.disabled = true;
+      saveButton.textContent = 'No Installed Hosts Yet';
+      card.hidden = false;
+      return;
+    }
 
     if (!supportedHosts.includes(authorityUiState.selectedHost)) {
       authorityUiState.selectedHost = supportedHosts[0];
