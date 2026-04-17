@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
+const BASH_BIN = '/bin/bash';
 const DEFAULT_MOCK_SERVER_PORT = 41715;
 const hookScript = process.env.HOOK_SCRIPT;
 const hookPayloadB64 = process.env.HOOK_PAYLOAD_B64;
@@ -69,7 +70,7 @@ const server = createServer((req, res) => {
 await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
 
 const result = await new Promise((resolve) => {
-  const child = spawn('bash', [hookScript], {
+  const child = spawn(BASH_BIN, [hookScript], {
     env: buildHookEnvironment(hookEnv, tempHome),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
