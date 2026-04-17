@@ -8,12 +8,21 @@
  */
 
 import express, { Router } from 'express';
+import { homedir } from 'node:os';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import {
+  type PermissionAuthorityHost,
+  type PermissionAuthorityMode,
+  PERMISSION_AUTHORITY_HOSTS,
+  PERMISSION_AUTHORITY_MODES,
+  readPermissionAuthorityState,
+  setPermissionAuthorityMode,
+} from '../../utils/permissionAuthority.js';
 
 // ── Permission Decision Tracking ─────────────────────────────────────────────
 // Ring buffer of recent permission decisions for the live dashboard feed.
@@ -300,7 +309,16 @@ async function selfHealLatestPermissionPortFile(port: number | undefined): Promi
  * Register permission-related routes on a gateway router.
  * Must be called with the MCP-AQL handler for policy evaluation.
  */
-export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler): void {
+export interface RegisterPermissionRoutesOptions {
+  homeDir?: string;
+}
+
+export function registerPermissionRoutes(
+  router: Router,
+  handler: MCPAQLHandler,
+  options: RegisterPermissionRoutesOptions = {},
+): void {
+  const authorityHomeDir = options.homeDir ?? homedir();
   const decisionTracker = createPermissionDecisionTracker();
   /**
    * POST /api/evaluate_permission
@@ -405,6 +423,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       const data = opResult.data as Record<string, unknown>;
+      const authorityState = await readPermissionAuthorityState(authorityHomeDir);
       const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
       const denyPatterns = (data.combinedDenyPatterns as string[] | undefined) ?? [];
@@ -432,6 +451,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         permissionPromptActive: data.permissionPromptActive,
         hookInstalled: data.hookInstalled,
         hookHost: data.hookHost,
+        authority: authorityState,
         enforcementReady: data.enforcementReady,
         invalidPolicyElementCount: data.invalidPolicyElementCount ?? 0,
         advisory: data.advisory,
@@ -442,4 +462,90 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       res.status(500).json({ error: 'Failed to get permission status' });
     }
   });
+
+  router.get('/permissions/authority', async (_req, res) => {
+    try {
+      const authorityState = await readPermissionAuthorityState(authorityHomeDir);
+      res.json({
+        ...authorityState,
+        supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+        supportedModes: [...PERMISSION_AUTHORITY_MODES],
+        aiMutable: false,
+      });
+    } catch (err) {
+      logger.error('[WebUI/Gateway] permissions/authority error:', err);
+      res.status(500).json({ error: 'Failed to get permission authority' });
+    }
+  });
+
+  router.post('/permissions/authority', express.json(), async (req, res) => {
+    try {
+      const host = normalizeAuthorityHost(req.body?.host);
+      const mode = normalizeAuthorityMode(req.body?.mode);
+      const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() !== ''
+        ? req.body.reason.trim()
+        : undefined;
+
+      if (!host || !mode) {
+        res.status(400).json({
+          error: 'host and mode are required',
+          supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+          supportedModes: [...PERMISSION_AUTHORITY_MODES],
+        });
+        return;
+      }
+
+      let policies: Record<string, unknown> | undefined;
+      if (mode === 'authoritative') {
+        const policyResult = asSingleResult(await handler.handleRead({
+          operation: 'get_effective_cli_policies',
+          params: { reporting_scope: 'dashboard' },
+        }));
+
+        if (!policyResult.success) {
+          res.status(500).json({ error: policyResult.error || 'Failed to fetch effective policies' });
+          return;
+        }
+
+        policies = policyResult.data as Record<string, unknown>;
+      }
+
+      const authorityState = await setPermissionAuthorityMode({
+        host,
+        mode,
+        reason,
+        homeDir: authorityHomeDir,
+        policies: mode === 'authoritative'
+          ? {
+            combinedAllowPatterns: asStringArray(policies?.combinedAllowPatterns),
+            combinedConfirmPatterns: asStringArray(policies?.combinedConfirmPatterns),
+            combinedDenyPatterns: asStringArray(policies?.combinedDenyPatterns),
+          }
+          : undefined,
+      });
+
+      res.json({ success: true, authority: authorityState });
+    } catch (err) {
+      logger.error('[WebUI/Gateway] permissions/authority update error:', err);
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update permission authority',
+      });
+    }
+  });
+}
+
+function normalizeAuthorityHost(value: unknown): PermissionAuthorityHost | null {
+  return typeof value === 'string' && PERMISSION_AUTHORITY_HOSTS.includes(value as PermissionAuthorityHost)
+    ? value as PermissionAuthorityHost
+    : null;
+}
+
+function normalizeAuthorityMode(value: unknown): PermissionAuthorityMode | null {
+  return typeof value === 'string' && PERMISSION_AUTHORITY_MODES.includes(value as PermissionAuthorityMode)
+    ? value as PermissionAuthorityMode
+    : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }

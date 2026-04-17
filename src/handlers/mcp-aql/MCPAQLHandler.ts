@@ -79,6 +79,11 @@ import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
 import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
+import {
+  PERMISSION_AUTHORITY_HOSTS,
+  PERMISSION_AUTHORITY_MODES,
+  readPermissionAuthorityState,
+} from '../../utils/permissionAuthority.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
 import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
@@ -3225,6 +3230,23 @@ export class MCPAQLHandler {
           hookHost: hookStatus.host,
           invalidPolicyElementCount: invalidPolicyElements.length,
           advisory,
+        };
+      }
+
+      case 'getPermissionAuthority': {
+        const requestedHost = typeof params.host === 'string' ? params.host : undefined;
+        const authorityState = await readPermissionAuthorityState();
+        return {
+          defaultMode: authorityState.defaultMode,
+          updatedAt: authorityState.updatedAt,
+          supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+          supportedModes: [...PERMISSION_AUTHORITY_MODES],
+          aiMutable: false,
+          hosts: authorityState.hosts,
+          host: requestedHost,
+          mode: requestedHost && requestedHost in authorityState.hosts
+            ? authorityState.hosts[requestedHost as keyof typeof authorityState.hosts]?.mode ?? authorityState.defaultMode
+            : authorityState.defaultMode,
         };
       }
 

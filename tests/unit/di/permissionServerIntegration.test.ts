@@ -185,6 +185,47 @@ describe('Permission Server Integration', () => {
       expect(stdout.trim()).toBe('');
     });
 
+    itBash('hook script should no-op when authority mode is off for Claude Code', async () => {
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const runDir = path.join(tempHome, '.dollhouse', 'run');
+      await fs.mkdir(runDir, { recursive: true });
+      await fs.writeFile(
+        path.join(runDir, 'permission-authority.json'),
+        JSON.stringify({
+          version: 1,
+          defaultMode: 'shared',
+          updatedAt: '2026-04-17T00:00:00.000Z',
+          hosts: {
+            'claude-code': {
+              mode: 'off',
+              updatedAt: '2026-04-17T00:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        }));
+        hookProc.stdin.end();
+      });
+
+      await fs.rm(tempHome, { recursive: true, force: true });
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+    });
+
     itBash('hook script should discover server via port file and get a response', async () => {
       const testPort = 49360;
       let capturedBody: Record<string, unknown> | null = null;
