@@ -10,8 +10,9 @@ import request from 'supertest';
 import { createServer } from 'node:http';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
+import { getPermissionHookMarkerPath } from '../../../src/utils/permissionHooks.js';
 
 function createMockHandler(readResult?: unknown) {
   return {
@@ -308,6 +309,66 @@ describe('permissionRoutes', () => {
           session_id: 'session-abc',
         },
       });
+    });
+
+    it('should only return installed authority hosts plus any persisted authority hosts', async () => {
+      const handler = {
+        handleRead: jest.fn().mockResolvedValue([{
+          success: true,
+          data: {
+            activeElementCount: 0,
+            hasAllowlist: false,
+            combinedDenyPatterns: [],
+            combinedAllowPatterns: [],
+            combinedConfirmPatterns: [],
+            elements: [],
+            permissionPromptActive: false,
+            recentDecisions: [],
+          },
+        }]),
+      } as any;
+
+      const installedScriptPath = join(tempHome, '.dollhouse', 'hooks', 'pretooluse-codex.sh');
+      const installedSettingsPath = join(tempHome, '.codex', 'hooks.json');
+      await mkdir(join(tempHome, '.dollhouse', 'hooks'), { recursive: true });
+      await mkdir(join(tempHome, '.codex'), { recursive: true });
+      await writeFile(installedScriptPath, '#!/bin/bash\n', 'utf-8');
+      await writeFile(installedSettingsPath, '{}\n', 'utf-8');
+      await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+      await writeFile(
+        getPermissionHookMarkerPath(tempHome, 'codex'),
+        JSON.stringify({
+          host: 'codex',
+          scriptPath: installedScriptPath,
+          settingsPath: installedSettingsPath,
+          configured: true,
+          installedAt: '2026-04-17T15:00:00.000Z',
+        }),
+        'utf-8',
+      );
+
+      await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+      await writeFile(
+        join(tempHome, '.dollhouse', 'run', 'permission-authority.json'),
+        JSON.stringify({
+          version: 1,
+          defaultMode: 'shared',
+          updatedAt: '2026-04-17T15:00:00.000Z',
+          hosts: {
+            'claude-code': {
+              mode: 'authoritative',
+              updatedAt: '2026-04-17T15:00:00.000Z',
+            },
+          },
+        }),
+        'utf-8',
+      );
+
+      const app = createApp(handler, { homeDir: tempHome });
+      const res = await request(app).get('/api/permissions/status');
+
+      expect(res.status).toBe(200);
+      expect(res.body.authoritySupportedHosts).toEqual(['codex', 'claude-code']);
     });
 
     it('should restore the shared latest port file from the active listener port', async () => {

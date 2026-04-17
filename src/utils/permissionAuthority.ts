@@ -3,9 +3,14 @@ import { dirname, join } from 'node:path';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from './logger.js';
 import { getClaudeHookSettingsPath } from './permissionHooks.js';
 
+// These modes intentionally describe who has the final say when Dollhouse and the host disagree:
+// - off: the host permission system is fully in charge
+// - shared: both systems participate, but the host can still be stricter
+// - authoritative: Dollhouse is the source of truth for the managed host slice
 export const PERMISSION_AUTHORITY_MODES = ['off', 'shared', 'authoritative'] as const;
 export type PermissionAuthorityMode = typeof PERMISSION_AUTHORITY_MODES[number];
 
@@ -123,12 +128,15 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
   const homeDir = input.homeDir ?? homedir();
   const now = input.now ?? new Date();
   const state = await readPermissionAuthorityState(homeDir);
-  const previousHostState = state.hosts[input.host];
+  const normalizedHost = normalizeAuthorityHostInput(input.host);
+  const normalizedMode = normalizeAuthorityModeInput(input.mode);
+  const normalizedReason = normalizeAuthorityReason(input.reason);
+  const previousHostState = state.hosts[normalizedHost];
   const previousMode = previousHostState?.mode ?? state.defaultMode;
   try {
-    if (input.mode === 'authoritative') {
-      if (input.host !== 'claude-code') {
-        throw new Error(`Authoritative mode is not implemented yet for ${input.host}.`);
+    if (normalizedMode === 'authoritative') {
+      if (normalizedHost !== 'claude-code') {
+        throw new Error(`Authoritative mode is not implemented yet for ${normalizedHost}.`);
       }
       if (!input.policies) {
         throw new Error('Authoritative mode requires a policy snapshot.');
@@ -136,15 +144,15 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
 
       const syncResult = await syncClaudeCodeAuthoritativeMode({
         homeDir,
-        host: input.host,
+        host: normalizedHost,
         previousBackupPath: previousHostState?.backupPath,
         policies: input.policies,
         now,
       });
 
-      state.hosts[input.host] = {
+      state.hosts[normalizedHost] = {
         mode: 'authoritative',
-        reason: input.reason,
+        reason: normalizedReason,
         updatedAt: now.toISOString(),
         backupPath: syncResult.backupPath,
         lastSyncedAt: syncResult.syncedAt,
@@ -152,12 +160,12 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
       };
     } else {
       if (previousMode === 'authoritative' && previousHostState?.backupPath) {
-        await restoreAuthorityBackup(previousHostState.backupPath, getHostSettingsPath(input.host, homeDir));
+        await restoreAuthorityBackup(previousHostState.backupPath, getHostSettingsPath(normalizedHost, homeDir));
       }
 
-      state.hosts[input.host] = {
-        mode: input.mode,
-        reason: input.reason,
+      state.hosts[normalizedHost] = {
+        mode: normalizedMode,
+        reason: normalizedReason,
         updatedAt: now.toISOString(),
         scope: 'user',
       };
@@ -170,19 +178,48 @@ export async function setPermissionAuthorityMode(input: SetPermissionAuthorityMo
       type: 'CONFIG_UPDATED',
       severity: 'LOW',
       source: 'permissionAuthority.setPermissionAuthorityMode',
-      details: `Permission authority for ${input.host} changed from ${previousMode} to ${input.mode}`,
+      details: `Permission authority for ${normalizedHost} changed from ${previousMode} to ${normalizedMode}`,
       additionalData: {
-        host: input.host,
+        host: normalizedHost,
         previousMode,
-        mode: input.mode,
-        reason: input.reason,
+        mode: normalizedMode,
+        reason: normalizedReason,
       },
     });
 
     return state;
   } catch (error) {
-    throw withAuthorityContext(error, `Failed to set permission authority for ${input.host} to ${input.mode}`);
+    throw withAuthorityContext(error, `Failed to set permission authority for ${normalizedHost} to ${normalizedMode}`);
   }
+}
+
+function normalizeAuthorityText(value: string): string {
+  return UnicodeValidator.normalize(value).normalizedContent.trim();
+}
+
+function normalizeAuthorityHostInput(value: PermissionAuthorityHost): PermissionAuthorityHost {
+  const normalized = normalizeAuthorityText(value).toLowerCase();
+  if (!isPermissionAuthorityHost(normalized)) {
+    throw new Error(`Unsupported permission authority host: ${value}`);
+  }
+  return normalized;
+}
+
+function normalizeAuthorityModeInput(value: PermissionAuthorityMode): PermissionAuthorityMode {
+  const normalized = normalizeAuthorityText(value).toLowerCase();
+  if (!isPermissionAuthorityMode(normalized)) {
+    throw new Error(`Unsupported permission authority mode: ${value}`);
+  }
+  return normalized;
+}
+
+function normalizeAuthorityReason(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+
+  const normalized = normalizeAuthorityText(value);
+  return normalized === '' ? undefined : normalized;
 }
 
 function normalizeHostStateMap(

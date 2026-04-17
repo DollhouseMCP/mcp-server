@@ -18,15 +18,33 @@
   let latestAggregateData = null;
   let latestSelectedData = null;
   let latestPollRequestId = 0;
+  const AUTHORITY_MODE_REQUEST_STATES = {
+    idle: 'idle',
+    saving: 'saving',
+  };
   const AUTHORITY_AUTHORITATIVE_HOSTS = new Set(['claude-code']);
+  // Authority modes are intentionally phrased in human terms in the UI:
+  // - off => host-controlled permissions
+  // - shared => both Dollhouse and the host participate
+  // - authoritative => Dollhouse is the source of truth
   const authorityUiState = {
     selectedHost: 'claude-code',
     selectedMode: 'shared',
     draftReason: '',
     dirty: false,
-    saving: false,
+    requestState: AUTHORITY_MODE_REQUEST_STATES.idle,
     feedback: '',
     feedbackKind: 'info',
+  };
+  const AUTHORITY_HOST_META = {
+    'claude-code': { label: 'Claude Code', shortLabel: 'CC', tone: 'claude' },
+    'codex': { label: 'Codex', shortLabel: 'CX', tone: 'codex' },
+    'cursor': { label: 'Cursor', shortLabel: 'CU', tone: 'cursor' },
+    'vscode': { label: 'VS Code', shortLabel: 'VS', tone: 'vscode' },
+    'windsurf': { label: 'Windsurf', shortLabel: 'WS', tone: 'windsurf' },
+    'gemini': { label: 'Gemini CLI', shortLabel: 'GM', tone: 'gemini' },
+    'cline': { label: 'Cline', shortLabel: 'CL', tone: 'cline' },
+    'lmstudio': { label: 'LM Studio', shortLabel: 'LM', tone: 'lmstudio' },
   };
 
   async function fetchPermissionStatus(sessionId) {
@@ -222,23 +240,52 @@
 
   function renderAuthorityMode(data) {
     const card = document.getElementById('perm-authority-card');
-    const hostSelect = document.getElementById('perm-authority-host');
     const saveButton = document.getElementById('perm-authority-save-btn');
     const message = document.getElementById('perm-authority-message');
-    const currentMode = document.getElementById('perm-authority-current-mode');
-    const currentHost = document.getElementById('perm-authority-current-host');
-    const explanation = document.getElementById('perm-authority-explanation');
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
+    const selectedHostHeading = document.getElementById('perm-authority-selected-host');
     const reasonInput = document.getElementById('perm-authority-reason');
     const note = document.getElementById('perm-authority-note');
+    const authoritativeNote = document.getElementById('perm-authority-authoritative-note');
+    const dirtyState = document.getElementById('perm-authority-dirty-state');
+    const saveCopy = document.getElementById('perm-authority-save-copy');
+    const saveShell = document.getElementById('perm-authority-save-shell');
 
-    if (!card || !hostSelect || !saveButton || !message || !currentMode || !currentHost || !explanation || !reasonInput || !note) {
+    if (!card || !saveButton || !message || !currentHostList || !selectedHostHeading || !reasonInput || !note || !authoritativeNote || !dirtyState || !saveCopy || !saveShell) {
       return;
     }
 
-    const supportedHosts = Array.isArray(data?.authoritySupportedHosts) && data.authoritySupportedHosts.length
+    const supportedHosts = Array.isArray(data?.authoritySupportedHosts)
       ? data.authoritySupportedHosts
       : ['claude-code'];
     const authority = data?.authority || { defaultMode: 'shared', hosts: {} };
+
+    if (supportedHosts.length === 0) {
+      currentHostList.innerHTML = '<div class="perm-pattern-empty">No installed permission hosts detected yet.</div>';
+      selectedHostHeading.textContent = 'No installed hosts';
+      note.textContent = 'Install Dollhouse permission hooks for a host before changing permission authority mode here.';
+      authoritativeNote.hidden = true;
+      authoritativeNote.textContent = '';
+      dirtyState.hidden = true;
+      dirtyState.textContent = '';
+      message.hidden = true;
+      message.textContent = '';
+      message.dataset.kind = 'info';
+      saveCopy.textContent = 'Once a host is installed and configured, it will appear on the left for editing.';
+      saveShell.dataset.dirty = 'false';
+      saveShell.dataset.busy = 'false';
+      card.dataset.authorityDirty = 'false';
+      card.setAttribute('aria-busy', 'false');
+      reasonInput.value = authorityUiState.draftReason;
+      setAuthorityRadioState('perm-authority-mode-off', false, true);
+      setAuthorityRadioState('perm-authority-mode-shared', false, true);
+      setAuthorityRadioState('perm-authority-mode-authoritative', false, true);
+      saveButton.disabled = true;
+      saveButton.textContent = 'No Installed Hosts Yet';
+      saveButton.setAttribute('aria-busy', 'false');
+      card.hidden = false;
+      return;
+    }
 
     if (!supportedHosts.includes(authorityUiState.selectedHost)) {
       authorityUiState.selectedHost = supportedHosts[0];
@@ -250,25 +297,38 @@
       authorityUiState.selectedMode = serverMode;
     }
 
-    hostSelect.innerHTML = supportedHosts.map(function (host) {
-      return `<option value="${esc(host)}">${esc(formatAuthorityHost(host))}</option>`;
-    }).join('');
-    hostSelect.value = authorityUiState.selectedHost;
     reasonInput.value = authorityUiState.draftReason;
 
     const authoritativeSupported = AUTHORITY_AUTHORITATIVE_HOSTS.has(authorityUiState.selectedHost);
     const desiredMode = authoritativeSupported ? authorityUiState.selectedMode : fallbackAuthorityMode(authorityUiState.selectedMode);
+    const dirty = desiredMode !== serverMode;
 
     setAuthorityRadioState('perm-authority-mode-off', desiredMode === 'off', false);
     setAuthorityRadioState('perm-authority-mode-shared', desiredMode === 'shared', false);
     setAuthorityRadioState('perm-authority-mode-authoritative', desiredMode === 'authoritative', !authoritativeSupported);
 
-    currentMode.textContent = formatAuthorityMode(serverMode);
-    currentHost.textContent = formatAuthorityHost(authorityUiState.selectedHost);
-    explanation.textContent = buildAuthorityExplanation(serverMode, authoritativeSupported);
-    note.textContent = authoritativeSupported
-      ? 'Human-only control. AI can read authority mode but cannot change it through MCP.'
-      : 'Authoritative settings sync currently ships for Claude Code only. Other hosts can use Off or Shared mode for now.';
+    currentHostList.innerHTML = renderAuthorityCurrentHostList(authority, supportedHosts, authorityUiState.selectedHost);
+    selectedHostHeading.textContent = formatAuthorityHost(authorityUiState.selectedHost);
+    note.textContent = 'Human-only control. AI can read authority mode but cannot change it through MCP.';
+    authoritativeNote.hidden = authoritativeSupported;
+    authoritativeNote.textContent = authoritativeSupported
+      ? ''
+      : 'Claude Code only for now. Other hosts can use Host-Controlled or Shared Permissioning mode.';
+    dirtyState.hidden = !dirty;
+    dirtyState.textContent = dirty
+      ? `Unsaved change: ${formatAuthorityHost(authorityUiState.selectedHost)} will move from ${formatAuthorityMode(serverMode)} to ${formatAuthorityMode(desiredMode)} after you save.`
+      : '';
+    saveCopy.textContent = buildAuthoritySaveCopy({
+      host: authorityUiState.selectedHost,
+      currentMode: serverMode,
+      desiredMode,
+      dirty,
+      saving: authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving,
+    });
+    saveShell.dataset.dirty = dirty ? 'true' : 'false';
+    saveShell.dataset.busy = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false';
+    card.dataset.authorityDirty = dirty ? 'true' : 'false';
+    card.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
 
     if (authorityUiState.feedback) {
       message.hidden = false;
@@ -280,8 +340,14 @@
       message.dataset.kind = 'info';
     }
 
-    saveButton.disabled = authorityUiState.saving || desiredMode === serverMode;
-    saveButton.textContent = authorityUiState.saving ? 'Saving...' : 'Save Authority Mode';
+    saveButton.disabled = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving || !dirty;
+    saveButton.textContent = authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving
+      ? `Saving ${formatAuthorityMode(desiredMode)}...`
+      : dirty
+        ? `Save ${formatAuthorityMode(desiredMode)} Mode for ${formatAuthorityHost(authorityUiState.selectedHost)}`
+        : `Saved for ${formatAuthorityHost(authorityUiState.selectedHost)}`;
+    saveButton.dataset.dirty = dirty ? 'true' : 'false';
+    saveButton.setAttribute('aria-busy', authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving ? 'true' : 'false');
     card.hidden = false;
   }
 
@@ -699,7 +765,7 @@
 
         <div class="perm-card perm-card--full" data-collapsed="false" id="perm-authority-card">
           <div class="perm-card-header" role="button" tabindex="0" aria-expanded="true">
-            <h3 class="perm-card-title">Authority Mode</h3>
+            <h3 class="perm-card-title">Permission Authority Mode</h3>
             <span class="perm-card-toggle" aria-hidden="true">&#9662;</span>
           </div>
           <div class="perm-card-body">
@@ -712,37 +778,60 @@
 
             <div class="perm-selected-grid">
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Current State</h4>
-                <ul class="perm-pattern-list">
-                  <li class="perm-pattern-item">
-                    <span class="perm-pattern-badge perm-pattern-badge--allow">host</span>
-                    <span class="perm-pattern-text" id="perm-authority-current-host">Claude Code</span>
-                  </li>
-                  <li class="perm-pattern-item">
-                    <span class="perm-pattern-badge perm-pattern-badge--ask">mode</span>
-                    <span class="perm-pattern-text" id="perm-authority-current-mode">Shared</span>
-                  </li>
-                </ul>
-                <p class="perm-selected-subtitle" id="perm-authority-explanation"></p>
+                <h4 class="perm-selected-panel-title">Current Permission State</h4>
+                <div class="perm-authority-current-list" id="perm-authority-current-host-list"></div>
               </div>
 
               <div class="perm-selected-panel">
-                <h4 class="perm-selected-panel-title">Change Mode</h4>
-                <label class="perm-selected-subtitle" for="perm-authority-host">Host</label>
-                <select id="perm-authority-host" class="perm-panel-action" style="width:100%;margin:0.35rem 0 0.75rem 0;"></select>
+                <h4 class="perm-selected-panel-title">Change Permission Mode</h4>
+                <div class="perm-authority-selected-host" id="perm-authority-selected-host">Claude Code</div>
+                <div class="perm-selected-subtitle">Choose how this host should handle permission decisions.</div>
 
-                <div style="display:grid;gap:0.45rem;">
-                  <label><input type="radio" name="perm-authority-mode" id="perm-authority-mode-off" value="off"> Off</label>
-                  <label><input type="radio" name="perm-authority-mode" id="perm-authority-mode-shared" value="shared"> Shared</label>
-                  <label><input type="radio" name="perm-authority-mode" id="perm-authority-mode-authoritative" value="authoritative"> Authoritative</label>
+                <div class="perm-authority-options" role="radiogroup" aria-label="Authority mode">
+                  <label class="perm-authority-option" id="perm-authority-option-off">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-off" value="off">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title">Host-Controlled Permissions</span>
+                        <span class="perm-authority-option-description">Dollhouse steps out of the way. The host's own permission system handles approvals by itself.</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="perm-authority-option" id="perm-authority-option-shared">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-shared" value="shared">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title">Shared Permissioning</span>
+                        <span class="perm-authority-option-description">Dollhouse stays active, but the host permission system can still be more restrictive.</span>
+                      </span>
+                    </span>
+                  </label>
+                  <label class="perm-authority-option perm-authority-option--authoritative" id="perm-authority-option-authoritative">
+                    <span class="perm-authority-option-main">
+                      <input type="radio" name="perm-authority-mode" id="perm-authority-mode-authoritative" value="authoritative">
+                      <span class="perm-authority-option-copy">
+                        <span class="perm-authority-option-title-row">
+                          <span class="perm-authority-option-title">Dollhouse-Controlled Permissions</span>
+                          <span class="perm-authority-inline-note" id="perm-authority-authoritative-note" hidden></span>
+                        </span>
+                        <span class="perm-authority-option-description">Dollhouse becomes the permission authority. It syncs Dollhouse allow, ask, and deny rules into the host so Dollhouse decides conflicts instead of the host's own approval flow.</span>
+                      </span>
+                    </span>
+                  </label>
                 </div>
 
-                <label class="perm-selected-subtitle" for="perm-authority-reason" style="display:block;margin-top:0.75rem;">Reason (optional)</label>
-                <input id="perm-authority-reason" type="text" maxlength="200" placeholder="Why are you changing authority mode?" style="width:100%;margin-top:0.35rem;">
+                <label class="perm-selected-subtitle perm-authority-field-label" for="perm-authority-reason">Reason (optional)</label>
+                <input id="perm-authority-reason" class="perm-authority-reason-input" type="text" maxlength="200" placeholder="Why are you changing the permission authority mode?">
 
-                <p class="perm-selected-subtitle" id="perm-authority-note" style="margin-top:0.75rem;"></p>
-                <div class="perm-inline-warning" id="perm-authority-message" hidden></div>
-                <button type="button" class="perm-panel-action" id="perm-authority-save-btn" style="margin-top:0.75rem;">Save Authority Mode</button>
+                <p class="perm-selected-subtitle perm-authority-human-note" id="perm-authority-note"></p>
+                <div class="perm-authority-save-shell" id="perm-authority-save-shell" data-dirty="false">
+                  <div class="perm-authority-dirty-state" id="perm-authority-dirty-state" hidden></div>
+                  <div class="perm-inline-warning" id="perm-authority-message" hidden></div>
+                  <div class="perm-authority-actions">
+                    <div class="perm-authority-save-copy" id="perm-authority-save-copy"></div>
+                    <button type="button" class="perm-panel-action perm-authority-save-btn" id="perm-authority-save-btn">Save Authority Mode</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -916,13 +1005,21 @@
   }
 
   function attachAuthorityControls() {
-    const hostSelect = document.getElementById('perm-authority-host');
+    const currentHostList = document.getElementById('perm-authority-current-host-list');
     const reasonInput = document.getElementById('perm-authority-reason');
     const saveButton = document.getElementById('perm-authority-save-btn');
 
-    if (hostSelect) {
-      hostSelect.addEventListener('change', function (event) {
-        authorityUiState.selectedHost = event.target.value;
+    if (currentHostList) {
+      currentHostList.addEventListener('click', function (event) {
+        const row = event.target.closest('.perm-authority-current-host[data-host]');
+        if (!row) {
+          return;
+        }
+        const host = row.getAttribute('data-host');
+        if (!host || host === authorityUiState.selectedHost) {
+          return;
+        }
+        authorityUiState.selectedHost = host;
         authorityUiState.feedback = '';
         authorityUiState.feedbackKind = 'info';
         authorityUiState.dirty = false;
@@ -1031,6 +1128,10 @@
   }
 
   function formatAuthorityHost(host) {
+    const meta = AUTHORITY_HOST_META[String(host || '')];
+    if (meta?.label) {
+      return meta.label;
+    }
     return String(host || '')
       .split('-')
       .map(function (part) { return part ? part.charAt(0).toUpperCase() + part.slice(1) : part; })
@@ -1039,18 +1140,18 @@
 
   function formatAuthorityMode(mode) {
     return mode === 'off'
-      ? 'Off'
+      ? 'Host-Controlled Permissions'
       : mode === 'authoritative'
-        ? 'Authoritative'
-        : 'Shared';
+        ? 'Dollhouse-Controlled Permissions'
+        : 'Shared Permissioning';
   }
 
   function buildAuthorityExplanation(mode, authoritativeSupported) {
     if (mode === 'off') {
-      return 'Dollhouse hooks no-op and the host-native permission system is the sole gate.';
+      return 'Dollhouse is not participating in approvals here. The host handles permissions on its own.';
     }
     if (mode === 'authoritative') {
-      return 'Dollhouse is writing managed allow/ask/deny entries into the host settings and preserving user-authored entries outside the managed slice.';
+      return 'Dollhouse is the source of truth for permissions here. The host follows Dollhouse-synced allow, ask, and deny rules, while user-authored entries outside Dollhouse-managed settings are still preserved.';
     }
     return authoritativeSupported
       ? 'Dollhouse participates in permission checks, but the host can still be more restrictive.'
@@ -1066,10 +1167,52 @@
     if (!radio) return;
     radio.checked = checked;
     radio.disabled = disabled;
+    const option = radio.closest('.perm-authority-option');
+    if (option) {
+      option.dataset.checked = checked ? 'true' : 'false';
+      option.dataset.disabled = disabled ? 'true' : 'false';
+    }
+  }
+
+  function buildAuthoritySaveCopy(state) {
+    if (state.saving) {
+      return `Applying ${formatAuthorityMode(state.desiredMode)} mode for ${formatAuthorityHost(state.host)}...`;
+    }
+    if (state.dirty) {
+      return `Review the change and save to apply ${formatAuthorityMode(state.desiredMode)} mode for ${formatAuthorityHost(state.host)}.`;
+    }
+    return `${formatAuthorityHost(state.host)} is currently saved in ${formatAuthorityMode(state.currentMode)} mode.`;
+  }
+
+  function renderAuthorityCurrentHostList(authority, supportedHosts, selectedHost) {
+    const explicitHosts = Object.keys(authority?.hosts || {});
+    const hostIds = Array.from(new Set(explicitHosts.concat(supportedHosts || [])));
+    const orderedHosts = hostIds.sort(function (left, right) {
+      return formatAuthorityHost(left).localeCompare(formatAuthorityHost(right));
+    });
+
+    if (orderedHosts.length === 0) {
+      return '<div class="perm-pattern-empty">No host authority settings saved yet.</div>';
+    }
+
+    return orderedHosts.map(function (host) {
+      const mode = getAuthorityModeForHost(authority, host);
+      const meta = AUTHORITY_HOST_META[host] || { shortLabel: formatAuthorityHost(host).slice(0, 2).toUpperCase(), tone: 'generic' };
+      const selectedAttr = host === selectedHost ? 'true' : 'false';
+      return `
+        <button type="button" class="perm-authority-current-host" data-selected="${selectedAttr}" data-host="${esc(host)}" aria-pressed="${selectedAttr}">
+          <span class="perm-authority-host-mark perm-authority-host-mark--${esc(meta.tone || 'generic')}" aria-hidden="true">${esc(meta.shortLabel || 'DH')}</span>
+          <span class="perm-authority-current-host-copy">
+            <span class="perm-authority-current-host-name">${esc(formatAuthorityHost(host))}</span>
+            <span class="perm-authority-current-host-mode">${esc(formatAuthorityMode(mode))}</span>
+          </span>
+        </button>
+      `;
+    }).join('');
   }
 
   async function saveAuthorityMode() {
-    if (!latestAggregateData || authorityUiState.saving) {
+    if (!latestAggregateData || authorityUiState.requestState === AUTHORITY_MODE_REQUEST_STATES.saving) {
       return;
     }
 
@@ -1100,7 +1243,7 @@
       return;
     }
 
-    authorityUiState.saving = true;
+    authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.saving;
     authorityUiState.feedback = '';
     renderAuthorityMode(latestAggregateData);
 
@@ -1123,7 +1266,7 @@
       authorityUiState.feedback = error instanceof Error ? error.message : 'Failed to update permission authority.';
       authorityUiState.feedbackKind = 'error';
     } finally {
-      authorityUiState.saving = false;
+      authorityUiState.requestState = AUTHORITY_MODE_REQUEST_STATES.idle;
       renderAuthorityMode(latestAggregateData);
     }
   }

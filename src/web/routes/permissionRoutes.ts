@@ -13,6 +13,7 @@ import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
+import { getPermissionHookStatusAsync } from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import {
@@ -305,6 +306,28 @@ async function selfHealLatestPermissionPortFile(port: number | undefined): Promi
   }
 }
 
+async function resolveInstalledPermissionAuthorityHosts(
+  homeDir: string,
+  authorityState: Awaited<ReturnType<typeof readPermissionAuthorityState>>,
+): Promise<PermissionAuthorityHost[]> {
+  const installedStatuses = await Promise.all(
+    PERMISSION_AUTHORITY_HOSTS.map(async (host) => ({
+      host,
+      status: await getPermissionHookStatusAsync(homeDir, host),
+    })),
+  );
+
+  const installedHosts = installedStatuses
+    .filter(({ status }) => status.installed)
+    .map(({ host }) => host);
+
+  const persistedHosts = Object.keys(authorityState.hosts || {}).filter((host): host is PermissionAuthorityHost =>
+    (PERMISSION_AUTHORITY_HOSTS as readonly string[]).includes(host),
+  );
+
+  return Array.from(new Set(installedHosts.concat(persistedHosts)));
+}
+
 /**
  * Register permission-related routes on a gateway router.
  * Must be called with the MCP-AQL handler for policy evaluation.
@@ -424,6 +447,7 @@ export function registerPermissionRoutes(
 
       const data = opResult.data as Record<string, unknown>;
       const authorityState = await readPermissionAuthorityState(authorityHomeDir);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(authorityHomeDir, authorityState);
       const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
       const denyPatterns = (data.combinedDenyPatterns as string[] | undefined) ?? [];
@@ -452,7 +476,7 @@ export function registerPermissionRoutes(
         hookInstalled: data.hookInstalled,
         hookHost: data.hookHost,
         authority: authorityState,
-        authoritySupportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+        authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
         authorityAiMutable: false,
         enforcementReady: data.enforcementReady,
@@ -469,9 +493,10 @@ export function registerPermissionRoutes(
   router.get('/permissions/authority', async (_req, res) => {
     try {
       const authorityState = await readPermissionAuthorityState(authorityHomeDir);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(authorityHomeDir, authorityState);
       res.json({
         ...authorityState,
-        supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+        supportedHosts: installedAuthorityHosts,
         supportedModes: [...PERMISSION_AUTHORITY_MODES],
         aiMutable: false,
       });
