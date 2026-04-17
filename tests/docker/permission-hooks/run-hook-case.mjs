@@ -70,11 +70,7 @@ await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
 
 const result = await new Promise((resolve) => {
   const child = spawn('bash', [hookScript], {
-    env: {
-      ...hookEnv,
-      HOME: tempHome,
-      DOLLHOUSE_SESSION_ID: 'docker-hook-session',
-    },
+    env: buildHookEnvironment(hookEnv, tempHome),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
 
@@ -130,4 +126,16 @@ function parseStringRecord(value, envName) {
       return [key, entryValue];
     }),
   );
+}
+
+function buildHookEnvironment(hookEnv, tempHomePath) {
+  const filteredHookEnv = Object.fromEntries(
+    Object.entries(hookEnv).filter(([key]) => key !== 'PATH'),
+  );
+
+  return {
+    ...filteredHookEnv,
+    HOME: tempHomePath,
+    DOLLHOUSE_SESSION_ID: 'docker-hook-session',
+  };
 }
