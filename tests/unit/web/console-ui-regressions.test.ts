@@ -498,6 +498,8 @@ describe('Web console cleanup regressions', () => {
 
     expect(win.document.getElementById('perm-authority-card')?.hidden).toBe(false);
     expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Human-only control');
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(true);
 
     const hostSelect = win.document.getElementById('perm-authority-host') as HTMLSelectElement | null;
     const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
@@ -511,7 +513,18 @@ describe('Web console cleanup regressions', () => {
     await wait(DEFAULT_WAIT_MS);
 
     expect(authoritativeRadio?.disabled).toBe(true);
-    expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Claude Code only');
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.textContent).toContain('Claude Code only');
+
+    const sharedRadio = win.document.getElementById('perm-authority-mode-shared') as HTMLInputElement | null;
+    sharedRadio!.checked = true;
+    sharedRadio!.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-dirty-state')?.textContent).toContain('Codex');
+    expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Save Shared Mode for Codex');
+    expect(win.document.getElementById('perm-authority-save-shell')?.getAttribute('data-dirty')).toBe('true');
 
     cleanup();
   });
@@ -611,12 +624,16 @@ describe('Web console cleanup regressions', () => {
     reasonInput!.dispatchEvent(new win.Event('input', { bubbles: true }));
 
     const saveButton = win.document.getElementById('perm-authority-save-btn') as HTMLButtonElement | null;
+    expect(saveButton?.textContent).toContain('Save Authoritative Mode for Claude Code');
+    expect(win.document.getElementById('perm-authority-dirty-state')?.textContent).toContain('Unsaved change');
     saveButton?.click();
     await wait(DEFAULT_WAIT_MS);
 
     expect(win.confirm).toHaveBeenCalled();
     expect(win.document.getElementById('perm-authority-current-mode')?.textContent).toContain('Authoritative');
     expect(win.document.getElementById('perm-authority-message')?.textContent).toContain('Saved Authoritative mode');
+    expect(win.document.getElementById('perm-authority-save-shell')?.getAttribute('data-dirty')).toBe('false');
+    expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Saved for Claude Code');
 
     cleanup();
   });
