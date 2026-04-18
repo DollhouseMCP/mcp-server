@@ -45,6 +45,14 @@ This file must stay aligned with `package.json`.
 
 Publishing to the MCP Registry is automated by the `Publish to MCP Registry` GitHub Actions workflow.
 
+Useful workflow anchors for navigation:
+
+- source ref resolution: `.github/workflows/publish-mcp-registry.yml:31-54`
+- pinned publisher download and verification: `.github/workflows/publish-mcp-registry.yml:74-145`
+- OIDC login: `.github/workflows/publish-mcp-registry.yml:149-150`
+- npm propagation wait: `.github/workflows/publish-mcp-registry.yml:152-179`
+- publish and dry-run branch: `.github/workflows/publish-mcp-registry.yml:181-189`
+
 The workflow:
 
 1. runs when a GitHub release is published
@@ -103,6 +111,13 @@ gh workflow run publish-mcp-registry.yml -f dry_run=true
 
 Dry run mode exercises the workflow path without performing a real registry publish.
 
+Expected success signals:
+
+- the workflow reaches `Login to MCP Registry (OIDC)`
+- the publish step prints `Running in DRY-RUN mode`
+- `mcp-publisher publish --dry-run` exits successfully
+- the workflow run finishes green without a real registry write
+
 ## Relationship To npm Publishing
 
 MCP Registry publishing is related to npm publishing, but they are not the same step.
@@ -122,17 +137,38 @@ If npm metadata and MCP Registry metadata drift apart, registry publishing can f
 
 The package entry in `server.json.packages[].version` must also match the same version.
 
+Typical symptoms:
+
+- workflow validation failures around version consistency
+- release-time publish failures because the metadata version does not match the package version
+
 ### Package identifier mismatch
 
 The npm package name in `package.json` must line up with `server.json.packages[].identifier`.
+
+Typical symptoms:
+
+- workflow validation failures around package identifier mismatch
+- registry publish errors when the package referenced by `server.json` does not match the published npm package
 
 ### Missing `server.json` from published files
 
 If `server.json` drops out of `package.json.files`, the workflow may still build locally, but the published package will not contain the metadata the registry expects.
 
+Typical symptoms:
+
+- validation failures that `server.json` is missing from `package.json.files`
+- successful local builds followed by registry publish failures because the packaged artifact is incomplete
+
 ### Unpinned publisher binary
 
 The workflow intentionally pins a specific `mcp-publisher` version and verifies a checksum. Do not loosen that without a deliberate security review.
+
+Typical symptoms:
+
+- checksum verification failures
+- signature verification failures for the downloaded publisher archive
+- security-review comments or workflow test failures when the publisher pin is removed or loosened
 
 ### Broken OIDC assumptions
 
@@ -142,6 +178,11 @@ The workflow relies on:
 - `contents: read`
 
 If those permissions change, the `mcp-publisher login github-oidc` step can fail.
+
+Typical symptoms:
+
+- failure at `Login to MCP Registry (OIDC)`
+- authentication or token-minting errors from `mcp-publisher login github-oidc`
 
 ## When To Update This Doc
 
