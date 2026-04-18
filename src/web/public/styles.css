@@ -1430,11 +1430,15 @@ body.modal-open { overflow: hidden; }
   margin-left: auto;
 }
 
+.footer-version,
 .footer-updated {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--ink-500);
+}
+
+.footer-updated {
+  margin-left: auto;
 }
 
 /* ── Topic filters ───────────────────────────────────────────────────────── */
