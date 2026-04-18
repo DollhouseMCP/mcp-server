@@ -22,6 +22,7 @@ const INDEX_TEMPLATE = `<!DOCTYPE html>
   <meta name="dollhouse-session-id" content="{{DOLLHOUSE_SESSION_ID}}">
   <meta name="dollhouse-runtime-session-id" content="{{DOLLHOUSE_RUNTIME_SESSION_ID}}">
   <meta name="dollhouse-console-asset-version" content="{{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="icon" type="image/png" href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}">
   <link rel="stylesheet" href="styles.css?v={{DOLLHOUSE_ASSET_VERSION}}">
 </head>
 <body><h1>DollhouseMCP Console</h1><script src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script></body>
@@ -141,6 +142,7 @@ describe('token injection into index.html (#1804)', () => {
     expect(res.text).not.toContain('{{DOLLHOUSE_SESSION_ID}}');
     expect(res.text).not.toContain('{{DOLLHOUSE_RUNTIME_SESSION_ID}}');
     expect(res.text).toContain('content="2.0.18"');
+    expect(res.text).toContain('href="dollhouse-logo.png?v=2.0.18"');
     expect(res.text).toContain('styles.css?v=2.0.18');
     expect(res.text).toContain('app.js?v=2.0.18');
     expect(res.text).not.toContain('{{DOLLHOUSE_ASSET_VERSION}}');
@@ -263,6 +265,7 @@ describe('token injection into index.html (#1804)', () => {
     expect(res.text).not.toContain('{{DOLLHOUSE_SESSION_ID}}');
     expect(res.text).not.toContain('{{DOLLHOUSE_RUNTIME_SESSION_ID}}');
     expect(res.text).not.toContain('{{DOLLHOUSE_ASSET_VERSION}}');
+    expect(res.text).toContain('href="dollhouse-logo.png?v=2.0.18"');
   });
 
   it('serves /index.htm through the injected shell instead of raw placeholders', async () => {
@@ -284,5 +287,6 @@ describe('token injection into index.html (#1804)', () => {
     expect(res.text).not.toContain('{{DOLLHOUSE_SESSION_ID}}');
     expect(res.text).not.toContain('{{DOLLHOUSE_RUNTIME_SESSION_ID}}');
     expect(res.text).not.toContain('{{DOLLHOUSE_ASSET_VERSION}}');
+    expect(res.text).toContain('href="dollhouse-logo.png?v=2.0.18"');
   });
 });
