@@ -17,6 +17,7 @@ describe('cache busting source wiring', () => {
     const html = readFileSync(join(PUBLIC_DIR, 'index.html'), 'utf-8');
     expect(html).toContain('name="dollhouse-console-asset-version"');
     expect(html).toContain('{{DOLLHOUSE_ASSET_VERSION}}');
+    expect(html).toContain('href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}"');
     expect(html).toContain('styles.css?v={{DOLLHOUSE_ASSET_VERSION}}');
     expect(html).toContain('app.js?v={{DOLLHOUSE_ASSET_VERSION}}');
     expect(html).toContain('sessions.js?v={{DOLLHOUSE_ASSET_VERSION}}');
