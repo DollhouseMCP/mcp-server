@@ -139,6 +139,88 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     footerVersion.textContent = `Version: ${DOLLHOUSE_SERVER_VERSION || 'unknown'}`;
   }
 
+  function wireThemeToggle() {
+    const themeToggleBtn  = document.getElementById('theme-toggle');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const themeToggleLbl  = document.getElementById('theme-toggle-label');
+    const html = document.documentElement;
+
+    function applyTheme(theme) {
+      html.dataset.theme = theme;
+      const isDark = theme === 'dark';
+      if (themeToggleIcon) themeToggleIcon.textContent = isDark ? '☀' : '☾';
+      if (themeToggleLbl) themeToggleLbl.textContent = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+      if (themeToggleBtn) themeToggleBtn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+      const hljsLight = document.getElementById('hljs-theme-light');
+      const hljsDark = document.getElementById('hljs-theme-dark');
+      if (hljsLight) hljsLight.disabled = isDark;
+      if (hljsDark) hljsDark.disabled = !isDark;
+      try { localStorage.setItem('color-scheme', theme); } catch {}
+    }
+
+    const saved = (() => { try { return localStorage.getItem('color-scheme'); } catch {} })();
+    const preferred = saved || (globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    applyTheme(preferred);
+
+    if (themeToggleBtn) {
+      themeToggleBtn.addEventListener('click', () => {
+        applyTheme(html.dataset.theme === 'dark' ? 'light' : 'dark');
+      });
+    }
+  }
+
+  function wireViewToggle() {
+    const viewToggle = document.getElementById('view-toggle');
+    const elemGrid = document.getElementById('elements-grid');
+    let activeView = (() => { try { return localStorage.getItem('collection-view') || 'grid'; } catch { return 'grid'; } })();
+
+    function applyView(view) {
+      activeView = view;
+      if (elemGrid) elemGrid.dataset.view = view;
+      viewToggle?.querySelectorAll('.view-btn').forEach(btn => {
+        const on = btn.dataset.view === view;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on);
+      });
+      try { localStorage.setItem('collection-view', view); } catch {}
+    }
+
+    applyView(activeView);
+
+    viewToggle?.addEventListener('click', e => {
+      const btn = e.target.closest('[data-view]');
+      if (btn) applyView(btn.dataset.view);
+    });
+  }
+
+  function wireSortControls() {
+    const sortSelect = document.getElementById('sort-select');
+    if (!sortSelect) return;
+    sortSelect.value = activeSort;
+    sortSelect.addEventListener('change', e => {
+      activeSort = e.target.value;
+      applyFilters();
+    });
+  }
+
+  function wireSourceToggle() {
+    const sourceToggle = document.getElementById('source-toggle');
+    if (!sourceToggle) return;
+    sourceToggle.addEventListener('click', e => {
+      const btn = e.target.closest('[data-source]');
+      if (!btn) return;
+      activeSource = btn.dataset.source;
+      sourceToggle.querySelectorAll('[data-source]').forEach(b => {
+        const on = b.dataset.source === activeSource;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on);
+      });
+      renderTypeFilters();
+      renderTopicFilters();
+      applyFilters();
+    });
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   function mergeCollectionData(data) {
@@ -1887,70 +1969,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
   document.addEventListener('DOMContentLoaded', () => {
     updateFooterVersion();
-
-    // Theme toggle
-    const themeToggleBtn  = document.getElementById('theme-toggle');
-    const themeToggleIcon = document.getElementById('theme-toggle-icon');
-    const themeToggleLbl  = document.getElementById('theme-toggle-label');
-    const html = document.documentElement;
-
-    function applyTheme(theme) {
-      html.dataset.theme = theme;
-      const isDark = theme === 'dark';
-      if (themeToggleIcon) themeToggleIcon.textContent = isDark ? '☀' : '☾';
-      if (themeToggleLbl)  themeToggleLbl.textContent  = isDark ? 'Switch to light mode' : 'Switch to dark mode';
-      if (themeToggleBtn)  themeToggleBtn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
-      // Sync highlight.js theme
-      const hljsLight = document.getElementById('hljs-theme-light');
-      const hljsDark  = document.getElementById('hljs-theme-dark');
-      if (hljsLight) hljsLight.disabled = isDark;
-      if (hljsDark)  hljsDark.disabled  = !isDark;
-      try { localStorage.setItem('color-scheme', theme); } catch {}
-    }
-
-    // Restore saved preference; fall back to OS preference
-    const saved = (() => { try { return localStorage.getItem('color-scheme'); } catch {} })();
-    const preferred = saved || (globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    applyTheme(preferred);
-
-    if (themeToggleBtn) {
-      themeToggleBtn.addEventListener('click', () => {
-        applyTheme(html.dataset.theme === 'dark' ? 'light' : 'dark');
-      });
-    }
-
-    // View toggle
-    const viewToggle = document.getElementById('view-toggle');
-    const elemGrid   = document.getElementById('elements-grid');
-    let activeView = (() => { try { return localStorage.getItem('collection-view') || 'grid'; } catch { return 'grid'; } })();
-
-    function applyView(view) {
-      activeView = view;
-      if (elemGrid) elemGrid.dataset.view = view;
-      viewToggle?.querySelectorAll('.view-btn').forEach(btn => {
-        const on = btn.dataset.view === view;
-        btn.classList.toggle('active', on);
-        btn.setAttribute('aria-pressed', on);
-      });
-      try { localStorage.setItem('collection-view', view); } catch {}
-    }
-
-    applyView(activeView);
-
-    viewToggle?.addEventListener('click', e => {
-      const btn = e.target.closest('[data-view]');
-      if (btn) applyView(btn.dataset.view);
-    });
-
-    // Sort
-    const sortSelect = document.getElementById('sort-select');
-    if (sortSelect) {
-      sortSelect.value = activeSort;
-      sortSelect.addEventListener('change', e => {
-        activeSort = e.target.value;
-        applyFilters();
-      });
-    }
+    wireThemeToggle();
+    wireViewToggle();
+    wireSortControls();
 
     // Search
     const searchInput = document.getElementById('search-input');
@@ -1985,29 +2006,16 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       }
     });
 
-    // Source toggle
-    const sourceToggle = document.getElementById('source-toggle');
-    if (sourceToggle) {
-      sourceToggle.addEventListener('click', e => {
-        const btn = e.target.closest('[data-source]');
-        if (!btn) return;
-        activeSource = btn.dataset.source;
-        sourceToggle.querySelectorAll('[data-source]').forEach(b => {
-          const on = b.dataset.source === activeSource;
-          b.classList.toggle('active', on);
-          b.setAttribute('aria-pressed', on);
-        });
-        renderTypeFilters();
-        renderTopicFilters();
-        applyFilters();
-      });
-    }
+    wireSourceToggle();
 
     // Portfolio button
     document.getElementById('btn-portfolio')?.addEventListener('click', loadLocalPortfolio);
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
+    const headerNavRow = document.querySelector('.header-nav-row');
+    const consoleTabMenuToggle = document.getElementById('console-tab-menu-toggle');
+    const consoleTabMenu = document.getElementById('console-tab-menu');
     const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
@@ -2092,7 +2100,70 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         p.hidden = p.id !== 'tab-' + tabName;
         p.classList.toggle('active', p.id === 'tab-' + tabName);
       });
+      syncConsoleTabMenuSelection();
+      closeConsoleTabMenu();
+      scheduleConsoleTabOverflowCheck();
     };
+
+    function renderConsoleTabMenu() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      consoleTabMenu.innerHTML = '';
+      consoleTabs.querySelectorAll('.console-tab').forEach((btn) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'console-tab-menu-item';
+        item.dataset.tab = btn.dataset.tab || '';
+        item.setAttribute('role', 'menuitem');
+        item.textContent = btn.textContent || '';
+        if (btn.classList.contains('active')) item.classList.add('active');
+        consoleTabMenu.appendChild(item);
+      });
+    }
+
+    function syncConsoleTabMenuSelection() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      const activeTab = consoleTabs.querySelector('.console-tab.active')?.dataset.tab || '';
+      consoleTabMenu.querySelectorAll('.console-tab-menu-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.tab === activeTab);
+      });
+    }
+
+    function closeConsoleTabMenu() {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = true;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function tabsNeedOverflowMenu() {
+      if (!consoleTabs) return false;
+      const buttons = Array.from(consoleTabs.querySelectorAll('.console-tab'));
+      if (buttons.length < 2) return false;
+      const firstTop = buttons[0].offsetTop;
+      return buttons.some((btn) => btn.offsetTop !== firstTop);
+    }
+
+    let consoleTabOverflowFrame = 0;
+    function updateConsoleTabOverflow() {
+      if (!consoleTabs || !headerNavRow || !consoleTabMenuToggle) return;
+      headerNavRow.classList.remove('header-nav-row--collapsed');
+      consoleTabMenuToggle.hidden = true;
+      const shouldCollapse = tabsNeedOverflowMenu();
+      if (shouldCollapse) {
+        headerNavRow.classList.add('header-nav-row--collapsed');
+        consoleTabMenuToggle.hidden = false;
+      }
+      if (!shouldCollapse) {
+        closeConsoleTabMenu();
+      }
+    }
+
+    function scheduleConsoleTabOverflowCheck() {
+      if (consoleTabOverflowFrame) cancelAnimationFrame(consoleTabOverflowFrame);
+      consoleTabOverflowFrame = requestAnimationFrame(() => {
+        consoleTabOverflowFrame = 0;
+        updateConsoleTabOverflow();
+      });
+    }
 
     /**
      * Parse the URL hash into tab name and query parameters.
@@ -2228,6 +2299,15 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     // Handle hash changes for deep-linking (e.g., open_logs operation)
     globalThis.addEventListener('hashchange', () => applyHashTab());
 
+    renderConsoleTabMenu();
+    syncConsoleTabMenuSelection();
+    scheduleConsoleTabOverflowCheck();
+    globalThis.addEventListener('resize', scheduleConsoleTabOverflowCheck);
+    if (typeof ResizeObserver === 'function' && headerNavRow) {
+      const tabOverflowObserver = new ResizeObserver(() => scheduleConsoleTabOverflowCheck());
+      tabOverflowObserver.observe(headerNavRow);
+    }
+
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {
         const btn = e.target.closest('.console-tab');
@@ -2241,6 +2321,31 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         lazyInitTab(tab, tabInits);
       });
     }
+
+    consoleTabMenuToggle?.addEventListener('click', () => {
+      if (!consoleTabMenu) return;
+      const willOpen = consoleTabMenu.hidden;
+      consoleTabMenu.hidden = !willOpen;
+      consoleTabMenuToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    consoleTabMenu?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.console-tab-menu-item');
+      if (!btn?.dataset.tab) return;
+      const tab = btn.dataset.tab;
+      switchToTab(tab);
+      localStorage.setItem(TAB_KEY, tab);
+      lazyInitTab(tab, tabInits);
+    });
+
+    globalThis.addEventListener('click', (e) => {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      if (consoleTabMenu.hidden) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (consoleTabMenu.contains(target) || consoleTabMenuToggle.contains(target)) return;
+      closeConsoleTabMenu();
+    });
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
