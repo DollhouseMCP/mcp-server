@@ -15,8 +15,10 @@ import { PACKAGE_VERSION } from '../../../src/generated/version.js';
 let appSource = '';
 let sessionsSource = '';
 let logsSource = '';
+let logsCssSource = '';
 let metricsSource = '';
 let permissionsSource = '';
+let stylesCssSource = '';
 
 type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
 
@@ -26,12 +28,14 @@ const SESSION_FILTER_INJECTION_WAIT_MS = 40;
 
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
-  [appSource, sessionsSource, logsSource, metricsSource, permissionsSource] = await Promise.all([
+  [appSource, sessionsSource, logsSource, logsCssSource, metricsSource, permissionsSource, stylesCssSource] = await Promise.all([
     readFile(join(base, 'app.js'), 'utf8'),
     readFile(join(base, 'sessions.js'), 'utf8'),
     readFile(join(base, 'logs.js'), 'utf8'),
+    readFile(join(base, 'logs.css'), 'utf8'),
     readFile(join(base, 'metrics.js'), 'utf8'),
     readFile(join(base, 'permissions.js'), 'utf8'),
+    readFile(join(base, 'styles.css'), 'utf8'),
   ]);
 });
 
@@ -248,6 +252,16 @@ describe('Web console cleanup regressions', () => {
     expect(win.document.getElementById('tab-permissions')?.classList.contains('active')).toBe(true);
 
     cleanup();
+  });
+
+  it('hides the session chip before collapsing the compact header into a single-column stack', () => {
+    expect(stylesCssSource).toContain('@media (max-width: 46rem)');
+    expect(stylesCssSource).toContain('.stat--session {\n    display: none;');
+    expect(stylesCssSource).toContain('@media (max-width: 28rem)');
+    expect(stylesCssSource).toContain('grid-template-areas: "brand nav controls";');
+    expect(stylesCssSource).toContain('.header-brand-text {\n    display: none;');
+    expect(stylesCssSource).toContain('@media (max-width: 24rem)');
+    expect(stylesCssSource).toContain('grid-template-areas:\n      "brand"\n      "controls"\n      "nav";');
   });
 
   it('shows a visible collection banner when the community collection fetch fails', async () => {
@@ -1106,6 +1120,119 @@ describe('Web console cleanup regressions', () => {
     expect(banner?.textContent).toBe('Connection lost - reconnecting...');
 
     cleanup();
+  });
+
+  it('uses taller compact log rows at narrow widths so entries do not overlap', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="tab-logs"></div>
+      <div id="log-viewer-root"></div>
+    `);
+
+    const mediaStates = new Map<string, boolean>([
+      ['(max-width: 48rem)', true],
+      ['(max-width: 32rem)', false],
+    ]);
+    win.matchMedia = jest.fn((query: string) => ({
+      matches: mediaStates.get(query) === true,
+      media: query,
+      onchange: null,
+      addListener() { /* legacy no-op */ },
+      removeListener() { /* legacy no-op */ },
+      addEventListener() { /* no-op */ },
+      removeEventListener() { /* no-op */ },
+      dispatchEvent() { return false; },
+    }));
+
+    const eventSource = {} as Record<string, ((event?: any) => void) | null>;
+    win.DollhouseAuth.apiEventSource = jest.fn(() => eventSource);
+    installBannerHelper(win);
+
+    win.eval(logsSource);
+    win.DollhouseConsole.logs.init();
+
+    const viewport = win.document.getElementById('log-viewport') as HTMLElement | null;
+    expect(viewport).not.toBeNull();
+    if (viewport) {
+      Object.defineProperty(viewport, 'clientHeight', { value: 320, configurable: true });
+    }
+
+    eventSource.onopen?.({});
+    eventSource.onmessage?.({
+      data: JSON.stringify({
+        id: 'log-1',
+        timestamp: '2026-04-18T18:00:00.000Z',
+        level: 'info',
+        category: 'application',
+        source: 'DollhouseMCP',
+        message: 'Compact rows should have enough height to show wrapped content without overlap.',
+      }),
+    });
+    await wait(DEFAULT_WAIT_MS);
+
+    const row = win.document.querySelector('.log-entry') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    expect(row?.style.height).toBe('74px');
+
+    cleanup();
+  });
+
+  it('uses extra-tall compact log rows at very narrow widths', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="tab-logs"></div>
+      <div id="log-viewer-root"></div>
+    `);
+
+    const mediaStates = new Map<string, boolean>([
+      ['(max-width: 48rem)', true],
+      ['(max-width: 32rem)', true],
+    ]);
+    win.matchMedia = jest.fn((query: string) => ({
+      matches: mediaStates.get(query) === true,
+      media: query,
+      onchange: null,
+      addListener() { /* legacy no-op */ },
+      removeListener() { /* legacy no-op */ },
+      addEventListener() { /* no-op */ },
+      removeEventListener() { /* no-op */ },
+      dispatchEvent() { return false; },
+    }));
+
+    const eventSource = {} as Record<string, ((event?: any) => void) | null>;
+    win.DollhouseAuth.apiEventSource = jest.fn(() => eventSource);
+    installBannerHelper(win);
+
+    win.eval(logsSource);
+    win.DollhouseConsole.logs.init();
+
+    const viewport = win.document.getElementById('log-viewport') as HTMLElement | null;
+    expect(viewport).not.toBeNull();
+    if (viewport) {
+      Object.defineProperty(viewport, 'clientHeight', { value: 320, configurable: true });
+    }
+
+    eventSource.onopen?.({});
+    eventSource.onmessage?.({
+      data: JSON.stringify({
+        id: 'log-2',
+        timestamp: '2026-04-18T18:00:00.000Z',
+        level: 'warn',
+        category: 'security',
+        source: 'SecurityMonitor',
+        message: 'Extra compact rows need a taller height because the time and message split across more lines on narrow screens.',
+      }),
+    });
+    await wait(DEFAULT_WAIT_MS);
+
+    const row = win.document.querySelector('.log-entry') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    expect(row?.style.height).toBe('96px');
+
+    cleanup();
+  });
+
+  it('keeps the logs viewport above the fixed footer in CSS', () => {
+    expect(logsCssSource).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 120px);');
+    expect(logsCssSource).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 104px);');
   });
 
   it('shows a visible metrics banner when the latest metrics fetch fails', async () => {
