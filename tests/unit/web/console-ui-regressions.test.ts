@@ -248,7 +248,7 @@ describe('Web console cleanup regressions', () => {
     menuButton?.click();
     await wait(DEFAULT_WAIT_MS);
 
-    expect(win.document.querySelector('#console-tabs .console-tab.active')?.getAttribute('data-tab')).toBe('permissions');
+    expect((win.document.querySelector('#console-tabs .console-tab.active') as HTMLElement | null)?.dataset.tab).toBe('permissions');
     expect(win.document.getElementById('tab-permissions')?.classList.contains('active')).toBe(true);
 
     cleanup();

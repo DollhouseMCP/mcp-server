@@ -139,6 +139,88 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     footerVersion.textContent = `Version: ${DOLLHOUSE_SERVER_VERSION || 'unknown'}`;
   }
 
+  function wireThemeToggle() {
+    const themeToggleBtn  = document.getElementById('theme-toggle');
+    const themeToggleIcon = document.getElementById('theme-toggle-icon');
+    const themeToggleLbl  = document.getElementById('theme-toggle-label');
+    const html = document.documentElement;
+
+    function applyTheme(theme) {
+      html.dataset.theme = theme;
+      const isDark = theme === 'dark';
+      if (themeToggleIcon) themeToggleIcon.textContent = isDark ? '☀' : '☾';
+      if (themeToggleLbl) themeToggleLbl.textContent = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+      if (themeToggleBtn) themeToggleBtn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
+      const hljsLight = document.getElementById('hljs-theme-light');
+      const hljsDark = document.getElementById('hljs-theme-dark');
+      if (hljsLight) hljsLight.disabled = isDark;
+      if (hljsDark) hljsDark.disabled = !isDark;
+      try { localStorage.setItem('color-scheme', theme); } catch {}
+    }
+
+    const saved = (() => { try { return localStorage.getItem('color-scheme'); } catch {} })();
+    const preferred = saved || (globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    applyTheme(preferred);
+
+    if (themeToggleBtn) {
+      themeToggleBtn.addEventListener('click', () => {
+        applyTheme(html.dataset.theme === 'dark' ? 'light' : 'dark');
+      });
+    }
+  }
+
+  function wireViewToggle() {
+    const viewToggle = document.getElementById('view-toggle');
+    const elemGrid = document.getElementById('elements-grid');
+    let activeView = (() => { try { return localStorage.getItem('collection-view') || 'grid'; } catch { return 'grid'; } })();
+
+    function applyView(view) {
+      activeView = view;
+      if (elemGrid) elemGrid.dataset.view = view;
+      viewToggle?.querySelectorAll('.view-btn').forEach(btn => {
+        const on = btn.dataset.view === view;
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on);
+      });
+      try { localStorage.setItem('collection-view', view); } catch {}
+    }
+
+    applyView(activeView);
+
+    viewToggle?.addEventListener('click', e => {
+      const btn = e.target.closest('[data-view]');
+      if (btn) applyView(btn.dataset.view);
+    });
+  }
+
+  function wireSortControls() {
+    const sortSelect = document.getElementById('sort-select');
+    if (!sortSelect) return;
+    sortSelect.value = activeSort;
+    sortSelect.addEventListener('change', e => {
+      activeSort = e.target.value;
+      applyFilters();
+    });
+  }
+
+  function wireSourceToggle() {
+    const sourceToggle = document.getElementById('source-toggle');
+    if (!sourceToggle) return;
+    sourceToggle.addEventListener('click', e => {
+      const btn = e.target.closest('[data-source]');
+      if (!btn) return;
+      activeSource = btn.dataset.source;
+      sourceToggle.querySelectorAll('[data-source]').forEach(b => {
+        const on = b.dataset.source === activeSource;
+        b.classList.toggle('active', on);
+        b.setAttribute('aria-pressed', on);
+      });
+      renderTypeFilters();
+      renderTopicFilters();
+      applyFilters();
+    });
+  }
+
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
   function mergeCollectionData(data) {
@@ -1887,70 +1969,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
   document.addEventListener('DOMContentLoaded', () => {
     updateFooterVersion();
-
-    // Theme toggle
-    const themeToggleBtn  = document.getElementById('theme-toggle');
-    const themeToggleIcon = document.getElementById('theme-toggle-icon');
-    const themeToggleLbl  = document.getElementById('theme-toggle-label');
-    const html = document.documentElement;
-
-    function applyTheme(theme) {
-      html.dataset.theme = theme;
-      const isDark = theme === 'dark';
-      if (themeToggleIcon) themeToggleIcon.textContent = isDark ? '☀' : '☾';
-      if (themeToggleLbl)  themeToggleLbl.textContent  = isDark ? 'Switch to light mode' : 'Switch to dark mode';
-      if (themeToggleBtn)  themeToggleBtn.setAttribute('aria-label', isDark ? 'Switch to light mode' : 'Switch to dark mode');
-      // Sync highlight.js theme
-      const hljsLight = document.getElementById('hljs-theme-light');
-      const hljsDark  = document.getElementById('hljs-theme-dark');
-      if (hljsLight) hljsLight.disabled = isDark;
-      if (hljsDark)  hljsDark.disabled  = !isDark;
-      try { localStorage.setItem('color-scheme', theme); } catch {}
-    }
-
-    // Restore saved preference; fall back to OS preference
-    const saved = (() => { try { return localStorage.getItem('color-scheme'); } catch {} })();
-    const preferred = saved || (globalThis.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-    applyTheme(preferred);
-
-    if (themeToggleBtn) {
-      themeToggleBtn.addEventListener('click', () => {
-        applyTheme(html.dataset.theme === 'dark' ? 'light' : 'dark');
-      });
-    }
-
-    // View toggle
-    const viewToggle = document.getElementById('view-toggle');
-    const elemGrid   = document.getElementById('elements-grid');
-    let activeView = (() => { try { return localStorage.getItem('collection-view') || 'grid'; } catch { return 'grid'; } })();
-
-    function applyView(view) {
-      activeView = view;
-      if (elemGrid) elemGrid.dataset.view = view;
-      viewToggle?.querySelectorAll('.view-btn').forEach(btn => {
-        const on = btn.dataset.view === view;
-        btn.classList.toggle('active', on);
-        btn.setAttribute('aria-pressed', on);
-      });
-      try { localStorage.setItem('collection-view', view); } catch {}
-    }
-
-    applyView(activeView);
-
-    viewToggle?.addEventListener('click', e => {
-      const btn = e.target.closest('[data-view]');
-      if (btn) applyView(btn.dataset.view);
-    });
-
-    // Sort
-    const sortSelect = document.getElementById('sort-select');
-    if (sortSelect) {
-      sortSelect.value = activeSort;
-      sortSelect.addEventListener('change', e => {
-        activeSort = e.target.value;
-        applyFilters();
-      });
-    }
+    wireThemeToggle();
+    wireViewToggle();
+    wireSortControls();
 
     // Search
     const searchInput = document.getElementById('search-input');
@@ -1985,23 +2006,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       }
     });
 
-    // Source toggle
-    const sourceToggle = document.getElementById('source-toggle');
-    if (sourceToggle) {
-      sourceToggle.addEventListener('click', e => {
-        const btn = e.target.closest('[data-source]');
-        if (!btn) return;
-        activeSource = btn.dataset.source;
-        sourceToggle.querySelectorAll('[data-source]').forEach(b => {
-          const on = b.dataset.source === activeSource;
-          b.classList.toggle('active', on);
-          b.setAttribute('aria-pressed', on);
-        });
-        renderTypeFilters();
-        renderTopicFilters();
-        applyFilters();
-      });
-    }
+    wireSourceToggle();
 
     // Portfolio button
     document.getElementById('btn-portfolio')?.addEventListener('click', loadLocalPortfolio);
@@ -2326,7 +2331,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     consoleTabMenu?.addEventListener('click', (e) => {
       const btn = e.target.closest('.console-tab-menu-item');
-      if (!btn || !btn.dataset.tab) return;
+      if (!btn?.dataset.tab) return;
       const tab = btn.dataset.tab;
       switchToTab(tab);
       localStorage.setItem(TAB_KEY, tab);
