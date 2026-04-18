@@ -47,6 +47,10 @@ function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function normalizeNewlines(value: string): string {
+  return value.replaceAll('\r\n', '\n');
+}
+
 function createDom(html: string): { window: JSDOM['window']; cleanup: () => void } {
   const dom = new JSDOM(`<!DOCTYPE html><html><body>${html}</body></html>`, {
     url: 'http://localhost:41715',
@@ -255,13 +259,14 @@ describe('Web console cleanup regressions', () => {
   });
 
   it('hides the session chip before collapsing the compact header into a single-column stack', () => {
-    expect(stylesCssSource).toContain('@media (max-width: 46rem)');
-    expect(stylesCssSource).toContain('.stat--session {\n    display: none;');
-    expect(stylesCssSource).toContain('@media (max-width: 28rem)');
-    expect(stylesCssSource).toContain('grid-template-areas: "brand nav controls";');
-    expect(stylesCssSource).toContain('.header-brand-text {\n    display: none;');
-    expect(stylesCssSource).toContain('@media (max-width: 24rem)');
-    expect(stylesCssSource).toContain('grid-template-areas:\n      "brand"\n      "controls"\n      "nav";');
+    const normalizedStyles = normalizeNewlines(stylesCssSource);
+    expect(normalizedStyles).toContain('@media (max-width: 46rem)');
+    expect(normalizedStyles).toContain('.stat--session {\n    display: none;');
+    expect(normalizedStyles).toContain('@media (max-width: 28rem)');
+    expect(normalizedStyles).toContain('grid-template-areas: "brand nav controls";');
+    expect(normalizedStyles).toContain('.header-brand-text {\n    display: none;');
+    expect(normalizedStyles).toContain('@media (max-width: 24rem)');
+    expect(normalizedStyles).toContain('grid-template-areas:\n      "brand"\n      "controls"\n      "nav";');
   });
 
   it('shows a visible collection banner when the community collection fetch fails', async () => {
@@ -1231,8 +1236,9 @@ describe('Web console cleanup regressions', () => {
   });
 
   it('keeps the logs viewport above the fixed footer in CSS', () => {
-    expect(logsCssSource).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 120px);');
-    expect(logsCssSource).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 104px);');
+    const normalizedLogsCss = normalizeNewlines(logsCssSource);
+    expect(normalizedLogsCss).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 120px);');
+    expect(normalizedLogsCss).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 104px);');
   });
 
   it('shows a visible metrics banner when the latest metrics fetch fails', async () => {
