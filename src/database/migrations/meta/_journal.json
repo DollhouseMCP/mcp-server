@@ -36,6 +36,13 @@
       "when": 1776316000000,
       "tag": "0004_fts_and_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1776700000000,
+      "tag": "0005_visibility_rls",
+      "breakpoints": true
     }
   ]
 }

@@ -214,15 +214,16 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   async readContent(relativePath: string): Promise<string> {
     const row = await withUserRead(this.db, this.userId, async (tx) => {
-      // Defense-in-depth: include userId even though RLS enforces it.
-      // This guarantees correctness if a future code path ever misses the RLS context.
+      // RLS is authoritative for cross-user visibility: the elements_select
+      // policy (migration 0005) returns rows where user_id matches the caller
+      // OR visibility = 'public'. Adding an explicit user_id filter here would
+      // re-block public reads and defeat the whole point of the policy — so
+      // the only predicate is the primary-key lookup. RLS enforces the
+      // visibility rule; the pk lookup stays O(1) via the id index.
       const rows = await tx
         .select({ rawContent: elements.rawContent })
         .from(elements)
-        .where(and(
-          eq(elements.userId, this.userId),
-          eq(elements.id, relativePath),
-        ))
+        .where(eq(elements.id, relativePath))
         .limit(1);
       return rows[0] ?? null;
     });

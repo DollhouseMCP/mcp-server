@@ -4,8 +4,11 @@
  * or relationships when using the database storage layers.
  */
 
+import { eq, sql } from 'drizzle-orm';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
+import { withUserContext, withUserRead } from '../../../src/database/rls.js';
+import { elements } from '../../../src/database/schema/elements.js';
 import { buildMemoryContent, buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 let dbAvailable = false;
@@ -196,5 +199,209 @@ describe('RLS User Isolation', () => {
     const summaries = await layerA.listSummaries();
     expect(summaries).toHaveLength(1);
     expect(summaries[0].name).toBe('protected-skill');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Visibility-aware RLS (Phase 4.4 Piece 1)
+//
+// Migration 0005 split the single FOR ALL policy on elements into per-
+// operation policies. SELECT now permits 'user_id = :me OR visibility =
+// public'; INSERT/UPDATE/DELETE stay strictly owner-only. This block
+// verifies the new semantics without asserting any MCP-surface change
+// (discovery in list_elements is Piece 2, intentionally not wired here).
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('RLS visibility — public elements', () => {
+  it('should allow cross-user readContent when visibility is public', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const layerB = new DatabaseStorageLayer(db, fixedUserId(userIdB), 'skills');
+
+    const publicId = await layerA.writeContent(
+      'skills', 'public-skill', buildSkillContent('public-skill', { description: 'public one' }),
+      { author: 'A', version: '1.0.0', description: 'public one', tags: [], visibility: 'public' },
+    );
+
+    // User B can read user A's public element by UUID
+    const content = await layerB.readContent(publicId);
+    expect(content).toContain('public-skill');
+    expect(content).toContain('public one');
+  });
+
+  it('should still block cross-user readContent when visibility is private', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const layerB = new DatabaseStorageLayer(db, fixedUserId(userIdB), 'skills');
+
+    const privateId = await layerA.writeContent(
+      'skills', 'secret-skill', buildSkillContent('secret-skill'),
+      { author: 'A', version: '1.0.0', description: '', tags: [] }, // default visibility = private
+    );
+
+    await expect(layerB.readContent(privateId)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('should not surface public elements in user B\'s listSummaries', async () => {
+    if (!dbAvailable) return;
+    // Listing remains per-user-scoped by design — discovery is Piece 2. This
+    // test guards against a regression where a future change accidentally
+    // leaks public rows into per-user list output.
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const layerB = new DatabaseStorageLayer(db, fixedUserId(userIdB), 'skills');
+
+    await layerA.writeContent(
+      'skills', 'public-on-A', buildSkillContent('public-on-A'),
+      { author: 'A', version: '1.0.0', description: '', tags: [], visibility: 'public' },
+    );
+
+    const summariesB = await layerB.listSummaries();
+    expect(summariesB.map(s => s.name)).not.toContain('public-on-A');
+  });
+
+  it('should not surface public elements in user B\'s getPathByName', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const layerB = new DatabaseStorageLayer(db, fixedUserId(userIdB), 'skills');
+
+    await layerA.writeContent(
+      'skills', 'public-for-name-lookup', buildSkillContent('public-for-name-lookup'),
+      { author: 'A', version: '1.0.0', description: '', tags: [], visibility: 'public' },
+    );
+
+    // Force a scan on layer B
+    await layerB.scan();
+    expect(layerB.getPathByName('public-for-name-lookup')).toBeUndefined();
+  });
+
+  it('should block cross-user UPDATE on a public row (raw SQL under user B)', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const publicId = await layerA.writeContent(
+      'skills', 'public-no-mutate', buildSkillContent('public-no-mutate', { description: 'original' }),
+      { author: 'A', version: '1.0.0', description: 'original', tags: [], visibility: 'public' },
+    );
+
+    // User B tries to update user A's row directly. RLS elements_update policy
+    // filters by owner, so UPDATE matches zero rows and returns no ids.
+    const updatedIds = await withUserContext(db, userIdB, async (tx) =>
+      tx.update(elements)
+        .set({ description: 'hijacked' })
+        .where(eq(elements.id, publicId))
+        .returning({ id: elements.id }),
+    );
+    expect(updatedIds).toHaveLength(0);
+
+    // User A confirms their row is untouched.
+    const rows = await withUserRead(db, userIdA, async (tx) =>
+      tx.select({ description: elements.description })
+        .from(elements)
+        .where(eq(elements.id, publicId))
+        .limit(1),
+    );
+    expect(rows[0]?.description).toBe('original');
+  });
+
+  it('should block cross-user DELETE on a public row (raw SQL under user B)', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    const layerA = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
+    const publicId = await layerA.writeContent(
+      'skills', 'public-no-delete', buildSkillContent('public-no-delete'),
+      { author: 'A', version: '1.0.0', description: '', tags: [], visibility: 'public' },
+    );
+
+    const deletedIds = await withUserContext(db, userIdB, async (tx) =>
+      tx.delete(elements)
+        .where(eq(elements.id, publicId))
+        .returning({ id: elements.id }),
+    );
+    expect(deletedIds).toHaveLength(0);
+
+    // Row still there (via user A's read-context)
+    const stillThere = await withUserRead(db, userIdA, async (tx) =>
+      tx.select({ id: elements.id })
+        .from(elements)
+        .where(eq(elements.id, publicId))
+        .limit(1),
+    );
+    expect(stillThere).toHaveLength(1);
+  });
+
+  it('should reject invalid visibility values via CHECK constraint', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const db = getTestDb();
+
+    // Insert with an unsupported visibility literal — elements_visibility_check
+    // in migration 0005 restricts the column to ('private', 'public'). Drizzle
+    // wraps the pg error in its own "Failed query" wrapper, so we inspect the
+    // chained cause to confirm it's the CHECK constraint specifically.
+    let caught: Error | null = null;
+    try {
+      await withUserContext(db, userIdA, async (tx) =>
+        tx.execute(sql`
+          INSERT INTO elements (user_id, element_type, name, raw_content, content_hash, byte_size, visibility)
+          VALUES (${userIdA}::uuid, 'skills', 'bad-visibility', 'body', 'h', 4, 'shared')
+        `),
+      );
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    const combined = `${caught?.message ?? ''} ${(caught as { cause?: { message?: string; code?: string; constraint_name?: string } } | null)?.cause?.message ?? ''} ${(caught as { cause?: { constraint_name?: string } } | null)?.cause?.constraint_name ?? ''}`;
+    const pgCode = (caught as { cause?: { code?: string } } | null)?.cause?.code;
+    // Either the pg error code is 23514 (check_violation) or the text
+    // mentions the constraint name. Both satisfy "CHECK constraint fired".
+    expect(pgCode === '23514' || /elements_visibility_check|violates check/i.test(combined)).toBe(true);
+  });
+
+  it('should block INSERT that spoofs user_id to another user (WITH CHECK)', async () => {
+    if (!dbAvailable) return;
+    const userIdA = await ensureTestUser();
+    const userIdB = await ensureTestUserB();
+    const db = getTestDb();
+
+    // User B tries to insert a row claiming user A as owner. elements_insert's
+    // WITH CHECK forces user_id to match the caller's app.current_user_id.
+    // pg error code 42501 = insufficient_privilege (RLS policy violation).
+    let caught: Error | null = null;
+    try {
+      await withUserContext(db, userIdB, async (tx) =>
+        tx.execute(sql`
+          INSERT INTO elements (user_id, element_type, name, raw_content, content_hash, byte_size, visibility)
+          VALUES (${userIdA}::uuid, 'skills', 'spoofed', 'body', 'h', 4, 'private')
+        `),
+      );
+    } catch (e) {
+      caught = e as Error;
+    }
+    expect(caught).not.toBeNull();
+    const pgCode = (caught as { cause?: { code?: string } } | null)?.cause?.code;
+    const combined = `${caught?.message ?? ''} ${(caught as { cause?: { message?: string } } | null)?.cause?.message ?? ''}`;
+    expect(pgCode === '42501' || /row-level security|violates row-level/i.test(combined)).toBe(true);
   });
 });
