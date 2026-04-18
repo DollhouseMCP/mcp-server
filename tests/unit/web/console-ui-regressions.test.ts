@@ -141,7 +141,7 @@ describe('Web console cleanup regressions', () => {
       <div id="results-announcer"></div>
       <div id="elements-grid"></div>
       <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
-      <div id="footer-version"></div>
+      <div id="footer-version" aria-live="polite" aria-atomic="true"></div>
       <div id="footer-updated"></div>
     `);
 
@@ -166,6 +166,7 @@ describe('Web console cleanup regressions', () => {
     await wait(DEFAULT_WAIT_MS);
 
     expect(win.document.getElementById('footer-version')?.textContent).toBe(`Version: ${PACKAGE_VERSION}`);
+    expect(win.document.getElementById('footer-version')?.getAttribute('aria-live')).toBe('polite');
 
     cleanup();
   });

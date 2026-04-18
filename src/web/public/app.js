@@ -132,6 +132,8 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   }
 
   function updateFooterVersion() {
+    // Keep the running build visible in the fixed footer so operators can
+    // quickly confirm which console version a given tab or machine is serving.
     const footerVersion = document.getElementById('footer-version');
     if (!footerVersion) return;
     footerVersion.textContent = `Version: ${DOLLHOUSE_SERVER_VERSION || 'unknown'}`;
