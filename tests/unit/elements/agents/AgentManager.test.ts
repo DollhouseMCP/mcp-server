@@ -662,14 +662,24 @@ Content`;
           }
         });
 
-      // First read loads from file
+      // First read: element is not cached, so both the agent file and its
+      // .state.yaml sidecar are read from disk (callCount = 2).
       await agentManager.read('test-agent');
-      const firstCallCount = callCount;
-      expect(firstCallCount).toBe(2); // Agent file + state file
+      expect(callCount).toBe(2);
 
-      // Second read should use cache
+      // Second read: the element cache (populated by BaseElementManager.load())
+      // serves the agent, and its already-hydrated state is returned as-is —
+      // neither file is re-read. This is the desired steady-state behavior.
       await agentManager.read('test-agent');
-      expect(callCount).toBe(3); // Only agent file read again
+      expect(callCount).toBe(2);
+
+      // Force an element-cache miss by clearing the base-class LRU. The state
+      // cache lives on AgentManager and is independent of the element cache —
+      // so the next read should re-fetch the agent file but reuse the cached
+      // AgentState, confirming the two layers are separate.
+      agentManager.clearCache();
+      await agentManager.read('test-agent');
+      expect(callCount).toBe(3); // +1 agent file read; state came from stateCache
     });
 
     it('should acquire file lock during state save to prevent TOCTOU race (Issue #107)', async () => {

@@ -971,7 +971,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     // Second, try storage layer index (O(1) name lookup)
     const indexedPath = this.storageLayer.getPathByName(identifier);
     if (indexedPath) {
-      try { return await this.load(indexedPath); } catch { /* fall through */ }
+      try {
+        return await this.load(indexedPath);
+      } catch (error) {
+        // ENOENT means the indexed path was deleted between scan and load —
+        // fall through to the next resolution strategy. Any other error (parse
+        // failure, size violation, permission denied, element-type mismatch)
+        // means the file exists but is invalid; callers rely on that error
+        // surfacing rather than being silently converted into "not found".
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
     }
 
     // Third, try direct file access using standard naming convention
@@ -1059,9 +1068,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
             element.id === identifier) {
           return element;
         }
-      } catch (_error) {
-        // File doesn't exist or failed to load - try next path
-        continue;
+      } catch (error) {
+        // ENOENT is expected while iterating candidate filenames — the element
+        // may live at one of the other paths. Continue to the next candidate.
+        //
+        // Any other error (parse failure, size violation, permission denied,
+        // wrong element type) means the file exists but is invalid. Mapping
+        // that to "not found" silently hides real problems from callers and
+        // operators, so re-throw so the load contract is preserved.
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw error;
       }
     }
 
