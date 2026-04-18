@@ -10,6 +10,7 @@ import { describe, it, expect, beforeAll, afterEach, jest } from '@jest/globals'
 import { JSDOM } from 'jsdom';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { PACKAGE_VERSION } from '../../../src/generated/version.js';
 
 let appSource = '';
 let sessionsSource = '';
@@ -118,6 +119,58 @@ function installBannerHelper(win: Record<string, any>) {
 }
 
 describe('Web console cleanup regressions', () => {
+  it('shows the running server version in the footer', async () => {
+    const { window: win, cleanup } = createDom(`
+      <meta name="dollhouse-server-version" content="${PACKAGE_VERSION}">
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div id="console-tabs"><button class="console-tab active" data-tab="portfolio"></button></div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-version" aria-live="polite" aria-atomic="true"></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.getElementById('footer-version')?.textContent).toBe(`Version: ${PACKAGE_VERSION}`);
+    expect(win.document.getElementById('footer-version')?.getAttribute('aria-live')).toBe('polite');
+
+    cleanup();
+  });
+
   it('shows a visible collection banner when the community collection fetch fails', async () => {
     const { window: win, cleanup } = createDom(`
       <button id="theme-toggle"></button>
