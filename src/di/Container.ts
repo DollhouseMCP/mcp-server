@@ -93,8 +93,7 @@ import { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js
 import { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
-import { bootstrapDatabase } from "../database/bootstrap.js";
-import { createUserIdResolver } from "../database/UserContext.js";
+import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -264,17 +263,11 @@ export class DollhouseContainer {
    *
    * Returns {} when database mode is inactive, so spreading into deps is a no-op.
    */
-  private resolveDatabaseDeps(): {
-    databaseInstance?: import('../database/connection.js').DatabaseInstance;
-    getCurrentUserId?: import('../database/UserContext.js').UserIdResolver;
-  } {
-    if (this.hasRegistration('DatabaseInstance')) {
-      return {
-        databaseInstance: this.resolve<import('../database/connection.js').DatabaseInstance>('DatabaseInstance'),
-        getCurrentUserId: this.resolve<import('../database/UserContext.js').UserIdResolver>('UserIdResolver'),
-      };
-    }
-    return {};
+  private resolveDatabaseDeps() {
+    // Thin wrapper around DatabaseServiceRegistrar.resolveDatabaseDeps so
+    // element-manager factories can keep calling `...this.resolveDatabaseDeps()`
+    // without knowing about the registrar. Returns {} when DB mode is off.
+    return DatabaseServiceRegistrar.resolveDatabaseDeps(this);
   }
 
   public resolve<T>(name: string): T {
@@ -899,62 +892,12 @@ export class DollhouseContainer {
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
   public async preparePortfolio(): Promise<void> {
-    // Phase 4: Bootstrap database connection when storage backend is 'database'.
+    // Bootstrap database connection when storage backend is 'database'.
     // Must happen before any manager resolution so DatabaseInstance is available.
+    // All DB-specific wiring lives in DatabaseServiceRegistrar — Container stays
+    // out of the bootstrap/registration details.
     if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
-      if (!env.DOLLHOUSE_DATABASE_URL) {
-        throw new Error(
-          'DOLLHOUSE_STORAGE_BACKEND=database requires DOLLHOUSE_DATABASE_URL to be set',
-        );
-      }
-      const result = await bootstrapDatabase({
-        connectionUrl: env.DOLLHOUSE_DATABASE_URL,
-        adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
-        poolSize: env.DOLLHOUSE_DATABASE_POOL_SIZE,
-        ssl: env.DOLLHOUSE_DATABASE_SSL,
-      });
-      // Register connection object (has .close() — picked up by dispose() automatically)
-      this.register('DatabaseConnection', () => result.connection);
-      // Register Drizzle instance (resolved by stores and storage layers)
-      this.register('DatabaseInstance', () => result.db);
-
-      // The bootstrapped DB UUID is the identity every session binds to by default.
-      // Per-session scoping is enforced by ContextTracker/AsyncLocalStorage: stdio
-      // sessions and single-tenant HTTP sessions both carry this UUID as their
-      // SessionContext.userId. When multi-tenant auth lands, HTTP sessions
-      // override it at session creation time. Either way, storage layers read the
-      // userId out of the active session context per call, NOT from a singleton.
-      this.register('BootstrappedUserId', () => result.userId);
-
-      // 'CurrentUserId' still exists for legacy per-session constructors
-      // (ActivationStore/ConfirmationStore/ChallengeStore) that are resolved at
-      // startup/session-init time — i.e. OUTSIDE a request scope, where there
-      // is no active ContextTracker session yet. For stdio, this is safe because
-      // there's only one tenant. For HTTP+DB, each HTTP session resolves it
-      // from its own child-container scope at session creation (see
-      // createServerForHttpSession) and the bootstrapped UUID is the default
-      // until per-request auth identity lands.
-      this.register('CurrentUserId', () => result.userId);
-
-      // 'UserIdResolver' is the per-call resolver used by storage layers. It
-      // reads from the active ContextTracker session scope, so each MCP tool
-      // call sees its own session's userId. stdio has one static session, HTTP
-      // has one per connection — the resolver is the same code.
-      this.register('UserIdResolver', () => {
-        const tracker = this.resolve<ContextTracker>('ContextTracker');
-        return createUserIdResolver(tracker);
-      });
-
-      // Re-register StdioSession with the bootstrapped DB UUID. registerServices()
-      // already set up a fallback factory that checks BootstrappedUserId, but by
-      // the time we get here the original factory may have been invoked eagerly
-      // (e.g. during ServerSetup construction) and its result cached. Re-
-      // registering clears the cached instance so the next resolve picks up the
-      // UUID-bearing session. See register() which resets `instance: null`.
-      this.register('StdioSession', () => Object.freeze({
-        ...createStdioSession(),
-        userId: result.userId,
-      }));
+      await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
     }
 
     // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)

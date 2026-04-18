@@ -1978,9 +1978,19 @@ export class MemoryManager extends BaseElementManager<Memory> {
       throw new Error('Invalid file path: Path traversal detected');
     }
     
-    // Ensure proper extension - memories should only be .yaml or .yml
+    // Ensure proper extension - memories should only be .yaml or .yml.
+    // Coded as ENOENT because a path without a memory extension cannot refer
+    // to any file in the memories directory — equivalent to "no such file."
+    // This allows BaseElementManager.tryDirectLoad's candidate iteration to
+    // treat a no-extension identifier as "try the next candidate" rather than
+    // surfacing the extension error through the read() error-propagation
+    // contract (preserve-load-errors fix in fbbf564a). Explicit callers that
+    // pass an invalid extension still get "not found" via the standard
+    // read()/findByName flow — consistent with how a missing file is reported.
     if (!normalized.endsWith('.yaml') && !normalized.endsWith('.yml')) {
-      throw new Error('Memory files must have .yaml or .yml extension');
+      const err = new Error('Memory files must have .yaml or .yml extension') as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
     }
     
     // Construct full path
