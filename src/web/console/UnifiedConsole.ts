@@ -52,6 +52,7 @@ import {
   type KillStaleProcessOutcome,
 } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
+import type { SessionInfo } from './IngestRoutes.js';
 
 /**
  * Default console port from the env var. Used as fallback when no port
@@ -207,6 +208,7 @@ interface ForceTakeoverAttemptResult {
   election: ElectionResult;
   fallback: PortLeaderDiscovery;
   replacement: PortOwnerReplacementDecision;
+  recoveredSessions: SessionInfo[];
   forcedKill: KillStaleProcessOutcome | null;
   takeoverAttempted: boolean;
   reboundLockClaimed: boolean;
@@ -241,6 +243,31 @@ interface DiscoveryDependencies {
 
 function buildDiscoveryHeaders(authToken: string | null): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+export async function fetchLeaderSessionsSnapshot(
+  port: number,
+  authToken: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SessionInfo[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LEADER_DISCOVERY_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: buildDiscoveryHeaders(authToken),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json() as { sessions?: SessionInfo[] };
+    return Array.isArray(data.sessions) ? data.sessions : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function buildLeaderInfoFromSession(port: number, ownerPid: number, leaderSession: SessionApiRecord): ConsoleLeaderInfo {
@@ -706,6 +733,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: initialFallback,
       replacement: initialReplacement,
+      recoveredSessions: [],
       forcedKill: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
@@ -713,6 +741,7 @@ async function attemptForceTakeover(
   }
 
   const latestFallback = await discoverLeaderServingPort(consolePort, primaryToken);
+  const recoveredSessions = await fetchLeaderSessionsSnapshot(consolePort, primaryToken);
   const latestReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, latestFallback);
   if (!latestReplacement.shouldEvict || latestReplacement.ownerPid === null) {
     logger.warn('[UnifiedConsole] Forced takeover target changed before eviction; skipping forced kill', {
@@ -730,6 +759,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: latestFallback,
       replacement: latestReplacement,
+      recoveredSessions,
       forcedKill: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
@@ -765,6 +795,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: latestFallback,
       replacement: latestReplacement,
+      recoveredSessions,
       forcedKill,
       takeoverAttempted: true,
       reboundLockClaimed: false,
@@ -809,6 +840,7 @@ async function attemptForceTakeover(
     election: reboundElection,
     fallback: latestFallback,
     replacement: latestReplacement,
+    recoveredSessions,
     forcedKill,
     takeoverAttempted: true,
     reboundLockClaimed,
@@ -902,6 +934,7 @@ async function startAsLeader(
   // bindAndListen now handles EADDRINUSE by finding and killing the stale
   // process on the port, then retrying. No external retry loop needed.
   let webResult = await startWebServer(serverOpts);
+  let recoveredFollowerSessions: SessionInfo[] = [];
 
   if (webResult.bindResult && !webResult.bindResult.success) {
     const forceTakeover = await attemptForceTakeover(
@@ -914,6 +947,7 @@ async function startAsLeader(
     );
     webResult = forceTakeover.webResult;
     election = forceTakeover.election;
+    recoveredFollowerSessions = forceTakeover.recoveredSessions;
 
     if (webResult.bindResult && !webResult.bindResult.success) {
       if (forceTakeover.fallback.leaderInfo) {
@@ -955,6 +989,14 @@ async function startAsLeader(
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
+
+  if (recoveredFollowerSessions.length > 0) {
+    ingestResult.importSessions(recoveredFollowerSessions);
+    logger.info('[UnifiedConsole] Recovered follower session snapshot from displaced leader', {
+      sessionId: options.sessionId,
+      recoveredSessions: recoveredFollowerSessions.length,
+    });
+  }
 
   // Wire SSE broadcasts for this leader's own events
   options.wireSSEBroadcasts(webResult, options.metricsSink);

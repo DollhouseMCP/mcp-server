@@ -23,6 +23,7 @@ import { logger } from '../../../../src/utils/logger.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
+  fetchLeaderSessionsSnapshot,
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
   resolveFollowerAuthority,
@@ -318,6 +319,45 @@ describe('discoverLeaderServingPort', () => {
       pid: 81234,
       port: 41715,
     });
+  });
+});
+
+describe('fetchLeaderSessionsSnapshot', () => {
+  it('reads the predecessor session snapshot with bearer auth when available', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessions: [
+          {
+            sessionId: 'older-follower',
+            displayName: 'Kermit',
+            color: '#00ff00',
+            pid: 4567,
+            startedAt: '2026-04-19T16:00:00.000Z',
+            lastHeartbeat: '2026-04-19T16:00:05.000Z',
+            status: 'active',
+            isLeader: false,
+            authenticated: true,
+            kind: 'mcp',
+            serverVersion: '2.0.18',
+            consoleProtocolVersion: 1,
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await fetchLeaderSessionsSnapshot(41715, 'token-123', fetchStub);
+
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', expect.objectContaining({
+      headers: { Authorization: 'Bearer token-123' },
+      signal: expect.any(AbortSignal),
+    }));
+    expect(result).toEqual([
+      expect.objectContaining({
+        sessionId: 'older-follower',
+        displayName: 'Kermit',
+      }),
+    ]);
   });
 });
 

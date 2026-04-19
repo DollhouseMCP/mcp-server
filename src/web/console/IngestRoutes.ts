@@ -42,6 +42,7 @@ const REAPER_INTERVAL_MS = 5_000;
 
 /** How long since last heartbeat before a session is considered dead (ms) */
 const SESSION_STALE_MS = 15_000;
+const TAKEOVER_IMPORTED_SESSION_GRACE_MS = 60_000;
 
 /** Timeout for legacy port federation/proxy requests (ms) */
 const LEGACY_FETCH_TIMEOUT_MS = 2_000;
@@ -125,6 +126,8 @@ export interface IngestRoutesResult {
   router: Router;
   /** Get all tracked sessions */
   getSessions: () => SessionInfo[];
+  /** Import active follower sessions from a displaced leader during takeover. */
+  importSessions: (sessions: SessionInfo[]) => void;
   /** Register the leader as a session */
   registerLeaderSession: (sessionId: string, pid: number) => void;
   /** Register the web console as a session so the indicator is never empty (#1805) */
@@ -170,6 +173,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   // When the user dismisses a pid=0 orphan, we add it here. The next heartbeat
   // (every 10s) carries the PID — we SIGTERM immediately and move to killedSessions.
   const pendingKills = new Set<string>();
+  const importedSessionGraceUntil = new Map<string, number>();
 
   /** Execute a deferred kill if we now have a PID. */
   function tryExecutePendingKill(sessionId: string, pid?: number): void {
@@ -245,6 +249,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     if (!existing) {
       return autoRegister(sessionId, pid, authenticated, serverVersion, consoleProtocolVersion);
     }
+
+    importedSessionGraceUntil.delete(sessionId);
 
     if (existing.status === 'ended') {
       existing.status = 'active';
@@ -532,6 +538,11 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       if (session.status !== 'active') continue;
       if (session.isLeader || session.kind === 'console') continue;
       const age = now - new Date(session.lastHeartbeat).getTime();
+      const graceUntil = importedSessionGraceUntil.get(id) ?? 0;
+      if (graceUntil > now) continue;
+      if (graceUntil !== 0) {
+        importedSessionGraceUntil.delete(id);
+      }
       if (age <= SESSION_STALE_MS) continue;
       session.status = 'ended';
       namePool.release(id);
@@ -548,6 +559,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   function purgeStaleEntries(now: number): void {
     for (const [id, session] of sessions) {
       if (session.status === 'ended' && now - new Date(session.lastHeartbeat).getTime() > ENDED_PURGE_MS) {
+        importedSessionGraceUntil.delete(id);
         sessions.delete(id);
       }
     }
@@ -562,6 +574,46 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
   function getSessions(): SessionInfo[] {
     return Array.from(sessions.values()).filter(s => s.status === 'active');
+  }
+
+  function importSessions(importedSessions: SessionInfo[]): void {
+    const now = Date.now();
+    for (const imported of importedSessions) {
+      if (imported.status !== 'active') continue;
+      if (imported.isLeader || imported.kind === 'console') continue;
+      if (killedSessions.has(imported.sessionId) || pendingKills.has(imported.sessionId)) continue;
+
+      const normalizedSessionId = normalizeInput(imported.sessionId);
+      const existing = sessions.get(normalizedSessionId);
+      if (existing?.isLeader || existing?.kind === 'console') {
+        continue;
+      }
+
+      const displayName = imported.displayName
+        ? namePool.adopt(normalizedSessionId, imported.displayName)
+        : namePool.assign(normalizedSessionId);
+      const color = imported.color || namePool.getColor(normalizedSessionId) || '#3b82f6';
+      const merged: SessionInfo = {
+        sessionId: normalizedSessionId,
+        displayName,
+        color,
+        pid: imported.pid || existing?.pid || 0,
+        startedAt: imported.startedAt || existing?.startedAt || new Date(now).toISOString(),
+        lastHeartbeat: imported.lastHeartbeat || existing?.lastHeartbeat || new Date(now).toISOString(),
+        status: 'active',
+        isLeader: false,
+        authenticated: imported.authenticated ?? existing?.authenticated ?? false,
+        kind: 'mcp',
+        serverVersion: normalizeServerVersion(imported.serverVersion || existing?.serverVersion),
+        consoleProtocolVersion: normalizeConsoleProtocolVersion(
+          imported.consoleProtocolVersion ?? existing?.consoleProtocolVersion,
+        ),
+      };
+
+      sessions.set(normalizedSessionId, merged);
+      importedSessionGraceUntil.set(normalizedSessionId, now + TAKEOVER_IMPORTED_SESSION_GRACE_MS);
+      broadcasts.sessionBroadcast?.(merged);
+    }
   }
 
   function registerLeaderSession(sessionId: string, pid: number): void {
@@ -610,5 +662,5 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     logger.info('[IngestRoutes] Console session registered', { sessionId: consoleId, pid: process.pid });
   }
 
-  return { router, getSessions, registerLeaderSession, registerConsoleSession };
+  return { router, getSessions, importSessions, registerLeaderSession, registerConsoleSession };
 }
