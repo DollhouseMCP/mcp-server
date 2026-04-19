@@ -9,6 +9,7 @@ TARGET_INJECT_SPEC="${TARGET_INJECT_SPEC:-@dollhousemcp/mcp-server@2.0.24}"
 
 cleanup() {
   docker compose -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
+  return 0
 }
 
 wait_for_sessions() {
@@ -18,7 +19,7 @@ wait_for_sessions() {
 
   for _ in $(seq 1 15); do
     output="$("${SCRIPT_DIR}/observe-state.sh" --once)"
-    if [[ "${output}" =~ sessions:\ count=([0-9]+) ]] && [[ "${output}" =~ ${expected_pattern} ]]; then
+    if [[ "${output}" =~ sessions:\ count=([0-9]+) ]] && printf '%s\n' "${output}" | grep -Eq "${expected_pattern}"; then
       printf '%s\n' "${output}"
       return 0
     fi
