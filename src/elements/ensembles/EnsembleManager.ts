@@ -65,6 +65,14 @@ export const resolveEnsembleElementTypes = resolveElementTypes;
  * - Ensemble creation and validation
  * - Element reference management
  * - Import/export in multiple formats
+ *
+ * MEMORY BEHAVIOR:
+ * - Tracks warned legacy element-field fingerprints in memory so repeated parses
+ *   of the same ensemble/element/field combination do not keep spamming logs.
+ * - Fingerprints are scoped to the manager lifetime and grow with the number of
+ *   unique legacy field sightings.
+ * - Long-running servers can clear this history explicitly with
+ *   clearLegacyElementWarningHistory(), and dispose() also clears it.
  */
 export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
@@ -92,6 +100,21 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
   protected override getElementLabel(): string {
     return 'ensemble';
+  }
+
+  /**
+   * Clear warn-once state for legacy ensemble element fields.
+   *
+   * Useful for long-lived processes that want to cap in-memory warning history
+   * or intentionally re-emit migration guidance after a maintenance boundary.
+   */
+  public clearLegacyElementWarningHistory(): void {
+    this.legacyElementFieldWarnings.clear();
+  }
+
+  override dispose(): void {
+    super.dispose();
+    this.clearLegacyElementWarningHistory();
   }
 
   private warnOnceForLegacyElementField(

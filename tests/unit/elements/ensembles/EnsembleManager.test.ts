@@ -213,6 +213,29 @@ describe('EnsembleManager', () => {
       warnSpy.mockRestore();
     });
 
+    it('should allow warning history to be cleared for long-running managers', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const metadata: any = {
+        name: 'Legacy Resettable Warning Ensemble',
+        elements: [
+          {
+            name: 'legacy-skill',
+            type: 'skill',
+            role: 'primary',
+            priority: 80,
+            activation: 'always'
+          }
+        ]
+      };
+
+      await (ensembleManager as any).parseMetadata(metadata);
+      ensembleManager.clearLegacyElementWarningHistory();
+      await (ensembleManager as any).parseMetadata(metadata);
+
+      expect(warnSpy).toHaveBeenCalledTimes(4);
+      warnSpy.mockRestore();
+    });
+
     it('should reject duplicate metadata name even with different filename (Issue #613)', async () => {
       // Create a mock ensemble that list() will return
       const mockEnsemble = {
