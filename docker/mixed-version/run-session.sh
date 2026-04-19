@@ -24,6 +24,7 @@ run_local_worktree() {
   cd /workspace
 
   local lock_hash_file="/workspace/node_modules/.mixed-version-package-lock.sha256"
+  local install_lock_dir="/workspace/.mixed-version-npm-ci.lock"
   local current_hash
   local original_node_env="${NODE_ENV:-}"
   current_hash="$(sha256sum package-lock.json | awk '{print $1}')"
@@ -34,9 +35,22 @@ run_local_worktree() {
   export NODE_ENV=development
 
   if [[ ! -d /workspace/node_modules ]] || [[ ! -f "${lock_hash_file}" ]] || [[ "$(cat "${lock_hash_file}" 2>/dev/null || true)" != "${current_hash}" ]]; then
-    echo "[mixed-version] installing local workspace dependencies"
-    npm ci --include=dev --no-audit --no-fund
-    echo "${current_hash}" > "${lock_hash_file}"
+    # Multiple harness containers can share the same mounted workspace. Use a
+    # simple mkdir lock so only one of them runs npm ci at a time.
+    until mkdir "${install_lock_dir}" 2>/dev/null; do
+      echo "[mixed-version] waiting for dependency install lock"
+      sleep 1
+    done
+
+    trap 'rmdir "'"${install_lock_dir}"'" 2>/dev/null || true' RETURN
+
+    if [[ ! -d /workspace/node_modules ]] || [[ ! -f "${lock_hash_file}" ]] || [[ "$(cat "${lock_hash_file}" 2>/dev/null || true)" != "${current_hash}" ]]; then
+      echo "[mixed-version] installing local workspace dependencies"
+      npm ci --include=dev --no-audit --no-fund
+      echo "${current_hash}" > "${lock_hash_file}"
+    else
+      echo "[mixed-version] dependencies already installed by another container"
+    fi
   fi
 
   echo "[mixed-version] building local workspace"
@@ -51,6 +65,9 @@ run_local_worktree() {
   else
     unset NODE_ENV
   fi
+
+  rmdir "${install_lock_dir}" 2>/dev/null || true
+  trap - RETURN
 
   # Keep stdin open forever so the stdio MCP server remains connected long enough
   # to exercise deferred console setup, leader election, and follower forwarding.

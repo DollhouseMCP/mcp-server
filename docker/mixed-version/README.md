@@ -57,6 +57,10 @@ If you want to try the host-facing port anyway, the default mapping is:
 
 but treat that as best-effort rather than the source of truth.
 
+The default host port `42715` is intentionally different from Dollhouse's
+internal `41715` so the harness can run alongside a local machine install
+without colliding with the real console.
+
 To capture a shareable snapshot instead of a live watch:
 
 ```bash

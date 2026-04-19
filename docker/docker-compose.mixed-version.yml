@@ -17,7 +17,8 @@ services:
   netns:
     image: alpine:3.20
     container_name: dollhouse-mixed-version-netns
-    command: ["sh", "-lc", "mkdir -p /dollhouse-home/.dollhouse/run /dollhouse-home/.dollhouse/portfolio /dollhouse-home/.dollhouse/cache /dollhouse-home/.dollhouse/logs /logs && sleep infinity"]
+    init: true
+    command: ["sh", "-lc", "mkdir -p /dollhouse-home/.dollhouse/run /dollhouse-home/.dollhouse/portfolio /dollhouse-home/.dollhouse/cache /dollhouse-home/.dollhouse/logs /logs && exec tail -f /dev/null"]
     ports:
       - "${MIXED_VERSION_HOST_PORT:-42715}:41715"
     volumes:

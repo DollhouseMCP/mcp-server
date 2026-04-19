@@ -8,6 +8,7 @@ STATE_HOME="${REPO_ROOT}/tmp/mixed-version/home/.dollhouse"
 RUN_DIR="${STATE_HOME}/run"
 LOCK_FILE="${RUN_DIR}/console-leader.auth.lock"
 COMPOSE_FILE="${REPO_ROOT}/docker/docker-compose.mixed-version.yml"
+INTERNAL_CONSOLE_PORT="${DOLLHOUSE_WEB_CONSOLE_PORT:-41715}"
 CONSOLE_URL="${MIXED_VERSION_CONSOLE_URL:-http://127.0.0.1:${MIXED_VERSION_HOST_PORT:-42715}}"
 INTERVAL=2
 MAX_ITERATIONS=0
@@ -16,10 +17,18 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --interval)
       INTERVAL="${2:?--interval requires a value}"
+      if ! [[ "${INTERVAL}" =~ ^[0-9]+$ ]] || (( INTERVAL < 1 )); then
+        echo "--interval must be a positive integer" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --count)
       MAX_ITERATIONS="${2:?--count requires a value}"
+      if ! [[ "${MAX_ITERATIONS}" =~ ^[0-9]+$ ]]; then
+        echo "--count must be a non-negative integer" >&2
+        exit 1
+      fi
       shift 2
       ;;
     --once)
@@ -67,30 +76,17 @@ print_port_files() {
 
 print_sessions_summary() {
   local response
+  local fallback_error=""
   if ! response="$(curl -fsS "${CONSOLE_URL}/api/sessions" 2>/dev/null)"; then
-    response="$(
-      docker compose -f "${COMPOSE_FILE}" exec -T stable-226 node - <<'NODE'
-const http = require('node:http');
-
-const request = http.get('http://127.0.0.1:41715/api/sessions', (response) => {
-  let body = '';
-  response.setEncoding('utf8');
-  response.on('data', (chunk) => { body += chunk; });
-  response.on('end', () => {
-    process.stdout.write(body);
-  });
-});
-
-request.on('error', (error) => {
-  process.stderr.write(String(error));
-  process.exit(1);
-});
-NODE
-    )" || true
+    response="$(docker compose -f "${COMPOSE_FILE}" exec -T -e DOLLHOUSE_WEB_CONSOLE_PORT="${INTERNAL_CONSOLE_PORT}" stable-226 node /harness/query-sessions.mjs 2>/tmp/mixed-version-observe.err)" || fallback_error="$(cat /tmp/mixed-version-observe.err 2>/dev/null || true)"
   fi
 
   if [[ -z "${response}" ]]; then
-    echo "sessions: console unavailable at ${CONSOLE_URL} and inside shared namespace"
+    if [[ -n "${fallback_error}" ]]; then
+      echo "sessions: console unavailable at ${CONSOLE_URL}; fallback query failed: ${fallback_error}"
+    else
+      echo "sessions: console unavailable at ${CONSOLE_URL} and inside shared namespace"
+    fi
     return
   fi
 
