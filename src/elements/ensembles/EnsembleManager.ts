@@ -71,6 +71,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private activeEnsembleNames: Set<string> = new Set();
+  private legacyElementFieldWarnings: Set<string> = new Set();
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -91,6 +92,23 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
   protected override getElementLabel(): string {
     return 'ensemble';
+  }
+
+  private warnOnceForLegacyElementField(
+    ensembleName: string,
+    index: number,
+    field: 'name' | 'type',
+    replacement: 'element_name' | 'element_type',
+  ): void {
+    const fingerprint = `${ensembleName}:${index}:${field}`;
+    if (this.legacyElementFieldWarnings.has(fingerprint)) {
+      return;
+    }
+
+    this.legacyElementFieldWarnings.add(fingerprint);
+    logger.warn(
+      `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
+    );
   }
 
   /**
@@ -217,7 +235,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'name' field
       if (elem.name && !elem.element_name) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'name' field. Use 'element_name' instead.`);
+        this.warnOnceForLegacyElementField(name, index, 'name', 'element_name');
       }
       const elementNameResult = this.validationService.validateAndSanitizeInput(
         String(rawElementName),
@@ -233,7 +251,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       const rawElementType = elem.element_type || elem.type || 'skill';
       // Log deprecation warning if using legacy 'type' field
       if (elem.type && !elem.element_type) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'type' field. Use 'element_type' instead.`);
+        this.warnOnceForLegacyElementField(name, index, 'type', 'element_type');
       }
       const elementTypeResult = this.validationService.validateAndSanitizeInput(
         String(rawElementType),
@@ -642,7 +660,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'name' field
       if (elem.name && !elem.element_name) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'name' field. Use 'element_name' instead.`);
+        this.warnOnceForLegacyElementField(metadata.name, index, 'name', 'element_name');
       }
 
       // Support both element_type (new standard) and type (legacy)
@@ -657,7 +675,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'type' field
       if (elem.type && !elem.element_type) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'type' field. Use 'element_type' instead.`);
+        this.warnOnceForLegacyElementField(metadata.name, index, 'type', 'element_type');
       }
 
       return {
