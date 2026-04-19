@@ -9,6 +9,15 @@ COPY packages/safety/package-lock.json packages/safety/package-lock.json
 
 RUN npm ci --include=dev --no-audit --no-fund
 
-COPY . .
+COPY tsconfig.json tsconfig.scripts.json ./
+COPY manifest.json server.json oauth-helper.mjs ./
+COPY data ./data
+COPY scripts ./scripts
+COPY src ./src
+COPY workers ./workers
+COPY packages/safety/src ./packages/safety/src
+COPY packages/safety/tsconfig.json ./packages/safety/tsconfig.json
 
 RUN npm run build
+
+USER node
