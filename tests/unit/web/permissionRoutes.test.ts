@@ -64,7 +64,7 @@ describe('permissionRoutes', () => {
           .post('/api/evaluate_permission')
           .send({
             tool_name: 'Bash',
-            input: { command: 'printf super-secret', path: '/tmp/example' },
+            input: { command: 'printf super-secret', path: join(tempHome, 'example') },
             platform: 'claude_code',
             session_id: 'session-follower-1',
           }),

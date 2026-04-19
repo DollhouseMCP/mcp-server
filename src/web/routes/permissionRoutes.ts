@@ -119,7 +119,11 @@ function buildPermissionRateLimitLogContext(
   sessionId: string | undefined,
   input: Record<string, unknown> | undefined,
 ): PermissionRateLimitLogContext {
-  const inputFields = input ? Object.keys(input).sort().slice(0, 12) : [];
+  const inputFields = input
+    ? Object.keys(input)
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, 12)
+    : [];
   return {
     ...(toolName ? { tool_name: toolName } : {}),
     platform,
