@@ -19,6 +19,7 @@
 import { describe, it, expect, jest } from '@jest/globals';
 import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
 import { LEGACY_SERVER_VERSION } from '../../../../src/web/console/LeaderElection.js';
+import { logger } from '../../../../src/utils/logger.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
@@ -89,6 +90,11 @@ function makeAuthorityMonitorFollowerElection(): { role: 'follower'; leaderInfo:
       consoleProtocolVersion: 1,
     },
   };
+}
+
+async function flushAuthorityMonitorTick(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('warnIfLegacyConsolePresent', () => {
@@ -717,5 +723,82 @@ describe('startFollowerAuthorityMonitor', () => {
     await Promise.resolve();
 
     expect(promotionMgr.promote).not.toHaveBeenCalled();
+  });
+
+  it('opens a circuit breaker after repeated authority failures and resumes after cooldown', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+    let nowMs = 1_000;
+    const resolveFollowerAuthorityImpl = jest.fn<typeof resolveFollowerAuthority>()
+      .mockRejectedValue(new Error('authority lookup failed'));
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+
+    try {
+      const stopMonitor = startFollowerAuthorityMonitor(
+        makeAuthorityMonitorOptions(),
+        41715,
+        makeAuthorityMonitorFollowerElection(),
+        promotionMgr,
+        forwardingSink,
+        sessionHeartbeat,
+        {
+          resolveFollowerAuthorityImpl,
+          setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
+            intervalCallback = callback as () => void;
+            return timerHandle;
+          }),
+          clearIntervalImpl: jest.fn<typeof clearInterval>(),
+          nowImpl: () => nowMs,
+        },
+      );
+
+      expect(intervalCallback).not.toBeNull();
+
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Follower authority re-evaluation circuit opened after repeated failures',
+        expect.objectContaining({
+          sessionId: 'session-newest',
+          consecutiveFailures: 3,
+        }),
+      );
+
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
+
+      nowMs += 60_001;
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Follower authority re-evaluation circuit closed; resuming checks',
+        expect.objectContaining({
+          sessionId: 'session-newest',
+        }),
+      );
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(4);
+      expect(promotionMgr.promote).not.toHaveBeenCalled();
+
+      stopMonitor();
+    } finally {
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
   });
 });
