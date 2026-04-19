@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "dollhousemcp",
   "display_name": "DollhouseMCP",
-  "version": "2.0.26",
+  "version": "2.0.27-rc.2",
   "description": "Open-source AI customization through modular Dollhouse elements — personas, skills, templates, agents, memories, and ensembles.",
   "long_description": "DollhouseMCP is an MCP server that lets you customize your AI with modular Dollhouse elements. Create personas that shape behavior and permissions, skills that add capabilities, templates for consistent outputs, agents for autonomous multi-step goals, memories for persistent context, and ensembles that bundle elements together. Includes MCP-AQL query language with 5 semantic CRUDE endpoints, Gatekeeper permission system, community collection, and a built-in portfolio browser.",
   "author": {
