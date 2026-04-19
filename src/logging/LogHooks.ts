@@ -15,8 +15,10 @@
 import type { LogManager } from './LogManager.js';
 import type { LogLevel, UnifiedLogEntry } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from '../portfolio/DefaultElementProvider.js';
 import { LRUCache } from '../cache/LRUCache.js';
+import { EventDeduplicator } from '../utils/EventDeduplicator.js';
 
 // ---------------------------------------------------------------------------
 // Severity → LogLevel helper (shared by SecurityMonitor, SecurityTelemetry,
@@ -33,6 +35,19 @@ const SEVERITY_TO_LEVEL: Record<string, LogLevel> = {
   medium: 'warn',
   low: 'info',
 };
+
+const CONTENT_INJECTION_VISIBILITY_WINDOW_MS = 10 * 60_000;
+const CONTENT_INJECTION_VISIBILITY_MAX_KEYS = 500;
+
+function extractContentInjectionKey(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalizedValue = UnicodeValidator.normalize(value).normalizedContent;
+  const normalized = normalizedValue.replace(/^Detected pattern:\s*/i, '').trim();
+  return normalized === '' ? null : `CONTENT_INJECTION\0${normalized}`;
+}
 
 // ---------------------------------------------------------------------------
 // CorrelationId provider interface (subset of ContextTracker)
@@ -102,6 +117,10 @@ export function wireLogHooks(
   container: { resolve<T>(name: string): T },
 ): (() => void)[] {
   const cleanups: (() => void)[] = [];
+  const contentInjectionVisibilityDedup = new EventDeduplicator(
+    CONTENT_INJECTION_VISIBILITY_WINDOW_MS,
+    CONTENT_INJECTION_VISIBILITY_MAX_KEYS,
+  );
 
   // Resolve ContextTracker for correlationId injection
   let contextTracker: CorrelationIdProvider | null = null;
@@ -115,6 +134,15 @@ export function wireLogHooks(
       addLogListener(fn: (entry: { timestamp: Date; level: string; message: string; data?: any }) => void): () => void;
     }>('MCPLogger');
     const unsub = mcpLogger.addLogListener((logEntry) => {
+      const contentInjectionKey =
+        logEntry.message === '[CRITICAL SECURITY ALERT]' &&
+        logEntry.data?.type === 'CONTENT_INJECTION_ATTEMPT'
+          ? extractContentInjectionKey(logEntry.data?.details)
+          : null;
+      if (contentInjectionKey !== null && contentInjectionVisibilityDedup.shouldSuppress(contentInjectionKey)) {
+        return;
+      }
+
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: logEntry.timestamp.toISOString(),
@@ -133,6 +161,14 @@ export function wireLogHooks(
   // --- SecurityMonitor (security, static) ---------------------------------
   {
     const unsub = SecurityMonitor.addLogListener((logEntry) => {
+      const contentInjectionKey =
+        logEntry.type === 'CONTENT_INJECTION_ATTEMPT'
+          ? extractContentInjectionKey(logEntry.details)
+          : null;
+      if (contentInjectionKey !== null && contentInjectionVisibilityDedup.shouldSuppress(contentInjectionKey)) {
+        return;
+      }
+
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: logEntry.timestamp,
@@ -162,6 +198,14 @@ export function wireLogHooks(
       }) => void): () => void;
     }>('SecurityTelemetry');
     const unsub = secTelemetry.addLogListener((telEntry) => {
+      const contentInjectionKey =
+        telEntry.attackType === 'CONTENT_INJECTION'
+          ? extractContentInjectionKey(telEntry.pattern)
+          : null;
+      if (contentInjectionKey !== null && contentInjectionVisibilityDedup.shouldSuppress(contentInjectionKey)) {
+        return;
+      }
+
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: telEntry.timestamp,

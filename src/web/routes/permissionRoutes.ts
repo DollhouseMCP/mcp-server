@@ -69,6 +69,13 @@ interface PermissionDecisionTracker {
   getRecentDecisions(): PermissionDecision[];
 }
 
+interface PermissionRateLimitLogContext {
+  tool_name?: string;
+  platform: string;
+  session_id?: string;
+  input_fields: string[];
+}
+
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
 const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
 type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
@@ -104,6 +111,25 @@ function extractReason(result: Record<string, unknown>): string {
   }
 
   return extractString(result, ['reason', 'message'], '');
+}
+
+function buildPermissionRateLimitLogContext(
+  toolName: string | undefined,
+  platform: string,
+  sessionId: string | undefined,
+  input: Record<string, unknown> | undefined,
+): PermissionRateLimitLogContext {
+  const inputFields = input
+    ? Object.keys(input)
+      .sort((left, right) => left.localeCompare(right))
+      .slice(0, 12)
+    : [];
+  return {
+    ...(toolName ? { tool_name: toolName } : {}),
+    platform,
+    ...(sessionId ? { session_id: sessionId } : {}),
+    input_fields: inputFields,
+  };
 }
 
 function shouldNormalizeClaudeHook(platform: string | undefined): boolean {
@@ -363,17 +389,20 @@ export function registerPermissionRoutes(
       session_id?: string;
     };
     const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
+    const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
+    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
+    const input = body.input;
 
     if (!permissionLimiter.tryAcquire()) {
+      logger.warn(
+        '[WebUI/Gateway] evaluate_permission rate limit exceeded; failing open',
+        buildPermissionRateLimitLogContext(tool_name, platform, session_id, input),
+      );
       res.json(formatPermissionResponse('allow', platform, {})); // fail open on rate limit
       return;
     }
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
-    const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
-    const input = body.input;
-
     if (!tool_name) {
       res.json(formatPermissionResponse('allow', platform, input || {})); // fail open on bad input
       return;

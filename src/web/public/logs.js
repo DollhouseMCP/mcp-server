@@ -13,10 +13,14 @@
 
 (() => {
   const BUFFER_SIZE = 10000;
-  const ROW_HEIGHT = 22;
+  const DEFAULT_ROW_HEIGHT = 22;
+  const COMPACT_ROW_HEIGHT = 74;
+  const EXTRA_COMPACT_ROW_HEIGHT = 96;
   const OVERSCAN = 5;
   const RECONNECT_DELAY_MS = 3000;
   const SEARCH_DEBOUNCE_MS = 300;
+  const COMPACT_LOG_LAYOUT_QUERY = '(max-width: 48rem)';
+  const EXTRA_COMPACT_LOG_LAYOUT_QUERY = '(max-width: 32rem)';
 
   // ── State ────────────────────────────────────────────────────────────────
   const buffer = [];
@@ -27,6 +31,8 @@
   let searchTimer = null;
   let pendingEntries = [];
   let rafScheduled = false;
+  let compactLogLayoutMedia = null;
+  let extraCompactLogLayoutMedia = null;
 
   // Selection state
   const selectedIds = new Set();
@@ -78,6 +84,7 @@
     if (urlParams) applyLogUrlParams(urlParams);
 
     bindEvents();
+    bindResponsiveLayout();
     connectSSE();
 
     requestAnimationFrame(() => {
@@ -141,6 +148,14 @@
     if (eventSource) {
       eventSource.close();
       eventSource = null;
+    }
+    if (compactLogLayoutMedia) {
+      compactLogLayoutMedia.removeEventListener?.('change', handleResponsiveLayoutChange);
+      compactLogLayoutMedia = null;
+    }
+    if (extraCompactLogLayoutMedia) {
+      extraCompactLogLayoutMedia.removeEventListener?.('change', handleResponsiveLayoutChange);
+      extraCompactLogLayoutMedia = null;
     }
   }
 
@@ -287,6 +302,35 @@
     document.getElementById('log-trace-clear').addEventListener('click', clearTraceFilter);
   }
 
+  function isCompactLogLayout() {
+    return !!compactLogLayoutMedia?.matches;
+  }
+
+  function isExtraCompactLogLayout() {
+    return !!extraCompactLogLayoutMedia?.matches;
+  }
+
+  function getRowHeight() {
+    if (isExtraCompactLogLayout()) return EXTRA_COMPACT_ROW_HEIGHT;
+    if (isCompactLogLayout()) return COMPACT_ROW_HEIGHT;
+    return DEFAULT_ROW_HEIGHT;
+  }
+
+  function handleResponsiveLayoutChange() {
+    requestAnimationFrame(() => {
+      renderViewport();
+      if (autoScroll) scrollToBottom();
+    });
+  }
+
+  function bindResponsiveLayout() {
+    if (typeof globalThis.matchMedia !== 'function') return;
+    compactLogLayoutMedia = globalThis.matchMedia(COMPACT_LOG_LAYOUT_QUERY);
+    extraCompactLogLayoutMedia = globalThis.matchMedia(EXTRA_COMPACT_LOG_LAYOUT_QUERY);
+    compactLogLayoutMedia.addEventListener?.('change', handleResponsiveLayoutChange);
+    extraCompactLogLayoutMedia.addEventListener?.('change', handleResponsiveLayoutChange);
+  }
+
   function setTraceFilter(correlationId) {
     filterCorrelationId = correlationId;
     const banner = document.getElementById('log-trace-banner');
@@ -415,14 +459,15 @@
 
   function renderViewport() {
     const totalItems = getVisibleCount();
-    scrollSpacer.style.height = (totalItems * ROW_HEIGHT) + 'px';
+    const rowHeight = getRowHeight();
+    scrollSpacer.style.height = (totalItems * rowHeight) + 'px';
 
     const scrollTop = viewport.scrollTop;
     let viewHeight = viewport.clientHeight;
     if (viewHeight === 0) viewHeight = 600;
 
-    const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
-    const endIdx = Math.min(totalItems, Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + OVERSCAN);
+    const startIdx = Math.max(0, Math.floor(scrollTop / rowHeight) - OVERSCAN);
+    const endIdx = Math.min(totalItems, Math.ceil((scrollTop + viewHeight) / rowHeight) + OVERSCAN);
     const needed = endIdx - startIdx;
 
     while (rowPool.length < needed) {
@@ -452,8 +497,9 @@
 
   function updateRow(row, entry, visibleIndex) {
     const isSelected = selectedIds.has(entry.id);
-    row.style.top = (visibleIndex * ROW_HEIGHT) + 'px';
-    row.style.height = ROW_HEIGHT + 'px';
+    const rowHeight = getRowHeight();
+    row.style.top = (visibleIndex * rowHeight) + 'px';
+    row.style.height = rowHeight + 'px';
     row.dataset.entryId = entry.id;
     row.dataset.visibleIndex = visibleIndex;
     row.className = 'log-entry level-' + escapeHtml(entry.level) + (isSelected ? ' selected' : '');
@@ -622,7 +668,8 @@
 
   // ── Scroll & status ──────────────────────────────────────────────────────
   function onScroll() {
-    const atBottom = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - ROW_HEIGHT * 2;
+    const rowHeight = getRowHeight();
+    const atBottom = viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - rowHeight * 2;
     autoScroll = atBottom;
     jumpBtn.classList.toggle('visible', !atBottom && getVisibleCount() > 0);
     renderViewport();
@@ -634,8 +681,8 @@
       requestAnimationFrame(() => {
         rafScheduled = false;
         updateEntryCount();
-        renderViewport();
         if (autoScroll) scrollToBottom();
+        else renderViewport();
       });
     }
   }
@@ -643,6 +690,7 @@
   // ── Helpers ──────────────────────────────────────────────────────────────
   function scrollToBottom() {
     viewport.scrollTop = viewport.scrollHeight;
+    renderViewport();
   }
 
   function setStatus(status) {
