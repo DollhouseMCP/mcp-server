@@ -217,6 +217,34 @@ const envSchema = z.object({
   DOLLHOUSE_CONSOLE_MAX_FORWARD_FAILURES: z.coerce.number().int().min(1).max(100).default(10),
 
   /**
+   * How often a follower re-evaluates whether it should take over console
+   * leadership in a heterogeneous mixed-version environment.
+   * Default: 15000ms.
+   */
+  DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_MS: z.coerce.number().int().min(1_000).max(300_000).default(15_000),
+
+  /**
+   * Additional per-session jitter added to authority rechecks so large mixed
+   * fleets do not all wake up in the same instant.
+   * Default: 5000ms.
+   */
+  DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_JITTER_MS: z.coerce.number().int().min(0).max(60_000).default(5_000),
+
+  /**
+   * Number of consecutive authority recheck failures before the follower opens
+   * its local circuit breaker and stops retrying until the cooldown expires.
+   * Default: 3.
+   */
+  DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_THRESHOLD: z.coerce.number().int().min(1).max(100).default(3),
+
+  /**
+   * Cooldown period after the follower authority monitor opens its circuit
+   * breaker due to repeated failures.
+   * Default: 60000ms.
+   */
+  DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(900_000).default(60_000),
+
+  /**
    * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)
    * for privileged actions like token rotation. Default is true for safety;
    * set to false for headless CI and scripted deployments that need to rotate

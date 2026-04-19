@@ -10,12 +10,15 @@ import { describe, it, expect, beforeAll, afterEach, jest } from '@jest/globals'
 import { JSDOM } from 'jsdom';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { PACKAGE_VERSION } from '../../../src/generated/version.js';
 
 let appSource = '';
 let sessionsSource = '';
 let logsSource = '';
+let logsCssSource = '';
 let metricsSource = '';
 let permissionsSource = '';
+let stylesCssSource = '';
 
 type TestWindow = JSDOM['window'] & typeof globalThis & Record<string, any>;
 
@@ -25,12 +28,14 @@ const SESSION_FILTER_INJECTION_WAIT_MS = 40;
 
 beforeAll(async () => {
   const base = join(process.cwd(), 'src/web/public');
-  [appSource, sessionsSource, logsSource, metricsSource, permissionsSource] = await Promise.all([
+  [appSource, sessionsSource, logsSource, logsCssSource, metricsSource, permissionsSource, stylesCssSource] = await Promise.all([
     readFile(join(base, 'app.js'), 'utf8'),
     readFile(join(base, 'sessions.js'), 'utf8'),
     readFile(join(base, 'logs.js'), 'utf8'),
+    readFile(join(base, 'logs.css'), 'utf8'),
     readFile(join(base, 'metrics.js'), 'utf8'),
     readFile(join(base, 'permissions.js'), 'utf8'),
+    readFile(join(base, 'styles.css'), 'utf8'),
   ]);
 });
 
@@ -40,6 +45,10 @@ afterEach(() => {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizeNewlines(value: string): string {
+  return value.replaceAll('\r\n', '\n');
 }
 
 function createDom(html: string): { window: JSDOM['window']; cleanup: () => void } {
@@ -118,6 +127,148 @@ function installBannerHelper(win: Record<string, any>) {
 }
 
 describe('Web console cleanup regressions', () => {
+  it('shows the running server version in the footer', async () => {
+    const { window: win, cleanup } = createDom(`
+      <meta name="dollhouse-server-version" content="${PACKAGE_VERSION}">
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div id="console-tabs"><button class="console-tab active" data-tab="portfolio"></button></div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-version" aria-live="polite" aria-atomic="true"></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.getElementById('footer-version')?.textContent).toBe(`Version: ${PACKAGE_VERSION}`);
+    expect(win.document.getElementById('footer-version')?.getAttribute('aria-live')).toBe('polite');
+
+    cleanup();
+  });
+
+  it('collapses wrapped console tabs into a hamburger menu instead of a second row', async () => {
+    const { window: win, cleanup } = createDom(`
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div class="header-nav-row">
+        <div id="console-tabs">
+          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+          <button class="console-tab" data-tab="permissions">Permissions</button>
+        </div>
+        <div id="console-tab-menu-shell">
+          <button id="console-tab-menu-toggle" hidden aria-expanded="false"></button>
+          <div id="console-tab-menu" hidden></div>
+        </div>
+      </div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="tab-permissions" class="tab-panel"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-updated"></div>
+      <div id="session-indicator"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: {}, totalCount: 0, updatedAt: null }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const tabButtons = Array.from(win.document.querySelectorAll('#console-tabs .console-tab')) as HTMLElement[];
+    Object.defineProperty(tabButtons[0], 'offsetTop', { configurable: true, get: () => 0 });
+    Object.defineProperty(tabButtons[1], 'offsetTop', { configurable: true, get: () => 24 });
+    win.dispatchEvent(new win.Event('resize'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const navRow = win.document.querySelector('.header-nav-row');
+    const menuToggle = win.document.getElementById('console-tab-menu-toggle') as HTMLButtonElement | null;
+    expect(navRow?.classList.contains('header-nav-row--collapsed')).toBe(true);
+    expect(menuToggle?.hidden).toBe(false);
+
+    menuToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const menuButton = win.document.querySelector('.console-tab-menu-item[data-tab="permissions"]') as HTMLButtonElement | null;
+    expect(menuButton).not.toBeNull();
+    menuButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect((win.document.querySelector('#console-tabs .console-tab.active') as HTMLElement | null)?.dataset.tab).toBe('permissions');
+    expect(win.document.getElementById('tab-permissions')?.classList.contains('active')).toBe(true);
+
+    cleanup();
+  });
+
+  it('hides the session chip before collapsing the compact header into a single-column stack', () => {
+    const normalizedStyles = normalizeNewlines(stylesCssSource);
+    expect(normalizedStyles).toContain('@media (max-width: 46rem)');
+    expect(normalizedStyles).toContain('.stat--session {\n    display: none;');
+    expect(normalizedStyles).toContain('@media (max-width: 28rem)');
+    expect(normalizedStyles).toContain('grid-template-areas: "brand nav controls";');
+    expect(normalizedStyles).toContain('.header-brand-text {\n    display: none;');
+    expect(normalizedStyles).toContain('@media (max-width: 24rem)');
+    expect(normalizedStyles).toContain('grid-template-areas:\n      "brand"\n      "controls"\n      "nav";');
+  });
+
   it('shows a visible collection banner when the community collection fetch fails', async () => {
     const { window: win, cleanup } = createDom(`
       <button id="theme-toggle"></button>
@@ -974,6 +1125,120 @@ describe('Web console cleanup regressions', () => {
     expect(banner?.textContent).toBe('Connection lost - reconnecting...');
 
     cleanup();
+  });
+
+  it('uses taller compact log rows at narrow widths so entries do not overlap', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="tab-logs"></div>
+      <div id="log-viewer-root"></div>
+    `);
+
+    const mediaStates = new Map<string, boolean>([
+      ['(max-width: 48rem)', true],
+      ['(max-width: 32rem)', false],
+    ]);
+    win.matchMedia = jest.fn((query: string) => ({
+      matches: mediaStates.get(query) === true,
+      media: query,
+      onchange: null,
+      addListener() { /* legacy no-op */ },
+      removeListener() { /* legacy no-op */ },
+      addEventListener() { /* no-op */ },
+      removeEventListener() { /* no-op */ },
+      dispatchEvent() { return false; },
+    }));
+
+    const eventSource = {} as Record<string, ((event?: any) => void) | null>;
+    win.DollhouseAuth.apiEventSource = jest.fn(() => eventSource);
+    installBannerHelper(win);
+
+    win.eval(logsSource);
+    win.DollhouseConsole.logs.init();
+
+    const viewport = win.document.getElementById('log-viewport') as HTMLElement | null;
+    expect(viewport).not.toBeNull();
+    if (viewport) {
+      Object.defineProperty(viewport, 'clientHeight', { value: 320, configurable: true });
+    }
+
+    eventSource.onopen?.({});
+    eventSource.onmessage?.({
+      data: JSON.stringify({
+        id: 'log-1',
+        timestamp: '2026-04-18T18:00:00.000Z',
+        level: 'info',
+        category: 'application',
+        source: 'DollhouseMCP',
+        message: 'Compact rows should have enough height to show wrapped content without overlap.',
+      }),
+    });
+    await wait(DEFAULT_WAIT_MS);
+
+    const row = win.document.querySelector('.log-entry') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    expect(row?.style.height).toBe('74px');
+
+    cleanup();
+  });
+
+  it('uses extra-tall compact log rows at very narrow widths', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="tab-logs"></div>
+      <div id="log-viewer-root"></div>
+    `);
+
+    const mediaStates = new Map<string, boolean>([
+      ['(max-width: 48rem)', true],
+      ['(max-width: 32rem)', true],
+    ]);
+    win.matchMedia = jest.fn((query: string) => ({
+      matches: mediaStates.get(query) === true,
+      media: query,
+      onchange: null,
+      addListener() { /* legacy no-op */ },
+      removeListener() { /* legacy no-op */ },
+      addEventListener() { /* no-op */ },
+      removeEventListener() { /* no-op */ },
+      dispatchEvent() { return false; },
+    }));
+
+    const eventSource = {} as Record<string, ((event?: any) => void) | null>;
+    win.DollhouseAuth.apiEventSource = jest.fn(() => eventSource);
+    installBannerHelper(win);
+
+    win.eval(logsSource);
+    win.DollhouseConsole.logs.init();
+
+    const viewport = win.document.getElementById('log-viewport') as HTMLElement | null;
+    expect(viewport).not.toBeNull();
+    if (viewport) {
+      Object.defineProperty(viewport, 'clientHeight', { value: 320, configurable: true });
+    }
+
+    eventSource.onopen?.({});
+    eventSource.onmessage?.({
+      data: JSON.stringify({
+        id: 'log-2',
+        timestamp: '2026-04-18T18:00:00.000Z',
+        level: 'warn',
+        category: 'security',
+        source: 'SecurityMonitor',
+        message: 'Extra compact rows need a taller height because the time and message split across more lines on narrow screens.',
+      }),
+    });
+    await wait(DEFAULT_WAIT_MS);
+
+    const row = win.document.querySelector('.log-entry') as HTMLElement | null;
+    expect(row).not.toBeNull();
+    expect(row?.style.height).toBe('96px');
+
+    cleanup();
+  });
+
+  it('keeps the logs viewport above the fixed footer in CSS', () => {
+    const normalizedLogsCss = normalizeNewlines(logsCssSource);
+    expect(normalizedLogsCss).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 120px);');
+    expect(normalizedLogsCss).toContain('height: calc(100dvh - var(--site-footer-height, 4.5rem) - 104px);');
   });
 
   it('shows a visible metrics banner when the latest metrics fetch fails', async () => {
