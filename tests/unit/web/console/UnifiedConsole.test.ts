@@ -18,6 +18,7 @@
 
 import { describe, it, expect, jest } from '@jest/globals';
 import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
+import { LEGACY_SERVER_VERSION } from '../../../../src/web/console/LeaderElection.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
@@ -405,6 +406,49 @@ describe('evaluatePortOwnerReplacement', () => {
 });
 
 describe('resolveFollowerAuthority', () => {
+  it('forces a takeover when the reachable elected leader is on the console port but running an older version', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'legacy-console',
+      startedAt: '2026-04-13T19:07:12.895Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: LEGACY_SERVER_VERSION,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'lock',
+        leaderInfo: electedLeader,
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.election.role).toBe('leader');
+    expect(result.election.leaderInfo).toMatchObject({
+      sessionId: 'session-newest',
+      port: 41715,
+      serverVersion: expect.any(String),
+      consoleProtocolVersion: 1,
+    });
+    expect(result.replacement).toMatchObject({
+      shouldEvict: true,
+      preference: expect.objectContaining({
+        reason: 'newer-compatible-version',
+        existingVersion: LEGACY_SERVER_VERSION,
+      }),
+    });
+  });
+
   it('promotes a newer session to leader when the reachable port owner is older than the elected lock holder', async () => {
     const electedLeader: ConsoleLeaderInfo = {
       version: 1,
@@ -496,6 +540,45 @@ describe('resolveFollowerAuthority', () => {
         serverVersion: actualOwnerVersion,
         consoleProtocolVersion: 1,
       },
+    });
+  });
+
+  it('stays follower when the reachable elected leader is already on the same version', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'current-leader',
+      startedAt: '2026-04-16T16:29:44.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: PACKAGE_VERSION,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'api',
+        leaderInfo: electedLeader,
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).not.toHaveBeenCalled();
+    expect(result.election).toEqual({
+      role: 'follower',
+      leaderInfo: electedLeader,
+    });
+    expect(result.replacement).toMatchObject({
+      shouldEvict: false,
+      preference: expect.objectContaining({
+        reason: 'same-version',
+      }),
     });
   });
 });

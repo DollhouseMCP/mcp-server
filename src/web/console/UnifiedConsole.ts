@@ -499,23 +499,28 @@ export async function resolveFollowerAuthority(
   }
 
   const replacement = evaluatePortOwnerReplacement(candidateLeader, discovery);
-  if (discovery.ownerPid !== election.leaderInfo.pid) {
-    if (replacement.shouldEvict) {
-      await deleteLeaderLockImpl();
-      logger.warn('[UnifiedConsole] Split-brain console authority detected; newer session will replace the actual port owner', buildAuthorityResolutionLogContext(
+  if (replacement.shouldEvict) {
+    await deleteLeaderLockImpl();
+    logger.warn(
+      discovery.ownerPid === election.leaderInfo.pid
+        ? '[UnifiedConsole] Older console leader detected on the console port; newer session will take over'
+        : '[UnifiedConsole] Split-brain console authority detected; newer session will replace the actual port owner',
+      buildAuthorityResolutionLogContext(
         consolePort,
         election.leaderInfo,
         discovery,
         replacement,
-      ));
-      return {
-        election: { role: 'leader', leaderInfo: candidateLeader },
-        discovery,
-        replacement,
-        forcedClaim: false,
-      };
-    }
+      ),
+    );
+    return {
+      election: { role: 'leader', leaderInfo: candidateLeader },
+      discovery,
+      replacement,
+      forcedClaim: false,
+    };
+  }
 
+  if (discovery.ownerPid !== election.leaderInfo.pid) {
     logger.warn('[UnifiedConsole] Split-brain console authority detected; following the actual port owner', buildAuthorityResolutionLogContext(
       consolePort,
       election.leaderInfo,
