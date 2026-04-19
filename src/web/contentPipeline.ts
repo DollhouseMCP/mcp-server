@@ -66,15 +66,20 @@ export interface PipelineResult {
   };
 }
 
+const CONTENT_PIPELINE_CACHE_MAX_SIZE = 256;
+const CONTENT_PIPELINE_CACHE_MAX_MEMORY_MB = 16;
+
 const CONTENT_PIPELINE_CACHE = new LRUCache<PipelineResult>({
   name: 'web-content-validation',
-  maxSize: 256,
-  maxMemoryMB: 16,
+  maxSize: CONTENT_PIPELINE_CACHE_MAX_SIZE,
+  maxMemoryMB: CONTENT_PIPELINE_CACHE_MAX_MEMORY_MB,
 });
 
 function buildContentCacheKey(filename: string, elementType: string, rawContent: string): string {
   const contentHash = createHash('sha256').update(rawContent).digest('hex');
-  return `${elementType}\0${filename}\0${contentHash}`;
+  // Keep filename/type in the key so identical payloads from different routes
+  // remain independently attributable if route-specific handling diverges later.
+  return JSON.stringify([elementType, filename, contentHash]);
 }
 
 function clonePipelineResult(result: PipelineResult): PipelineResult {
@@ -152,6 +157,9 @@ export function validateElementContent(
       body: '',
       rejection: { reason: `Parse validation failed: ${(err as Error).message}`, severity: 'high' },
     };
+    // Cache parse failures too: steady-state polling can otherwise keep reparsing
+    // identical malformed files forever. If the file is fixed, the content hash
+    // changes and this entry is naturally bypassed.
     CONTENT_PIPELINE_CACHE.set(cacheKey, clonePipelineResult(result));
     return result;
   }
