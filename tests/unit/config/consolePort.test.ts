@@ -284,12 +284,12 @@ describe('Console port configuration (#1840)', () => {
 
     it('resolves promise on conflict (does not throw)', async () => {
       const source = await readFile(join(SRC, 'src/web/server.ts'), 'utf8');
-      // The error handler calls resolve(handleListenError(...)), not reject()
+      // The bind error handler settles the promise instead of rejecting it.
       const errorSection = source.slice(
         source.indexOf("httpServer.on('error'"),
         source.indexOf('});', source.indexOf("httpServer.on('error'")) + 10,
       );
-      expect(errorSection).toContain('resolve(');
+      expect(errorSection).toContain('settle(');
       expect(errorSection).not.toContain('reject(');
     });
   });

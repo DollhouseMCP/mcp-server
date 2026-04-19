@@ -101,6 +101,22 @@ describe('Process Lifecycle Cleanup (#1856)', () => {
       expect(typeof shutdownWebServer).toBe('function');
     });
 
+    it('verifyBoundPortOwnership accepts the current listener and reports mismatches', async () => {
+      const { verifyBoundPortOwnership } = await import('../../../../src/web/server.js');
+
+      await expect(
+        verifyBoundPortOwnership(41715, 1234, async () => 1234),
+      ).resolves.toEqual({ matches: true, ownerPid: 1234 });
+
+      await expect(
+        verifyBoundPortOwnership(41715, 1234, async () => 9999),
+      ).resolves.toEqual({ matches: false, ownerPid: 9999 });
+
+      await expect(
+        verifyBoundPortOwnership(41715, 1234, async () => null),
+      ).resolves.toEqual({ matches: true, ownerPid: null });
+    });
+
     it('registerPortCleanup is exported from portDiscovery.ts', async () => {
       const { registerPortCleanup } = await import('../../../../src/web/portDiscovery.js');
       expect(typeof registerPortCleanup).toBe('function');

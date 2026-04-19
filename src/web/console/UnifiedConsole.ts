@@ -241,6 +241,7 @@ interface LeaderLeaseReconciliationDependencies {
   readLeaderLockImpl?: typeof readLeaderLock;
   findPidOnPortImpl?: typeof findPidOnPort;
   claimLeadershipImpl?: typeof claimLeadership;
+  deleteLeaderLockImpl?: typeof deleteLeaderLock;
   killStaleProcessDetailedImpl?: typeof killStaleProcessDetailed;
   setTimeoutImpl?: typeof setTimeout;
   clearTimeoutImpl?: typeof clearTimeout;
@@ -741,10 +742,11 @@ export async function reconcileLeaderLease(
   sessionId: string,
   consolePort: number,
   deps: LeaderLeaseReconciliationDependencies = {},
-): Promise<'not-port-owner' | 'already-owned' | 'reconciled'> {
+): Promise<'not-port-owner' | 'already-owned' | 'reconciled' | 'reclaim-failed'> {
   const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
   const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
   const claimLeadershipImpl = deps.claimLeadershipImpl ?? claimLeadership;
+  const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
   const killStaleProcessDetailedImpl = deps.killStaleProcessDetailedImpl ?? killStaleProcessDetailed;
 
   const portOwnerPid = await findPidOnPortImpl(consolePort);
@@ -777,7 +779,22 @@ export async function reconcileLeaderLease(
   const killOutcome = await killStaleProcessDetailedImpl(currentLock.pid, consolePort, {
     allowActiveHostParent: true,
   });
-  const lockClaimed = await claimLeadershipImpl(expectedLeader);
+  const lockAfterKill = await readLeaderLockImpl();
+  let lockDeleted = false;
+  let lockClaimAttempted = false;
+  let lockClaimed = false;
+
+  if (lockAfterKill?.pid !== process.pid) {
+    if (lockAfterKill) {
+      await deleteLeaderLockImpl();
+      lockDeleted = true;
+    }
+    lockClaimAttempted = true;
+    lockClaimed = await claimLeadershipImpl(expectedLeader);
+  }
+
+  const finalLock = await readLeaderLockImpl();
+  const reconciled = finalLock?.pid === process.pid;
 
   logger.info('[UnifiedConsole] Leader lease reconciliation completed', {
     sessionId,
@@ -788,8 +805,32 @@ export async function reconcileLeaderLease(
     killAttempted: true,
     killResult: killOutcome.reason,
     killed: killOutcome.killed,
+    lockDeleted,
+    lockClaimAttempted,
     lockClaimed,
+    finalLockOwnerPid: finalLock?.pid ?? null,
+    finalLockOwnerSessionId: finalLock?.sessionId ?? null,
+    finalLockOwnerVersion: finalLock?.serverVersion ?? null,
+    reconciled,
   });
+
+  if (!reconciled) {
+    logger.warn('[UnifiedConsole] Port-owning leader could not reclaim the displaced leader lock', {
+      sessionId,
+      port: consolePort,
+      displacedPid: currentLock.pid,
+      displacedSessionId: currentLock.sessionId,
+      finalLockOwnerPid: finalLock?.pid ?? null,
+      finalLockOwnerSessionId: finalLock?.sessionId ?? null,
+      finalLockOwnerVersion: finalLock?.serverVersion ?? null,
+      killResult: killOutcome.reason,
+      lockDeleted,
+      lockClaimAttempted,
+      lockClaimed,
+    });
+    return 'reclaim-failed';
+  }
+
   return 'reconciled';
 }
 
