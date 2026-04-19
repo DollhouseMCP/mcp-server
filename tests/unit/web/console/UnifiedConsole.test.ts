@@ -28,6 +28,8 @@ import {
   evaluatePortOwnerReplacement,
   resolveFollowerAuthority,
   startFollowerAuthorityMonitor,
+  reconcileLeaderLease,
+  startLeaderLeaseMonitor,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -840,5 +842,115 @@ describe('startFollowerAuthorityMonitor', () => {
       infoSpy.mockRestore();
       debugSpy.mockRestore();
     }
+  });
+});
+
+describe('reconcileLeaderLease', () => {
+  it('reclaims the lock and evicts the displaced lock writer when this process owns the console port', async () => {
+    const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>()
+      .mockResolvedValue(true);
+    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>()
+      .mockResolvedValue({
+        killed: true,
+        reason: 'terminated',
+        pid: 3877,
+      });
+
+    await reconcileLeaderLease('session-newest', 41715, {
+      findPidOnPortImpl: async () => process.pid,
+      readLeaderLockImpl: async () => ({
+        version: 1,
+        pid: 3877,
+        port: 41715,
+        sessionId: 'session-old',
+        startedAt: '2026-04-16T20:40:19.500Z',
+        heartbeat: '2026-04-19T18:13:34.914Z',
+        serverVersion: '2.0.25',
+        consoleProtocolVersion: 1,
+      }),
+      claimLeadershipImpl,
+      killStaleProcessDetailedImpl,
+    });
+
+    expect(killStaleProcessDetailedImpl).toHaveBeenCalledWith(3877, 41715, {
+      allowActiveHostParent: true,
+    });
+    expect(claimLeadershipImpl).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 'session-newest',
+      port: 41715,
+    }));
+  });
+
+  it('does nothing when this process does not own the console port', async () => {
+    const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>();
+    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>();
+
+    await reconcileLeaderLease('session-newest', 41715, {
+      findPidOnPortImpl: async () => 3877,
+      readLeaderLockImpl: async () => ({
+        version: 1,
+        pid: 3877,
+        port: 41715,
+        sessionId: 'session-old',
+        startedAt: '2026-04-16T20:40:19.500Z',
+        heartbeat: '2026-04-19T18:13:34.914Z',
+        serverVersion: '2.0.25',
+        consoleProtocolVersion: 1,
+      }),
+      claimLeadershipImpl,
+      killStaleProcessDetailedImpl,
+    });
+
+    expect(killStaleProcessDetailedImpl).not.toHaveBeenCalled();
+    expect(claimLeadershipImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('startLeaderLeaseMonitor', () => {
+  it('schedules periodic lease reconciliation and cleans up the timer', async () => {
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+    const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>()
+      .mockResolvedValue(true);
+    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>()
+      .mockResolvedValue({
+        killed: true,
+        reason: 'terminated',
+        pid: 3877,
+      });
+    const clearIntervalImpl = jest.fn<typeof clearInterval>();
+
+    const stopMonitor = startLeaderLeaseMonitor('session-newest', 41715, {
+      setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
+        intervalCallback = callback as () => void;
+        return timerHandle;
+      }),
+      clearIntervalImpl,
+      findPidOnPortImpl: async () => process.pid,
+      readLeaderLockImpl: async () => ({
+        version: 1,
+        pid: 3877,
+        port: 41715,
+        sessionId: 'session-old',
+        startedAt: '2026-04-16T20:40:19.500Z',
+        heartbeat: '2026-04-19T18:13:34.914Z',
+        serverVersion: '2.0.25',
+        consoleProtocolVersion: 1,
+      }),
+      claimLeadershipImpl,
+      killStaleProcessDetailedImpl,
+    });
+
+    expect(intervalCallback).not.toBeNull();
+    expect(timerHandle.unref).toHaveBeenCalledTimes(1);
+
+    intervalCallback?.();
+    await flushAuthorityMonitorTick();
+
+    expect(killStaleProcessDetailedImpl).toHaveBeenCalled();
+    expect(claimLeadershipImpl).toHaveBeenCalled();
+
+    stopMonitor();
+    expect(clearIntervalImpl).toHaveBeenCalledWith(timerHandle);
   });
 });
