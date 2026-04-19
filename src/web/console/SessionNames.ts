@@ -321,6 +321,28 @@ export class SessionNamePool {
   }
 
   /**
+   * Preserve an existing human-facing assignment during leadership handoff.
+   * If the requested name is already taken by another live session, the pool
+   * falls back to normal assignment logic rather than creating a duplicate.
+   */
+  adopt(sessionId: string, name: string, isLeader = false): string {
+    const existing = this.assigned.get(sessionId);
+    if (existing) return existing;
+
+    this.flushCooldowns();
+
+    if (!this.nameToSession.has(name) && !(isLeader && FOLLOWER_ONLY_NAMES.has(name))) {
+      this.assigned.set(sessionId, name);
+      this.nameToSession.set(name, sessionId);
+      this.cooldown = this.cooldown.filter(entry => entry.name !== name);
+      logger.debug(`[SessionNames] Adopted '${name}' for ${sessionId}`);
+      return name;
+    }
+
+    return this.assign(sessionId, isLeader);
+  }
+
+  /**
    * Release a name back to the pool with a cooldown period.
    */
   release(sessionId: string): void {

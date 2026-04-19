@@ -18,12 +18,16 @@
 
 import { describe, it, expect, jest } from '@jest/globals';
 import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
+import { LEGACY_SERVER_VERSION } from '../../../../src/web/console/LeaderElection.js';
+import { logger } from '../../../../src/utils/logger.js';
 import {
   warnIfLegacyConsolePresent,
   discoverLeaderServingPort,
+  fetchLeaderSessionsSnapshot,
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
   resolveFollowerAuthority,
+  startFollowerAuthorityMonitor,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -60,6 +64,38 @@ function makeLoggerStub() {
     info: jest.fn(),
     error: jest.fn(),
   } as unknown as typeof import('../../../../src/utils/logger.js').logger;
+}
+
+function makeAuthorityMonitorOptions() {
+  return {
+    sessionId: 'session-newest',
+    stableSessionId: 'stable-session-newest',
+    portfolioDir: '/sonar-fixture/unused-portfolio',
+    memorySink: {} as any,
+    registerLogSink: jest.fn(),
+    wireSSEBroadcasts: jest.fn(),
+  };
+}
+
+function makeAuthorityMonitorFollowerElection(): { role: 'follower'; leaderInfo: ConsoleLeaderInfo } {
+  return {
+    role: 'follower',
+    leaderInfo: {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'current-leader',
+      startedAt: '2026-04-16T16:29:44.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: '2.0.26',
+      consoleProtocolVersion: 1,
+    },
+  };
+}
+
+async function flushAuthorityMonitorTick(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('warnIfLegacyConsolePresent', () => {
@@ -286,6 +322,45 @@ describe('discoverLeaderServingPort', () => {
   });
 });
 
+describe('fetchLeaderSessionsSnapshot', () => {
+  it('reads the predecessor session snapshot with bearer auth when available', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        sessions: [
+          {
+            sessionId: 'older-follower',
+            displayName: 'Kermit',
+            color: '#00ff00',
+            pid: 4567,
+            startedAt: '2026-04-19T16:00:00.000Z',
+            lastHeartbeat: '2026-04-19T16:00:05.000Z',
+            status: 'active',
+            isLeader: false,
+            authenticated: true,
+            kind: 'mcp',
+            serverVersion: '2.0.18',
+            consoleProtocolVersion: 1,
+          },
+        ],
+      }),
+    } as Response);
+
+    const result = await fetchLeaderSessionsSnapshot(41715, 'token-123', fetchStub);
+
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/sessions', expect.objectContaining({
+      headers: { Authorization: 'Bearer token-123' },
+      signal: expect.any(AbortSignal),
+    }));
+    expect(result).toEqual([
+      expect.objectContaining({
+        sessionId: 'older-follower',
+        displayName: 'Kermit',
+      }),
+    ]);
+  });
+});
+
 describe('recoverLeaderBindFailure', () => {
   it('removes the provisional self-lock before following the real leader on the bound port', async () => {
     const provisionalLeader: ConsoleLeaderInfo = {
@@ -405,6 +480,49 @@ describe('evaluatePortOwnerReplacement', () => {
 });
 
 describe('resolveFollowerAuthority', () => {
+  it('forces a takeover when the reachable elected leader is on the console port but running an older version', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'legacy-console',
+      startedAt: '2026-04-13T19:07:12.895Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: LEGACY_SERVER_VERSION,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'lock',
+        leaderInfo: electedLeader,
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.election.role).toBe('leader');
+    expect(result.election.leaderInfo).toMatchObject({
+      sessionId: 'session-newest',
+      port: 41715,
+      serverVersion: expect.any(String),
+      consoleProtocolVersion: 1,
+    });
+    expect(result.replacement).toMatchObject({
+      shouldEvict: true,
+      preference: expect.objectContaining({
+        reason: 'newer-compatible-version',
+        existingVersion: LEGACY_SERVER_VERSION,
+      }),
+    });
+  });
+
   it('promotes a newer session to leader when the reachable port owner is older than the elected lock holder', async () => {
     const electedLeader: ConsoleLeaderInfo = {
       version: 1,
@@ -497,5 +615,230 @@ describe('resolveFollowerAuthority', () => {
         consoleProtocolVersion: 1,
       },
     });
+  });
+
+  it('stays follower when the reachable elected leader is already on the same version', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const electedLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'current-leader',
+      startedAt: '2026-04-16T16:29:44.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: PACKAGE_VERSION,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await resolveFollowerAuthority('session-newest', 41715, {
+      role: 'follower',
+      leaderInfo: electedLeader,
+    }, {
+      isLeaderWebConsoleReachableImpl: async () => true,
+      discoverLeaderServingPortImpl: async () => ({
+        ownerPid: 57117,
+        source: 'api',
+        leaderInfo: electedLeader,
+      }),
+      deleteLeaderLockImpl,
+    });
+
+    expect(deleteLeaderLockImpl).not.toHaveBeenCalled();
+    expect(result.election).toEqual({
+      role: 'follower',
+      leaderInfo: electedLeader,
+    });
+    expect(result.replacement).toMatchObject({
+      shouldEvict: false,
+      preference: expect.objectContaining({
+        reason: 'same-version',
+      }),
+    });
+  });
+});
+
+describe('startFollowerAuthorityMonitor', () => {
+  it('queues promotion when a periodic authority recheck prefers the local follower', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+    const setIntervalImpl = jest.fn<typeof setInterval>((callback) => {
+      intervalCallback = callback as () => void;
+      return timerHandle;
+    });
+    const clearIntervalImpl = jest.fn<typeof clearInterval>();
+
+    const stopMonitor = startFollowerAuthorityMonitor(
+      makeAuthorityMonitorOptions(),
+      41715,
+      makeAuthorityMonitorFollowerElection(),
+      promotionMgr,
+      forwardingSink,
+      sessionHeartbeat,
+      {
+        resolveFollowerAuthorityImpl: jest.fn().mockResolvedValue({
+          election: {
+            role: 'leader',
+            leaderInfo: {
+              version: 1,
+              pid: process.pid,
+              port: 41715,
+              sessionId: 'session-newest',
+              startedAt: '2026-04-19T16:00:00.000Z',
+              heartbeat: '2026-04-19T16:00:00.000Z',
+              serverVersion: PACKAGE_VERSION,
+              consoleProtocolVersion: 1,
+            },
+          },
+          discovery: null,
+          replacement: {
+            shouldEvict: true,
+            ownerPid: 57117,
+            preference: {
+              shouldReplace: true,
+              reason: 'newer-compatible-version',
+              candidateVersion: PACKAGE_VERSION,
+              existingVersion: '2.0.26',
+              candidateProtocolVersion: 1,
+              existingProtocolVersion: 1,
+            },
+          },
+          forcedClaim: false,
+        }),
+        setIntervalImpl,
+        clearIntervalImpl,
+      },
+    );
+
+    expect(setIntervalImpl).toHaveBeenCalledTimes(1);
+    expect(timerHandle.unref).toHaveBeenCalledTimes(1);
+    expect(intervalCallback).not.toBeNull();
+
+    intervalCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(clearIntervalImpl).toHaveBeenCalledWith(timerHandle);
+    expect(promotionMgr.promote).toHaveBeenCalledWith(forwardingSink, sessionHeartbeat);
+
+    stopMonitor();
+  });
+
+  it('stays idle when the periodic authority recheck still prefers following', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+
+    startFollowerAuthorityMonitor(
+      makeAuthorityMonitorOptions(),
+      41715,
+      makeAuthorityMonitorFollowerElection(),
+      promotionMgr,
+      forwardingSink,
+      sessionHeartbeat,
+      {
+        resolveFollowerAuthorityImpl: jest.fn().mockResolvedValue({
+          election: makeAuthorityMonitorFollowerElection(),
+          discovery: null,
+          replacement: null,
+          forcedClaim: false,
+        }),
+        setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
+          intervalCallback = callback as () => void;
+          return timerHandle;
+        }),
+        clearIntervalImpl: jest.fn<typeof clearInterval>(),
+      },
+    );
+
+    intervalCallback?.();
+    await Promise.resolve();
+
+    expect(promotionMgr.promote).not.toHaveBeenCalled();
+  });
+
+  it('opens a circuit breaker after repeated authority failures and resumes after cooldown', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+    let nowMs = 1_000;
+    const resolveFollowerAuthorityImpl = jest.fn<typeof resolveFollowerAuthority>()
+      .mockRejectedValue(new Error('authority lookup failed'));
+    const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    const infoSpy = jest.spyOn(logger, 'info').mockImplementation(() => {});
+    const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+
+    try {
+      const stopMonitor = startFollowerAuthorityMonitor(
+        makeAuthorityMonitorOptions(),
+        41715,
+        makeAuthorityMonitorFollowerElection(),
+        promotionMgr,
+        forwardingSink,
+        sessionHeartbeat,
+        {
+          resolveFollowerAuthorityImpl,
+          setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
+            intervalCallback = callback as () => void;
+            return timerHandle;
+          }),
+          clearIntervalImpl: jest.fn<typeof clearInterval>(),
+          nowImpl: () => nowMs,
+        },
+      );
+
+      expect(intervalCallback).not.toBeNull();
+
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Follower authority re-evaluation circuit opened after repeated failures',
+        expect.objectContaining({
+          sessionId: 'session-newest',
+          consecutiveFailures: 3,
+        }),
+      );
+
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
+
+      nowMs += 60_001;
+      intervalCallback?.();
+      await flushAuthorityMonitorTick();
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Follower authority re-evaluation circuit closed; resuming checks',
+        expect.objectContaining({
+          sessionId: 'session-newest',
+        }),
+      );
+      expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(4);
+      expect(promotionMgr.promote).not.toHaveBeenCalled();
+
+      stopMonitor();
+    } finally {
+      warnSpy.mockRestore();
+      infoSpy.mockRestore();
+      debugSpy.mockRestore();
+    }
   });
 });

@@ -52,6 +52,7 @@ import {
   type KillStaleProcessOutcome,
 } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
+import type { SessionInfo } from './IngestRoutes.js';
 
 /**
  * Default console port from the env var. Used as fallback when no port
@@ -64,9 +65,28 @@ const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
 const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
+const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
+  intervalMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_MS,
+  jitterMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_JITTER_MS,
+  failureThreshold: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_THRESHOLD,
+  failureCooldownMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_COOLDOWN_MS,
+} as const;
 
 function currentTimestamp(): string {
   return new Date().toISOString();
+}
+
+function computeFollowerAuthorityRecheckInterval(sessionId: string): number {
+  const normalizedSessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
+  let hash = 0;
+  for (let index = 0; index < normalizedSessionId.length; index += 1) {
+    const codePoint = normalizedSessionId.codePointAt(index) ?? 0;
+    hash = (hash * 31 + codePoint) >>> 0;
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return FOLLOWER_AUTHORITY_MONITOR_CONFIG.intervalMs + (hash % (FOLLOWER_AUTHORITY_MONITOR_CONFIG.jitterMs + 1));
 }
 
 /**
@@ -188,6 +208,7 @@ interface ForceTakeoverAttemptResult {
   election: ElectionResult;
   fallback: PortLeaderDiscovery;
   replacement: PortOwnerReplacementDecision;
+  recoveredSessions: SessionInfo[];
   forcedKill: KillStaleProcessOutcome | null;
   takeoverAttempted: boolean;
   reboundLockClaimed: boolean;
@@ -207,6 +228,13 @@ interface FollowerAuthorityDependencies {
   deleteLeaderLockImpl?: typeof deleteLeaderLock;
 }
 
+interface FollowerAuthorityMonitorDependencies extends FollowerAuthorityDependencies {
+  resolveFollowerAuthorityImpl?: typeof resolveFollowerAuthority;
+  setIntervalImpl?: typeof setInterval;
+  clearIntervalImpl?: typeof clearInterval;
+  nowImpl?: () => number;
+}
+
 interface DiscoveryDependencies {
   fetchImpl?: typeof fetch;
   findPidOnPortImpl?: typeof findPidOnPort;
@@ -215,6 +243,31 @@ interface DiscoveryDependencies {
 
 function buildDiscoveryHeaders(authToken: string | null): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+export async function fetchLeaderSessionsSnapshot(
+  port: number,
+  authToken: string | null,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SessionInfo[]> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LEADER_DISCOVERY_TIMEOUT_MS);
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/api/sessions`, {
+      headers: buildDiscoveryHeaders(authToken),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return [];
+    }
+
+    const data = await response.json() as { sessions?: SessionInfo[] };
+    return Array.isArray(data.sessions) ? data.sessions : [];
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function buildLeaderInfoFromSession(port: number, ownerPid: number, leaderSession: SessionApiRecord): ConsoleLeaderInfo {
@@ -499,23 +552,28 @@ export async function resolveFollowerAuthority(
   }
 
   const replacement = evaluatePortOwnerReplacement(candidateLeader, discovery);
-  if (discovery.ownerPid !== election.leaderInfo.pid) {
-    if (replacement.shouldEvict) {
-      await deleteLeaderLockImpl();
-      logger.warn('[UnifiedConsole] Split-brain console authority detected; newer session will replace the actual port owner', buildAuthorityResolutionLogContext(
+  if (replacement.shouldEvict) {
+    await deleteLeaderLockImpl();
+    logger.warn(
+      discovery.ownerPid === election.leaderInfo.pid
+        ? '[UnifiedConsole] Older console leader detected on the console port; newer session will take over'
+        : '[UnifiedConsole] Split-brain console authority detected; newer session will replace the actual port owner',
+      buildAuthorityResolutionLogContext(
         consolePort,
         election.leaderInfo,
         discovery,
         replacement,
-      ));
-      return {
-        election: { role: 'leader', leaderInfo: candidateLeader },
-        discovery,
-        replacement,
-        forcedClaim: false,
-      };
-    }
+      ),
+    );
+    return {
+      election: { role: 'leader', leaderInfo: candidateLeader },
+      discovery,
+      replacement,
+      forcedClaim: false,
+    };
+  }
 
+  if (discovery.ownerPid !== election.leaderInfo.pid) {
     logger.warn('[UnifiedConsole] Split-brain console authority detected; following the actual port owner', buildAuthorityResolutionLogContext(
       consolePort,
       election.leaderInfo,
@@ -538,6 +596,126 @@ export async function resolveFollowerAuthority(
   };
 }
 
+export function startFollowerAuthorityMonitor(
+  options: UnifiedConsoleOptions,
+  consolePort: number,
+  election: ElectionResult,
+  promotionMgr: PromotionManager,
+  forwardingSink: LeaderForwardingLogSink,
+  sessionHeartbeat: SessionHeartbeat,
+  deps: FollowerAuthorityMonitorDependencies = {},
+): () => void {
+  const resolveFollowerAuthorityImpl = deps.resolveFollowerAuthorityImpl ?? resolveFollowerAuthority;
+  const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
+  const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
+  const nowImpl = deps.nowImpl ?? Date.now;
+  let currentElection = election;
+  let checkInProgress = false;
+  let promotionQueued = false;
+  let consecutiveFailures = 0;
+  let circuitOpenUntilMs = 0;
+  let authorityTimer: ReturnType<typeof setInterval> | null = null;
+  const recheckIntervalMs = computeFollowerAuthorityRecheckInterval(options.sessionId);
+
+  const queueAuthorityPromotion = () => {
+    queueMicrotask(() => {
+      promotionMgr.promote(forwardingSink, sessionHeartbeat)
+        .catch((err) => logger.error('[UnifiedConsole] Authority-based promotion crashed', {
+          error: String(err),
+        }));
+    });
+  };
+
+  const handleResolvedAuthority = (resolved: FollowerAuthorityResolution) => {
+    currentElection = resolved.election;
+    consecutiveFailures = 0;
+    circuitOpenUntilMs = 0;
+
+    if (resolved.election.role !== 'leader') {
+      return;
+    }
+
+    promotionQueued = true;
+    if (authorityTimer) {
+      clearIntervalImpl(authorityTimer);
+      authorityTimer = null;
+    }
+
+    logger.warn('[UnifiedConsole] Follower authority re-evaluation queued a leader takeover', {
+      sessionId: options.sessionId,
+      stableSessionId: options.stableSessionId,
+      port: consolePort,
+      recheckIntervalMs,
+      electedLeaderPid: election.leaderInfo.pid,
+      electedLeaderSessionId: election.leaderInfo.sessionId,
+      resolvedLeaderPid: resolved.election.leaderInfo.pid,
+      resolvedLeaderSessionId: resolved.election.leaderInfo.sessionId,
+      replacementReason: resolved.replacement?.preference?.reason ?? null,
+      forcedClaim: resolved.forcedClaim,
+    });
+
+    queueAuthorityPromotion();
+  };
+
+  const handleAuthorityFailure = (err: unknown) => {
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= FOLLOWER_AUTHORITY_MONITOR_CONFIG.failureThreshold) {
+      circuitOpenUntilMs = nowImpl() + FOLLOWER_AUTHORITY_MONITOR_CONFIG.failureCooldownMs;
+      logger.warn('[UnifiedConsole] Follower authority re-evaluation circuit opened after repeated failures', {
+        sessionId: options.sessionId,
+        port: consolePort,
+        recheckIntervalMs,
+        consecutiveFailures,
+        circuitOpenUntilMs: new Date(circuitOpenUntilMs).toISOString(),
+      });
+      consecutiveFailures = 0;
+    }
+
+    logger.debug('[UnifiedConsole] Follower authority re-evaluation failed', {
+      error: err instanceof Error ? err.message : String(err),
+      sessionId: options.sessionId,
+      port: consolePort,
+      recheckIntervalMs,
+      circuitOpenUntilMs: circuitOpenUntilMs ? new Date(circuitOpenUntilMs).toISOString() : null,
+    });
+  };
+
+  authorityTimer = setIntervalImpl(() => {
+    if (checkInProgress || promotionQueued) {
+      return;
+    }
+
+    if (circuitOpenUntilMs > nowImpl()) {
+      return;
+    }
+
+    if (circuitOpenUntilMs !== 0) {
+      logger.info('[UnifiedConsole] Follower authority re-evaluation circuit closed; resuming checks', {
+        sessionId: options.sessionId,
+        port: consolePort,
+        recheckIntervalMs,
+      });
+      circuitOpenUntilMs = 0;
+    }
+
+    checkInProgress = true;
+    resolveFollowerAuthorityImpl(options.sessionId, consolePort, currentElection)
+      .then(handleResolvedAuthority)
+      .catch(handleAuthorityFailure)
+      .finally(() => {
+        checkInProgress = false;
+      });
+  }, recheckIntervalMs);
+  authorityTimer.unref();
+
+  return () => {
+    if (authorityTimer) {
+      clearIntervalImpl(authorityTimer);
+      authorityTimer = null;
+    }
+  };
+}
+
 async function attemptForceTakeover(
   options: UnifiedConsoleOptions,
   currentElection: ElectionResult,
@@ -555,6 +733,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: initialFallback,
       replacement: initialReplacement,
+      recoveredSessions: [],
       forcedKill: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
@@ -562,6 +741,7 @@ async function attemptForceTakeover(
   }
 
   const latestFallback = await discoverLeaderServingPort(consolePort, primaryToken);
+  const recoveredSessions = await fetchLeaderSessionsSnapshot(consolePort, primaryToken);
   const latestReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, latestFallback);
   if (!latestReplacement.shouldEvict || latestReplacement.ownerPid === null) {
     logger.warn('[UnifiedConsole] Forced takeover target changed before eviction; skipping forced kill', {
@@ -579,6 +759,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: latestFallback,
       replacement: latestReplacement,
+      recoveredSessions,
       forcedKill: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
@@ -614,6 +795,7 @@ async function attemptForceTakeover(
       election: currentElection,
       fallback: latestFallback,
       replacement: latestReplacement,
+      recoveredSessions,
       forcedKill,
       takeoverAttempted: true,
       reboundLockClaimed: false,
@@ -658,6 +840,7 @@ async function attemptForceTakeover(
     election: reboundElection,
     fallback: latestFallback,
     replacement: latestReplacement,
+    recoveredSessions,
     forcedKill,
     takeoverAttempted: true,
     reboundLockClaimed,
@@ -751,6 +934,7 @@ async function startAsLeader(
   // bindAndListen now handles EADDRINUSE by finding and killing the stale
   // process on the port, then retrying. No external retry loop needed.
   let webResult = await startWebServer(serverOpts);
+  let recoveredFollowerSessions: SessionInfo[] = [];
 
   if (webResult.bindResult && !webResult.bindResult.success) {
     const forceTakeover = await attemptForceTakeover(
@@ -763,6 +947,7 @@ async function startAsLeader(
     );
     webResult = forceTakeover.webResult;
     election = forceTakeover.election;
+    recoveredFollowerSessions = forceTakeover.recoveredSessions;
 
     if (webResult.bindResult && !webResult.bindResult.success) {
       if (forceTakeover.fallback.leaderInfo) {
@@ -804,6 +989,14 @@ async function startAsLeader(
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
+
+  if (recoveredFollowerSessions.length > 0) {
+    ingestResult.importSessions(recoveredFollowerSessions);
+    logger.info('[UnifiedConsole] Recovered follower session snapshot from displaced leader', {
+      sessionId: options.sessionId,
+      recoveredSessions: recoveredFollowerSessions.length,
+    });
+  }
 
   // Wire SSE broadcasts for this leader's own events
   options.wireSSEBroadcasts(webResult, options.metricsSink);
@@ -888,6 +1081,15 @@ async function startAsFollower(
   sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
   await sessionHeartbeat.start();
 
+  const stopAuthorityMonitor = startFollowerAuthorityMonitor(
+    options,
+    consolePort,
+    election,
+    promotionMgr,
+    forwardingSink,
+    sessionHeartbeat,
+  );
+
   logger.info('[UnifiedConsole] Follower started', {
     sessionId: options.sessionId, pid: process.pid, role: 'follower',
     leaderSession: election.leaderInfo.sessionId, leaderPid: election.leaderInfo.pid,
@@ -898,6 +1100,7 @@ async function startAsFollower(
     role: 'follower',
     election,
     cleanup: async () => {
+      stopAuthorityMonitor();
       await sessionHeartbeat.stop();
       await forwardingSink.close();
     },
