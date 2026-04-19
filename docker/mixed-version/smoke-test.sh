@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 COMPOSE_FILE="${REPO_ROOT}/docker/docker-compose.mixed-version.yml"
 TARGET_INJECT_SPEC="${TARGET_INJECT_SPEC:-@dollhousemcp/mcp-server@2.0.24}"
+SESSION_WAIT_RETRIES="${SESSION_WAIT_RETRIES:-30}"
+SESSION_WAIT_SLEEP_SECONDS="${SESSION_WAIT_SLEEP_SECONDS:-2}"
 
 cleanup() {
   docker compose -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
@@ -17,17 +19,19 @@ wait_for_sessions() {
   local expected_pattern="$2"
   local output=""
 
-  for _ in $(seq 1 15); do
+  for _ in $(seq 1 "${SESSION_WAIT_RETRIES}"); do
     output="$("${SCRIPT_DIR}/observe-state.sh" --once)"
     if [[ "${output}" =~ sessions:\ count=([0-9]+) ]] && printf '%s\n' "${output}" | grep -Eq "${expected_pattern}"; then
       printf '%s\n' "${output}"
       return 0
     fi
-    sleep 2
+    sleep "${SESSION_WAIT_SLEEP_SECONDS}"
   done
 
   echo "Timed out waiting for ${description}" >&2
   printf '%s\n' "${output}" >&2
+  echo "Recent container logs:" >&2
+  docker compose -f "${COMPOSE_FILE}" logs --tail=40 current-local stable-226 legacy-225 legacy-219 >&2 || true
   return 1
 }
 
