@@ -803,11 +803,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    *
    * Issue #18 Phase 4: Apply active status to memories that are in the active set.
    */
-  override async list(): Promise<Memory[]> {
+  override async list(options?: { includePublic?: boolean }): Promise<Memory[]> {
     // Database mode: delegate to base class which uses listFromDatabase().
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
-      const memories = await super.list();
+      const memories = await super.list(options);
       // Apply activation status
       for (const memory of memories) {
         if (this.getActivationSet().has(memory.metadata.name)) {

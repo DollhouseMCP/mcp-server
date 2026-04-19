@@ -43,6 +43,20 @@
       "when": 1776700000000,
       "tag": "0005_visibility_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1776800000000,
+      "tag": "0006_tags_public_visibility",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1776810000000,
+      "tag": "0007_relationships_public_visibility",
+      "breakpoints": true
     }
   ]
 }

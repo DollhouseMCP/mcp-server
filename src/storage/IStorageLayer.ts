@@ -25,8 +25,14 @@ export interface IStorageLayer {
 
   /**
    * Trigger scan and return all indexed entries.
+   *
+   * @param options.includePublic - When true, the returned set also includes
+   *   elements owned by other users that have visibility='public'. When false
+   *   (default), results are scoped to the current user. Implementations that
+   *   don't support public content (e.g. legacy file-mode layouts with no
+   *   shared directory) ignore the flag and return only own content.
    */
-  listSummaries(): Promise<ElementIndexEntry[]>;
+  listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]>;
 
   /**
    * Trigger scan and return all indexed file paths.

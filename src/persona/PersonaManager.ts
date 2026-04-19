@@ -304,8 +304,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * List all personas as an array
    * Ensures all personas have filenames set
    */
-  override async list(): Promise<PersonaElement[]> {
-    const personas = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<PersonaElement[]> {
+    const personas = await super.list(options);
     // Ensure filenames are set using deriveFilename logic
     for (const persona of personas) {
       if (!persona.filename) {

@@ -11,7 +11,7 @@
  * @since v2.2.0 — Phase 4, Step 4.3
  */
 
-import { eq, and, gt, inArray } from 'drizzle-orm';
+import { eq, and, or, gt, inArray } from 'drizzle-orm';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserRead } from '../database/rls.js';
@@ -126,10 +126,20 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     return result;
   }
 
-  async listSummaries(): Promise<ElementIndexEntry[]> {
+  async listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     if (!this.scanCompleted) {
       await this.scan();
     }
+
+    // includePublic expands the owner filter to also match any row with
+    // visibility='public'. RLS's elements_select policy already permits the
+    // caller to read public rows owned by other users (migration 0005), so
+    // the database will happily return them once the predicate lets them
+    // through. Default (flag off) keeps the query per-user-scoped, preserving
+    // today's discovery surface.
+    const ownerPredicate = options?.includePublic
+      ? or(eq(elements.userId, this.userId), eq(elements.visibility, 'public'))
+      : eq(elements.userId, this.userId);
 
     return withUserRead(this.db, this.userId, async (tx) => {
       const rows = await tx
@@ -144,14 +154,19 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
           autoLoad: elements.autoLoad,
           priority: elements.priority,
           memoryType: elements.memoryType,
+          userId: elements.userId,
         })
         .from(elements)
         .where(and(
-          eq(elements.userId, this.userId),
+          ownerPredicate,
           eq(elements.elementType, this.elementType),
         ));
 
-      // Batch-load tags for all elements
+      // Batch-load tags for all elements. When includePublic is set, pass a
+      // hint so foreign (cross-user public) IDs go through a separate loader
+      // that honors element_tags RLS — which is strict owner-only and would
+      // otherwise silently return empty tag arrays for public rows authored
+      // by other users.
       const tagsByElementId = await this.batchLoadTags(tx, rows.map(r => r.id));
 
       return this.mapRowsToSummaries(rows, tagsByElementId, tx);
@@ -264,7 +279,19 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     this.idToNameMap.delete(id);
   }
 
-  /** Batch-load tags for a set of element IDs within an existing transaction. */
+  /**
+   * Batch-load tags for a set of element IDs within an existing transaction.
+   *
+   * CONTRACT: callers MUST invoke inside a `withUserRead` /
+   * `withUserContext` block. There is no defense-in-depth `user_id = :me`
+   * filter here — RLS on `element_tags` (migrations 0004 + 0006) is the sole
+   * visibility gate. The filter was removed in Phase 4.4 Piece 2 so tags
+   * attached to cross-user public elements come through when discovery is
+   * requested; re-adding it would silently strip those tags and regress
+   * include_public behavior. Without an active user context, the RLS
+   * predicate fails closed (missing `app.current_user_id` → NULL → no rows
+   * match owner branch, only public-attached rows match the EXISTS branch).
+   */
   protected async batchLoadTags(
     tx: DrizzleTx,
     elementIds: string[],
@@ -275,10 +302,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
     const tagRows = await tx
       .select({ elementId: elementTags.elementId, tag: elementTags.tag })
       .from(elementTags)
-      .where(and(
-        eq(elementTags.userId, this.userId),
-        inArray(elementTags.elementId, elementIds),
-      ));
+      .where(inArray(elementTags.elementId, elementIds));
 
     for (const t of tagRows) {
       const existing = tagsByElementId.get(t.elementId) ?? [];
@@ -319,6 +343,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       autoLoad: boolean | null;
       priority: number | null;
       memoryType: string | null;
+      userId?: string;
     }>,
     tagsByElementId: Map<string, string[]>,
     _tx: DrizzleTx,
@@ -335,6 +360,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       autoLoad: row.autoLoad ?? undefined,
       priority: row.priority ?? undefined,
       memoryType: row.memoryType ?? undefined,
+      userId: row.userId,
     }));
   }
 

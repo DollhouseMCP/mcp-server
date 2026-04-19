@@ -6,19 +6,33 @@
  * endpoint behavior, hook script compatibility, and error recovery.
  */
 
-import { describe, expect, it, afterEach } from '@jest/globals';
+import { describe, expect, it, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
 import { execFile } from 'node:child_process';
 
-const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
-const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
 
 describe('Permission Server Integration', () => {
+  // Use a unique tmp dir as the run directory for every test (DOLLHOUSE_RUN_DIR
+  // override). Without this, parallel test execution races against
+  // tests/unit/web/portDiscovery.test.ts on the shared `permission-server.port`.
+  let RUN_DIR: string;
+  let PORT_FILE: string;
+
+  beforeEach(async () => {
+    RUN_DIR = await fs.mkdtemp(path.join(os.tmpdir(), 'permsrv-integ-'));
+    PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
+    process.env.DOLLHOUSE_RUN_DIR = RUN_DIR;
+  });
+
+  afterEach(async () => {
+    delete process.env.DOLLHOUSE_RUN_DIR;
+    if (RUN_DIR) await fs.rm(RUN_DIR, { recursive: true, force: true });
+  });
 
   describe('end-to-end HTTP endpoint', () => {
     let server: http.Server | undefined;
@@ -157,7 +171,11 @@ describe('Permission Server Integration', () => {
       // Ensure port file doesn't exist
       fs.unlink(PORT_FILE).catch(() => {}).then(() => {
         execFile('bash', [HOOK_SCRIPT], {
-          env: { HOME: os.homedir(), PATH: '/usr/local/bin:/usr/bin:/bin' },
+          env: {
+            HOME: os.homedir(),
+            PATH: '/usr/local/bin:/usr/bin:/bin',
+            DOLLHOUSE_RUN_DIR: RUN_DIR,
+          },
         }, (error, stdout, _stderr) => {
           // Exit code 0 = fail open (allow)
           expect(error).toBeNull();
@@ -204,6 +222,7 @@ describe('Permission Server Integration', () => {
             HOME: os.homedir(),
             PATH: '/usr/local/bin:/usr/bin:/bin',
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
+            DOLLHOUSE_RUN_DIR: RUN_DIR,
           },
           stdio: ['pipe', 'pipe', 'pipe'],
         });

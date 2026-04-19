@@ -716,4 +716,146 @@ describe('MCP Database E2E Tests', () => {
       }
     }, TEST_TIMEOUT);
   });
+
+  // ── include_public discovery flag (Phase 4.4 Piece 2) ───────────────
+  //
+  // End-to-end coverage of the MCP tool dispatch path for list_elements
+  // with include_public. Exercises: schema validation → SchemaDispatcher
+  // snake_to_camel mapping → handler flag extraction → BaseElementManager
+  // threading → storage-layer visibility-aware query → response shape.
+  //
+  // Setup: insert a public skill + a public persona owned by a foreign
+  // user directly via the admin connection (bypassing RLS for test
+  // seeding). Then call list_elements through the MCP client (which is
+  // running as the bootstrapped test user = not the foreign user) with
+  // and without the flag, asserting the foreign public content is only
+  // visible when the flag is explicitly set to true.
+
+  describe('list_elements { include_public } — MCP end-to-end', () => {
+    const FOREIGN_USERNAME = 'e2e-include-public-foreign';
+    const FOREIGN_SKILL_NAME = 'e2e-foreign-public-skill';
+    const FOREIGN_PERSONA_NAME = 'e2e-foreign-public-persona';
+    let foreignUserId: string;
+
+    beforeAll(async () => {
+      if (!dbAvailable) return;
+
+      // Use the admin connection (bypasses RLS) to create a foreign user
+      // and seed public content owned by them. Mirrors the pattern in
+      // rls-isolation.test.ts.
+      const { createDatabaseConnection } = await import('../../../src/database/connection.js');
+      const adminConn = createDatabaseConnection({
+        connectionUrl: DB_ADMIN_URL, poolSize: 1, ssl: 'disable',
+      });
+      try {
+        const existing = await adminConn.db.select({ id: users.id }).from(users)
+          .where(eq(users.username, FOREIGN_USERNAME)).limit(1);
+        foreignUserId = existing[0]?.id
+          ?? (await adminConn.db.insert(users)
+                .values({ username: FOREIGN_USERNAME, displayName: `Foreign (${FOREIGN_USERNAME})` })
+                .returning({ id: users.id }))[0].id;
+
+        // Seed a public skill + persona owned by the foreign user.
+        // Direct INSERT via the admin connection lets us set arbitrary
+        // user_id + visibility values without going through owner-only
+        // mutation policies.
+        const skillContent = `---\nname: ${FOREIGN_SKILL_NAME}\nversion: 1.0.0\ndescription: Public skill from foreign user\nauthor: foreign-user\n---\n\nForeign user's public skill body.`;
+        const personaContent = `---\nname: ${FOREIGN_PERSONA_NAME}\nversion: 1.0.0\ndescription: Public persona from foreign user\nauthor: foreign-user\n---\n\nForeign user's public persona body.`;
+        const { createHash } = await import('node:crypto');
+        const hashOf = (c: string) => createHash('sha256').update(c, 'utf8').digest('hex');
+        await adminConn.db.insert(elements).values([
+          {
+            userId: foreignUserId, elementType: 'skills', name: FOREIGN_SKILL_NAME,
+            rawContent: skillContent, bodyContent: skillContent.split('---')[2] ?? '',
+            contentHash: hashOf(skillContent), byteSize: Buffer.byteLength(skillContent, 'utf8'),
+            description: 'Public skill from foreign user', version: '1.0.0',
+            author: 'foreign-user', visibility: 'public', metadata: {},
+          },
+          {
+            userId: foreignUserId, elementType: 'personas', name: FOREIGN_PERSONA_NAME,
+            rawContent: personaContent, bodyContent: personaContent.split('---')[2] ?? '',
+            contentHash: hashOf(personaContent), byteSize: Buffer.byteLength(personaContent, 'utf8'),
+            description: 'Public persona from foreign user', version: '1.0.0',
+            author: 'foreign-user', visibility: 'public', metadata: {},
+          },
+        ]);
+      } finally {
+        await adminConn.close();
+      }
+    });
+
+    afterAll(async () => {
+      if (!dbAvailable || !foreignUserId) return;
+      // Clean up foreign seed content.
+      const { createDatabaseConnection } = await import('../../../src/database/connection.js');
+      const adminConn = createDatabaseConnection({
+        connectionUrl: DB_ADMIN_URL, poolSize: 1, ssl: 'disable',
+      });
+      try {
+        await adminConn.db.delete(elements).where(eq(elements.userId, foreignUserId));
+        await adminConn.db.delete(users).where(eq(users.id, foreignUserId));
+      } finally {
+        await adminConn.close();
+      }
+    });
+
+    it('should NOT return foreign public skill when include_public is omitted', async () => {
+      if (!dbAvailable) return;
+      const resp = await aql.read(client, {
+        operation: 'list_elements',
+        element_type: 'skill',
+      });
+      expect(resp).not.toContain(FOREIGN_SKILL_NAME);
+    }, TEST_TIMEOUT);
+
+    it('should NOT return foreign public skill when include_public is false', async () => {
+      if (!dbAvailable) return;
+      const resp = await aql.read(client, {
+        operation: 'list_elements',
+        element_type: 'skill',
+        params: { include_public: false },
+      });
+      expect(resp).not.toContain(FOREIGN_SKILL_NAME);
+    }, TEST_TIMEOUT);
+
+    it('should return foreign public skill when include_public is true', async () => {
+      if (!dbAvailable) return;
+      const resp = await aql.read(client, {
+        operation: 'list_elements',
+        element_type: 'skill',
+        params: { include_public: true },
+      });
+      expect(resp).toContain(FOREIGN_SKILL_NAME);
+    }, TEST_TIMEOUT);
+
+    it('should return foreign public persona when include_public is true (element-type coverage)', async () => {
+      if (!dbAvailable) return;
+      // Second element type — proves the flag threads correctly through
+      // PersonaManager, not just SkillManager. Defends against a subclass
+      // override that accidentally drops the options argument.
+      const resp = await aql.read(client, {
+        operation: 'list_elements',
+        element_type: 'persona',
+        params: { include_public: true },
+      });
+      expect(resp).toContain(FOREIGN_PERSONA_NAME);
+    }, TEST_TIMEOUT);
+
+    it('should reject non-boolean include_public at the schema boundary', async () => {
+      if (!dbAvailable) return;
+      // Defense-in-depth: the schema declares include_public: boolean. A
+      // string "true" must be rejected by the schema validator before the
+      // handler runs — the handler's strict `=== true` gate is a second
+      // line, but the first line should catch this.
+      const resp = await aql.read(client, {
+        operation: 'list_elements',
+        element_type: 'skill',
+        params: { include_public: 'true' },
+      });
+      // Either a validation error is returned, or the flag is treated as
+      // false (strict check in handler). Either way: the foreign element
+      // must NOT be visible.
+      expect(resp).not.toContain(FOREIGN_SKILL_NAME);
+    }, TEST_TIMEOUT);
+  });
 });

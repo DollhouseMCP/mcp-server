@@ -316,8 +316,8 @@ export class SkillManager extends BaseElementManager<Skill> {
   /**
    * Override list() to apply active status to skills
    */
-  override async list(): Promise<Skill[]> {
-    const skills = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Skill[]> {
+    const skills = await super.list(options);
 
     // Apply active status to skills that are in the active set (by name)
     for (const skill of skills) {

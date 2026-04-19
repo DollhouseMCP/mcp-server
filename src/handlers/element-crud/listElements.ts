@@ -308,8 +308,26 @@ export async function listElements(
       return unknownType(type);
     }
 
+    // Extract include_public flag. The MCP-AQL dispatcher maps
+    // `include_public` (schema) → `includePublic` (internal) via the
+    // schema's `mapTo`/`sources` machinery; test harnesses and alternate
+    // entry points may pass either name directly or nested under `params`.
+    //
+    // The gate is strict boolean identity (`=== true`). The schema validator
+    // (OperationSchema: include_public as type 'boolean') rejects non-boolean
+    // inputs before the handler runs. If that check is ever bypassed — a
+    // string `"true"`, the number 1, a truthy object — the request must not
+    // coincidentally enable cross-user discovery. Only a literal `true` flips
+    // the flag.
+    const readFlag = (source: Record<string, unknown> | undefined): unknown =>
+      source?.include_public ?? source?.includePublic;
+    const optsObj = options as Record<string, unknown> | undefined;
+    const rawFlag =
+      readFlag(optsObj) ?? readFlag(optsObj?.params as Record<string, unknown> | undefined);
+    const includePublic = rawFlag === true;
+
     // Get raw elements from the appropriate manager
-    const elements = await getElementsForType(context, normalizedType);
+    const elements = await getElementsForType(context, normalizedType, { includePublic });
 
     if (elements.length === 0) {
       return emptyElementsResponse(normalizedType);
@@ -347,25 +365,30 @@ export async function listElements(
 }
 
 /**
- * Get elements from the appropriate manager based on type
+ * Get elements from the appropriate manager based on type.
+ *
+ * @param options.includePublic - When true, the result includes public
+ *   elements owned by other users (DB mode only today; file mode ignores
+ *   this until Step 4.5 delivers the per-user/shared layout).
  */
 async function getElementsForType(
   context: ElementCrudContext,
-  type: ElementType
+  type: ElementType,
+  options?: { includePublic?: boolean }
 ): Promise<any[]> {
   switch (type) {
     case ElementType.PERSONA:
-      return context.personaManager.list();
+      return context.personaManager.list(options);
     case ElementType.SKILL:
-      return context.skillManager.list();
+      return context.skillManager.list(options);
     case ElementType.TEMPLATE:
-      return context.templateManager.list();
+      return context.templateManager.list(options);
     case ElementType.AGENT:
-      return context.agentManager.list();
+      return context.agentManager.list(options);
     case ElementType.MEMORY:
-      return context.memoryManager.list();
+      return context.memoryManager.list(options);
     case ElementType.ENSEMBLE:
-      return context.ensembleManager.list();
+      return context.ensembleManager.list(options);
     default:
       return [];
   }

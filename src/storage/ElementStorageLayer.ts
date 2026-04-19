@@ -84,8 +84,13 @@ export class ElementStorageLayer implements IStorageLayer {
 
   /**
    * Trigger scan and return all index entries.
+   *
+   * File mode today is single-user per installation with no shared/
+   * directory, so the includePublic flag is a no-op. Once Step 4.5 lands the
+   * per-user file layout and `shared/` sibling, this implementation will
+   * grow a union-enumeration of the current user's subtree plus `shared/`.
    */
-  async listSummaries(): Promise<ElementIndexEntry[]> {
+  async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     await this.scan();
     return this.index.getAll();
   }

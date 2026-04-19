@@ -823,14 +823,19 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
-   * List all available elements
-   * SECURITY: Uses PortfolioManager.listElements() which filters test elements
+   * List all available elements.
+   *
+   * SECURITY: Uses PortfolioManager.listElements() which filters test elements.
+   *
+   * @param options.includePublic - When true, the result includes public
+   *   elements owned by other users (DB mode). Default false — per-user-scoped.
+   *   File mode ignores this flag until Step 4.5 delivers the shared/ layout.
    */
-  async list(): Promise<T[]> {
+  async list(options?: { includePublic?: boolean }): Promise<T[]> {
     try {
       // Phase 4: Database mode — list directly from storage layer
       if (isWritableStorageLayer(this.storageLayer)) {
-        return this.listFromDatabase();
+        return this.listFromDatabase(options);
       }
 
       // File mode: ensure directory exists
@@ -888,7 +893,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Database-mode list: query summaries from storage layer, then load each element.
    * The storage layer returns element UUIDs as filePaths.
    */
-  private async listFromDatabase(): Promise<T[]> {
+  private async listFromDatabase(options?: { includePublic?: boolean }): Promise<T[]> {
     try {
       const diff = await this.storageLayer.scan();
       // Evict modified/removed entries from cache
@@ -897,7 +902,28 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         this.filePathToId.delete(id);
       }
 
-      const summaries = await this.storageLayer.listSummaries();
+      const summaries = await this.storageLayer.listSummaries(options);
+
+      // Resolve the current user once for the foreign-row classification below.
+      // In DB mode `getCurrentUserId` is always injected by the factory, so
+      // a missing resolver or thrown call indicates a misconfigured deployment
+      // — log it (once per list, not per row) so operators can diagnose the
+      // drift. An empty resolved userId disables the uncache loop below,
+      // which is the same practical effect as pre-4.4 Piece 2 (caching own
+      // and foreign alike), not a security issue since the caller can still
+      // only see rows RLS permits.
+      let currentUserId = '';
+      if (this.getCurrentUserId) {
+        try {
+          currentUserId = this.getCurrentUserId() ?? '';
+        } catch (err) {
+          logger.warn(
+            `[${this.constructor.name}] getCurrentUserId threw during listFromDatabase; foreign-row cache eviction skipped`,
+            { error: err instanceof Error ? err.message : String(err) },
+          );
+        }
+      }
+
       const elements = await Promise.all(
         summaries.map(async (summary) => {
           try {
@@ -909,6 +935,24 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
           }
         }),
       );
+
+      // Cache hygiene: `load()` populated this.elements for every summary,
+      // including public rows owned by other users when `includePublic` is
+      // set. Evict the foreign entries so the per-manager LRU doesn't retain
+      // cross-user content across subsequent flag-off calls. `list()` itself
+      // doesn't leak them (the flag-off query only returns own summaries,
+      // so foreign cached rows are unreachable) — but future cache-by-UUID
+      // paths would otherwise inherit stale cross-user data. ElementIndexEntry
+      // carries the owning `userId` from the DB layer; file-mode summaries
+      // leave it undefined, in which case this branch is a no-op.
+      if (options?.includePublic && currentUserId) {
+        for (const summary of summaries) {
+          if (summary.userId && summary.userId !== currentUserId) {
+            this.uncacheByPath(summary.filePath);
+          }
+        }
+      }
+
       return elements.filter((e): e is Awaited<T> => e !== null) as T[];
     } catch (error) {
       logger.error(`Failed to list ${this.elementType}s from database:`, error);
@@ -919,12 +963,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   /**
    * List lightweight metadata summaries without loading full elements.
    * Useful when only names/descriptions/tags are needed.
+   *
+   * @param options.includePublic - Forwarded to the storage layer. See
+   *   `IStorageLayer.listSummaries` for the backend-specific semantics.
    */
-  async listSummaries(): Promise<ElementIndexEntry[]> {
+  async listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     if (!isWritableStorageLayer(this.storageLayer)) {
       await this.fileOperations.createDirectory(this.elementDir);
     }
-    return this.storageLayer.listSummaries();
+    return this.storageLayer.listSummaries(options);
   }
 
   /**

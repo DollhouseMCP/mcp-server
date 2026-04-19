@@ -102,7 +102,9 @@ export class MemoryStorageLayer implements IStorageLayer {
     }
   }
 
-  async listSummaries(): Promise<ElementIndexEntry[]> {
+  async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
+    // File-mode memories are single-user per installation; includePublic is a
+    // no-op here until Step 4.5 delivers the per-user layout + shared/ dir.
     await this.scan();
     return this.deduplicateByName(this.index.getAll());
   }

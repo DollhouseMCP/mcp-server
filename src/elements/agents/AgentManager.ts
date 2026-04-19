@@ -818,8 +818,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Override list to apply active status based on activeAgentNames set
    */
-  override async list(): Promise<Agent[]> {
-    const agents = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
+    const agents = await super.list(options);
 
     // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {

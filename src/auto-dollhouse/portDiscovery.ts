@@ -13,8 +13,17 @@ import { mkdir, writeFile, unlink } from 'node:fs/promises';
 
 const MAX_PORT_ATTEMPTS = 10;
 
-/** Directory for runtime state files (port discovery, PID files) */
-const RUN_DIR = join(homedir(), '.dollhouse', 'run');
+/**
+ * Resolve the runtime-state directory (port files, PID files).
+ *
+ * Reads the DOLLHOUSE_RUN_DIR env var on each call so tests and deployments
+ * can override without restarting the process. Falls back to the legacy
+ * `~/.dollhouse/run/` location. When Step 4.5's `resolveDataDirectory()`
+ * lands, this becomes a thin wrapper over `resolveDataDirectory('run')`.
+ */
+function getRunDir(): string {
+  return process.env.DOLLHOUSE_RUN_DIR || join(homedir(), '.dollhouse', 'run');
+}
 
 /** Track port file path for cleanup */
 let portFilePath: string | null = null;
@@ -52,9 +61,10 @@ export async function findAvailablePort(startPort: number): Promise<number> {
  * Each process writes its own PID-keyed file for cleanup.
  */
 export async function writePortFile(port: number): Promise<string> {
-  await mkdir(RUN_DIR, { recursive: true });
-  const pidFile = join(RUN_DIR, `permission-server-${process.pid}.port`);
-  const latestFile = join(RUN_DIR, 'permission-server.port');
+  const runDir = getRunDir();
+  await mkdir(runDir, { recursive: true });
+  const pidFile = join(runDir, `permission-server-${process.pid}.port`);
+  const latestFile = join(runDir, 'permission-server.port');
   await writeFile(pidFile, String(port), 'utf-8');
   await writeFile(latestFile, String(port), 'utf-8');
   portFilePath = pidFile;
