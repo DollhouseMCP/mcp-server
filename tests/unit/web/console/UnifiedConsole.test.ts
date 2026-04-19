@@ -25,6 +25,7 @@ import {
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
   resolveFollowerAuthority,
+  startFollowerAuthorityMonitor,
 } from '../../../../src/web/console/UnifiedConsole.js';
 import type { LegacyLeaderInfo, ConsoleLeaderInfo } from '../../../../src/web/console/LeaderElection.js';
 
@@ -580,5 +581,141 @@ describe('resolveFollowerAuthority', () => {
         reason: 'same-version',
       }),
     });
+  });
+});
+
+describe('startFollowerAuthorityMonitor', () => {
+  function makeOptions() {
+    return {
+      sessionId: 'session-newest',
+      stableSessionId: 'stable-session-newest',
+      portfolioDir: '/sonar-fixture/unused-portfolio',
+      memorySink: {} as any,
+      registerLogSink: jest.fn(),
+      wireSSEBroadcasts: jest.fn(),
+    };
+  }
+
+  function makeFollowerElection(): { role: 'follower'; leaderInfo: ConsoleLeaderInfo } {
+    return {
+      role: 'follower',
+      leaderInfo: {
+        version: 1,
+        pid: 57117,
+        port: 41715,
+        sessionId: 'current-leader',
+        startedAt: '2026-04-16T16:29:44.000Z',
+        heartbeat: '2026-04-16T16:29:44.000Z',
+        serverVersion: '2.0.26',
+        consoleProtocolVersion: 1,
+      },
+    };
+  }
+
+  it('queues promotion when a periodic authority recheck prefers the local follower', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+    const setIntervalImpl = jest.fn<typeof setInterval>((callback) => {
+      intervalCallback = callback as () => void;
+      return timerHandle;
+    });
+    const clearIntervalImpl = jest.fn<typeof clearInterval>();
+
+    const stopMonitor = startFollowerAuthorityMonitor(
+      makeOptions(),
+      41715,
+      makeFollowerElection(),
+      promotionMgr,
+      forwardingSink,
+      sessionHeartbeat,
+      {
+        resolveFollowerAuthorityImpl: jest.fn().mockResolvedValue({
+          election: {
+            role: 'leader',
+            leaderInfo: {
+              version: 1,
+              pid: process.pid,
+              port: 41715,
+              sessionId: 'session-newest',
+              startedAt: '2026-04-19T16:00:00.000Z',
+              heartbeat: '2026-04-19T16:00:00.000Z',
+              serverVersion: PACKAGE_VERSION,
+              consoleProtocolVersion: 1,
+            },
+          },
+          discovery: null,
+          replacement: {
+            shouldEvict: true,
+            ownerPid: 57117,
+            preference: {
+              shouldReplace: true,
+              reason: 'newer-compatible-version',
+              candidateVersion: PACKAGE_VERSION,
+              existingVersion: '2.0.26',
+              candidateProtocolVersion: 1,
+              existingProtocolVersion: 1,
+            },
+          },
+          forcedClaim: false,
+        }),
+        setIntervalImpl,
+        clearIntervalImpl,
+      },
+    );
+
+    expect(setIntervalImpl).toHaveBeenCalledTimes(1);
+    expect(timerHandle.unref).toHaveBeenCalledTimes(1);
+    expect(intervalCallback).not.toBeNull();
+
+    intervalCallback?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(clearIntervalImpl).toHaveBeenCalledWith(timerHandle);
+    expect(promotionMgr.promote).toHaveBeenCalledWith(forwardingSink, sessionHeartbeat);
+
+    stopMonitor();
+  });
+
+  it('stays idle when the periodic authority recheck still prefers following', async () => {
+    const promotionMgr = {
+      promote: jest.fn().mockResolvedValue(undefined),
+    } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
+    const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
+    const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
+    let intervalCallback: (() => void) | null = null;
+
+    startFollowerAuthorityMonitor(
+      makeOptions(),
+      41715,
+      makeFollowerElection(),
+      promotionMgr,
+      forwardingSink,
+      sessionHeartbeat,
+      {
+        resolveFollowerAuthorityImpl: jest.fn().mockResolvedValue({
+          election: makeFollowerElection(),
+          discovery: null,
+          replacement: null,
+          forcedClaim: false,
+        }),
+        setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
+          intervalCallback = callback as () => void;
+          return timerHandle;
+        }),
+        clearIntervalImpl: jest.fn<typeof clearInterval>(),
+      },
+    );
+
+    intervalCallback?.();
+    await Promise.resolve();
+
+    expect(promotionMgr.promote).not.toHaveBeenCalled();
   });
 });
