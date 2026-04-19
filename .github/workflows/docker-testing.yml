@@ -647,6 +647,17 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install shellcheck
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Validate mixed-version harness shell scripts
+        shell: bash
+        run: |
+          shellcheck docker/mixed-version/*.sh
+
       - name: Test MINIMAL Docker Compose (hello world test)
         shell: bash
         run: |
@@ -698,6 +709,12 @@ jobs:
             exit 1
           fi
 
+      - name: Test mixed-version harness smoke flow
+        shell: bash
+        run: |
+          chmod +x docker/mixed-version/*.sh
+          ./docker/mixed-version/smoke-test.sh
+
       - name: Cleanup Docker Compose
         if: always()
         shell: bash
@@ -719,6 +736,7 @@ jobs:
           fi
 
           docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml rm -f || true
+          docker compose -f docker/docker-compose.mixed-version.yml down --remove-orphans || true
 
       - name: Docker Compose testing complete
         shell: bash

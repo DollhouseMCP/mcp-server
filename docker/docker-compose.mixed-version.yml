@@ -1,0 +1,108 @@
+name: dollhouse-mixed-version
+
+x-session-env: &session-env
+  NODE_ENV: production
+  DOLLHOUSE_WEB_CONSOLE: "true"
+  DOLLHOUSE_PERMISSION_SERVER: "true"
+  DOLLHOUSE_DISABLE_UPDATES: "true"
+  DOLLHOUSE_SECURITY_MODE: strict
+  DOLLHOUSE_WEB_CONSOLE_PORT: "41715"
+  HOME: /dollhouse-home
+  DOLLHOUSE_HOME_DIR: /dollhouse-home
+  DOLLHOUSE_PORTFOLIO_DIR: /dollhouse-home/.dollhouse/portfolio
+  DOLLHOUSE_CACHE_DIR: /dollhouse-home/.dollhouse/cache
+  HARNESS_LOG_DIR: /logs
+
+services:
+  netns:
+    image: alpine:3.20
+    container_name: dollhouse-mixed-version-netns
+    init: true
+    command: ["sh", "-lc", "mkdir -p /dollhouse-home/.dollhouse/run /dollhouse-home/.dollhouse/portfolio /dollhouse-home/.dollhouse/cache /dollhouse-home/.dollhouse/logs /logs && exec tail -f /dev/null"]
+    ports:
+      - "${MIXED_VERSION_HOST_PORT:-42715}:41715"
+    volumes:
+      - ../tmp/mixed-version/home:/dollhouse-home
+      - ../tmp/mixed-version/logs:/logs
+
+  current-local:
+    build:
+      context: ..
+      dockerfile: docker/mixed-version/Dockerfile.current
+    image: dollhouse-mixed-version-current:local
+    container_name: dollhouse-mixed-version-current
+    init: true
+    depends_on:
+      - netns
+    network_mode: "service:netns"
+    working_dir: /workspace
+    entrypoint: ["/bin/bash", "/harness/run-session.sh"]
+    environment:
+      <<: *session-env
+      SESSION_NAME: current-local
+      DOLLHOUSE_SESSION_ID: current-local
+      MCP_SERVER_TARGET: image-worktree
+    volumes:
+      - ../docker/mixed-version:/harness:ro
+      - ../tmp/mixed-version/home:/dollhouse-home
+      - ../tmp/mixed-version/logs:/logs
+
+  stable-226:
+    image: node:22-bookworm-slim
+    container_name: dollhouse-mixed-version-stable-226
+    init: true
+    depends_on:
+      - netns
+    network_mode: "service:netns"
+    entrypoint: ["/bin/bash", "/harness/run-session.sh"]
+    environment:
+      <<: *session-env
+      SESSION_NAME: stable-226
+      DOLLHOUSE_SESSION_ID: stable-226
+      MCP_SERVER_TARGET: "${MIXED_VERSION_STABLE_SPEC:-@dollhousemcp/mcp-server@2.0.26}"
+    volumes:
+      - npm-cache:/root/.npm
+      - ../docker/mixed-version:/harness:ro
+      - ../tmp/mixed-version/home:/dollhouse-home
+      - ../tmp/mixed-version/logs:/logs
+
+  legacy-225:
+    image: node:22-bookworm-slim
+    container_name: dollhouse-mixed-version-legacy-225
+    init: true
+    depends_on:
+      - netns
+    network_mode: "service:netns"
+    entrypoint: ["/bin/bash", "/harness/run-session.sh"]
+    environment:
+      <<: *session-env
+      SESSION_NAME: legacy-225
+      DOLLHOUSE_SESSION_ID: legacy-225
+      MCP_SERVER_TARGET: "${MIXED_VERSION_LEGACY_ONE_SPEC:-@dollhousemcp/mcp-server@2.0.25}"
+    volumes:
+      - npm-cache:/root/.npm
+      - ../docker/mixed-version:/harness:ro
+      - ../tmp/mixed-version/home:/dollhouse-home
+      - ../tmp/mixed-version/logs:/logs
+
+  legacy-219:
+    image: node:22-bookworm-slim
+    container_name: dollhouse-mixed-version-legacy-219
+    init: true
+    depends_on:
+      - netns
+    network_mode: "service:netns"
+    entrypoint: ["/bin/bash", "/harness/run-session.sh"]
+    environment:
+      <<: *session-env
+      SESSION_NAME: legacy-219
+      DOLLHOUSE_SESSION_ID: legacy-219
+      MCP_SERVER_TARGET: "${MIXED_VERSION_LEGACY_TWO_SPEC:-@dollhousemcp/mcp-server@2.0.19}"
+    volumes:
+      - npm-cache:/root/.npm
+      - ../docker/mixed-version:/harness:ro
+      - ../tmp/mixed-version/home:/dollhouse-home
+      - ../tmp/mixed-version/logs:/logs
+
+volumes:
+  npm-cache:
