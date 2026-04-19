@@ -15,6 +15,7 @@
 import type { LogManager } from './LogManager.js';
 import type { LogLevel, UnifiedLogEntry } from './types.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from '../portfolio/DefaultElementProvider.js';
 import { LRUCache } from '../cache/LRUCache.js';
 import { EventDeduplicator } from '../utils/EventDeduplicator.js';
@@ -43,7 +44,8 @@ function extractContentInjectionKey(value: unknown): string | null {
     return null;
   }
 
-  const normalized = value.replace(/^Detected pattern:\s*/i, '').trim();
+  const normalizedValue = UnicodeValidator.normalize(value).normalizedContent;
+  const normalized = normalizedValue.replace(/^Detected pattern:\s*/i, '').trim();
   return normalized === '' ? null : `CONTENT_INJECTION\0${normalized}`;
 }
 
