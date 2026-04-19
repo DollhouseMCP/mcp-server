@@ -71,7 +71,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private activeEnsembleNames: Set<string> = new Set();
-  private legacyElementFieldWarnings: Set<string> = new Set();
+  private readonly legacyElementFieldWarnings: Set<string> = new Set();
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -100,6 +100,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     field: 'name' | 'type',
     replacement: 'element_name' | 'element_type',
   ): void {
+    // Keep the fingerprint stable across parse/create paths for the same ensemble element.
     const fingerprint = `${ensembleName}:${index}:${field}`;
     if (this.legacyElementFieldWarnings.has(fingerprint)) {
       return;
@@ -647,6 +648,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (!metadata.name) {
       throw new Error('Ensemble must have a name');
     }
+    const ensembleName = metadata.name;
 
     let rawElements = metadata.elements || [];
 
@@ -660,7 +662,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'name' field
       if (elem.name && !elem.element_name) {
-        this.warnOnceForLegacyElementField(metadata.name, index, 'name', 'element_name');
+        this.warnOnceForLegacyElementField(ensembleName, index, 'name', 'element_name');
       }
 
       // Support both element_type (new standard) and type (legacy)
@@ -675,7 +677,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'type' field
       if (elem.type && !elem.element_type) {
-        this.warnOnceForLegacyElementField(metadata.name, index, 'type', 'element_type');
+        this.warnOnceForLegacyElementField(ensembleName, index, 'type', 'element_type');
       }
 
       return {
