@@ -17,6 +17,8 @@ validate_package_spec() {
     echo "Expected format: @dollhousemcp/mcp-server@2.0.26 or @dollhousemcp/mcp-server@2.0.27-rc.6" >&2
     exit 1
   fi
+
+  return 0
 }
 
 if [[ $# -lt 1 ]]; then

@@ -10,6 +10,7 @@ RUN_DIR="${STATE_ROOT}/home/.dollhouse/run"
 REPORT_DIR="${STATE_ROOT}/reports"
 TIMESTAMP="$(date '+%Y%m%d-%H%M%S')"
 REPORT_PATH="${REPORT_DIR}/mixed-version-report-${TIMESTAMP}.md"
+TEXT_CODE_FENCE='```text'
 
 mkdir -p "${REPORT_DIR}"
 
@@ -22,13 +23,13 @@ mkdir -p "${REPORT_DIR}"
   echo
   echo "## Compose Status"
   echo
-  echo '```text'
+  echo "${TEXT_CODE_FENCE}"
   docker compose -f "${COMPOSE_FILE}" ps
   echo '```'
   echo
   echo "## Live Observer Snapshot"
   echo
-  echo '```text'
+  echo "${TEXT_CODE_FENCE}"
   "${SCRIPT_DIR}/observe-state.sh" --once
   echo '```'
   echo
@@ -44,7 +45,7 @@ mkdir -p "${REPORT_DIR}"
   echo
   echo "## Port Files"
   echo
-  echo '```text'
+  echo "${TEXT_CODE_FENCE}"
   if [[ -d "${RUN_DIR}" ]]; then
     find "${RUN_DIR}" -maxdepth 1 \( -name 'permission-server*.port' -o -name 'console-leader*.lock' \) | sort
   else
@@ -54,7 +55,7 @@ mkdir -p "${REPORT_DIR}"
   echo
   echo "## Recent Container Logs"
   echo
-  echo '```text'
+  echo "${TEXT_CODE_FENCE}"
   docker compose -f "${COMPOSE_FILE}" logs --tail=80 current-local stable-226 legacy-225 legacy-219
   echo '```'
 } > "${REPORT_PATH}"

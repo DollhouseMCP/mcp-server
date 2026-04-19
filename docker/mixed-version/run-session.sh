@@ -72,6 +72,7 @@ run_local_worktree() {
   # Keep stdin open forever so the stdio MCP server remains connected long enough
   # to exercise deferred console setup, leader election, and follower forwarding.
   tail -f /dev/null | node dist/index.js
+  return 0
 }
 
 run_built_worktree() {
@@ -82,6 +83,7 @@ run_built_worktree() {
   echo "[mixed-version] image worktree version=${version}"
 
   tail -f /dev/null | node dist/index.js
+  return 0
 }
 
 run_published_package() {
@@ -90,6 +92,7 @@ run_published_package() {
   # npx installs the requested version into the shared npm cache volume after the
   # first run, which keeps subsequent reproductions much faster.
   tail -f /dev/null | npx -y "${MCP_SERVER_TARGET}"
+  return 0
 }
 
 case "${MCP_SERVER_TARGET}" in
