@@ -128,6 +128,64 @@ describe('Session registry (#1805)', () => {
       expect(kinds).toContain('mcp');
       expect(kinds).toContain('console');
     });
+
+    it('imports displaced follower sessions without importing the old leader or console', () => {
+      ingestResult.importSessions([
+        {
+          sessionId: 'old-leader',
+          displayName: 'Leader',
+          color: '#111111',
+          pid: 11,
+          startedAt: new Date().toISOString(),
+          lastHeartbeat: new Date().toISOString(),
+          status: 'active',
+          isLeader: true,
+          authenticated: true,
+          kind: 'mcp',
+          serverVersion: '2.0.26',
+          consoleProtocolVersion: 1,
+        },
+        {
+          sessionId: 'old-console',
+          displayName: 'Web Console',
+          color: '#222222',
+          pid: 12,
+          startedAt: new Date().toISOString(),
+          lastHeartbeat: new Date().toISOString(),
+          status: 'active',
+          isLeader: false,
+          authenticated: true,
+          kind: 'console',
+          serverVersion: '2.0.26',
+          consoleProtocolVersion: 1,
+        },
+        {
+          sessionId: 'older-follower',
+          displayName: 'Kermit',
+          color: '#00ff00',
+          pid: 13,
+          startedAt: new Date().toISOString(),
+          lastHeartbeat: new Date().toISOString(),
+          status: 'active',
+          isLeader: false,
+          authenticated: true,
+          kind: 'mcp',
+          serverVersion: '2.0.18',
+          consoleProtocolVersion: 1,
+        },
+      ]);
+
+      expect(ingestResult.getSessions()).toEqual([
+        expect.objectContaining({
+          sessionId: 'older-follower',
+          displayName: 'Kermit',
+          pid: 13,
+          kind: 'mcp',
+          isLeader: false,
+          serverVersion: '2.0.18',
+        }),
+      ]);
+    });
   });
 
   describe('GET /api/sessions endpoint', () => {
@@ -207,6 +265,42 @@ describe('Session registry (#1805)', () => {
         expect(sessions).toHaveLength(1);
         expect(sessions[0].isLeader).toBe(true);
         expect(sessions[0].status).toBe('active');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('keeps imported takeover sessions alive long enough to reconnect', () => {
+      jest.useFakeTimers();
+      try {
+        ingestResult = createIngestRoutes({
+          logBroadcast: () => {},
+        });
+
+        ingestResult.importSessions([
+          {
+            sessionId: 'imported-follower',
+            displayName: 'Bunraku',
+            color: '#123456',
+            pid: 77,
+            startedAt: new Date().toISOString(),
+            lastHeartbeat: new Date().toISOString(),
+            status: 'active',
+            isLeader: false,
+            authenticated: true,
+            kind: 'mcp',
+            serverVersion: '2.0.18',
+            consoleProtocolVersion: 1,
+          },
+        ]);
+
+        jest.advanceTimersByTime(20_000);
+        expect(ingestResult.getSessions()).toEqual([
+          expect.objectContaining({ sessionId: 'imported-follower', status: 'active' }),
+        ]);
+
+        jest.advanceTimersByTime(50_000);
+        expect(ingestResult.getSessions()).toHaveLength(0);
       } finally {
         jest.useRealTimers();
       }
