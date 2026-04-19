@@ -64,6 +64,33 @@ function makeLoggerStub() {
   } as unknown as typeof import('../../../../src/utils/logger.js').logger;
 }
 
+function makeAuthorityMonitorOptions() {
+  return {
+    sessionId: 'session-newest',
+    stableSessionId: 'stable-session-newest',
+    portfolioDir: '/sonar-fixture/unused-portfolio',
+    memorySink: {} as any,
+    registerLogSink: jest.fn(),
+    wireSSEBroadcasts: jest.fn(),
+  };
+}
+
+function makeAuthorityMonitorFollowerElection(): { role: 'follower'; leaderInfo: ConsoleLeaderInfo } {
+  return {
+    role: 'follower',
+    leaderInfo: {
+      version: 1,
+      pid: 57117,
+      port: 41715,
+      sessionId: 'current-leader',
+      startedAt: '2026-04-16T16:29:44.000Z',
+      heartbeat: '2026-04-16T16:29:44.000Z',
+      serverVersion: '2.0.26',
+      consoleProtocolVersion: 1,
+    },
+  };
+}
+
 describe('warnIfLegacyConsolePresent', () => {
   it('logs a WARN when the legacy console is running, with pid/port in the message', async () => {
     const logStub = makeLoggerStub();
@@ -585,33 +612,6 @@ describe('resolveFollowerAuthority', () => {
 });
 
 describe('startFollowerAuthorityMonitor', () => {
-  function makeOptions() {
-    return {
-      sessionId: 'session-newest',
-      stableSessionId: 'stable-session-newest',
-      portfolioDir: '/sonar-fixture/unused-portfolio',
-      memorySink: {} as any,
-      registerLogSink: jest.fn(),
-      wireSSEBroadcasts: jest.fn(),
-    };
-  }
-
-  function makeFollowerElection(): { role: 'follower'; leaderInfo: ConsoleLeaderInfo } {
-    return {
-      role: 'follower',
-      leaderInfo: {
-        version: 1,
-        pid: 57117,
-        port: 41715,
-        sessionId: 'current-leader',
-        startedAt: '2026-04-16T16:29:44.000Z',
-        heartbeat: '2026-04-16T16:29:44.000Z',
-        serverVersion: '2.0.26',
-        consoleProtocolVersion: 1,
-      },
-    };
-  }
-
   it('queues promotion when a periodic authority recheck prefers the local follower', async () => {
     const promotionMgr = {
       promote: jest.fn().mockResolvedValue(undefined),
@@ -627,9 +627,9 @@ describe('startFollowerAuthorityMonitor', () => {
     const clearIntervalImpl = jest.fn<typeof clearInterval>();
 
     const stopMonitor = startFollowerAuthorityMonitor(
-      makeOptions(),
+      makeAuthorityMonitorOptions(),
       41715,
-      makeFollowerElection(),
+      makeAuthorityMonitorFollowerElection(),
       promotionMgr,
       forwardingSink,
       sessionHeartbeat,
@@ -692,15 +692,15 @@ describe('startFollowerAuthorityMonitor', () => {
     let intervalCallback: (() => void) | null = null;
 
     startFollowerAuthorityMonitor(
-      makeOptions(),
+      makeAuthorityMonitorOptions(),
       41715,
-      makeFollowerElection(),
+      makeAuthorityMonitorFollowerElection(),
       promotionMgr,
       forwardingSink,
       sessionHeartbeat,
       {
         resolveFollowerAuthorityImpl: jest.fn().mockResolvedValue({
-          election: makeFollowerElection(),
+          election: makeAuthorityMonitorFollowerElection(),
           discovery: null,
           replacement: null,
           forcedClaim: false,

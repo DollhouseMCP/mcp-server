@@ -65,9 +65,19 @@ const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
 const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
 const FOLLOWER_AUTHORITY_RECHECK_MS = 15_000;
+const FOLLOWER_AUTHORITY_RECHECK_JITTER_MS = 5_000;
 
 function currentTimestamp(): string {
   return new Date().toISOString();
+}
+
+function computeFollowerAuthorityRecheckInterval(sessionId: string): number {
+  const normalizedSessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
+  let hash = 0;
+  for (let index = 0; index < normalizedSessionId.length; index += 1) {
+    hash = (hash * 31 + normalizedSessionId.charCodeAt(index)) >>> 0;
+  }
+  return FOLLOWER_AUTHORITY_RECHECK_MS + (hash % (FOLLOWER_AUTHORITY_RECHECK_JITTER_MS + 1));
 }
 
 /**
@@ -566,6 +576,54 @@ export function startFollowerAuthorityMonitor(
   let checkInProgress = false;
   let promotionQueued = false;
   let authorityTimer: ReturnType<typeof setInterval> | null = null;
+  const recheckIntervalMs = computeFollowerAuthorityRecheckInterval(options.sessionId);
+
+  const queueAuthorityPromotion = () => {
+    queueMicrotask(() => {
+      promotionMgr.promote(forwardingSink, sessionHeartbeat)
+        .catch((err) => logger.error('[UnifiedConsole] Authority-based promotion crashed', {
+          error: String(err),
+        }));
+    });
+  };
+
+  const handleResolvedAuthority = (resolved: FollowerAuthorityResolution) => {
+    currentElection = resolved.election;
+
+    if (resolved.election.role !== 'leader') {
+      return;
+    }
+
+    promotionQueued = true;
+    if (authorityTimer) {
+      clearIntervalImpl(authorityTimer);
+      authorityTimer = null;
+    }
+
+    logger.warn('[UnifiedConsole] Follower authority re-evaluation queued a leader takeover', {
+      sessionId: options.sessionId,
+      stableSessionId: options.stableSessionId,
+      port: consolePort,
+      recheckIntervalMs,
+      electedLeaderPid: election.leaderInfo.pid,
+      electedLeaderSessionId: election.leaderInfo.sessionId,
+      resolvedLeaderPid: resolved.election.leaderInfo.pid,
+      resolvedLeaderSessionId: resolved.election.leaderInfo.sessionId,
+      replacementReason: resolved.replacement?.preference?.reason ?? null,
+      forcedClaim: resolved.forcedClaim,
+    });
+
+    queueAuthorityPromotion();
+  };
+
+  const handleAuthorityFailure = (err: unknown) => {
+    logger.debug('[UnifiedConsole] Follower authority re-evaluation failed', {
+      error: err instanceof Error ? err.message : String(err),
+      sessionId: options.sessionId,
+      port: consolePort,
+      recheckIntervalMs,
+    });
+  };
 
   authorityTimer = setIntervalImpl(() => {
     if (checkInProgress || promotionQueued) {
@@ -574,49 +632,12 @@ export function startFollowerAuthorityMonitor(
 
     checkInProgress = true;
     resolveFollowerAuthorityImpl(options.sessionId, consolePort, currentElection)
-      .then((resolved) => {
-        currentElection = resolved.election;
-
-        if (resolved.election.role !== 'leader') {
-          return;
-        }
-
-        promotionQueued = true;
-        if (authorityTimer) {
-          clearIntervalImpl(authorityTimer);
-          authorityTimer = null;
-        }
-
-        logger.warn('[UnifiedConsole] Follower authority re-evaluation queued a leader takeover', {
-          sessionId: options.sessionId,
-          stableSessionId: options.stableSessionId,
-          port: consolePort,
-          electedLeaderPid: election.leaderInfo.pid,
-          electedLeaderSessionId: election.leaderInfo.sessionId,
-          resolvedLeaderPid: resolved.election.leaderInfo.pid,
-          resolvedLeaderSessionId: resolved.election.leaderInfo.sessionId,
-          replacementReason: resolved.replacement?.preference?.reason ?? null,
-          forcedClaim: resolved.forcedClaim,
-        });
-
-        queueMicrotask(() => {
-          promotionMgr.promote(forwardingSink, sessionHeartbeat)
-            .catch((err) => logger.error('[UnifiedConsole] Authority-based promotion crashed', {
-              error: String(err),
-            }));
-        });
-      })
-      .catch((err) => {
-        logger.debug('[UnifiedConsole] Follower authority re-evaluation failed', {
-          error: err instanceof Error ? err.message : String(err),
-          sessionId: options.sessionId,
-          port: consolePort,
-        });
-      })
+      .then(handleResolvedAuthority)
+      .catch(handleAuthorityFailure)
       .finally(() => {
         checkInProgress = false;
       });
-  }, FOLLOWER_AUTHORITY_RECHECK_MS);
+  }, recheckIntervalMs);
   authorityTimer.unref();
 
   return () => {
