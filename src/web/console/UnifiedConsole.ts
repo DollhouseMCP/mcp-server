@@ -64,9 +64,28 @@ const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
 const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
+const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
+  intervalMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_MS,
+  jitterMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_JITTER_MS,
+  failureThreshold: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_THRESHOLD,
+  failureCooldownMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_COOLDOWN_MS,
+} as const;
 
 function currentTimestamp(): string {
   return new Date().toISOString();
+}
+
+function computeFollowerAuthorityRecheckInterval(sessionId: string): number {
+  const normalizedSessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
+  let hash = 0;
+  for (let index = 0; index < normalizedSessionId.length; index += 1) {
+    const codePoint = normalizedSessionId.codePointAt(index) ?? 0;
+    hash = (hash * 31 + codePoint) >>> 0;
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return FOLLOWER_AUTHORITY_MONITOR_CONFIG.intervalMs + (hash % (FOLLOWER_AUTHORITY_MONITOR_CONFIG.jitterMs + 1));
 }
 
 /**
@@ -205,6 +224,13 @@ interface FollowerAuthorityDependencies {
   discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
   forceClaimLeadershipImpl?: typeof forceClaimLeadership;
   deleteLeaderLockImpl?: typeof deleteLeaderLock;
+}
+
+interface FollowerAuthorityMonitorDependencies extends FollowerAuthorityDependencies {
+  resolveFollowerAuthorityImpl?: typeof resolveFollowerAuthority;
+  setIntervalImpl?: typeof setInterval;
+  clearIntervalImpl?: typeof clearInterval;
+  nowImpl?: () => number;
 }
 
 interface DiscoveryDependencies {
@@ -540,6 +566,126 @@ export async function resolveFollowerAuthority(
     discovery,
     replacement,
     forcedClaim: false,
+  };
+}
+
+export function startFollowerAuthorityMonitor(
+  options: UnifiedConsoleOptions,
+  consolePort: number,
+  election: ElectionResult,
+  promotionMgr: PromotionManager,
+  forwardingSink: LeaderForwardingLogSink,
+  sessionHeartbeat: SessionHeartbeat,
+  deps: FollowerAuthorityMonitorDependencies = {},
+): () => void {
+  const resolveFollowerAuthorityImpl = deps.resolveFollowerAuthorityImpl ?? resolveFollowerAuthority;
+  const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
+  const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
+  const nowImpl = deps.nowImpl ?? Date.now;
+  let currentElection = election;
+  let checkInProgress = false;
+  let promotionQueued = false;
+  let consecutiveFailures = 0;
+  let circuitOpenUntilMs = 0;
+  let authorityTimer: ReturnType<typeof setInterval> | null = null;
+  const recheckIntervalMs = computeFollowerAuthorityRecheckInterval(options.sessionId);
+
+  const queueAuthorityPromotion = () => {
+    queueMicrotask(() => {
+      promotionMgr.promote(forwardingSink, sessionHeartbeat)
+        .catch((err) => logger.error('[UnifiedConsole] Authority-based promotion crashed', {
+          error: String(err),
+        }));
+    });
+  };
+
+  const handleResolvedAuthority = (resolved: FollowerAuthorityResolution) => {
+    currentElection = resolved.election;
+    consecutiveFailures = 0;
+    circuitOpenUntilMs = 0;
+
+    if (resolved.election.role !== 'leader') {
+      return;
+    }
+
+    promotionQueued = true;
+    if (authorityTimer) {
+      clearIntervalImpl(authorityTimer);
+      authorityTimer = null;
+    }
+
+    logger.warn('[UnifiedConsole] Follower authority re-evaluation queued a leader takeover', {
+      sessionId: options.sessionId,
+      stableSessionId: options.stableSessionId,
+      port: consolePort,
+      recheckIntervalMs,
+      electedLeaderPid: election.leaderInfo.pid,
+      electedLeaderSessionId: election.leaderInfo.sessionId,
+      resolvedLeaderPid: resolved.election.leaderInfo.pid,
+      resolvedLeaderSessionId: resolved.election.leaderInfo.sessionId,
+      replacementReason: resolved.replacement?.preference?.reason ?? null,
+      forcedClaim: resolved.forcedClaim,
+    });
+
+    queueAuthorityPromotion();
+  };
+
+  const handleAuthorityFailure = (err: unknown) => {
+    consecutiveFailures += 1;
+    if (consecutiveFailures >= FOLLOWER_AUTHORITY_MONITOR_CONFIG.failureThreshold) {
+      circuitOpenUntilMs = nowImpl() + FOLLOWER_AUTHORITY_MONITOR_CONFIG.failureCooldownMs;
+      logger.warn('[UnifiedConsole] Follower authority re-evaluation circuit opened after repeated failures', {
+        sessionId: options.sessionId,
+        port: consolePort,
+        recheckIntervalMs,
+        consecutiveFailures,
+        circuitOpenUntilMs: new Date(circuitOpenUntilMs).toISOString(),
+      });
+      consecutiveFailures = 0;
+    }
+
+    logger.debug('[UnifiedConsole] Follower authority re-evaluation failed', {
+      error: err instanceof Error ? err.message : String(err),
+      sessionId: options.sessionId,
+      port: consolePort,
+      recheckIntervalMs,
+      circuitOpenUntilMs: circuitOpenUntilMs ? new Date(circuitOpenUntilMs).toISOString() : null,
+    });
+  };
+
+  authorityTimer = setIntervalImpl(() => {
+    if (checkInProgress || promotionQueued) {
+      return;
+    }
+
+    if (circuitOpenUntilMs > nowImpl()) {
+      return;
+    }
+
+    if (circuitOpenUntilMs !== 0) {
+      logger.info('[UnifiedConsole] Follower authority re-evaluation circuit closed; resuming checks', {
+        sessionId: options.sessionId,
+        port: consolePort,
+        recheckIntervalMs,
+      });
+      circuitOpenUntilMs = 0;
+    }
+
+    checkInProgress = true;
+    resolveFollowerAuthorityImpl(options.sessionId, consolePort, currentElection)
+      .then(handleResolvedAuthority)
+      .catch(handleAuthorityFailure)
+      .finally(() => {
+        checkInProgress = false;
+      });
+  }, recheckIntervalMs);
+  authorityTimer.unref();
+
+  return () => {
+    if (authorityTimer) {
+      clearIntervalImpl(authorityTimer);
+      authorityTimer = null;
+    }
   };
 }
 
@@ -893,6 +1039,15 @@ async function startAsFollower(
   sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
   await sessionHeartbeat.start();
 
+  const stopAuthorityMonitor = startFollowerAuthorityMonitor(
+    options,
+    consolePort,
+    election,
+    promotionMgr,
+    forwardingSink,
+    sessionHeartbeat,
+  );
+
   logger.info('[UnifiedConsole] Follower started', {
     sessionId: options.sessionId, pid: process.pid, role: 'follower',
     leaderSession: election.leaderInfo.sessionId, leaderPid: election.leaderInfo.pid,
@@ -903,6 +1058,7 @@ async function startAsFollower(
     role: 'follower',
     election,
     cleanup: async () => {
+      stopAuthorityMonitor();
       await sessionHeartbeat.stop();
       await forwardingSink.close();
     },
