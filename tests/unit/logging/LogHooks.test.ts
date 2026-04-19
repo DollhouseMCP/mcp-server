@@ -289,6 +289,97 @@ describe('LogHooks', () => {
 
       expect(mockLogManager.logCalls[0].level).toBe('warn');
     });
+
+    it('should suppress duplicate content-injection rows across monitor, alert, and telemetry channels', () => {
+      const mcpListener = jest.fn();
+      const telemetryListener = jest.fn();
+      let securityMonitorListener: any;
+      const securitySpy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        securityMonitorListener = fn;
+        return jest.fn() as any;
+      });
+      const mcpLogger = {
+        addLogListener: jest.fn((fn) => {
+          mcpListener.mockImplementation(fn);
+          return jest.fn();
+        }),
+      };
+      const secTelemetry = {
+        addLogListener: jest.fn((fn) => {
+          telemetryListener.mockImplementation(fn);
+          return jest.fn();
+        }),
+      };
+      const container = makeMockContainer({ MCPLogger: mcpLogger, SecurityTelemetry: secTelemetry });
+
+      wireLogHooks(mockLogManager, container);
+
+      securityMonitorListener({
+        timestamp: '2026-02-10T12:00:00.000Z',
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'CRITICAL',
+        source: 'content_validation',
+        details: 'Detected pattern: HTML script injection',
+      });
+
+      mcpListener({
+        timestamp: new Date('2026-02-10T12:00:00.100Z'),
+        level: 'error',
+        message: '[CRITICAL SECURITY ALERT]',
+        data: {
+          type: 'CONTENT_INJECTION_ATTEMPT',
+          details: 'Detected pattern: HTML script injection',
+        },
+      });
+
+      telemetryListener({
+        timestamp: '2026-02-10T12:00:00.200Z',
+        attackType: 'CONTENT_INJECTION',
+        pattern: 'HTML script injection',
+        severity: 'CRITICAL',
+        source: 'content_validation',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).toMatchObject({
+        category: 'security',
+        source: 'SecurityMonitor',
+        message: '[CONTENT_INJECTION_ATTEMPT] Detected pattern: HTML script injection',
+      });
+      securitySpy.mockRestore();
+    });
+
+    it('should keep distinct content-injection patterns visible', () => {
+      let securityMonitorListener: any;
+      const securitySpy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        securityMonitorListener = fn;
+        return jest.fn() as any;
+      });
+      const container = makeMockContainer({});
+
+      wireLogHooks(mockLogManager, container);
+
+      securityMonitorListener({
+        timestamp: '2026-02-10T12:00:00.000Z',
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'CRITICAL',
+        source: 'content_validation',
+        details: 'Detected pattern: HTML script injection',
+      });
+
+      securityMonitorListener({
+        timestamp: '2026-02-10T12:00:01.000Z',
+        type: 'CONTENT_INJECTION_ATTEMPT',
+        severity: 'CRITICAL',
+        source: 'content_validation',
+        details: 'Detected pattern: Instruction override',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(2);
+      expect(mockLogManager.logCalls[0].message).toContain('HTML script injection');
+      expect(mockLogManager.logCalls[1].message).toContain('Instruction override');
+      securitySpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------

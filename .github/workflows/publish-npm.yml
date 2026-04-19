@@ -109,18 +109,32 @@ jobs:
           # Ensure provenance is enabled for OIDC detection
           NPM_CONFIG_PROVENANCE: 'true'
         run: |
+          VERSION="${{ steps.package_version.outputs.version }}"
+          PUBLISH_TAG_ARGS=()
+
+          if [[ "$VERSION" == *-* ]]; then
+            PUBLISH_TAG_ARGS+=(--tag rc)
+          fi
+
           # Publish with provenance via OIDC Trusted Publishing.
           # Requires: npm 11+ (Node 24), id-token: write, NODE_AUTH_TOKEN cleared,
           # and a Trusted Publisher configured at npmjs.com/package/@dollhousemcp/mcp-server/access
-          npm publish --provenance --access public --loglevel verbose
+          npm publish --provenance --access public --loglevel verbose "${PUBLISH_TAG_ARGS[@]}"
 
       - name: Dry run (skip publish)
         if: github.event.inputs.dry_run == 'true'
         shell: bash
         run: |
+          VERSION="${{ steps.package_version.outputs.version }}"
+          PUBLISH_TAG_ARGS=()
+
+          if [[ "$VERSION" == *-* ]]; then
+            PUBLISH_TAG_ARGS+=(--tag rc)
+          fi
+
           echo "🧪 DRY RUN MODE - Skipping publication"
-          echo "Package would be published: @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }}"
-          npm publish --dry-run
+          echo "Package would be published: @dollhousemcp/mcp-server@$VERSION ${PUBLISH_TAG_ARGS[*]}"
+          npm publish --dry-run "${PUBLISH_TAG_ARGS[@]}"
 
       - name: Notify success
         if: success() && github.event.inputs.dry_run != 'true'

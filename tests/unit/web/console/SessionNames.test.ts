@@ -162,6 +162,13 @@ describe('SessionNamePool', () => {
     expect(pool.getName('session-rel')).toBeUndefined();
   });
 
+  it('adopt() preserves an imported puppet name across leader handoff', () => {
+    const pool = new SessionNamePool();
+    const adopted = pool.adopt('session-imported', 'Kermit');
+    expect(adopted).toBe('Kermit');
+    expect(pool.getName('session-imported')).toBe('Kermit');
+  });
+
   it('falls back to session-ID segment when pool is exhausted', () => {
     const pool = new SessionNamePool();
     // Assign all names in the puppet pool
