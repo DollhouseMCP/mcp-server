@@ -65,6 +65,8 @@ const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
 const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
+const LEADER_LEASE_RECONCILE_INTERVAL_MS = 2_000;
+const LEADER_LEASE_RECONCILE_MAX_INTERVAL_MS = 30_000;
 const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
   intervalMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_MS,
   jitterMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_JITTER_MS,
@@ -230,9 +232,18 @@ interface FollowerAuthorityDependencies {
 
 interface FollowerAuthorityMonitorDependencies extends FollowerAuthorityDependencies {
   resolveFollowerAuthorityImpl?: typeof resolveFollowerAuthority;
-  setIntervalImpl?: typeof setInterval;
-  clearIntervalImpl?: typeof clearInterval;
+  setTimeoutImpl?: typeof setTimeout;
+  clearTimeoutImpl?: typeof clearTimeout;
   nowImpl?: () => number;
+}
+
+interface LeaderLeaseReconciliationDependencies {
+  readLeaderLockImpl?: typeof readLeaderLock;
+  findPidOnPortImpl?: typeof findPidOnPort;
+  claimLeadershipImpl?: typeof claimLeadership;
+  killStaleProcessDetailedImpl?: typeof killStaleProcessDetailed;
+  setTimeoutImpl?: typeof setTimeout;
+  clearTimeoutImpl?: typeof clearTimeout;
 }
 
 interface DiscoveryDependencies {
@@ -606,15 +617,15 @@ export function startFollowerAuthorityMonitor(
   deps: FollowerAuthorityMonitorDependencies = {},
 ): () => void {
   const resolveFollowerAuthorityImpl = deps.resolveFollowerAuthorityImpl ?? resolveFollowerAuthority;
-  const setIntervalImpl = deps.setIntervalImpl ?? setInterval;
-  const clearIntervalImpl = deps.clearIntervalImpl ?? clearInterval;
+  const setTimeoutImpl = deps.setTimeoutImpl ?? setTimeout;
+  const clearTimeoutImpl = deps.clearTimeoutImpl ?? clearTimeout;
   const nowImpl = deps.nowImpl ?? Date.now;
   let currentElection = election;
-  let checkInProgress = false;
   let promotionQueued = false;
   let consecutiveFailures = 0;
   let circuitOpenUntilMs = 0;
-  let authorityTimer: ReturnType<typeof setInterval> | null = null;
+  let authorityTimer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
   const recheckIntervalMs = computeFollowerAuthorityRecheckInterval(options.sessionId);
 
   const queueAuthorityPromotion = () => {
@@ -637,7 +648,7 @@ export function startFollowerAuthorityMonitor(
 
     promotionQueued = true;
     if (authorityTimer) {
-      clearIntervalImpl(authorityTimer);
+      clearTimeoutImpl(authorityTimer);
       authorityTimer = null;
     }
 
@@ -680,12 +691,21 @@ export function startFollowerAuthorityMonitor(
     });
   };
 
-  authorityTimer = setIntervalImpl(() => {
-    if (checkInProgress || promotionQueued) {
+  const scheduleNextCheck = (delayMs: number) => {
+    if (stopped || promotionQueued) {
       return;
     }
+    authorityTimer = setTimeoutImpl(runAuthorityCheck, delayMs);
+    authorityTimer.unref();
+  };
 
+  const runAuthorityCheck = () => {
+    authorityTimer = null;
+    if (stopped || promotionQueued) {
+      return;
+    }
     if (circuitOpenUntilMs > nowImpl()) {
+      scheduleNextCheck(recheckIntervalMs);
       return;
     }
 
@@ -698,20 +718,128 @@ export function startFollowerAuthorityMonitor(
       circuitOpenUntilMs = 0;
     }
 
-    checkInProgress = true;
     resolveFollowerAuthorityImpl(options.sessionId, consolePort, currentElection)
       .then(handleResolvedAuthority)
       .catch(handleAuthorityFailure)
       .finally(() => {
-        checkInProgress = false;
+        scheduleNextCheck(recheckIntervalMs);
       });
-  }, recheckIntervalMs);
-  authorityTimer.unref();
+  };
+
+  scheduleNextCheck(recheckIntervalMs);
 
   return () => {
     if (authorityTimer) {
-      clearIntervalImpl(authorityTimer);
+      clearTimeoutImpl(authorityTimer);
       authorityTimer = null;
+    }
+    stopped = true;
+  };
+}
+
+export async function reconcileLeaderLease(
+  sessionId: string,
+  consolePort: number,
+  deps: LeaderLeaseReconciliationDependencies = {},
+): Promise<'not-port-owner' | 'already-owned' | 'reconciled'> {
+  const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
+  const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
+  const claimLeadershipImpl = deps.claimLeadershipImpl ?? claimLeadership;
+  const killStaleProcessDetailedImpl = deps.killStaleProcessDetailedImpl ?? killStaleProcessDetailed;
+
+  const portOwnerPid = await findPidOnPortImpl(consolePort);
+  if (portOwnerPid !== process.pid) {
+    return 'not-port-owner';
+  }
+
+  const currentLock = await readLeaderLockImpl();
+  if (!currentLock || currentLock.pid === process.pid) {
+    return 'already-owned';
+  }
+
+  const expectedLeader = createLeaderInfo(sessionId, consolePort);
+  const replacement = evaluatePortOwnerReplacement(expectedLeader, {
+    ownerPid: currentLock.pid,
+    source: 'lock',
+    leaderInfo: currentLock,
+  });
+
+  logger.warn('[UnifiedConsole] Port-owning leader detected a displaced lock writer; reconciling leader lease', {
+    sessionId,
+    port: consolePort,
+    lockOwnerPid: currentLock.pid,
+    lockOwnerSessionId: currentLock.sessionId,
+    lockOwnerVersion: currentLock.serverVersion ?? LEGACY_SERVER_VERSION,
+    actualPortOwnerPid: portOwnerPid,
+    replacementReason: replacement.preference?.reason ?? null,
+  });
+
+  const killOutcome = await killStaleProcessDetailedImpl(currentLock.pid, consolePort, {
+    allowActiveHostParent: true,
+  });
+  const lockClaimed = await claimLeadershipImpl(expectedLeader);
+
+  logger.info('[UnifiedConsole] Leader lease reconciliation completed', {
+    sessionId,
+    port: consolePort,
+    displacedPid: currentLock.pid,
+    displacedSessionId: currentLock.sessionId,
+    displacedVersion: currentLock.serverVersion ?? LEGACY_SERVER_VERSION,
+    killAttempted: true,
+    killResult: killOutcome.reason,
+    killed: killOutcome.killed,
+    lockClaimed,
+  });
+  return 'reconciled';
+}
+
+export function startLeaderLeaseMonitor(
+  sessionId: string,
+  consolePort: number,
+  deps: LeaderLeaseReconciliationDependencies = {},
+): () => void {
+  const setTimeoutImpl = deps.setTimeoutImpl ?? setTimeout;
+  const clearTimeoutImpl = deps.clearTimeoutImpl ?? clearTimeout;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let stopped = false;
+  let delayMs = LEADER_LEASE_RECONCILE_INTERVAL_MS;
+
+  const scheduleNext = () => {
+    if (stopped) {
+      return;
+    }
+    timer = setTimeoutImpl(runCheck, delayMs);
+    timer.unref();
+  };
+
+  const runCheck = () => {
+    timer = null;
+    if (stopped) {
+      return;
+    }
+    reconcileLeaderLease(sessionId, consolePort, deps)
+      .then((result) => {
+        delayMs = result === 'reconciled'
+          ? LEADER_LEASE_RECONCILE_INTERVAL_MS
+          : Math.min(delayMs * 2, LEADER_LEASE_RECONCILE_MAX_INTERVAL_MS);
+      })
+      .catch((err) => logger.debug('[UnifiedConsole] Leader lease reconciliation failed', {
+        error: err instanceof Error ? err.message : String(err),
+        sessionId,
+        port: consolePort,
+      }))
+      .finally(() => {
+        scheduleNext();
+      });
+  };
+
+  scheduleNext();
+
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeoutImpl(timer);
+      timer = null;
     }
   };
 }
@@ -1019,6 +1147,7 @@ async function startAsLeader(
 
   // Start heartbeat and register cleanup
   const stopHeartbeat = startHeartbeat(election.leaderInfo);
+  const stopLeaseMonitor = startLeaderLeaseMonitor(options.sessionId, consolePort);
   registerLeaderCleanup();
 
   logger.info('[UnifiedConsole] Leader started', {
@@ -1032,6 +1161,7 @@ async function startAsLeader(
     port: consolePort,
     cleanup: async () => {
       stopHeartbeat();
+      stopLeaseMonitor();
     },
   };
 }
