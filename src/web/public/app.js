@@ -118,6 +118,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       .replaceAll("'", '&#39;');
   }
 
+  function normalizeInlineMetaText(value) {
+    return typeof value === 'string' ? value.trim() : '';
+  }
+
   function renderHeaderStatsMarkup(primaryMarkup) {
     const sessionTitle = DOLLHOUSE_RUNTIME_SESSION_ID && DOLLHOUSE_RUNTIME_SESSION_ID !== DOLLHOUSE_SESSION_ID
       ? `Stable session ${DOLLHOUSE_SESSION_ID}; runtime ${DOLLHOUSE_RUNTIME_SESSION_ID}`
@@ -549,6 +553,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       const idx = pageStart + i; // absolute index into filteredElements
       const unavailable = el._unavailable;
       const compSummary = renderComponentSummary(el);
+      const author = normalizeInlineMetaText(el.author);
       return `
       <article
         class="element-card"
@@ -574,7 +579,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         ${compSummary}
         <footer class="card-footer">
           <div class="card-meta">
-            ${el.author   ? `<span class="meta-author">${escapeHtml(el.author)}</span>` : ''}
+            ${author      ? `<span class="meta-author">by ${escapeHtml(author)}</span>` : ''}
             ${el.version  ? `<span class="meta-version">v${escapeHtml(el.version)}</span>` : ''}
             ${el.category ? `<span class="meta-category">${escapeHtml(el.category)}</span>` : ''}
             ${el.created  ? `<span class="meta-date">${formatDate(el.created)}</span>` : ''}
@@ -773,9 +778,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   }
 
   function setupModalMeta(element, modal) {
+    const author = normalizeInlineMetaText(element.author);
     modal.querySelector('.modal-title').textContent   = element.name;
     modal.querySelector('.modal-type').textContent    = capitalize(element.type);
-    modal.querySelector('.modal-author').textContent  = element.author ? `by ${element.author}` : '';
+    modal.querySelector('.modal-author').textContent  = author ? `by ${author}` : '';
     modal.querySelector('.modal-version').textContent = element.version ? `v${element.version}` : '';
     const modalDate   = modal.querySelector('.modal-date');
     const modalSource = modal.querySelector('.modal-source');
