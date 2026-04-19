@@ -310,6 +310,8 @@ After merging to main and publishing, merge main back to develop so future work 
 
 ## npm Publishing
 
+> MCP Registry publishing is documented separately in [MCP Registry Publishing](mcp-registry-publishing.md). Use that guide for `server.json`, registry workflow, and dry-run details.
+
 ### Understanding npm Tags vs Versions
 
 | Concept | What It Is | Behavior |

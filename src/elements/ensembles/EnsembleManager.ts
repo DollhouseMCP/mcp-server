@@ -65,12 +65,21 @@ export const resolveEnsembleElementTypes = resolveElementTypes;
  * - Ensemble creation and validation
  * - Element reference management
  * - Import/export in multiple formats
+ *
+ * MEMORY BEHAVIOR:
+ * - Tracks warned legacy element-field fingerprints in memory so repeated parses
+ *   of the same ensemble/element/field combination do not keep spamming logs.
+ * - Fingerprints are scoped to the manager lifetime and grow with the number of
+ *   unique legacy field sightings.
+ * - Long-running servers can clear this history explicitly with
+ *   clearLegacyElementWarningHistory(), and dispose() also clears it.
  */
 export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private activeEnsembleNames: Set<string> = new Set();
+  private readonly legacyElementFieldWarnings: Set<string> = new Set();
 
   constructor(
     portfolioManager: PortfolioManager,
@@ -91,6 +100,39 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
   protected override getElementLabel(): string {
     return 'ensemble';
+  }
+
+  /**
+   * Clear warn-once state for legacy ensemble element fields.
+   *
+   * Useful for long-lived processes that want to cap in-memory warning history
+   * or intentionally re-emit migration guidance after a maintenance boundary.
+   */
+  public clearLegacyElementWarningHistory(): void {
+    this.legacyElementFieldWarnings.clear();
+  }
+
+  override dispose(): void {
+    super.dispose();
+    this.clearLegacyElementWarningHistory();
+  }
+
+  private warnOnceForLegacyElementField(
+    ensembleName: string,
+    index: number,
+    field: 'name' | 'type',
+    replacement: 'element_name' | 'element_type',
+  ): void {
+    // Keep the fingerprint stable across parse/create paths for the same ensemble element.
+    const fingerprint = `${ensembleName}:${index}:${field}`;
+    if (this.legacyElementFieldWarnings.has(fingerprint)) {
+      return;
+    }
+
+    this.legacyElementFieldWarnings.add(fingerprint);
+    logger.warn(
+      `Ensemble '${ensembleName}' element at index ${index} uses deprecated '${field}' field. Use '${replacement}' instead.`,
+    );
   }
 
   /**
@@ -217,7 +259,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'name' field
       if (elem.name && !elem.element_name) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'name' field. Use 'element_name' instead.`);
+        this.warnOnceForLegacyElementField(name, index, 'name', 'element_name');
       }
       const elementNameResult = this.validationService.validateAndSanitizeInput(
         String(rawElementName),
@@ -233,7 +275,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       const rawElementType = elem.element_type || elem.type || 'skill';
       // Log deprecation warning if using legacy 'type' field
       if (elem.type && !elem.element_type) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'type' field. Use 'element_type' instead.`);
+        this.warnOnceForLegacyElementField(name, index, 'type', 'element_type');
       }
       const elementTypeResult = this.validationService.validateAndSanitizeInput(
         String(rawElementType),
@@ -629,6 +671,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (!metadata.name) {
       throw new Error('Ensemble must have a name');
     }
+    const ensembleName = metadata.name;
 
     let rawElements = metadata.elements || [];
 
@@ -642,7 +685,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'name' field
       if (elem.name && !elem.element_name) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'name' field. Use 'element_name' instead.`);
+        this.warnOnceForLegacyElementField(ensembleName, index, 'name', 'element_name');
       }
 
       // Support both element_type (new standard) and type (legacy)
@@ -657,7 +700,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       }
       // Log deprecation warning if using legacy 'type' field
       if (elem.type && !elem.element_type) {
-        logger.warn(`Ensemble element at index ${index} uses deprecated 'type' field. Use 'element_type' instead.`);
+        this.warnOnceForLegacyElementField(ensembleName, index, 'type', 'element_type');
       }
 
       return {
