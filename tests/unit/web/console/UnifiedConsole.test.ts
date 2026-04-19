@@ -26,7 +26,9 @@ import {
   fetchLeaderSessionsSnapshot,
   recoverLeaderBindFailure,
   evaluatePortOwnerReplacement,
+  shouldEvictDiscoveredOwner,
   resolveFollowerAuthority,
+  resolveLeaderPreflightAuthority,
   startFollowerAuthorityMonitor,
   reconcileLeaderLease,
   startLeaderLeaseMonitor,
@@ -477,6 +479,181 @@ describe('evaluatePortOwnerReplacement', () => {
     expect(decision.shouldEvict).toBe(false);
     expect(decision.preference).toMatchObject({
       reason: 'same-version',
+    });
+  });
+});
+
+describe('shouldEvictDiscoveredOwner', () => {
+  it('does not evict a synthetic port owner when the owner identity is unknown', () => {
+    const decision = {
+      shouldEvict: true,
+      ownerPid: 57117,
+      preference: {
+        shouldReplace: true,
+        reason: 'newer-compatible-version' as const,
+        candidateVersion: PACKAGE_VERSION,
+        existingVersion: LEGACY_SERVER_VERSION,
+        candidateProtocolVersion: 1,
+        existingProtocolVersion: 0,
+      },
+    };
+
+    expect(shouldEvictDiscoveredOwner({
+      ownerPid: 57117,
+      source: 'synthetic',
+      leaderInfo: {
+        version: 1,
+        pid: 57117,
+        port: 41715,
+        sessionId: 'port-owner-57117',
+        startedAt: '2026-04-19T18:00:00.000Z',
+        heartbeat: '2026-04-19T18:00:00.000Z',
+        serverVersion: LEGACY_SERVER_VERSION,
+        consoleProtocolVersion: 1,
+      },
+    }, decision)).toBe(false);
+  });
+
+  it('evicts an older API-confirmed port owner when replacement is preferred', () => {
+    const decision = {
+      shouldEvict: true,
+      ownerPid: 57117,
+      preference: {
+        shouldReplace: true,
+        reason: 'newer-compatible-version' as const,
+        candidateVersion: PACKAGE_VERSION,
+        existingVersion: LEGACY_SERVER_VERSION,
+        candidateProtocolVersion: 1,
+        existingProtocolVersion: 0,
+      },
+    };
+
+    expect(shouldEvictDiscoveredOwner({
+      ownerPid: 57117,
+      source: 'api',
+      leaderInfo: {
+        version: 1,
+        pid: 57117,
+        port: 41715,
+        sessionId: 'legacy-console',
+        startedAt: '2026-04-19T18:00:00.000Z',
+        heartbeat: '2026-04-19T18:00:00.000Z',
+        serverVersion: LEGACY_SERVER_VERSION,
+        consoleProtocolVersion: 1,
+      },
+    }, decision)).toBe(true);
+  });
+});
+
+describe('resolveLeaderPreflightAuthority', () => {
+  it('demotes a provisional leader when the actual port owner is already healthy on the same version', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const provisionalElection = {
+      role: 'leader' as const,
+      leaderInfo: {
+        version: 1,
+        pid: 99991,
+        port: 41715,
+        sessionId: 'session-newest',
+        startedAt: '2026-04-19T18:00:00.000Z',
+        heartbeat: '2026-04-19T18:00:00.000Z',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: 1,
+      },
+    };
+
+    const result = await resolveLeaderPreflightAuthority(
+      'session-newest',
+      41715,
+      provisionalElection,
+      'token-123',
+      {
+        discoverLeaderServingPortImpl: async () => ({
+          ownerPid: 60525,
+          source: 'api',
+          leaderInfo: {
+            version: 1,
+            pid: 60525,
+            port: 41715,
+            sessionId: 'current-leader',
+            startedAt: '2026-04-19T17:55:00.000Z',
+            heartbeat: '2026-04-19T18:00:00.000Z',
+            serverVersion: PACKAGE_VERSION,
+            consoleProtocolVersion: 1,
+          },
+        }),
+        readLeaderLockImpl: async () => provisionalElection.leaderInfo,
+        deleteLeaderLockImpl,
+      },
+    );
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.demotedToFollower).toBe(true);
+    expect(result.election).toEqual({
+      role: 'follower',
+      leaderInfo: {
+        version: 1,
+        pid: 60525,
+        port: 41715,
+        sessionId: 'current-leader',
+        startedAt: '2026-04-19T17:55:00.000Z',
+        heartbeat: '2026-04-19T18:00:00.000Z',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: 1,
+      },
+    });
+  });
+
+  it('demotes a provisional leader instead of evicting a synthetic unknown owner', async () => {
+    const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>().mockResolvedValue();
+    const provisionalElection = {
+      role: 'leader' as const,
+      leaderInfo: {
+        version: 1,
+        pid: 99991,
+        port: 41715,
+        sessionId: 'session-newest',
+        startedAt: '2026-04-19T18:00:00.000Z',
+        heartbeat: '2026-04-19T18:00:00.000Z',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: 1,
+      },
+    };
+
+    const result = await resolveLeaderPreflightAuthority(
+      'session-newest',
+      41715,
+      provisionalElection,
+      'token-123',
+      {
+        discoverLeaderServingPortImpl: async () => ({
+          ownerPid: 60525,
+          source: 'synthetic',
+          leaderInfo: {
+            version: 1,
+            pid: 60525,
+            port: 41715,
+            sessionId: 'port-owner-60525',
+            startedAt: '2026-04-19T17:55:00.000Z',
+            heartbeat: '2026-04-19T18:00:00.000Z',
+            serverVersion: LEGACY_SERVER_VERSION,
+            consoleProtocolVersion: 1,
+          },
+        }),
+        readLeaderLockImpl: async () => provisionalElection.leaderInfo,
+        deleteLeaderLockImpl,
+      },
+    );
+
+    expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
+    expect(result.demotedToFollower).toBe(true);
+    expect(result.election.role).toBe('follower');
+    expect(result.election.leaderInfo.sessionId).toBe('port-owner-60525');
+    expect(result.replacement).toMatchObject({
+      shouldEvict: true,
+      preference: expect.objectContaining({
+        reason: 'newer-compatible-version',
+      }),
     });
   });
 });
