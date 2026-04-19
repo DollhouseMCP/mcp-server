@@ -766,12 +766,6 @@ p, li { max-width: 69ch; }
   color: var(--ink-500);
 }
 
-/* "by" prefix handled by CSS so JS can pass raw author value */
-.meta-author::before {
-  content: "by\00a0";
-  opacity: 0.65;
-}
-
 .meta-version {
   border: 1px solid color-mix(in srgb, var(--line) 82%, var(--paper-strong));
   border-radius: 0.24rem;
