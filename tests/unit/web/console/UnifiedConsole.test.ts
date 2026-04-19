@@ -666,13 +666,13 @@ describe('startFollowerAuthorityMonitor', () => {
     } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
     const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
     const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
-    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
-    let intervalCallback: (() => void) | null = null;
-    const setIntervalImpl = jest.fn<typeof setInterval>((callback) => {
-      intervalCallback = callback as () => void;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setTimeout>;
+    let timeoutCallback: (() => void) | null = null;
+    const setTimeoutImpl = jest.fn<typeof setTimeout>((callback) => {
+      timeoutCallback = callback as () => void;
       return timerHandle;
     });
-    const clearIntervalImpl = jest.fn<typeof clearInterval>();
+    const clearTimeoutImpl = jest.fn<typeof clearTimeout>();
 
     const stopMonitor = startFollowerAuthorityMonitor(
       makeAuthorityMonitorOptions(),
@@ -711,23 +711,23 @@ describe('startFollowerAuthorityMonitor', () => {
           },
           forcedClaim: false,
         }),
-        setIntervalImpl,
-        clearIntervalImpl,
+        setTimeoutImpl,
+        clearTimeoutImpl,
       },
     );
 
-    expect(setIntervalImpl).toHaveBeenCalledTimes(1);
+    expect(setTimeoutImpl).toHaveBeenCalledTimes(1);
     expect(timerHandle.unref).toHaveBeenCalledTimes(1);
-    expect(intervalCallback).not.toBeNull();
+    expect(timeoutCallback).not.toBeNull();
 
-    intervalCallback?.();
+    timeoutCallback?.();
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(clearIntervalImpl).toHaveBeenCalledWith(timerHandle);
     expect(promotionMgr.promote).toHaveBeenCalledWith(forwardingSink, sessionHeartbeat);
 
     stopMonitor();
+    expect(clearTimeoutImpl).not.toHaveBeenCalled();
   });
 
   it('stays idle when the periodic authority recheck still prefers following', async () => {
@@ -736,8 +736,8 @@ describe('startFollowerAuthorityMonitor', () => {
     } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
     const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
     const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
-    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
-    let intervalCallback: (() => void) | null = null;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setTimeout>;
+    let timeoutCallback: (() => void) | null = null;
 
     startFollowerAuthorityMonitor(
       makeAuthorityMonitorOptions(),
@@ -753,15 +753,15 @@ describe('startFollowerAuthorityMonitor', () => {
           replacement: null,
           forcedClaim: false,
         }),
-        setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
-          intervalCallback = callback as () => void;
+        setTimeoutImpl: jest.fn<typeof setTimeout>((callback) => {
+          timeoutCallback = callback as () => void;
           return timerHandle;
         }),
-        clearIntervalImpl: jest.fn<typeof clearInterval>(),
+        clearTimeoutImpl: jest.fn<typeof clearTimeout>(),
       },
     );
 
-    intervalCallback?.();
+    timeoutCallback?.();
     await Promise.resolve();
 
     expect(promotionMgr.promote).not.toHaveBeenCalled();
@@ -773,8 +773,8 @@ describe('startFollowerAuthorityMonitor', () => {
     } as unknown as import('../../../../src/web/console/PromotionManager.js').PromotionManager;
     const forwardingSink = {} as import('../../../../src/web/console/LeaderForwardingSink.js').LeaderForwardingLogSink;
     const sessionHeartbeat = {} as import('../../../../src/web/console/LeaderForwardingSink.js').SessionHeartbeat;
-    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
-    let intervalCallback: (() => void) | null = null;
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setTimeout>;
+    let timeoutCallback: (() => void) | null = null;
     let nowMs = 1_000;
     const resolveFollowerAuthorityImpl = jest.fn<typeof resolveFollowerAuthority>()
       .mockRejectedValue(new Error('authority lookup failed'));
@@ -792,22 +792,22 @@ describe('startFollowerAuthorityMonitor', () => {
         sessionHeartbeat,
         {
           resolveFollowerAuthorityImpl,
-          setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
-            intervalCallback = callback as () => void;
+          setTimeoutImpl: jest.fn<typeof setTimeout>((callback) => {
+            timeoutCallback = callback as () => void;
             return timerHandle;
           }),
-          clearIntervalImpl: jest.fn<typeof clearInterval>(),
+          clearTimeoutImpl: jest.fn<typeof clearTimeout>(),
           nowImpl: () => nowMs,
         },
       );
 
-      expect(intervalCallback).not.toBeNull();
+      expect(timeoutCallback).not.toBeNull();
 
-      intervalCallback?.();
+      timeoutCallback?.();
       await flushAuthorityMonitorTick();
-      intervalCallback?.();
+      timeoutCallback?.();
       await flushAuthorityMonitorTick();
-      intervalCallback?.();
+      timeoutCallback?.();
       await flushAuthorityMonitorTick();
 
       expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
@@ -819,12 +819,12 @@ describe('startFollowerAuthorityMonitor', () => {
         }),
       );
 
-      intervalCallback?.();
+      timeoutCallback?.();
       await flushAuthorityMonitorTick();
       expect(resolveFollowerAuthorityImpl).toHaveBeenCalledTimes(3);
 
       nowMs += 60_001;
-      intervalCallback?.();
+      timeoutCallback?.();
       await flushAuthorityMonitorTick();
 
       expect(infoSpy).toHaveBeenCalledWith(
@@ -856,7 +856,7 @@ describe('reconcileLeaderLease', () => {
         pid: 3877,
       });
 
-    await reconcileLeaderLease('session-newest', 41715, {
+    const result = await reconcileLeaderLease('session-newest', 41715, {
       findPidOnPortImpl: async () => process.pid,
       readLeaderLockImpl: async () => ({
         version: 1,
@@ -872,6 +872,7 @@ describe('reconcileLeaderLease', () => {
       killStaleProcessDetailedImpl,
     });
 
+    expect(result).toBe('reconciled');
     expect(killStaleProcessDetailedImpl).toHaveBeenCalledWith(3877, 41715, {
       allowActiveHostParent: true,
     });
@@ -885,7 +886,7 @@ describe('reconcileLeaderLease', () => {
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>();
     const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>();
 
-    await reconcileLeaderLease('session-newest', 41715, {
+    const result = await reconcileLeaderLease('session-newest', 41715, {
       findPidOnPortImpl: async () => 3877,
       readLeaderLockImpl: async () => ({
         version: 1,
@@ -901,15 +902,16 @@ describe('reconcileLeaderLease', () => {
       killStaleProcessDetailedImpl,
     });
 
+    expect(result).toBe('not-port-owner');
     expect(killStaleProcessDetailedImpl).not.toHaveBeenCalled();
     expect(claimLeadershipImpl).not.toHaveBeenCalled();
   });
 });
 
 describe('startLeaderLeaseMonitor', () => {
-  it('schedules periodic lease reconciliation and cleans up the timer', async () => {
-    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setInterval>;
-    let intervalCallback: (() => void) | null = null;
+  it('schedules lease reconciliation, backs off when stable, and cleans up the timer', async () => {
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setTimeout>;
+    let timeoutCallback: (() => void) | null = null;
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>()
       .mockResolvedValue(true);
     const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>()
@@ -918,16 +920,9 @@ describe('startLeaderLeaseMonitor', () => {
         reason: 'terminated',
         pid: 3877,
       });
-    const clearIntervalImpl = jest.fn<typeof clearInterval>();
-
-    const stopMonitor = startLeaderLeaseMonitor('session-newest', 41715, {
-      setIntervalImpl: jest.fn<typeof setInterval>((callback) => {
-        intervalCallback = callback as () => void;
-        return timerHandle;
-      }),
-      clearIntervalImpl,
-      findPidOnPortImpl: async () => process.pid,
-      readLeaderLockImpl: async () => ({
+    const clearTimeoutImpl = jest.fn<typeof clearTimeout>();
+    const readLeaderLockImpl = jest.fn()
+      .mockResolvedValueOnce({
         version: 1,
         pid: 3877,
         port: 41715,
@@ -936,21 +931,50 @@ describe('startLeaderLeaseMonitor', () => {
         heartbeat: '2026-04-19T18:13:34.914Z',
         serverVersion: '2.0.25',
         consoleProtocolVersion: 1,
+      })
+      .mockResolvedValueOnce({
+        version: 1,
+        pid: process.pid,
+        port: 41715,
+        sessionId: 'session-newest',
+        startedAt: '2026-04-19T19:00:00.000Z',
+        heartbeat: '2026-04-19T19:00:00.000Z',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: 1,
+      });
+
+    const stopMonitor = startLeaderLeaseMonitor('session-newest', 41715, {
+      setTimeoutImpl: jest.fn<typeof setTimeout>((callback, delay) => {
+        timeoutCallback = callback as () => void;
+        if (claimLeadershipImpl.mock.calls.length === 0) {
+          expect(delay).toBe(2_000);
+        } else {
+          expect(delay).toBe(4_000);
+        }
+        return timerHandle;
       }),
+      clearTimeoutImpl,
+      findPidOnPortImpl: async () => process.pid,
+      readLeaderLockImpl,
       claimLeadershipImpl,
       killStaleProcessDetailedImpl,
     });
 
-    expect(intervalCallback).not.toBeNull();
+    expect(timeoutCallback).not.toBeNull();
     expect(timerHandle.unref).toHaveBeenCalledTimes(1);
 
-    intervalCallback?.();
+    timeoutCallback?.();
+    await flushAuthorityMonitorTick();
+    expect(killStaleProcessDetailedImpl).toHaveBeenCalledTimes(1);
+    expect(claimLeadershipImpl).toHaveBeenCalledTimes(1);
+
+    timeoutCallback?.();
     await flushAuthorityMonitorTick();
 
-    expect(killStaleProcessDetailedImpl).toHaveBeenCalled();
-    expect(claimLeadershipImpl).toHaveBeenCalled();
+    expect(killStaleProcessDetailedImpl).toHaveBeenCalledTimes(1);
+    expect(claimLeadershipImpl).toHaveBeenCalledTimes(1);
 
     stopMonitor();
-    expect(clearIntervalImpl).toHaveBeenCalledWith(timerHandle);
+    expect(clearTimeoutImpl).not.toHaveBeenCalled();
   });
 });
