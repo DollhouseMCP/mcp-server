@@ -12,10 +12,12 @@
  * DMCP-SEC-004 compliant: uses UnicodeValidator.normalize() on all inputs
  */
 
+import { createHash } from 'node:crypto';
 import { extname } from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { ContentValidator, type ContentValidationResult } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { LRUCache } from '../cache/LRUCache.js';
 import { logger } from '../utils/logger.js';
 
 /** Element types that map to content validation contexts */
@@ -64,6 +66,34 @@ export interface PipelineResult {
   };
 }
 
+const CONTENT_PIPELINE_CACHE = new LRUCache<PipelineResult>({
+  name: 'web-content-validation',
+  maxSize: 256,
+  maxMemoryMB: 16,
+});
+
+function buildContentCacheKey(filename: string, elementType: string, rawContent: string): string {
+  const contentHash = createHash('sha256').update(rawContent).digest('hex');
+  return `${elementType}\0${filename}\0${contentHash}`;
+}
+
+function clonePipelineResult(result: PipelineResult): PipelineResult {
+  return {
+    ...result,
+    metadata: { ...result.metadata },
+    rejection: result.rejection
+      ? {
+          ...result.rejection,
+          patterns: result.rejection.patterns ? [...result.rejection.patterns] : undefined,
+        }
+      : undefined,
+  };
+}
+
+export function resetContentPipelineCacheForTesting(): void {
+  CONTENT_PIPELINE_CACHE.clear();
+}
+
 /**
  * Validate element content through the security pipeline.
  *
@@ -84,6 +114,11 @@ export function validateElementContent(
   const normalizedFilename = filenameValidation.normalizedContent;
   const normalizedContent = contentValidation.normalizedContent;
   const normalizedType = elementType.normalize('NFC');
+  const cacheKey = buildContentCacheKey(normalizedFilename, normalizedType, rawContent);
+  const cachedResult = CONTENT_PIPELINE_CACHE.get(cacheKey);
+  if (cachedResult) {
+    return clonePipelineResult(cachedResult);
+  }
 
   const ext = extname(normalizedFilename);
   const isYaml = ext === '.yaml' || ext === '.yml';
@@ -110,13 +145,15 @@ export function validateElementContent(
       body = parsed.content;
     }
   } catch (err) {
-    return {
+    const result: PipelineResult = {
       valid: false,
       content: normalizedContent,
       metadata: {},
       body: '',
       rejection: { reason: `Parse validation failed: ${(err as Error).message}`, severity: 'high' },
     };
+    CONTENT_PIPELINE_CACHE.set(cacheKey, clonePipelineResult(result));
+    return result;
   }
 
   // Step 2: Content injection pattern detection (markdown elements only)
@@ -135,7 +172,7 @@ export function validateElementContent(
         patterns: validation.detectedPatterns,
         severity: validation.severity,
       });
-      return {
+      const result: PipelineResult = {
         valid: false,
         content: normalizedContent,
         metadata,
@@ -146,14 +183,18 @@ export function validateElementContent(
           patterns: validation.detectedPatterns,
         },
       };
+      CONTENT_PIPELINE_CACHE.set(cacheKey, clonePipelineResult(result));
+      return result;
     }
   }
 
   // Step 3: Return validated content
-  return {
+  const result: PipelineResult = {
     valid: true,
     content: rawContent,
     metadata,
     body,
   };
+  CONTENT_PIPELINE_CACHE.set(cacheKey, clonePipelineResult(result));
+  return result;
 }
