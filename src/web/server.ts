@@ -162,6 +162,11 @@ export interface BindResult {
   detail?: string;
 }
 
+export interface PortOwnershipVerificationResult {
+  matches: boolean;
+  ownerPid: number | null;
+}
+
 /**
  * Result of starting the web server, including hooks for DI wiring.
  */
@@ -546,8 +551,20 @@ function printStartupBanner(port: number, tokenStore: ConsoleTokenStore | undefi
 }
 
 // Stale process recovery — extracted to StaleProcessRecovery.ts for independent testing (#1850).
-import { recoverStalePort } from './console/StaleProcessRecovery.js';
+import { findPidOnPort, recoverStalePort } from './console/StaleProcessRecovery.js';
 export { findPidOnPort, killStaleProcess, recoverStalePort } from './console/StaleProcessRecovery.js';
+
+export async function verifyBoundPortOwnership(
+  port: number,
+  expectedPid: number,
+  findPidOnPortImpl: typeof findPidOnPort = findPidOnPort,
+): Promise<PortOwnershipVerificationResult> {
+  const ownerPid = await findPidOnPortImpl(port);
+  return {
+    matches: ownerPid === null || ownerPid === expectedPid,
+    ownerPid,
+  };
+}
 
 /**
  * Attempt a single port bind. Returns a BindResult without any recovery logic.
@@ -558,22 +575,55 @@ function attemptBind(
   options: WebServerOptions,
 ): Promise<BindResult> {
   return new Promise<BindResult>((resolve) => {
-    const httpServer = app.listen(port, '127.0.0.1', () => {
-      serverRunning = true;
-      serverPort = port;
-      activeHttpServer = httpServer;
-      printStartupBanner(port, options.tokenStore);
-      if (options.openBrowser) {
-        openInBrowser(`http://${CONSOLE_HOST}:${port}`);
+    let settled = false;
+    const settle = (result: BindResult) => {
+      if (!settled) {
+        settled = true;
+        resolve(result);
       }
-      resolve({ success: true });
+    };
+
+    const httpServer = app.listen(port, '127.0.0.1', () => {
+      void (async () => {
+        const ownership = await verifyBoundPortOwnership(port, process.pid);
+        if (!ownership.matches) {
+          httpServer.close();
+          logger.warn('[WebUI] Port ownership verification failed after bind callback', {
+            port,
+            expectedPid: process.pid,
+            observedPid: ownership.ownerPid,
+          });
+          settle({
+            success: false,
+            error: 'EADDRINUSE',
+            detail: `Port ${port} already in use by pid ${ownership.ownerPid ?? 'unknown'}`,
+          });
+          return;
+        }
+
+        serverRunning = true;
+        serverPort = port;
+        activeHttpServer = httpServer;
+        printStartupBanner(port, options.tokenStore);
+        if (options.openBrowser) {
+          openInBrowser(`http://${CONSOLE_HOST}:${port}`);
+        }
+        settle({ success: true });
+      })().catch((err) => {
+        logger.error(`[WebUI] Failed to verify bound port ${port}: ${err instanceof Error ? err.message : String(err)}`);
+        settle({
+          success: false,
+          error: 'OTHER',
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      });
     });
     httpServer.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        resolve({ success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` });
+        settle({ success: false, error: 'EADDRINUSE', detail: `Port ${port} already in use` });
       } else {
         logger.error(`[WebUI] Failed to bind port ${port}: ${err.message}`);
-        resolve({ success: false, error: 'OTHER', detail: err.message });
+        settle({ success: false, error: 'OTHER', detail: err.message });
       }
     });
   });

@@ -19,8 +19,8 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
-import { mkdir, readFile, writeFile, rename, unlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { env } from '../../config/env.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
@@ -278,9 +278,9 @@ export async function detectLegacyLeader(lockPath: string = LEGACY_LOCK_FILE): P
  * Read and parse the leader lock file.
  * Returns null if the file doesn't exist, is unreadable, or has invalid content.
  */
-export async function readLeaderLock(): Promise<ConsoleLeaderInfo | null> {
+export async function readLeaderLock(lockPath: string = LOCK_FILE): Promise<ConsoleLeaderInfo | null> {
   try {
-    const content = await readFile(LOCK_FILE, 'utf-8');
+    const content = await readFile(lockPath, 'utf-8');
     const data = JSON.parse(content) as ConsoleLeaderInfo;
     if (data.version !== LOCK_VERSION || !data.pid || !data.port || !data.sessionId) {
       return null;
@@ -289,7 +289,7 @@ export async function readLeaderLock(): Promise<ConsoleLeaderInfo | null> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
       logger.debug('[LeaderElection] Ignoring unreadable or invalid leader lock', {
-        lockFile: LOCK_FILE,
+        lockFile: lockPath,
         error: error instanceof Error ? error.message : String(error),
       });
     }
@@ -311,25 +311,33 @@ export function isLockStale(info: ConsoleLeaderInfo): boolean {
 /**
  * Attempt to atomically claim leadership.
  *
- * Writes to a temp file then renames to the lock path. On POSIX systems
- * rename is atomic, so only one writer wins. After renaming, re-reads the
- * lock to verify our PID won.
+ * Creates the lock file with exclusive-write semantics so only one process
+ * can win the initial claim. This avoids startup races where multiple
+ * contenders overwrite the lock in quick succession and each briefly believe
+ * they are leader.
  *
  * @returns true if this process successfully claimed leadership
  */
-export async function claimLeadership(info: ConsoleLeaderInfo): Promise<boolean> {
-  await mkdir(RUN_DIR, { recursive: true });
-  const tmpFile = join(RUN_DIR, `console-leader.lock.${process.pid}.tmp`);
+export async function claimLeadership(
+  info: ConsoleLeaderInfo,
+  lockPath: string = LOCK_FILE,
+): Promise<boolean> {
+  await mkdir(dirname(lockPath), { recursive: true });
   try {
-    await writeFile(tmpFile, JSON.stringify(info, null, 2), 'utf-8');
-    await rename(tmpFile, LOCK_FILE);
+    const handle = await open(lockPath, 'wx', 0o600);
+    try {
+      await handle.writeFile(JSON.stringify(info, null, 2), 'utf-8');
+    } finally {
+      await handle.close();
+    }
 
-    // Verify we won the race
-    const written = await readLeaderLock();
+    // Verify we won the race.
+    const written = await readLeaderLock(lockPath);
     return written !== null && written.pid === info.pid;
-  } catch {
-    // Clean up temp file on failure
-    try { await unlink(tmpFile); } catch { /* ignore */ }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return false;
+    }
     return false;
   }
 }

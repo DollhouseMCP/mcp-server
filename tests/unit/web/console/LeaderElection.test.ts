@@ -99,6 +99,52 @@ describe('LeaderElection', () => {
     });
   });
 
+  describe('claimLeadership', () => {
+    let tempDir: string;
+    let tempLockPath: string;
+
+    beforeEach(async () => {
+      const { mkdtemp } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      tempDir = await mkdtemp(join(tmpdir(), 'dh-leader-claim-test-'));
+      tempLockPath = join(tempDir, 'console-leader.auth.lock');
+    });
+
+    afterEach(async () => {
+      const { rm } = await import('node:fs/promises');
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('creates a new lock when none exists', async () => {
+      const claimed = await LeaderElection.claimLeadership(
+        makeLeaderInfo({ sessionId: 'fresh-claim' }),
+        tempLockPath,
+      );
+
+      expect(claimed).toBe(true);
+      await expect(LeaderElection.readLeaderLock(tempLockPath)).resolves.toMatchObject({
+        sessionId: 'fresh-claim',
+        pid: process.pid,
+      });
+    });
+
+    it('does not overwrite an existing lock', async () => {
+      const { writeFile } = await import('node:fs/promises');
+      await writeFile(tempLockPath, JSON.stringify(makeLeaderInfo({ sessionId: 'existing-leader' })), 'utf-8');
+
+      const claimed = await LeaderElection.claimLeadership(
+        makeLeaderInfo({ sessionId: 'late-joiner' }),
+        tempLockPath,
+      );
+
+      expect(claimed).toBe(false);
+      await expect(LeaderElection.readLeaderLock(tempLockPath)).resolves.toMatchObject({
+        sessionId: 'existing-leader',
+      });
+    });
+  });
+
   describe('ConsoleLeaderInfo interface', () => {
     it('should have the expected shape', () => {
       const info: import('../../../../src/web/console/LeaderElection.js').ConsoleLeaderInfo = {
