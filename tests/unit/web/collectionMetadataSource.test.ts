@@ -19,6 +19,6 @@ describe('collection metadata author rendering', () => {
     const styles = readFileSync(join(PUBLIC_DIR, 'styles.css'), 'utf-8');
 
     expect(styles).not.toContain('.meta-author::before');
-    expect(styles).not.toContain('content: "by\\00a0";');
+    expect(styles).not.toContain(String.raw`content: "by\00a0";`);
   });
 });
