@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 import { getPermissionHookMarkerPath } from '../../../src/utils/permissionHooks.js';
+import { logger } from '../../../src/utils/logger.js';
 
 function createMockHandler(readResult?: unknown) {
   return {
@@ -53,6 +54,46 @@ describe('permissionRoutes', () => {
   });
 
   describe('POST /api/evaluate_permission', () => {
+    it('should log rate-limit bypass events without raw request payloads', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const handler = createMockHandler();
+      const app = createApp(handler);
+
+      const requests = Array.from({ length: 121 }, () =>
+        request(app)
+          .post('/api/evaluate_permission')
+          .send({
+            tool_name: 'Bash',
+            input: { command: 'printf super-secret', path: '/tmp/example' },
+            platform: 'claude_code',
+            session_id: 'session-follower-1',
+          }),
+      );
+
+      const responses = await Promise.all(requests);
+      const bypass = responses[responses.length - 1];
+
+      expect(bypass.status).toBe(200);
+      expect(bypass.body).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
+      expect(handler.handleRead).toHaveBeenCalledTimes(120);
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[WebUI/Gateway] evaluate_permission rate limit exceeded; failing open',
+        {
+          tool_name: 'Bash',
+          platform: 'claude_code',
+          session_id: 'session-follower-1',
+          input_fields: ['command', 'path'],
+        },
+      );
+      expect(warnSpy.mock.calls.at(-1)?.[1]).not.toHaveProperty('command');
+      warnSpy.mockRestore();
+    });
+
     it('should return allow for a valid request', async () => {
       const handler = createMockHandler();
       const app = createApp(handler);
