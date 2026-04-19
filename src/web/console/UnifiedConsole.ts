@@ -64,7 +64,7 @@ import type { SessionInfo } from './IngestRoutes.js';
 const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
-const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
+const LEADER_DISCOVERY_TIMEOUT_MS = env.DOLLHOUSE_CONSOLE_LEADER_DISCOVERY_TIMEOUT_MS;
 const LEADER_LEASE_RECONCILE_INTERVAL_MS = 2_000;
 const LEADER_LEASE_RECONCILE_MAX_INTERVAL_MS = 30_000;
 const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
@@ -288,7 +288,11 @@ export async function fetchLeaderSessionsSnapshot(
 
     const data = await response.json() as { sessions?: SessionInfo[] };
     return Array.isArray(data.sessions) ? data.sessions : [];
-  } catch {
+  } catch (err) {
+    logger.debug('[UnifiedConsole] Failed to fetch leader session snapshot', {
+      port,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   } finally {
     clearTimeout(timeout);

@@ -245,6 +245,13 @@ const envSchema = z.object({
   DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_FAILURE_COOLDOWN_MS: z.coerce.number().int().min(1_000).max(900_000).default(60_000),
 
   /**
+   * Timeout for leader-discovery HTTP probes against /api/sessions before the
+   * caller falls back to lock-file or synthetic-owner heuristics.
+   * Default: 2000ms.
+   */
+  DOLLHOUSE_CONSOLE_LEADER_DISCOVERY_TIMEOUT_MS: z.coerce.number().int().min(250).max(30_000).default(2_000),
+
+  /**
    * Issue #1780: Phase 2 — require a confirmation code (OS dialog or TOTP)
    * for privileged actions like token rotation. Default is true for safety;
    * set to false for headless CI and scripted deployments that need to rotate
