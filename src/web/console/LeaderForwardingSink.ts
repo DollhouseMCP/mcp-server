@@ -44,6 +44,101 @@ const MAX_CONSECUTIVE_FAILURES = env.DOLLHOUSE_CONSOLE_MAX_FORWARD_FAILURES;
 /** HTTP request timeout (ms) */
 const REQUEST_TIMEOUT_MS = 5_000;
 
+interface LeaseBearingPayload {
+  displayName?: string;
+  preferredDisplayName?: string;
+  lastAssignedDisplayName?: string;
+  stableSessionId?: string;
+}
+
+interface SessionLeaseSnapshot {
+  displayName: string;
+  stableSessionId: string | null;
+  sessionId: string;
+}
+
+interface SessionLeaseResponse {
+  ok: boolean;
+  lease?: SessionLeaseSnapshot;
+}
+
+/**
+ * Mutable local view of the display-name lease for one runtime session.
+ *
+ * Followers start with a deterministic preferred name, then replace it with
+ * the leader-assigned authoritative display name once the leader responds.
+ */
+export class SessionLeaseState {
+  private assignedDisplayName: string | null = null;
+
+  constructor(
+    private readonly preferredDisplayName: string,
+    private readonly stableSessionId: string | null = null,
+  ) {}
+
+  getDisplayName(): string {
+    return this.assignedDisplayName ?? this.preferredDisplayName;
+  }
+
+  getPreferredDisplayName(): string {
+    return this.preferredDisplayName;
+  }
+
+  getLastAssignedDisplayName(): string | null {
+    return this.assignedDisplayName;
+  }
+
+  getStableSessionId(): string | null {
+    return this.stableSessionId;
+  }
+
+  applyLease(lease: SessionLeaseSnapshot | null | undefined): void {
+    if (!lease?.displayName) {
+      return;
+    }
+
+    const normalizedDisplayName = UnicodeValidator.normalize(lease.displayName).normalizedContent.trim();
+    if (!normalizedDisplayName) {
+      return;
+    }
+
+    this.assignedDisplayName = normalizedDisplayName;
+  }
+}
+
+function buildLeasePayload(leaseState: SessionLeaseState): LeaseBearingPayload {
+  const currentDisplayName = leaseState.getDisplayName();
+  const preferredDisplayName = leaseState.getPreferredDisplayName();
+  const lastAssignedDisplayName = leaseState.getLastAssignedDisplayName();
+  const stableSessionId = leaseState.getStableSessionId();
+
+  return {
+    ...(currentDisplayName ? { displayName: currentDisplayName } : {}),
+    ...(preferredDisplayName ? { preferredDisplayName } : {}),
+    ...(lastAssignedDisplayName ? { lastAssignedDisplayName } : {}),
+    ...(stableSessionId ? { stableSessionId } : {}),
+  };
+}
+
+function isSessionLeaseResponse(payload: unknown): payload is SessionLeaseResponse {
+  return Boolean(payload) && typeof payload === 'object';
+}
+
+function resolveLeaseState(
+  leaseStateOrDisplayName: SessionLeaseState | string | null | undefined,
+  stableSessionId: string | null | undefined,
+): SessionLeaseState | undefined {
+  if (leaseStateOrDisplayName instanceof SessionLeaseState) {
+    return leaseStateOrDisplayName;
+  }
+
+  if (typeof leaseStateOrDisplayName === 'string' && leaseStateOrDisplayName.trim().length > 0) {
+    return new SessionLeaseState(leaseStateOrDisplayName, stableSessionId ?? null);
+  }
+
+  return undefined;
+}
+
 /**
  * Build the HTTP headers for ingest POSTs, including the console auth token
  * if one was provided (#1780). Followers read the token from the shared token
@@ -68,6 +163,7 @@ export class LeaderForwardingLogSink implements ILogSink {
   private flushing = false;
   private consecutiveFailures = 0;
   private gaveUp = false;
+  private readonly leaseState?: SessionLeaseState;
 
   constructor(
     private readonly leaderUrl: string,
@@ -76,12 +172,12 @@ export class LeaderForwardingLogSink implements ILogSink {
     private readonly authToken: string | null = null,
     /** Callback invoked when the leader is presumed dead after MAX_CONSECUTIVE_FAILURES (#1850). */
     private readonly onLeaderDeath?: () => void,
-    /** Canonical local display name for this runtime session. */
-    private readonly sessionDisplayName: string | null = null,
-    /** Stable session identity shared across restarts when available. */
-    private readonly stableSessionId: string | null = null,
+    /** Local mutable lease state for this runtime session. */
+    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    stableSessionId: string | null = null,
   ) {
     this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
+    this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
     this.flushTimer.unref();
   }
@@ -130,8 +226,7 @@ export class LeaderForwardingLogSink implements ILogSink {
         headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({
           sessionId: this.sessionId,
-          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
-          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
+          ...(this.leaseState ? buildLeasePayload(this.leaseState) : {}),
           entries: batch,
         }),
         signal: controller.signal,
@@ -193,16 +288,19 @@ export class LeaderForwardingLogSink implements ILogSink {
  * Forwards metric snapshots to the leader's /api/ingest/metrics.
  */
 export class LeaderForwardingMetricsSink {
+  private readonly leaseState?: SessionLeaseState;
+
   constructor(
     private readonly leaderUrl: string,
     private readonly sessionId: string,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
-    /** Canonical local display name for this runtime session. */
-    private readonly sessionDisplayName: string | null = null,
-    /** Stable session identity shared across restarts when available. */
-    private readonly stableSessionId: string | null = null,
-  ) {}
+    /** Local mutable lease state for this runtime session. */
+    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    stableSessionId: string | null = null,
+  ) {
+    this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);
+  }
 
   async onSnapshot(snapshot: MetricSnapshot): Promise<void> {
     try {
@@ -214,8 +312,7 @@ export class LeaderForwardingMetricsSink {
         headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({
           sessionId: this.sessionId,
-          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
-          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
+          ...(this.leaseState ? buildLeasePayload(this.leaseState) : {}),
           snapshot,
         }),
         signal: controller.signal,
@@ -232,6 +329,7 @@ export class LeaderForwardingMetricsSink {
  */
 export class SessionHeartbeat {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly leaseState?: SessionLeaseState;
 
   constructor(
     private readonly leaderUrl: string,
@@ -239,11 +337,12 @@ export class SessionHeartbeat {
     private readonly pid: number,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
-    /** Canonical local display name for this runtime session. */
-    private readonly sessionDisplayName: string | null = null,
-    /** Stable session identity shared across restarts when available. */
-    private readonly stableSessionId: string | null = null,
-  ) {}
+    /** Local mutable lease state for this runtime session. */
+    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    stableSessionId: string | null = null,
+  ) {
+    this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);
+  }
 
   /** Notify the leader that this session has started */
   async start(): Promise<void> {
@@ -269,13 +368,12 @@ export class SessionHeartbeat {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-      await fetch(`${this.leaderUrl}/api/ingest/session`, {
+      const response = await fetch(`${this.leaderUrl}/api/ingest/session`, {
         method: 'POST',
         headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({
           sessionId: this.sessionId,
-          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
-          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
+          ...(this.leaseState ? buildLeasePayload(this.leaseState) : {}),
           event,
           pid: this.pid,
           startedAt: new Date().toISOString(),
@@ -285,6 +383,12 @@ export class SessionHeartbeat {
         signal: controller.signal,
       });
       clearTimeout(timeout);
+      if (this.leaseState && response.ok) {
+        const payload = await response.json().catch(() => null);
+        if (isSessionLeaseResponse(payload)) {
+          this.leaseState.applyLease(payload.lease);
+        }
+      }
     } catch {
       logger.debug(`[SessionHeartbeat] Failed to send ${event} event`);
     }

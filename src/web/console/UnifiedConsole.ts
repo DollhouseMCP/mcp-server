@@ -43,6 +43,7 @@ import {
 import { createIngestRoutes } from './IngestRoutes.js';
 import {
   LeaderForwardingLogSink,
+  SessionLeaseState,
   SessionHeartbeat,
 } from './LeaderForwardingSink.js';
 import { PromotionManager } from './PromotionManager.js';
@@ -1363,7 +1364,10 @@ async function startAsFollower(
   }
 
   const { derivePreferredFollowerSessionName } = await import('./SessionNames.js');
-  const preferredSessionName = derivePreferredFollowerSessionName(options.sessionId);
+  const leaseState = new SessionLeaseState(
+    derivePreferredFollowerSessionName(options.sessionId),
+    options.stableSessionId,
+  );
 
   // Per-instance promotion manager — tracks its own attempt counter so
   // multiple followers don't interfere with each other's promotion budgets.
@@ -1382,8 +1386,7 @@ async function startAsFollower(
     promotionMgr.promote(forwardingSink, sessionHeartbeat)
       .catch(err => logger.error('[UnifiedConsole] Promotion crashed', { error: String(err) }));
     },
-    preferredSessionName,
-    options.stableSessionId,
+    leaseState,
   );
   options.registerLogSink(forwardingSink);
 
@@ -1393,8 +1396,7 @@ async function startAsFollower(
     options.sessionId,
     process.pid,
     authToken,
-    preferredSessionName,
-    options.stableSessionId,
+    leaseState,
   );
   await sessionHeartbeat.start();
 
