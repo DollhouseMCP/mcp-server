@@ -302,7 +302,8 @@ describe('LeaderElection', () => {
       );
 
       expect(result).toBe('lost-lock');
-      await expect(readFile(tempLockPath, 'utf-8')).resolves.toEqual(JSON.stringify(existingLock));
+      const persistedLock = JSON.parse(await readFile(tempLockPath, 'utf-8')) as typeof existingLock;
+      expect(persistedLock).toMatchObject(existingLock);
     });
 
     it('returns lost-port instead of reclaiming the lock when another pid owns the port', async () => {

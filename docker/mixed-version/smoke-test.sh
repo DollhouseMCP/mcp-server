@@ -14,6 +14,7 @@ capture_report() {
   local label="$1"
   LAST_REPORT_PATH="$("${SCRIPT_DIR}/report-state.sh" --label "${label}")"
   echo "State report (${label}): ${LAST_REPORT_PATH}"
+  return 0
 }
 
 cleanup() {
