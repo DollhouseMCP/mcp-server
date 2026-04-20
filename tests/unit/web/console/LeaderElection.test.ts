@@ -5,7 +5,7 @@
  * stale detection, PID liveness checks, and claim mechanics.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 
 // We test the exported utility functions directly rather than mocking fs,
 // using a real temp directory for isolation.
@@ -244,6 +244,14 @@ describe('LeaderElection', () => {
   });
 
   describe('startHeartbeat', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
     it('should return a stop function', () => {
       const info = {
         version: 1,
@@ -256,6 +264,59 @@ describe('LeaderElection', () => {
       const stop = LeaderElection.startHeartbeat(info);
       expect(typeof stop).toBe('function');
       stop(); // clean up immediately
+    });
+  });
+
+  describe('renewLeaderHeartbeat', () => {
+    let tempDir: string;
+    let tempLockPath: string;
+
+    beforeEach(async () => {
+      const { mkdtemp } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      tempDir = await mkdtemp(join(tmpdir(), 'dh-heartbeat-renew-test-'));
+      tempLockPath = join(tempDir, 'console-leader.auth.lock');
+    });
+
+    afterEach(async () => {
+      const { rm } = await import('node:fs/promises');
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('returns lost-lock instead of overwriting another leader lock', async () => {
+      const { writeFile, readFile } = await import('node:fs/promises');
+      const existingLock = makeLeaderInfo({
+        pid: 424242,
+        sessionId: 'newer-leader',
+      });
+      await writeFile(tempLockPath, JSON.stringify(existingLock), 'utf-8');
+
+      const result = await LeaderElection.renewLeaderHeartbeat(
+        makeLeaderInfo({ sessionId: 'former-leader' }),
+        {
+          lockPath: tempLockPath,
+          readLeaderLockImpl: LeaderElection.readLeaderLock,
+          findPidOnPortImpl: async () => null,
+        },
+      );
+
+      expect(result).toBe('lost-lock');
+      await expect(readFile(tempLockPath, 'utf-8')).resolves.toEqual(JSON.stringify(existingLock));
+    });
+
+    it('returns lost-port instead of reclaiming the lock when another pid owns the port', async () => {
+      const result = await LeaderElection.renewLeaderHeartbeat(
+        makeLeaderInfo({ sessionId: 'former-leader' }),
+        {
+          lockPath: tempLockPath,
+          readLeaderLockImpl: async () => null,
+          findPidOnPortImpl: async () => 424242,
+        },
+      );
+
+      expect(result).toBe('lost-port');
+      await expect(LeaderElection.readLeaderLock(tempLockPath)).resolves.toBeNull();
     });
   });
 
