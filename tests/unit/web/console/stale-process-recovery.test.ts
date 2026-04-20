@@ -179,12 +179,15 @@ describe('Stale Process Recovery (#1850)', () => {
       it('refuses to auto-kill a verified DollhouseMCP process without orphan proof', async () => {
         const port = await getFreePort();
         const { child, tempDir } = await spawnFakeDollhouseServer(port);
+        const childPid = child.pid;
+        expect(childPid).toBeDefined();
+        if (!childPid) return;
 
         try {
-          const outcome = await Recovery.killStaleProcessDetailed(child.pid!, port);
+          const outcome = await Recovery.killStaleProcessDetailed(childPid, port);
           expect(outcome.killed).toBe(false);
           expect(outcome.reason).toBe('requires_orphan_proof');
-          expect(() => process.kill(child.pid!, 0)).not.toThrow();
+          expect(() => process.kill(childPid, 0)).not.toThrow();
         } finally {
           await cleanupFakeDollhouseServer(child, tempDir);
         }
@@ -215,11 +218,14 @@ describe('Stale Process Recovery (#1850)', () => {
       it('does not auto-kill a verified DollhouseMCP server on the port', async () => {
         const port = await getFreePort();
         const { child, tempDir } = await spawnFakeDollhouseServer(port);
+        const childPid = child.pid;
+        expect(childPid).toBeDefined();
+        if (!childPid) return;
 
         try {
           expect(await Recovery.recoverStalePort(port)).toBe(false);
-          expect(() => process.kill(child.pid!, 0)).not.toThrow();
-          expect(await Recovery.findPidOnPort(port)).toBe(child.pid);
+          expect(() => process.kill(childPid, 0)).not.toThrow();
+          expect(await Recovery.findPidOnPort(port)).toBe(childPid);
         } finally {
           await cleanupFakeDollhouseServer(child, tempDir);
         }
