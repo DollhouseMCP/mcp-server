@@ -310,8 +310,68 @@ describe('Web console cleanup regressions', () => {
     expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.26');
     expect(oldItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Codex');
     expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.getAttribute('title')).toBe(
+      'A newer local DollhouseMCP session version is active.',
+    );
 
     expect(consoleItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Web Console');
+
+    cleanup();
+  });
+
+  it('handles prerelease update comparisons and missing platform metadata safely', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [
+          {
+            sessionId: 'session-new',
+            status: 'active',
+            displayName: 'Bert',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: true,
+            authenticated: true,
+            kind: 'mcp',
+            color: '#1d4ed8',
+            serverVersion: '2.0.27-rc.17',
+            clientPlatform: 'claude-code',
+            clientPlatformLabel: 'Claude Code',
+          },
+          {
+            sessionId: 'session-old',
+            status: 'active',
+            displayName: 'Teddy',
+            startedAt: '2026-04-20T17:30:00.000Z',
+            isLeader: false,
+            authenticated: false,
+            kind: 'mcp',
+            color: '#92400e',
+            serverVersion: '2.0.27-rc.16',
+            clientPlatform: null,
+            clientPlatformLabel: null,
+          },
+        ],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    (win.document.querySelector('.session-box') as HTMLButtonElement | null)?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const oldItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-old"]') as HTMLElement | null;
+
+    expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.27-rc.16');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-client-label')).toBeNull();
 
     cleanup();
   });

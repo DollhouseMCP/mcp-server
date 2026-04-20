@@ -34,9 +34,27 @@ function normalizeText(value: string | undefined): string {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-function includesAny(value: string, needles: string[]): boolean {
+function includesAny(value: string, needles: readonly string[]): boolean {
   return needles.some((needle) => value.includes(needle));
 }
+
+function matchesAnySource(values: readonly string[], needles: readonly string[]): boolean {
+  return values.some((value) => includesAny(value, needles));
+}
+
+const TEXT_PLATFORM_MATCHERS: ReadonlyArray<{
+  platform: SessionClientPlatformId;
+  needles: readonly string[];
+}> = [
+  { platform: 'cursor', needles: ['cursor'] },
+  { platform: 'windsurf', needles: ['windsurf'] },
+  { platform: 'gemini-cli', needles: ['gemini'] },
+  { platform: 'cline', needles: ['cline'] },
+  { platform: 'lmstudio', needles: ['lmstudio', 'lm studio'] },
+  { platform: 'claude-desktop', needles: ['claude desktop'] },
+  { platform: 'claude-code', needles: ['claude code'] },
+  { platform: 'codex', needles: ['codex'] },
+];
 
 export function normalizeSessionClientPlatformId(
   value: string | null | undefined,
@@ -73,6 +91,7 @@ export function detectSessionClientPlatformId(
   const argvText = normalizeText(argv.join(' '));
   const execPathText = normalizeText(execPath);
   const titleText = normalizeText(title);
+  const textSources = [argvText, execPathText, titleText];
 
   if (env.CLAUDE_DESKTOP === 'true' || env.CLAUDE_DESKTOP_VERSION) {
     return 'claude-desktop';
@@ -96,40 +115,10 @@ export function detectSessionClientPlatformId(
     return 'codex';
   }
 
-  if (includesAny(argvText, ['cursor']) || includesAny(execPathText, ['cursor']) || includesAny(titleText, ['cursor'])) {
-    return 'cursor';
-  }
-
-  if (includesAny(argvText, ['windsurf']) || includesAny(execPathText, ['windsurf']) || includesAny(titleText, ['windsurf'])) {
-    return 'windsurf';
-  }
-
-  if (includesAny(argvText, ['gemini']) || includesAny(execPathText, ['gemini']) || includesAny(titleText, ['gemini'])) {
-    return 'gemini-cli';
-  }
-
-  if (includesAny(argvText, ['cline']) || includesAny(execPathText, ['cline']) || includesAny(titleText, ['cline'])) {
-    return 'cline';
-  }
-
-  if (
-    includesAny(argvText, ['lmstudio', 'lm studio']) ||
-    includesAny(execPathText, ['lmstudio', 'lm studio']) ||
-    includesAny(titleText, ['lmstudio', 'lm studio'])
-  ) {
-    return 'lmstudio';
-  }
-
-  if (includesAny(argvText, ['claude desktop']) || includesAny(execPathText, ['claude desktop']) || includesAny(titleText, ['claude desktop'])) {
-    return 'claude-desktop';
-  }
-
-  if (includesAny(argvText, ['claude code']) || includesAny(execPathText, ['claude code']) || includesAny(titleText, ['claude code'])) {
-    return 'claude-code';
-  }
-
-  if (includesAny(argvText, ['codex']) || includesAny(execPathText, ['codex']) || includesAny(titleText, ['codex'])) {
-    return 'codex';
+  for (const matcher of TEXT_PLATFORM_MATCHERS) {
+    if (matchesAnySource(textSources, matcher.needles)) {
+      return matcher.platform;
+    }
   }
 
   return null;

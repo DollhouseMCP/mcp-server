@@ -668,6 +668,7 @@
           var updateBadge = document.createElement('span');
           updateBadge.className = 'session-dropdown-update';
           updateBadge.textContent = 'Update available';
+          updateBadge.title = 'A newer local DollhouseMCP session version is active.';
           metaRow.appendChild(updateBadge);
         }
 

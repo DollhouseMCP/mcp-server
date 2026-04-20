@@ -30,12 +30,22 @@ describe('sessionClientPlatform', () => {
 
   it('detects Codex from CODEX_HOME', () => {
     const detected = detectSessionClientPlatformId(
-      { CODEX_HOME: '/tmp/codex-home' },
+      { CODEX_HOME: '/Users/test/.codex' },
       ['node', 'dist/index.js'],
       '/usr/local/bin/node',
       'node',
     );
     expect(detected).toBe('codex');
+  });
+
+  it('detects Gemini CLI from argv text when no explicit env markers exist', () => {
+    const detected = detectSessionClientPlatformId(
+      {},
+      ['node', '/Applications/Gemini CLI.app/Contents/MacOS/gemini'],
+      '/usr/local/bin/node',
+      'node',
+    );
+    expect(detected).toBe('gemini-cli');
   });
 
   it('returns null when the host cannot be identified confidently', () => {
