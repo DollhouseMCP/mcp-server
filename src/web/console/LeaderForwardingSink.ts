@@ -78,13 +78,16 @@ type SessionLeaseInput = SessionLeaseState | string | null;
  * the leader-assigned authoritative display name once the leader responds.
  */
 export class SessionLeaseState {
-  private assignedDisplayName: string | null = null;
+  private assignedDisplayName: string | null;
 
   constructor(
     private readonly preferredDisplayName: string,
     private readonly stableSessionId: string | null = null,
     private readonly onAssignedDisplayName?: (displayName: string) => void,
-  ) {}
+    initialAssignedDisplayName: string | null = null,
+  ) {
+    this.assignedDisplayName = initialAssignedDisplayName;
+  }
 
   getDisplayName(): string {
     return this.assignedDisplayName ?? this.preferredDisplayName;
@@ -354,6 +357,7 @@ export class SessionHeartbeat {
     /** Local mutable lease state for this runtime session. */
     leaseStateOrDisplayName: SessionLeaseInput = null,
     stableSessionId: string | null = null,
+    private readonly startedAt: string = new Date().toISOString(),
   ) {
     this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);
   }
@@ -390,7 +394,7 @@ export class SessionHeartbeat {
           ...(this.leaseState ? buildLeasePayload(this.leaseState) : {}),
           event,
           pid: this.pid,
-          startedAt: new Date().toISOString(),
+          startedAt: this.startedAt,
           serverVersion: PACKAGE_VERSION,
           consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
         }),
