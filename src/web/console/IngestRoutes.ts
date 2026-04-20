@@ -21,7 +21,11 @@ import type { UnifiedLogEntry } from '../../logging/types.js';
 import type { MetricSnapshot } from '../../metrics/types.js';
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
-import { SessionNamePool } from './SessionNames.js';
+import {
+  SessionNamePool,
+  derivePreferredSessionName,
+  getPuppetColor,
+} from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
@@ -56,6 +60,8 @@ const ENDED_PURGE_MS = 5 * 60_000; // 5 minutes
 export interface SessionInfo {
   /** Unique identifier for this session (UUID or `console-<pid>`). */
   sessionId: string;
+  /** Stable cross-restart/session identity when the host provides one. */
+  stableSessionId: string | null;
   /** Friendly puppet name (e.g., "Kermit", "Punch") or "Web Console". */
   displayName: string;
   /** Canonical hex color for this puppet character. */
@@ -85,6 +91,8 @@ export interface SessionInfo {
  */
 export interface IngestLogPayload {
   sessionId: string;
+  stableSessionId?: string;
+  displayName?: string;
   entries: UnifiedLogEntry[];
 }
 
@@ -93,6 +101,8 @@ export interface IngestLogPayload {
  */
 export interface IngestMetricsPayload {
   sessionId: string;
+  stableSessionId?: string;
+  displayName?: string;
   snapshot: MetricSnapshot;
 }
 
@@ -101,6 +111,8 @@ export interface IngestMetricsPayload {
  */
 export interface SessionEventPayload {
   sessionId: string;
+  stableSessionId?: string;
+  displayName?: string;
   event: 'started' | 'stopped' | 'heartbeat';
   pid: number;
   startedAt: string;
@@ -129,7 +141,12 @@ export interface IngestRoutesResult {
   /** Import active follower sessions from a displaced leader during takeover. */
   importSessions: (sessions: SessionInfo[]) => void;
   /** Register the leader as a session */
-  registerLeaderSession: (sessionId: string, pid: number) => void;
+  registerLeaderSession: (
+    sessionId: string,
+    pid: number,
+    displayName?: string,
+    stableSessionId?: string,
+  ) => void;
   /** Register the web console as a session so the indicator is never empty (#1805) */
   registerConsoleSession: () => void;
 }
@@ -137,6 +154,14 @@ export interface IngestRoutesResult {
 /** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
 function normalizeInput(s: string): string {
   return UnicodeValidator.normalize(s).normalizedContent;
+}
+
+function normalizeOptionalInput(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = normalizeInput(value).trim();
+  return normalized || undefined;
 }
 
 function normalizeServerVersion(version?: string): string {
@@ -201,13 +226,21 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     authenticated = false,
     serverVersion?: string,
     consoleProtocolVersion?: number,
+    displayName?: string,
+    stableSessionId?: string,
   ): SessionInfo | null {
     try {
-      const displayName = namePool.assign(sessionId);
-      const color = namePool.getColor(sessionId) ?? '#3b82f6';
+      const preferredDisplayName = normalizeOptionalInput(displayName);
+      const resolvedDisplayName = preferredDisplayName
+        ? namePool.adopt(sessionId, preferredDisplayName)
+        : namePool.assign(sessionId);
+      const color = namePool.getColor(sessionId) ?? getPuppetColor(resolvedDisplayName) ?? '#3b82f6';
       const now = new Date().toISOString();
       const info: SessionInfo = {
-        sessionId, displayName, color,
+        sessionId,
+        stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+        displayName: resolvedDisplayName,
+        color,
         pid: pid || 0,
         startedAt: now, lastHeartbeat: now,
         status: 'active', isLeader: false, authenticated, kind: 'mcp',
@@ -216,7 +249,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       };
       sessions.set(sessionId, info);
       logger.info('[IngestRoutes] Auto-registered orphaned session', {
-        displayName, sessionId, source: pid ? 'heartbeat' : 'ingestion',
+        displayName: resolvedDisplayName, sessionId, source: pid ? 'heartbeat' : 'ingestion',
       });
       broadcasts.sessionBroadcast?.(info);
       return info;
@@ -238,6 +271,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     authenticated = false,
     serverVersion?: string,
     consoleProtocolVersion?: number,
+    displayName?: string,
+    stableSessionId?: string,
   ): SessionInfo | null {
     if (killedSessions.has(sessionId)) return null;
     if (pendingKills.has(sessionId)) {
@@ -247,7 +282,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     const existing = sessions.get(sessionId);
     if (!existing) {
-      return autoRegister(sessionId, pid, authenticated, serverVersion, consoleProtocolVersion);
+      return autoRegister(
+        sessionId,
+        pid,
+        authenticated,
+        serverVersion,
+        consoleProtocolVersion,
+        displayName,
+        stableSessionId,
+      );
     }
 
     importedSessionGraceUntil.delete(sessionId);
@@ -270,6 +313,18 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
     if (consoleProtocolVersion !== undefined) {
       existing.consoleProtocolVersion = normalizeConsoleProtocolVersion(consoleProtocolVersion);
+    }
+    const preferredDisplayName = normalizeOptionalInput(displayName);
+    if (preferredDisplayName) {
+      const resolvedDisplayName = namePool.reassign(sessionId, preferredDisplayName, existing.isLeader);
+      if (resolvedDisplayName !== existing.displayName) {
+        existing.displayName = resolvedDisplayName;
+        existing.color = getPuppetColor(resolvedDisplayName) ?? existing.color;
+      }
+    }
+    const normalizedStableSessionId = normalizeOptionalInput(stableSessionId);
+    if (normalizedStableSessionId) {
+      existing.stableSessionId = normalizedStableSessionId;
     }
     return existing;
   }
@@ -294,6 +349,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
+    const payloadDisplayName = normalizeOptionalInput(payload.displayName);
+    const payloadStableSessionId = normalizeOptionalInput(payload.stableSessionId);
 
     let count = 0;
     let skipped = 0;
@@ -308,7 +365,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
-    const session = ensureSession(payload.sessionId);
+    const session = ensureSession(
+      payload.sessionId,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      payloadDisplayName,
+      payloadStableSessionId,
+    );
 
     if (skipped > 0) {
       logger.debug(`[IngestRoutes] Log ingest from ${session?.displayName ?? payload.sessionId}: accepted=${count}, skipped=${skipped}`);
@@ -334,6 +399,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
+    const payloadDisplayName = normalizeOptionalInput(payload.displayName);
+    const payloadStableSessionId = normalizeOptionalInput(payload.stableSessionId);
 
     if (broadcasts.metricsOnSnapshot) {
       broadcasts.metricsOnSnapshot(payload.snapshot);
@@ -343,7 +410,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
 
     // Update heartbeat, revive ended sessions, or auto-register orphans (#1870)
-    const session = ensureSession(payload.sessionId);
+    const session = ensureSession(
+      payload.sessionId,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      payloadDisplayName,
+      payloadStableSessionId,
+    );
     logger.debug(`[IngestRoutes] Metrics ingested from ${session?.displayName ?? payload.sessionId}`);
     res.status(200).json({ accepted: true });
   });
@@ -360,6 +435,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       return;
     }
     payload.sessionId = normalizeInput(payload.sessionId);
+    const payloadDisplayName = normalizeOptionalInput(payload.displayName);
+    const payloadStableSessionId = normalizeOptionalInput(payload.stableSessionId);
 
     const now = new Date().toISOString();
 
@@ -369,11 +446,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         if (killedSessions.has(payload.sessionId)) break;
         if (pendingKills.has(payload.sessionId)) { finalizePendingKill(payload.sessionId, payload.pid); break; }
 
-        const displayName = namePool.assign(payload.sessionId);
-        const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
+        const preferredDisplayName = payloadDisplayName ?? derivePreferredSessionName(payload.sessionId);
+        const displayName = namePool.adopt(payload.sessionId, preferredDisplayName);
+        const color = namePool.getColor(payload.sessionId) ?? getPuppetColor(displayName) ?? '#3b82f6';
         const isAuthenticated = Boolean((res as any).locals?.tokenEntry);
         sessions.set(payload.sessionId, {
-          sessionId: payload.sessionId, displayName, color,
+          sessionId: payload.sessionId,
+          stableSessionId: payloadStableSessionId ?? null,
+          displayName,
+          color,
           pid: payload.pid, startedAt: payload.startedAt || now, lastHeartbeat: now,
           status: 'active', isLeader: false, authenticated: isAuthenticated, kind: 'mcp',
           serverVersion: normalizeServerVersion(payload.serverVersion),
@@ -408,6 +489,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           false,
           payload.serverVersion,
           payload.consoleProtocolVersion,
+          payloadDisplayName,
+          payloadStableSessionId,
         );
         break;
       }
@@ -595,6 +678,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       const color = imported.color || namePool.getColor(normalizedSessionId) || '#3b82f6';
       const merged: SessionInfo = {
         sessionId: normalizedSessionId,
+        stableSessionId: imported.stableSessionId ?? existing?.stableSessionId ?? null,
         displayName,
         color,
         pid: imported.pid || existing?.pid || 0,
@@ -616,12 +700,19 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
   }
 
-  function registerLeaderSession(sessionId: string, pid: number): void {
-    const displayName = namePool.assign(sessionId, true);
-    const color = namePool.getColor(sessionId) ?? '#3b82f6';
+  function registerLeaderSession(
+    sessionId: string,
+    pid: number,
+    displayName?: string,
+    stableSessionId?: string,
+  ): void {
+    const preferredDisplayName = normalizeOptionalInput(displayName) ?? derivePreferredSessionName(sessionId, true);
+    const resolvedDisplayName = namePool.adopt(sessionId, preferredDisplayName, true);
+    const color = namePool.getColor(sessionId) ?? getPuppetColor(resolvedDisplayName) ?? '#3b82f6';
     sessions.set(sessionId, {
       sessionId,
-      displayName,
+      stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+      displayName: resolvedDisplayName,
       color,
       pid,
       startedAt: new Date().toISOString(),
@@ -633,7 +724,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       serverVersion: PACKAGE_VERSION,
       consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
     });
-    logger.info('[IngestRoutes] Leader session registered', { displayName, sessionId, pid, color });
+    logger.info('[IngestRoutes] Leader session registered', {
+      displayName: resolvedDisplayName,
+      sessionId,
+      stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+      pid,
+      color,
+    });
   }
 
   /**
@@ -647,6 +744,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     const displayName = 'Web Console';
     sessions.set(consoleId, {
       sessionId: consoleId,
+      stableSessionId: null,
       displayName,
       color: '#6366f1', // indigo — distinct from puppet greens/blues
       pid: process.pid,

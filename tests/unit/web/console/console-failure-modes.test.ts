@@ -476,6 +476,8 @@ describe('Console Failure Modes', () => {
           'test-session',
           process.pid,
           null,
+          'Bunraku',
+          'claude-code-main',
         );
 
         await heartbeat.start();
@@ -485,6 +487,8 @@ describe('Console Failure Modes', () => {
         const body = parseRequestBody((firstCall?.[1] as RequestInit | undefined)?.body);
         expect(body.serverVersion).toBe(PACKAGE_VERSION);
         expect(body.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
+        expect(body.displayName).toBe('Bunraku');
+        expect(body.stableSessionId).toBe('claude-code-main');
       } finally {
         fetchSpy.mockRestore();
       }

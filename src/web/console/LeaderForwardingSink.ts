@@ -76,6 +76,10 @@ export class LeaderForwardingLogSink implements ILogSink {
     private readonly authToken: string | null = null,
     /** Callback invoked when the leader is presumed dead after MAX_CONSECUTIVE_FAILURES (#1850). */
     private readonly onLeaderDeath?: () => void,
+    /** Canonical local display name for this runtime session. */
+    private readonly sessionDisplayName: string | null = null,
+    /** Stable session identity shared across restarts when available. */
+    private readonly stableSessionId: string | null = null,
   ) {
     this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
     this.flushTimer = setInterval(() => this.flushBuffer(), FLUSH_INTERVAL_MS);
@@ -124,7 +128,12 @@ export class LeaderForwardingLogSink implements ILogSink {
       const response = await fetch(`${this.leaderUrl}/api/ingest/logs`, {
         method: 'POST',
         headers: buildIngestHeaders(this.authToken),
-        body: JSON.stringify({ sessionId: this.sessionId, entries: batch }),
+        body: JSON.stringify({
+          sessionId: this.sessionId,
+          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
+          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
+          entries: batch,
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -189,6 +198,10 @@ export class LeaderForwardingMetricsSink {
     private readonly sessionId: string,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
+    /** Canonical local display name for this runtime session. */
+    private readonly sessionDisplayName: string | null = null,
+    /** Stable session identity shared across restarts when available. */
+    private readonly stableSessionId: string | null = null,
   ) {}
 
   async onSnapshot(snapshot: MetricSnapshot): Promise<void> {
@@ -199,7 +212,12 @@ export class LeaderForwardingMetricsSink {
       await fetch(`${this.leaderUrl}/api/ingest/metrics`, {
         method: 'POST',
         headers: buildIngestHeaders(this.authToken),
-        body: JSON.stringify({ sessionId: this.sessionId, snapshot }),
+        body: JSON.stringify({
+          sessionId: this.sessionId,
+          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
+          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
+          snapshot,
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -221,6 +239,10 @@ export class SessionHeartbeat {
     private readonly pid: number,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
+    /** Canonical local display name for this runtime session. */
+    private readonly sessionDisplayName: string | null = null,
+    /** Stable session identity shared across restarts when available. */
+    private readonly stableSessionId: string | null = null,
   ) {}
 
   /** Notify the leader that this session has started */
@@ -252,6 +274,8 @@ export class SessionHeartbeat {
         headers: buildIngestHeaders(this.authToken),
         body: JSON.stringify({
           sessionId: this.sessionId,
+          ...(this.stableSessionId ? { stableSessionId: this.stableSessionId } : {}),
+          ...(this.sessionDisplayName ? { displayName: this.sessionDisplayName } : {}),
           event,
           pid: this.pid,
           startedAt: new Date().toISOString(),

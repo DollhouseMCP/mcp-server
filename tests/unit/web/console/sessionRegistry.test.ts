@@ -133,6 +133,7 @@ describe('Session registry (#1805)', () => {
       ingestResult.importSessions([
         {
           sessionId: 'old-leader',
+          stableSessionId: null,
           displayName: 'Leader',
           color: '#111111',
           pid: 11,
@@ -147,6 +148,7 @@ describe('Session registry (#1805)', () => {
         },
         {
           sessionId: 'old-console',
+          stableSessionId: null,
           displayName: 'Web Console',
           color: '#222222',
           pid: 12,
@@ -161,6 +163,7 @@ describe('Session registry (#1805)', () => {
         },
         {
           sessionId: 'older-follower',
+          stableSessionId: null,
           displayName: 'Kermit',
           color: '#00ff00',
           pid: 13,
@@ -236,6 +239,28 @@ describe('Session registry (#1805)', () => {
       expect(follower.serverVersion).toBe('2.0.99');
       expect(follower.consoleProtocolVersion).toBe(1);
     });
+
+    it('preserves follower-provided display names and stable session identity', async () => {
+      const app = buildApp(ingestResult);
+
+      await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'follower-identity-001',
+          stableSessionId: 'claude-code-main',
+          displayName: 'Bunraku',
+          event: 'started',
+          pid: 12345,
+          startedAt: new Date().toISOString(),
+        });
+
+      const res = await request(app).get('/api/sessions');
+      expect(res.status).toBe(200);
+      const follower = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'follower-identity-001');
+      expect(follower).toBeDefined();
+      expect(follower.displayName).toBe('Bunraku');
+      expect(follower.stableSessionId).toBe('claude-code-main');
+    });
   });
 
   describe('stale session reaper', () => {
@@ -280,6 +305,7 @@ describe('Session registry (#1805)', () => {
         ingestResult.importSessions([
           {
             sessionId: 'imported-follower',
+            stableSessionId: 'claude-code-main',
             displayName: 'Bunraku',
             color: '#123456',
             pid: 77,
@@ -313,6 +339,7 @@ describe('Session registry (#1805)', () => {
       const session = ingestResult.getSessions()[0];
       expect(session).toEqual(expect.objectContaining({
         sessionId: 'leader-001',
+        stableSessionId: null,
         pid: process.pid,
         status: 'active',
         isLeader: true,
@@ -331,6 +358,7 @@ describe('Session registry (#1805)', () => {
       ingestResult.registerConsoleSession();
       const session = ingestResult.getSessions()[0];
       expect(session).toEqual(expect.objectContaining({
+        stableSessionId: null,
         displayName: 'Web Console',
         pid: process.pid,
         status: 'active',

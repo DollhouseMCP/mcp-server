@@ -1163,7 +1163,7 @@ async function startAsLeader(
   consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
-  const { pickRandomTokenName } = await import('./SessionNames.js');
+  const { derivePreferredSessionName, pickRandomTokenName } = await import('./SessionNames.js');
 
   // Initialize the console token store (#1780). Creates the token file on
   // first run, reads the existing tokens on subsequent runs. The token is
@@ -1257,7 +1257,12 @@ async function startAsLeader(
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.
-  ingestResult.registerLeaderSession(options.sessionId, process.pid);
+  ingestResult.registerLeaderSession(
+    options.sessionId,
+    process.pid,
+    derivePreferredSessionName(options.sessionId, true),
+    options.stableSessionId,
+  );
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
@@ -1336,6 +1341,9 @@ async function startAsFollower(
     logger.debug('[UnifiedConsole] No console auth token file found; follower will POST without Bearer header');
   }
 
+  const { derivePreferredSessionName } = await import('./SessionNames.js');
+  const preferredSessionName = derivePreferredSessionName(options.sessionId);
+
   // Per-instance promotion manager — tracks its own attempt counter so
   // multiple followers don't interfere with each other's promotion budgets.
   const promotionMgr = new PromotionManager(options, consolePort, startAsLeader, startAsFollower);
@@ -1345,14 +1353,28 @@ async function startAsFollower(
   let sessionHeartbeat: SessionHeartbeat;
 
   // Register a forwarding log sink with leader-death callback (#1850).
-  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId, authToken, () => {
+  const forwardingSink = new LeaderForwardingLogSink(
+    leaderUrl,
+    options.sessionId,
+    authToken,
+    () => {
     promotionMgr.promote(forwardingSink, sessionHeartbeat)
       .catch(err => logger.error('[UnifiedConsole] Promotion crashed', { error: String(err) }));
-  });
+    },
+    preferredSessionName,
+    options.stableSessionId,
+  );
   options.registerLogSink(forwardingSink);
 
   // Start session heartbeat to the leader
-  sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
+  sessionHeartbeat = new SessionHeartbeat(
+    leaderUrl,
+    options.sessionId,
+    process.pid,
+    authToken,
+    preferredSessionName,
+    options.stableSessionId,
+  );
   await sessionHeartbeat.start();
 
   const stopAuthorityMonitor = startFollowerAuthorityMonitor(

@@ -9,7 +9,7 @@
  * @since v2.1.0 — Issue #1700
  */
 
-import { randomInt } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
 
 /**
@@ -116,6 +116,12 @@ function shuffleArray<T>(arr: T[]): T[] {
 /** Shuffled copy of the name pool — randomized on each process start */
 const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
 
+function getAssignablePuppetNames(isLeader = false): readonly string[] {
+  return isLeader
+    ? ALL_PUPPET_NAMES.filter(name => !FOLLOWER_ONLY_NAMES.has(name))
+    : ALL_PUPPET_NAMES;
+}
+
 /**
  * Iconic attire and accessories drawn from famous dolls, puppets, and
  * theatrical characters throughout history. Used to name console tokens
@@ -189,6 +195,20 @@ export function pickRandomTokenName(): string {
 }
 
 /**
+ * Derive a stable preferred puppet name for a runtime session.
+ *
+ * This lets followers and leaders agree on a canonical human-facing name for
+ * the same runtime session before the leader decides whether it can reserve
+ * that name in the active pool.
+ */
+export function derivePreferredSessionName(sessionId: string, isLeader = false): string {
+  const candidates = getAssignablePuppetNames(isLeader);
+  const digest = createHash('sha256').update(sessionId, 'utf8').digest();
+  const index = digest.readUInt32BE(0) % candidates.length;
+  return candidates[index];
+}
+
+/**
  * Canonical colors for each puppet character.
  * Adjusted from true canonical colors for UI readability in both light/dark themes.
  */
@@ -255,6 +275,10 @@ const PUPPET_COLORS: Record<string, string> = {
   'Betsy':        '#DD7694', // rose pink
   'Madeline':     '#FFD700', // yellow hat
 };
+
+export function getPuppetColor(name: string): string | undefined {
+  return PUPPET_COLORS[name] ?? undefined;
+}
 
 /** Cooldown period before a released name can be reused (ms) */
 const NAME_COOLDOWN_MS = 5 * 60_000; // 5 minutes
@@ -331,7 +355,11 @@ export class SessionNamePool {
 
     this.flushCooldowns();
 
-    if (!this.nameToSession.has(name) && !(isLeader && FOLLOWER_ONLY_NAMES.has(name))) {
+    if (
+      ALL_PUPPET_NAMES.includes(name) &&
+      !this.nameToSession.has(name) &&
+      !(isLeader && FOLLOWER_ONLY_NAMES.has(name))
+    ) {
       this.assigned.set(sessionId, name);
       this.nameToSession.set(name, sessionId);
       this.cooldown = this.cooldown.filter(entry => entry.name !== name);
@@ -340,6 +368,35 @@ export class SessionNamePool {
     }
 
     return this.assign(sessionId, isLeader);
+  }
+
+  /**
+   * Update an existing session to a canonical preferred name when the new name
+   * is available. If another live session already owns that name, the current
+   * assignment is preserved to avoid churn.
+   */
+  reassign(sessionId: string, name: string, isLeader = false): string {
+    const existing = this.assigned.get(sessionId);
+    if (!existing) {
+      return this.adopt(sessionId, name, isLeader);
+    }
+
+    if (existing === name) {
+      return existing;
+    }
+
+    const currentOwner = this.nameToSession.get(name);
+    if (currentOwner && currentOwner !== sessionId) {
+      return existing;
+    }
+
+    this.assigned.delete(sessionId);
+    this.nameToSession.delete(existing);
+    if (ALL_PUPPET_NAMES.includes(existing)) {
+      this.cooldown.push({ name: existing, releasedAt: Date.now() });
+    }
+
+    return this.adopt(sessionId, name, isLeader);
   }
 
   /**
@@ -372,7 +429,7 @@ export class SessionNamePool {
    */
   getColor(sessionId: string): string | undefined {
     const name = this.assigned.get(sessionId);
-    return name ? (PUPPET_COLORS[name] ?? undefined) : undefined;
+    return name ? getPuppetColor(name) : undefined;
   }
 
   /**

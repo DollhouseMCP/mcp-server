@@ -334,6 +334,7 @@ describe('fetchLeaderSessionsSnapshot', () => {
         sessions: [
           {
             sessionId: 'older-follower',
+            stableSessionId: null,
             displayName: 'Kermit',
             color: '#00ff00',
             pid: 4567,
@@ -356,12 +357,13 @@ describe('fetchLeaderSessionsSnapshot', () => {
       headers: { Authorization: 'Bearer token-123' },
       signal: expect.any(AbortSignal),
     }));
-    expect(result).toEqual([
-      expect.objectContaining({
-        sessionId: 'older-follower',
-        displayName: 'Kermit',
-      }),
-    ]);
+      expect(result).toEqual([
+        expect.objectContaining({
+          sessionId: 'older-follower',
+          stableSessionId: null,
+          displayName: 'Kermit',
+        }),
+      ]);
   });
 });
 
