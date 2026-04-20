@@ -34,6 +34,7 @@ import {
   CONSOLE_PROTOCOL_VERSION,
   LEGACY_CONSOLE_PROTOCOL_VERSION,
 } from './LeaderElection.js';
+import type { ConsoleTokenEntry } from './consoleToken.js';
 
 /** Maximum payload size for ingestion requests */
 const MAX_PAYLOAD_SIZE = '1mb';
@@ -209,6 +210,10 @@ interface SessionLeaseResolution {
   resolution: 'runtime-renewal' | 'stable-resume' | 'new-allocation';
 }
 
+interface IngestRouteLocals {
+  tokenEntry?: ConsoleTokenEntry;
+}
+
 interface SessionDisplayNameHints {
   displayName?: string;
   preferredDisplayName?: string;
@@ -269,6 +274,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   // (every 10s) carries the PID — we SIGTERM immediately and move to killedSessions.
   const pendingKills = new Set<string>();
   const importedSessionGraceUntil = new Map<string, number>();
+  // Bounded observability counters for lease-flow debugging. This object keeps a
+  // fixed set of numeric totals and does not grow with session count.
   const metadataSyncCounters = {
     displayNameAdoptions: 0,
     stableSessionBindings: 0,
@@ -643,7 +650,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   /**
    * POST /api/ingest/session — Session lifecycle events.
    */
-  router.post('/api/ingest/session', (req: Request, res: Response) => {
+  router.post('/api/ingest/session', (req: Request, res: Response<unknown, IngestRouteLocals>) => {
     const payload = req.body as SessionEventPayload;
     if (!payload?.sessionId || !payload.event) {
       const received = payload ? Object.keys(payload) : [];
@@ -672,7 +679,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           lastAssignedDisplayName: payloadLastAssignedDisplayName,
           pid: payload.pid,
           startedAt: payload.startedAt || now,
-          authenticated: Boolean((res as any).locals?.tokenEntry),
+          authenticated: Boolean(res.locals.tokenEntry),
           kind: 'mcp',
           isLeader: false,
           serverVersion: payload.serverVersion,

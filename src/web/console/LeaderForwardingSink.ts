@@ -57,6 +57,13 @@ interface SessionLeaseSnapshot {
   sessionId: string;
 }
 
+/**
+ * Minimal leader response for session lifecycle events.
+ *
+ * `lease` is present when the leader has an active authoritative assignment
+ * for the runtime session. Older leaders or non-active sessions may return
+ * only `{ ok: true }`, which followers treat as "keep the current local view".
+ */
 interface SessionLeaseResponse {
   ok: boolean;
   lease?: SessionLeaseSnapshot;
