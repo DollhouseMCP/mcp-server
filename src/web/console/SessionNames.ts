@@ -116,10 +116,22 @@ function shuffleArray<T>(arr: T[]): T[] {
 /** Shuffled copy of the name pool — randomized on each process start */
 const PUPPET_NAMES: string[] = shuffleArray([...ALL_PUPPET_NAMES]);
 
-function getAssignablePuppetNames(isLeader = false): readonly string[] {
-  return isLeader
-    ? ALL_PUPPET_NAMES.filter(name => !FOLLOWER_ONLY_NAMES.has(name))
-    : ALL_PUPPET_NAMES;
+const LEADER_ASSIGNABLE_PUPPET_NAMES = ALL_PUPPET_NAMES.filter(
+  name => !FOLLOWER_ONLY_NAMES.has(name),
+);
+
+function getFollowerAssignablePuppetNames(): readonly string[] {
+  return ALL_PUPPET_NAMES;
+}
+
+function getLeaderAssignablePuppetNames(): readonly string[] {
+  return LEADER_ASSIGNABLE_PUPPET_NAMES;
+}
+
+function derivePreferredNameFromCandidates(sessionId: string, candidates: readonly string[]): string {
+  const digest = createHash('sha256').update(sessionId, 'utf8').digest();
+  const index = digest.readUInt32BE(0) % candidates.length;
+  return candidates[index];
 }
 
 /**
@@ -197,15 +209,21 @@ export function pickRandomTokenName(): string {
 /**
  * Derive a stable preferred puppet name for a runtime session.
  *
- * This lets followers and leaders agree on a canonical human-facing name for
- * the same runtime session before the leader decides whether it can reserve
- * that name in the active pool.
+ * This gives followers a deterministic local preference before the active
+ * leader grants the authoritative leased display name.
  */
-export function derivePreferredSessionName(sessionId: string, isLeader = false): string {
-  const candidates = getAssignablePuppetNames(isLeader);
-  const digest = createHash('sha256').update(sessionId, 'utf8').digest();
-  const index = digest.readUInt32BE(0) % candidates.length;
-  return candidates[index];
+export function derivePreferredFollowerSessionName(sessionId: string): string {
+  return derivePreferredNameFromCandidates(sessionId, getFollowerAssignablePuppetNames());
+}
+
+/**
+ * Derive a stable preferred puppet name for a leader runtime session.
+ *
+ * Leader sessions use the same deterministic derivation as followers, but
+ * they exclude follower-only names such as `Punch`.
+ */
+export function derivePreferredLeaderSessionName(sessionId: string): string {
+  return derivePreferredNameFromCandidates(sessionId, getLeaderAssignablePuppetNames());
 }
 
 /**
@@ -299,13 +317,19 @@ export class SessionNamePool {
   /** Names in cooldown after session end */
   private cooldown: CooldownEntry[] = [];
 
+  assign(sessionId: string): string {
+    return this.assignFromCandidates(sessionId, getFollowerAssignablePuppetNames());
+  }
+
   /**
-   * Assign a friendly name to a session.
-   * Returns an existing assignment if the session already has one.
-   *
-   * @param isLeader - If true, follower-only names (e.g., Punch) are excluded
+   * Assign a friendly name to a leader session.
+   * Leader sessions exclude follower-only names such as `Punch`.
    */
-  assign(sessionId: string, isLeader = false): string {
+  assignLeader(sessionId: string): string {
+    return this.assignFromCandidates(sessionId, getLeaderAssignablePuppetNames());
+  }
+
+  private assignFromCandidates(sessionId: string, candidates: readonly string[]): string {
     // Already assigned?
     const existing = this.assigned.get(sessionId);
     if (existing) return existing;
@@ -313,12 +337,12 @@ export class SessionNamePool {
     // Flush expired cooldowns
     this.flushCooldowns();
 
-    // Find an available name, respecting leader restrictions
+    // Find an available name within the allowed candidate set.
     const cooldownNames = new Set(this.cooldown.map(c => c.name));
     const availableName = PUPPET_NAMES.find(
-      name => !this.nameToSession.has(name) &&
-              !cooldownNames.has(name) &&
-              !(isLeader && FOLLOWER_ONLY_NAMES.has(name))
+      name => candidates.includes(name) &&
+        !this.nameToSession.has(name) &&
+        !cooldownNames.has(name),
     );
 
     if (availableName) {
@@ -349,17 +373,24 @@ export class SessionNamePool {
    * If the requested name is already taken by another live session, the pool
    * falls back to normal assignment logic rather than creating a duplicate.
    */
-  adopt(sessionId: string, name: string, isLeader = false): string {
+  adopt(sessionId: string, name: string): string {
+    return this.adoptFromCandidates(sessionId, name, getFollowerAssignablePuppetNames());
+  }
+
+  /**
+   * Preserve an existing leader-facing assignment while excluding follower-only names.
+   */
+  adoptLeader(sessionId: string, name: string): string {
+    return this.adoptFromCandidates(sessionId, name, getLeaderAssignablePuppetNames());
+  }
+
+  private adoptFromCandidates(sessionId: string, name: string, candidates: readonly string[]): string {
     const existing = this.assigned.get(sessionId);
     if (existing) return existing;
 
     this.flushCooldowns();
 
-    if (
-      ALL_PUPPET_NAMES.includes(name) &&
-      !this.nameToSession.has(name) &&
-      !(isLeader && FOLLOWER_ONLY_NAMES.has(name))
-    ) {
+    if (candidates.includes(name) && !this.nameToSession.has(name)) {
       this.assigned.set(sessionId, name);
       this.nameToSession.set(name, sessionId);
       this.cooldown = this.cooldown.filter(entry => entry.name !== name);
@@ -367,7 +398,7 @@ export class SessionNamePool {
       return name;
     }
 
-    return this.assign(sessionId, isLeader);
+    return this.assignFromCandidates(sessionId, candidates);
   }
 
   /**
@@ -375,10 +406,22 @@ export class SessionNamePool {
    * is available. If another live session already owns that name, the current
    * assignment is preserved to avoid churn.
    */
-  reassign(sessionId: string, name: string, isLeader = false): string {
+  reassign(sessionId: string, name: string): string {
+    return this.reassignFromCandidates(sessionId, name, getFollowerAssignablePuppetNames());
+  }
+
+  /**
+   * Reassign a leader session to a preferred name while preserving the
+   * leader-only exclusion rules.
+   */
+  reassignLeader(sessionId: string, name: string): string {
+    return this.reassignFromCandidates(sessionId, name, getLeaderAssignablePuppetNames());
+  }
+
+  private reassignFromCandidates(sessionId: string, name: string, candidates: readonly string[]): string {
     const existing = this.assigned.get(sessionId);
     if (!existing) {
-      return this.adopt(sessionId, name, isLeader);
+      return this.adoptFromCandidates(sessionId, name, candidates);
     }
 
     if (existing === name) {
@@ -396,7 +439,7 @@ export class SessionNamePool {
       this.cooldown.push({ name: existing, releasedAt: Date.now() });
     }
 
-    return this.adopt(sessionId, name, isLeader);
+    return this.adoptFromCandidates(sessionId, name, candidates);
   }
 
   /**

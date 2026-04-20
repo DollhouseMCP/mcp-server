@@ -11,7 +11,8 @@ import { describe, it, expect, jest } from '@jest/globals';
 import {
   ALL_PUPPET_NAMES,
   ALL_TOKEN_NAMES,
-  derivePreferredSessionName,
+  derivePreferredFollowerSessionName,
+  derivePreferredLeaderSessionName,
   getPuppetColor,
   pickRandomTokenName,
   SessionNamePool,
@@ -82,13 +83,13 @@ describe('pickRandomTokenName()', () => {
 
 describe('SessionNamePool', () => {
   it('derives a stable preferred name for the same runtime session', () => {
-    expect(derivePreferredSessionName('local-test-session')).toBe(
-      derivePreferredSessionName('local-test-session'),
+    expect(derivePreferredFollowerSessionName('local-test-session')).toBe(
+      derivePreferredFollowerSessionName('local-test-session'),
     );
   });
 
   it('derives different leader and follower preferences when Punch would be excluded', () => {
-    const leaderName = derivePreferredSessionName('leader-test-session', true);
+    const leaderName = derivePreferredLeaderSessionName('leader-test-session');
     expect(leaderName).not.toBe('Punch');
   });
 
@@ -125,7 +126,7 @@ describe('SessionNamePool', () => {
     const names = new Set<string>();
     // Assign enough sessions to exercise most of the pool
     for (let i = 0; i < 30; i++) {
-      names.add(pool.assign(`leader-${i}`, /* isLeader= */ true));
+      names.add(pool.assignLeader(`leader-${i}`));
     }
     expect(names.has('Punch')).toBe(false);
   });

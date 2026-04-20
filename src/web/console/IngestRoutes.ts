@@ -23,7 +23,8 @@ import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.j
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import {
   SessionNamePool,
-  derivePreferredSessionName,
+  derivePreferredFollowerSessionName,
+  derivePreferredLeaderSessionName,
   getPuppetColor,
 } from './SessionNames.js';
 import { logger } from '../../utils/logger.js';
@@ -90,9 +91,13 @@ export interface SessionInfo {
  * Payload for POST /api/ingest/logs
  */
 export interface IngestLogPayload {
+  /** Runtime-unique session identity for the follower sending the logs. */
   sessionId: string;
+  /** Stable cross-restart/session identity when the host provides one. */
   stableSessionId?: string;
+  /** Follower-provided canonical display name preference for this runtime session. */
   displayName?: string;
+  /** Batched log entries already stamped with follower-local metadata. */
   entries: UnifiedLogEntry[];
 }
 
@@ -100,9 +105,13 @@ export interface IngestLogPayload {
  * Payload for POST /api/ingest/metrics
  */
 export interface IngestMetricsPayload {
+  /** Runtime-unique session identity for the follower sending the snapshot. */
   sessionId: string;
+  /** Stable cross-restart/session identity when the host provides one. */
   stableSessionId?: string;
+  /** Follower-provided canonical display name preference for this runtime session. */
   displayName?: string;
+  /** Metric snapshot captured on the follower. */
   snapshot: MetricSnapshot;
 }
 
@@ -110,13 +119,21 @@ export interface IngestMetricsPayload {
  * Payload for POST /api/ingest/session
  */
 export interface SessionEventPayload {
+  /** Runtime-unique session identity for the follower emitting the event. */
   sessionId: string;
+  /** Stable cross-restart/session identity when the host provides one. */
   stableSessionId?: string;
+  /** Follower-provided canonical display name preference for this runtime session. */
   displayName?: string;
+  /** Lifecycle event that should renew, create, or retire the session lease. */
   event: 'started' | 'stopped' | 'heartbeat';
+  /** PID of the follower runtime emitting the event. */
   pid: number;
+  /** Original startup time reported by the follower runtime. */
   startedAt: string;
+  /** Package version reported by the follower runtime. */
   serverVersion?: string;
+  /** Console/session protocol version reported by the follower runtime. */
   consoleProtocolVersion?: number;
 }
 
@@ -199,6 +216,21 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
   // (every 10s) carries the PID — we SIGTERM immediately and move to killedSessions.
   const pendingKills = new Set<string>();
   const importedSessionGraceUntil = new Map<string, number>();
+  const metadataSyncCounters = {
+    displayNameAdoptions: 0,
+    displayNameReassignments: 0,
+    stableSessionBindings: 0,
+  };
+
+  function recordMetadataSync(event: keyof typeof metadataSyncCounters, sessionId: string, details: Record<string, unknown> = {}): void {
+    metadataSyncCounters[event] += 1;
+    logger.debug('[IngestRoutes] Session metadata synchronized', {
+      event,
+      sessionId,
+      total: metadataSyncCounters[event],
+      ...details,
+    });
+  }
 
   /** Execute a deferred kill if we now have a PID. */
   function tryExecutePendingKill(sessionId: string, pid?: number): void {
@@ -234,11 +266,18 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       const resolvedDisplayName = preferredDisplayName
         ? namePool.adopt(sessionId, preferredDisplayName)
         : namePool.assign(sessionId);
+      if (preferredDisplayName && resolvedDisplayName === preferredDisplayName) {
+        recordMetadataSync('displayNameAdoptions', sessionId, { displayName: resolvedDisplayName });
+      }
       const color = namePool.getColor(sessionId) ?? getPuppetColor(resolvedDisplayName) ?? '#3b82f6';
+      const normalizedStableSessionId = normalizeOptionalInput(stableSessionId) ?? null;
+      if (normalizedStableSessionId) {
+        recordMetadataSync('stableSessionBindings', sessionId, { stableSessionId: normalizedStableSessionId });
+      }
       const now = new Date().toISOString();
       const info: SessionInfo = {
         sessionId,
-        stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+        stableSessionId: normalizedStableSessionId,
         displayName: resolvedDisplayName,
         color,
         pid: pid || 0,
@@ -316,14 +355,21 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
     const preferredDisplayName = normalizeOptionalInput(displayName);
     if (preferredDisplayName) {
-      const resolvedDisplayName = namePool.reassign(sessionId, preferredDisplayName, existing.isLeader);
+      const resolvedDisplayName = existing.isLeader
+        ? namePool.reassignLeader(sessionId, preferredDisplayName)
+        : namePool.reassign(sessionId, preferredDisplayName);
       if (resolvedDisplayName !== existing.displayName) {
+        recordMetadataSync('displayNameReassignments', sessionId, {
+          previousDisplayName: existing.displayName,
+          nextDisplayName: resolvedDisplayName,
+        });
         existing.displayName = resolvedDisplayName;
         existing.color = getPuppetColor(resolvedDisplayName) ?? existing.color;
       }
     }
     const normalizedStableSessionId = normalizeOptionalInput(stableSessionId);
-    if (normalizedStableSessionId) {
+    if (normalizedStableSessionId && normalizedStableSessionId !== existing.stableSessionId) {
+      recordMetadataSync('stableSessionBindings', sessionId, { stableSessionId: normalizedStableSessionId });
       existing.stableSessionId = normalizedStableSessionId;
     }
     return existing;
@@ -446,13 +492,20 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         if (killedSessions.has(payload.sessionId)) break;
         if (pendingKills.has(payload.sessionId)) { finalizePendingKill(payload.sessionId, payload.pid); break; }
 
-        const preferredDisplayName = payloadDisplayName ?? derivePreferredSessionName(payload.sessionId);
+        const preferredDisplayName = payloadDisplayName ?? derivePreferredFollowerSessionName(payload.sessionId);
         const displayName = namePool.adopt(payload.sessionId, preferredDisplayName);
+        if (displayName === preferredDisplayName) {
+          recordMetadataSync('displayNameAdoptions', payload.sessionId, { displayName });
+        }
         const color = namePool.getColor(payload.sessionId) ?? getPuppetColor(displayName) ?? '#3b82f6';
         const isAuthenticated = Boolean((res as any).locals?.tokenEntry);
+        const normalizedStableSessionId = payloadStableSessionId ?? null;
+        if (normalizedStableSessionId) {
+          recordMetadataSync('stableSessionBindings', payload.sessionId, { stableSessionId: normalizedStableSessionId });
+        }
         sessions.set(payload.sessionId, {
           sessionId: payload.sessionId,
-          stableSessionId: payloadStableSessionId ?? null,
+          stableSessionId: normalizedStableSessionId,
           displayName,
           color,
           pid: payload.pid, startedAt: payload.startedAt || now, lastHeartbeat: now,
@@ -675,10 +728,23 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       const displayName = imported.displayName
         ? namePool.adopt(normalizedSessionId, imported.displayName)
         : namePool.assign(normalizedSessionId);
+      if (imported.displayName && displayName === imported.displayName) {
+        recordMetadataSync('displayNameAdoptions', normalizedSessionId, {
+          displayName,
+          source: 'takeover-import',
+        });
+      }
       const color = imported.color || namePool.getColor(normalizedSessionId) || '#3b82f6';
+      const normalizedStableSessionId = imported.stableSessionId ?? existing?.stableSessionId ?? null;
+      if (normalizedStableSessionId) {
+        recordMetadataSync('stableSessionBindings', normalizedSessionId, {
+          stableSessionId: normalizedStableSessionId,
+          source: 'takeover-import',
+        });
+      }
       const merged: SessionInfo = {
         sessionId: normalizedSessionId,
-        stableSessionId: imported.stableSessionId ?? existing?.stableSessionId ?? null,
+        stableSessionId: normalizedStableSessionId,
         displayName,
         color,
         pid: imported.pid || existing?.pid || 0,
@@ -706,12 +772,25 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     displayName?: string,
     stableSessionId?: string,
   ): void {
-    const preferredDisplayName = normalizeOptionalInput(displayName) ?? derivePreferredSessionName(sessionId, true);
-    const resolvedDisplayName = namePool.adopt(sessionId, preferredDisplayName, true);
+    const preferredDisplayName = normalizeOptionalInput(displayName) ?? derivePreferredLeaderSessionName(sessionId);
+    const resolvedDisplayName = namePool.adoptLeader(sessionId, preferredDisplayName);
+    if (resolvedDisplayName === preferredDisplayName) {
+      recordMetadataSync('displayNameAdoptions', sessionId, {
+        displayName: resolvedDisplayName,
+        source: 'leader-registration',
+      });
+    }
     const color = namePool.getColor(sessionId) ?? getPuppetColor(resolvedDisplayName) ?? '#3b82f6';
+    const normalizedStableSessionId = normalizeOptionalInput(stableSessionId) ?? null;
+    if (normalizedStableSessionId) {
+      recordMetadataSync('stableSessionBindings', sessionId, {
+        stableSessionId: normalizedStableSessionId,
+        source: 'leader-registration',
+      });
+    }
     sessions.set(sessionId, {
       sessionId,
-      stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+      stableSessionId: normalizedStableSessionId,
       displayName: resolvedDisplayName,
       color,
       pid,
@@ -727,7 +806,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     logger.info('[IngestRoutes] Leader session registered', {
       displayName: resolvedDisplayName,
       sessionId,
-      stableSessionId: normalizeOptionalInput(stableSessionId) ?? null,
+      stableSessionId: normalizedStableSessionId,
       pid,
       color,
     });

@@ -365,6 +365,49 @@ describe('fetchLeaderSessionsSnapshot', () => {
         }),
       ]);
   });
+
+  it('logs non-ok responses and returns an empty snapshot', async () => {
+    const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: false,
+      status: 503,
+      statusText: 'Service Unavailable',
+    } as Response);
+
+    try {
+      const result = await fetchLeaderSessionsSnapshot(41715, null, fetchStub);
+      expect(result).toEqual([]);
+      expect(debugSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Leader session snapshot request returned non-OK response',
+        expect.objectContaining({
+          port: 41715,
+          status: 503,
+          statusText: 'Service Unavailable',
+        }),
+      );
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
+
+  it('logs malformed snapshot payloads and returns an empty list', async () => {
+    const debugSpy = jest.spyOn(logger, 'debug').mockImplementation(() => {});
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      json: async () => ({ nope: [] }),
+    } as Response);
+
+    try {
+      const result = await fetchLeaderSessionsSnapshot(41715, null, fetchStub);
+      expect(result).toEqual([]);
+      expect(debugSpy).toHaveBeenCalledWith(
+        '[UnifiedConsole] Leader session snapshot response missing sessions array',
+        expect.objectContaining({ port: 41715 }),
+      );
+    } finally {
+      debugSpy.mockRestore();
+    }
+  });
 });
 
 describe('recoverLeaderBindFailure', () => {
