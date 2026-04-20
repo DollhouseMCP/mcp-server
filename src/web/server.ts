@@ -630,8 +630,9 @@ function attemptBind(
 }
 
 /**
- * Bind the Express app to 127.0.0.1:port. On EADDRINUSE, attempt to find
- * and kill the stale DollhouseMCP process holding the port, then retry once.
+ * Bind the Express app to 127.0.0.1:port. On EADDRINUSE, inspect the current
+ * port holder and retry only if a future recovery path proves it is safe to
+ * terminate.
  */
 async function bindAndListen(
   app: import('express').Express,
@@ -641,7 +642,8 @@ async function bindAndListen(
   const result = await attemptBind(app, port, options);
   if (result.success || result.error !== 'EADDRINUSE') return result;
 
-  // Port occupied — attempt stale process recovery and retry
+  // Port occupied — inspect the port holder. Recovery is intentionally
+  // non-destructive for verified DollhouseMCP sessions.
   if (await recoverStalePort(port)) {
     const retryResult = await attemptBind(app, port, options);
     if (retryResult.success) return retryResult;
