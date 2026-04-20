@@ -20,6 +20,7 @@ import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js
 import type { WebServerOptions, WebServerResult } from '../server.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
+import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import {
   electLeader,
   isLeaderWebConsoleReachable,
@@ -105,8 +106,8 @@ export interface UnifiedConsoleOptions {
   memorySink: MemoryLogSink;
   /** Metrics memory sink */
   metricsSink?: MemoryMetricsSink;
-  /** MCP-AQL handler for permission routes (typed as any to avoid circular imports) */
-  mcpAqlHandler?: any;
+  /** MCP-AQL handler for permission and gateway routes when the console is leader. */
+  mcpAqlHandler?: MCPAQLHandler;
   /** Callback to register a log sink with the LogManager */
   registerLogSink: (sink: { write(entry: UnifiedLogEntry): void; flush(): Promise<void>; close(): Promise<void> }) => void;
   /** Callback to wire SSE broadcasts after web server starts */
@@ -283,14 +284,34 @@ export async function fetchLeaderSessionsSnapshot(
       signal: controller.signal,
     });
     if (!response.ok) {
+      logger.debug('[UnifiedConsole] Leader session snapshot request returned non-OK response', {
+        port,
+        status: response.status,
+        statusText: response.statusText,
+      });
       return [];
     }
 
     const data = await response.json() as { sessions?: SessionInfo[] };
-    return Array.isArray(data.sessions) ? data.sessions : [];
-  } catch (err) {
-    logger.debug('[UnifiedConsole] Failed to fetch leader session snapshot', {
+    if (!Array.isArray(data.sessions)) {
+      logger.debug('[UnifiedConsole] Leader session snapshot response missing sessions array', { port });
+      return [];
+    }
+
+    logger.debug('[UnifiedConsole] Leader session snapshot fetched', {
       port,
+      sessions: data.sessions.length,
+      authMode: authToken ? 'bearer' : 'anonymous',
+    });
+    return data.sessions;
+  } catch (err) {
+    const errorName = err instanceof Error ? err.name : 'UnknownError';
+    const debugMessage = errorName === 'AbortError'
+      ? '[UnifiedConsole] Leader session snapshot request timed out'
+      : '[UnifiedConsole] Failed to fetch leader session snapshot';
+    logger.debug(debugMessage, {
+      port,
+      errorName,
       error: err instanceof Error ? err.message : String(err),
     });
     return [];
@@ -1163,7 +1184,7 @@ async function startAsLeader(
   consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
   const { startWebServer } = await import('../server.js');
-  const { pickRandomTokenName } = await import('./SessionNames.js');
+  const { derivePreferredLeaderSessionName, pickRandomTokenName } = await import('./SessionNames.js');
 
   // Initialize the console token store (#1780). Creates the token file on
   // first run, reads the existing tokens on subsequent runs. The token is
@@ -1257,7 +1278,12 @@ async function startAsLeader(
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.
-  ingestResult.registerLeaderSession(options.sessionId, process.pid);
+  ingestResult.registerLeaderSession(
+    options.sessionId,
+    process.pid,
+    derivePreferredLeaderSessionName(options.sessionId),
+    options.stableSessionId,
+  );
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
@@ -1336,6 +1362,9 @@ async function startAsFollower(
     logger.debug('[UnifiedConsole] No console auth token file found; follower will POST without Bearer header');
   }
 
+  const { derivePreferredFollowerSessionName } = await import('./SessionNames.js');
+  const preferredSessionName = derivePreferredFollowerSessionName(options.sessionId);
+
   // Per-instance promotion manager — tracks its own attempt counter so
   // multiple followers don't interfere with each other's promotion budgets.
   const promotionMgr = new PromotionManager(options, consolePort, startAsLeader, startAsFollower);
@@ -1345,14 +1374,28 @@ async function startAsFollower(
   let sessionHeartbeat: SessionHeartbeat;
 
   // Register a forwarding log sink with leader-death callback (#1850).
-  const forwardingSink = new LeaderForwardingLogSink(leaderUrl, options.sessionId, authToken, () => {
+  const forwardingSink = new LeaderForwardingLogSink(
+    leaderUrl,
+    options.sessionId,
+    authToken,
+    () => {
     promotionMgr.promote(forwardingSink, sessionHeartbeat)
       .catch(err => logger.error('[UnifiedConsole] Promotion crashed', { error: String(err) }));
-  });
+    },
+    preferredSessionName,
+    options.stableSessionId,
+  );
   options.registerLogSink(forwardingSink);
 
   // Start session heartbeat to the leader
-  sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
+  sessionHeartbeat = new SessionHeartbeat(
+    leaderUrl,
+    options.sessionId,
+    process.pid,
+    authToken,
+    preferredSessionName,
+    options.stableSessionId,
+  );
   await sessionHeartbeat.start();
 
   const stopAuthorityMonitor = startFollowerAuthorityMonitor(

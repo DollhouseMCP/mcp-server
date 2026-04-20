@@ -11,6 +11,9 @@ import { describe, it, expect, jest } from '@jest/globals';
 import {
   ALL_PUPPET_NAMES,
   ALL_TOKEN_NAMES,
+  derivePreferredFollowerSessionName,
+  derivePreferredLeaderSessionName,
+  getPuppetColor,
   pickRandomTokenName,
   SessionNamePool,
 } from '../../../../src/web/console/SessionNames.js';
@@ -79,6 +82,17 @@ describe('pickRandomTokenName()', () => {
 // ─── SessionNamePool ─────────────────────────────────────────────────────────
 
 describe('SessionNamePool', () => {
+  it('derives a stable preferred name for the same runtime session', () => {
+    expect(derivePreferredFollowerSessionName('local-test-session')).toBe(
+      derivePreferredFollowerSessionName('local-test-session'),
+    );
+  });
+
+  it('derives different leader and follower preferences when Punch would be excluded', () => {
+    const leaderName = derivePreferredLeaderSessionName('leader-test-session');
+    expect(leaderName).not.toBe('Punch');
+  });
+
   it('assigns a name from the puppet pool', () => {
     const pool = new SessionNamePool();
     const name = pool.assign('session-1');
@@ -112,7 +126,7 @@ describe('SessionNamePool', () => {
     const names = new Set<string>();
     // Assign enough sessions to exercise most of the pool
     for (let i = 0; i < 30; i++) {
-      names.add(pool.assign(`leader-${i}`, /* isLeader= */ true));
+      names.add(pool.assignLeader(`leader-${i}`));
     }
     expect(names.has('Punch')).toBe(false);
   });
@@ -160,6 +174,26 @@ describe('SessionNamePool', () => {
     pool.assign('session-rel');
     pool.release('session-rel');
     expect(pool.getName('session-rel')).toBeUndefined();
+  });
+
+  it('reassigns a session to a preferred puppet name when that name is free', () => {
+    const pool = new SessionNamePool();
+    pool.assign('session-a');
+
+    const reassigned = pool.reassign('session-a', 'Bunraku');
+    expect(reassigned).toBe('Bunraku');
+    expect(pool.getName('session-a')).toBe('Bunraku');
+    expect(pool.getColor('session-a')).toBe(getPuppetColor('Bunraku'));
+  });
+
+  it('keeps the current assignment when another session already owns the requested name', () => {
+    const pool = new SessionNamePool();
+    pool.adopt('session-a', 'Bunraku');
+    const original = pool.assign('session-b');
+
+    const reassigned = pool.reassign('session-b', 'Bunraku');
+    expect(reassigned).toBe(original);
+    expect(pool.getName('session-b')).toBe(original);
   });
 
   it('adopt() preserves an imported puppet name across leader handoff', () => {

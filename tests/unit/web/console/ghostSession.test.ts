@@ -72,6 +72,22 @@ describe('Ghost session cleanup (#1870)', () => {
       expect(s.color).toMatch(/^#[0-9a-fA-F]{6}$/);
     });
 
+    it('uses the follower-provided display name and stable identity when auto-registering from logs', async () => {
+      const app = buildApp(ir);
+      await request(app)
+        .post('/api/ingest/logs')
+        .send({
+          sessionId: 'orphan-identity',
+          stableSessionId: 'claude-code-main',
+          displayName: 'Skipper',
+          entries: [makeEntry()],
+        });
+
+      const session = ir.getSessions()[0];
+      expect(session.displayName).toBe('Skipper');
+      expect(session.stableSessionId).toBe('claude-code-main');
+    });
+
     it('broadcasts the new session', async () => {
       const app = buildApp(ir);
       await request(app)
