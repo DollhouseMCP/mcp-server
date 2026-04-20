@@ -147,6 +147,7 @@ p, li { max-width: 69ch; }
   top: 0;
   z-index: 35;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -168,8 +169,8 @@ p, li { max-width: 69ch; }
   pointer-events: none;
 }
 
-.header-brand { display: flex; flex-direction: row; align-items: center; gap: 0.6rem; }
-.header-brand-text { display: flex; flex-direction: column; gap: 0.05rem; }
+.header-brand { display: flex; flex-direction: row; align-items: center; gap: 0.6rem; min-width: 0; }
+.header-brand-text { display: flex; flex-direction: column; gap: 0.05rem; min-width: 0; }
 .header-logo { width: 32px; height: 32px; flex-shrink: 0; }
 
 .site-title {
@@ -191,17 +192,23 @@ p, li { max-width: 69ch; }
 .header-right {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 0.65rem;
-  flex-shrink: 0;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .site-stats {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.5rem;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--ink-500);
+  min-width: 0;
 }
 
 .stat {
@@ -1338,6 +1345,7 @@ body.modal-open { overflow: hidden; }
   background: var(--surface-1);
   border-radius: var(--radius-sm);
   padding: 2px;
+  min-width: 0;
 }
 
 .console-tab {
@@ -1363,6 +1371,33 @@ body.modal-open { overflow: hidden; }
   background: var(--paper-strong);
   color: var(--signal);
   box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+@media (max-width: 1100px) {
+  .site-header {
+    align-items: flex-start;
+  }
+
+  .header-right {
+    width: 100%;
+    justify-content: flex-start;
+    row-gap: 0.55rem;
+  }
+
+  .console-tabs {
+    order: 3;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .site-stats {
+    flex: 1 1 auto;
+    justify-content: flex-start;
+  }
+
+  .theme-toggle {
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 640px) {
@@ -1430,11 +1465,15 @@ body.modal-open { overflow: hidden; }
   margin-left: auto;
 }
 
+.footer-version,
 .footer-updated {
-  margin-left: auto;
   font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--ink-500);
+}
+
+.footer-updated {
+  margin-left: auto;
 }
 
 /* ── Topic filters ───────────────────────────────────────────────────────── */

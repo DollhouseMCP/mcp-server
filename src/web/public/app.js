@@ -105,6 +105,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   let activeSort = 'date-desc';
   let activeSource = 'all'; // 'all' | 'collection' | 'portfolio'
   let searchQuery = '';
+  const DOLLHOUSE_SERVER_VERSION = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
   const DOLLHOUSE_SESSION_ID = document.querySelector('meta[name="dollhouse-session-id"]')?.content || '';
   const DOLLHOUSE_RUNTIME_SESSION_ID = document.querySelector('meta[name="dollhouse-runtime-session-id"]')?.content || '';
 
@@ -128,6 +129,12 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       </span>`
       : '';
     return `${primaryMarkup}${sessionMarkup}`;
+  }
+
+  function updateFooterVersion() {
+    const footerVersion = document.getElementById('footer-version');
+    if (!footerVersion) return;
+    footerVersion.textContent = `Version: ${DOLLHOUSE_SERVER_VERSION || 'unknown'}`;
   }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
@@ -1877,6 +1884,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   // ── Event wiring ───────────────────────────────────────────────────────────
 
   document.addEventListener('DOMContentLoaded', () => {
+    updateFooterVersion();
 
     // Theme toggle
     const themeToggleBtn  = document.getElementById('theme-toggle');

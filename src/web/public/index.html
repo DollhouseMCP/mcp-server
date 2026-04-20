@@ -18,6 +18,8 @@
   <meta name="dollhouse-runtime-session-id" content="{{DOLLHOUSE_RUNTIME_SESSION_ID}}">
   <!-- Asset version — injected at request time for cache-busting local CSS/JS/img files. -->
   <meta name="dollhouse-console-asset-version" content="{{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="icon" type="image/png" href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="apple-touch-icon" href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}">
   <link rel="stylesheet" href="fonts.css?v={{DOLLHOUSE_ASSET_VERSION}}">
   <link rel="stylesheet" href="styles.css?v={{DOLLHOUSE_ASSET_VERSION}}">
   <link rel="stylesheet" href="logs.css?v={{DOLLHOUSE_ASSET_VERSION}}">
@@ -570,6 +572,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
       <a href="https://github.com/DollhouseMCP/mcp-server" class="footer-link">GitHub Repository</a>
       <a href="./collection-index.json" class="footer-link">JSON API</a>
       <a href="https://dollhousemcp.com" class="footer-link">DollhouseMCP</a>
+      <span class="footer-version" id="footer-version"></span>
       <span class="footer-updated" id="footer-updated"></span>
       <span class="footer-copyright">&copy; 2026 DollhouseMCP</span>
     </div>
