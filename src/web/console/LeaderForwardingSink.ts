@@ -83,6 +83,7 @@ export class SessionLeaseState {
   constructor(
     private readonly preferredDisplayName: string,
     private readonly stableSessionId: string | null = null,
+    private readonly onAssignedDisplayName?: (displayName: string) => void,
   ) {}
 
   getDisplayName(): string {
@@ -111,7 +112,11 @@ export class SessionLeaseState {
       return;
     }
 
+    const previousDisplayName = this.assignedDisplayName;
     this.assignedDisplayName = normalizedDisplayName;
+    if (previousDisplayName !== normalizedDisplayName) {
+      this.onAssignedDisplayName?.(normalizedDisplayName);
+    }
   }
 }
 

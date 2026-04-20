@@ -14,12 +14,15 @@ import { logger } from '../utils/logger.js';
 import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
+import type { CurrentConsoleSessionIdentity } from './currentConsoleSessionIdentity.js';
+import { getCurrentConsoleSessionIdentity } from './currentConsoleSessionIdentity.js';
 import { resolveSessionIdentity } from './sessionIdentity.js';
 
 export interface BuildInfo {
   sessionId: string;
   runtimeSessionId: string;
   sessionSource: 'env' | 'derived';
+  consoleSession?: CurrentConsoleSessionIdentity;
   package: {
     name: string;
     version: string;
@@ -144,6 +147,7 @@ export class BuildInfoService {
       sessionId: sessionIdentity.sessionId,
       runtimeSessionId: sessionIdentity.runtimeSessionId,
       sessionSource: sessionIdentity.source,
+      consoleSession: getCurrentConsoleSessionIdentity() ?? undefined,
       package: packageInfo,
       build: {
         timestamp: buildTimestamp,
@@ -202,6 +206,20 @@ export class BuildInfoService {
     ];
     if (info.runtimeSessionId !== info.sessionId) {
       sessionLines.splice(2, 0, `- **Runtime Session ID**: ${info.runtimeSessionId}`);
+    }
+    if (info.consoleSession) {
+      const authorityLabel = info.consoleSession.authoritative
+        ? 'Authoritative web console lease'
+        : 'Awaiting authoritative web console lease';
+      sessionLines.push(
+        `- **Web Console Display Name**: ${info.consoleSession.displayName ?? 'pending authoritative assignment'}`,
+        `- **Web Console Role**: ${info.consoleSession.role}`,
+        `- **Web Console Kind**: ${info.consoleSession.kind}`,
+        `- **Web Console Identity**: ${authorityLabel}`,
+      );
+      if (info.consoleSession.authoritative && info.consoleSession.color) {
+        sessionLines.push(`- **Web Console Color**: ${info.consoleSession.color}`);
+      }
     }
     lines.push(...sessionLines, '');
     
