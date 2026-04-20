@@ -37,17 +37,9 @@ import type { ContextTracker } from '../../security/encryption/ContextTracker.js
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { UserIdResolver } from '../../database/UserContext.js';
 
-/**
- * Minimal interface the registrar needs from the DI container. Typed this way
- * (rather than importing `DollhouseContainer` directly) to avoid a circular
- * dependency — Container.ts imports this registrar; this file shouldn't need
- * to import Container.ts to get a type.
- */
-export interface DiContainerFacade {
-  register<T>(name: string, factory: () => T): void;
-  resolve<T>(name: string): T;
-  hasRegistration(name: string): boolean;
-}
+// Use the shared DiContainerFacade so multiple registrars don't drift.
+export type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { DiContainerFacade } from '../DiContainerFacade.js';
 
 /**
  * Optional DB deps spread into element-manager constructors. Returns an empty
