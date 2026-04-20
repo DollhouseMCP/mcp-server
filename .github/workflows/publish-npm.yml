@@ -79,6 +79,11 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          if [[ "$VERSION" == *-* ]]; then
+            echo "dist_tag=rc" >> $GITHUB_OUTPUT
+          else
+            echo "dist_tag=latest" >> $GITHUB_OUTPUT
+          fi
           echo "Publishing version: $VERSION"
 
       - name: Debug OIDC Environment
@@ -112,7 +117,11 @@ jobs:
           # Publish with provenance via OIDC Trusted Publishing.
           # Requires: npm 11+ (Node 24), id-token: write, NODE_AUTH_TOKEN cleared,
           # and a Trusted Publisher configured at npmjs.com/package/@dollhousemcp/mcp-server/access
-          npm publish --provenance --access public --loglevel verbose
+          if [[ "${{ steps.package_version.outputs.dist_tag }}" == "rc" ]]; then
+            npm publish --provenance --access public --tag rc --loglevel verbose
+          else
+            npm publish --provenance --access public --loglevel verbose
+          fi
 
       - name: Dry run (skip publish)
         if: github.event.inputs.dry_run == 'true'
