@@ -185,7 +185,7 @@
 
 .session-dropdown-item {
   display: grid;
-  grid-template-columns: 1rem 8px 1fr 62px 72px 3.5rem 1.2rem;
+  grid-template-columns: 1rem 8px 1fr 62px 76px 3.5rem 1.2rem;
   align-items: center;
   gap: 0.4rem;
   padding: 0.45rem 0.75rem;
@@ -249,6 +249,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-dropdown-client-group {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  gap: 0.1rem;
+}
+
+.session-dropdown-client-label {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.62rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-500, #677893);
+  text-align: center;
 }
 
 .session-dropdown-uptime {
