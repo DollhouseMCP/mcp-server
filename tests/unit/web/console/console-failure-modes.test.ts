@@ -547,6 +547,53 @@ describe('Console Failure Modes', () => {
       }
     });
 
+    it('preserves an authoritative lease name and original startedAt across follower lifecycle events', async () => {
+      const originalStartedAt = '2026-04-20T18:45:00.000Z';
+      const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true }),
+      } as Response);
+
+      try {
+        const {
+          SessionHeartbeat,
+          SessionLeaseState,
+        } = await import('../../../../src/web/console/LeaderForwardingSink.js');
+
+        const leaseState = new SessionLeaseState(
+          'Mortimer',
+          'claude-code-main',
+          undefined,
+          'Mortimer',
+        );
+        const heartbeat = new SessionHeartbeat(
+          'http://127.0.0.1:41715',
+          'test-session',
+          process.pid,
+          null,
+          leaseState,
+          'claude-code-main',
+          originalStartedAt,
+        );
+
+        await heartbeat.start();
+        await heartbeat.stop();
+
+        const startBody = parseRequestBody((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+        const stopBody = parseRequestBody((fetchSpy.mock.calls[1]?.[1] as RequestInit | undefined)?.body);
+
+        expect(startBody.displayName).toBe('Mortimer');
+        expect(startBody.lastAssignedDisplayName).toBe('Mortimer');
+        expect(startBody.startedAt).toBe(originalStartedAt);
+
+        expect(stopBody.displayName).toBe('Mortimer');
+        expect(stopBody.lastAssignedDisplayName).toBe('Mortimer');
+        expect(stopBody.startedAt).toBe(originalStartedAt);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
     it('reuses the leader-assigned lease name across other forwarding channels', async () => {
       const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,

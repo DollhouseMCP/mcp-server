@@ -238,6 +238,12 @@ interface LeaderPreflightResolution {
   demotedToFollower: boolean;
 }
 
+interface FollowerResumeLeaseContext {
+  displayName: string | null;
+  color: string | null;
+  startedAt: string | null;
+}
+
 interface FollowerAuthorityDependencies {
   isLeaderWebConsoleReachableImpl?: typeof isLeaderWebConsoleReachable;
   discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
@@ -1353,6 +1359,16 @@ async function startAsLeader(
     setImmediate(() => {
       void (async () => {
         try {
+          const currentLeaderSession = ingestResult.getSessions().find((session) =>
+            session.sessionId === options.sessionId && session.kind === 'mcp'
+          );
+          const resumeLeaseContext: FollowerResumeLeaseContext | undefined = currentLeaderSession
+            ? {
+                displayName: currentLeaderSession.displayName,
+                color: currentLeaderSession.color,
+                startedAt: currentLeaderSession.startedAt,
+              }
+            : undefined;
           await activeCleanup();
           shutdownWebServer();
           await deleteLeaderLock();
@@ -1361,6 +1377,7 @@ async function startAsLeader(
             { role: 'follower', leaderInfo: candidateLeader },
             consolePort,
             primaryToken.token,
+            resumeLeaseContext,
           );
           activeCleanup = followerResult.cleanup;
           logger.info('[UnifiedConsole] Former leader resumed as follower after leadership handoff', {
@@ -1544,6 +1561,7 @@ async function startAsFollower(
   election: ElectionResult,
   consolePort: number = DEFAULT_CONSOLE_PORT,
   initialAuthToken: string | null = null,
+  resumeLeaseContext?: FollowerResumeLeaseContext,
 ): Promise<UnifiedConsoleResult> {
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
@@ -1562,7 +1580,10 @@ async function startAsFollower(
   }
 
   const { derivePreferredFollowerSessionName, getPuppetColor } = await import('./SessionNames.js');
-  const preferredDisplayName = derivePreferredFollowerSessionName(options.sessionId);
+  const preferredDisplayName = resumeLeaseContext?.displayName ?? derivePreferredFollowerSessionName(options.sessionId);
+  const authoritativeDisplayName = resumeLeaseContext?.displayName ?? null;
+  const authoritativeColor = resumeLeaseContext?.color
+    ?? (authoritativeDisplayName ? getPuppetColor(authoritativeDisplayName) ?? null : null);
   const leaseState = new SessionLeaseState(
     preferredDisplayName,
     options.stableSessionId,
@@ -1577,13 +1598,14 @@ async function startAsFollower(
         consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
       });
     },
+    authoritativeDisplayName,
   );
   setCurrentConsoleSessionIdentity({
-    displayName: null,
-    authoritative: false,
+    displayName: authoritativeDisplayName,
+    authoritative: Boolean(authoritativeDisplayName),
     role: 'follower',
     kind: 'mcp',
-    color: null,
+    color: authoritativeColor,
     serverVersion: PACKAGE_VERSION,
     consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
   });
@@ -1616,6 +1638,8 @@ async function startAsFollower(
     process.pid,
     authToken,
     leaseState,
+    options.stableSessionId,
+    resumeLeaseContext?.startedAt ?? undefined,
   );
   await sessionHeartbeat.start();
 
