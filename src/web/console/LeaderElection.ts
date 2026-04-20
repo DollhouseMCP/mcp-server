@@ -26,6 +26,7 @@ import { env } from '../../config/env.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import { logger } from '../../utils/logger.js';
 import { compareVersions } from '../../utils/version.js';
+import { findPidOnPort } from './StaleProcessRecovery.js';
 
 /** Directory for runtime state files */
 const RUN_DIR = join(homedir(), '.dollhouse', 'run');
@@ -100,6 +101,14 @@ export interface ElectionResult {
   /** Leader info — for followers, this is the existing leader's info */
   leaderInfo: ConsoleLeaderInfo;
 }
+
+export interface HeartbeatDependencies {
+  lockPath?: string;
+  readLeaderLockImpl?: typeof readLeaderLock;
+  findPidOnPortImpl?: typeof findPidOnPort;
+}
+
+export type HeartbeatRenewalResult = 'updated' | 'lost-lock' | 'lost-port' | 'failed';
 
 export interface LeaderPreferenceDecision {
   shouldReplace: boolean;
@@ -473,21 +482,60 @@ export async function forceClaimLeadership(sessionId: string, port: number): Pro
   return { role: 'follower', leaderInfo: winner ?? myInfo };
 }
 
+export async function renewLeaderHeartbeat(
+  info: ConsoleLeaderInfo,
+  deps: HeartbeatDependencies = {},
+): Promise<HeartbeatRenewalResult> {
+  const lockPath = deps.lockPath ?? LOCK_FILE;
+  const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
+  const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
+
+  try {
+    const currentLock = await readLeaderLockImpl(lockPath);
+    if (currentLock && currentLock.pid !== info.pid) {
+      logger.info('[LeaderElection] Heartbeat stopping after leadership was lost to another lock owner', {
+        sessionId: info.sessionId,
+        pid: info.pid,
+        port: info.port,
+        currentLockPid: currentLock.pid,
+        currentLockSessionId: currentLock.sessionId,
+      });
+      return 'lost-lock';
+    }
+
+    const competingPortOwnerPid = await findPidOnPortImpl(info.port);
+    if (competingPortOwnerPid !== null && competingPortOwnerPid !== info.pid) {
+      logger.info('[LeaderElection] Heartbeat stopping because another process owns the console port', {
+        sessionId: info.sessionId,
+        pid: info.pid,
+        port: info.port,
+        competingPortOwnerPid,
+      });
+      return 'lost-port';
+    }
+
+    const updated: ConsoleLeaderInfo = { ...info, heartbeat: new Date().toISOString() };
+    const tmpFile = join(RUN_DIR, `console-leader.lock.${process.pid}.tmp`);
+    await writeFile(tmpFile, JSON.stringify(updated, null, 2), 'utf-8');
+    await rename(tmpFile, lockPath);
+    return 'updated';
+  } catch (err) {
+    logger.debug('[LeaderElection] Heartbeat write failed:', err);
+    return 'failed';
+  }
+}
+
 /**
  * Start the leader heartbeat loop.
  * Updates the lock file every HEARTBEAT_INTERVAL_MS so followers know the leader is alive.
  *
  * @returns A stop function to clear the interval
  */
-export function startHeartbeat(info: ConsoleLeaderInfo): () => void {
+export function startHeartbeat(info: ConsoleLeaderInfo, deps: HeartbeatDependencies = {}): () => void {
   const interval = setInterval(async () => {
-    try {
-      const updated: ConsoleLeaderInfo = { ...info, heartbeat: new Date().toISOString() };
-      const tmpFile = join(RUN_DIR, `console-leader.lock.${process.pid}.tmp`);
-      await writeFile(tmpFile, JSON.stringify(updated, null, 2), 'utf-8');
-      await rename(tmpFile, LOCK_FILE);
-    } catch (err) {
-      logger.debug('[LeaderElection] Heartbeat write failed:', err);
+    const result = await renewLeaderHeartbeat(info, deps);
+    if (result === 'lost-lock' || result === 'lost-port') {
+      clearInterval(interval);
     }
   }, HEARTBEAT_INTERVAL_MS);
 
