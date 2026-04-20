@@ -2082,9 +2082,10 @@ describe('Setup Tab — Package Inclusion', () => {
     expect(files).toContain('dist/seed-elements/**');
   });
 
-  it('files field includes manual permission hook wrapper scripts', () => {
+  it('files field includes manual permission hook scripts and helpers', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/permission-port-discovery.sh');
     expect(files).toContain('scripts/pretooluse-vscode.sh');
     expect(files).toContain('scripts/pretooluse-cursor.sh');
     expect(files).toContain('scripts/pretooluse-windsurf.sh');
