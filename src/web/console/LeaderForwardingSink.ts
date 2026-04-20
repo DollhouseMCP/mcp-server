@@ -62,6 +62,8 @@ interface SessionLeaseResponse {
   lease?: SessionLeaseSnapshot;
 }
 
+type SessionLeaseInput = SessionLeaseState | string | null;
+
 /**
  * Mutable local view of the display-name lease for one runtime session.
  *
@@ -125,7 +127,7 @@ function isSessionLeaseResponse(payload: unknown): payload is SessionLeaseRespon
 }
 
 function resolveLeaseState(
-  leaseStateOrDisplayName: SessionLeaseState | string | null | undefined,
+  leaseStateOrDisplayName: SessionLeaseInput | undefined,
   stableSessionId: string | null | undefined,
 ): SessionLeaseState | undefined {
   if (leaseStateOrDisplayName instanceof SessionLeaseState) {
@@ -173,7 +175,7 @@ export class LeaderForwardingLogSink implements ILogSink {
     /** Callback invoked when the leader is presumed dead after MAX_CONSECUTIVE_FAILURES (#1850). */
     private readonly onLeaderDeath?: () => void,
     /** Local mutable lease state for this runtime session. */
-    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    leaseStateOrDisplayName: SessionLeaseInput = null,
     stableSessionId: string | null = null,
   ) {
     this.sessionId = UnicodeValidator.normalize(sessionId).normalizedContent;
@@ -296,7 +298,7 @@ export class LeaderForwardingMetricsSink {
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
     /** Local mutable lease state for this runtime session. */
-    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    leaseStateOrDisplayName: SessionLeaseInput = null,
     stableSessionId: string | null = null,
   ) {
     this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);
@@ -338,7 +340,7 @@ export class SessionHeartbeat {
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
     /** Local mutable lease state for this runtime session. */
-    leaseStateOrDisplayName: SessionLeaseState | string | null = null,
+    leaseStateOrDisplayName: SessionLeaseInput = null,
     stableSessionId: string | null = null,
   ) {
     this.leaseState = resolveLeaseState(leaseStateOrDisplayName, stableSessionId);

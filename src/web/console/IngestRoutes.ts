@@ -209,6 +209,12 @@ interface SessionLeaseResolution {
   resolution: 'runtime-renewal' | 'stable-resume' | 'new-allocation';
 }
 
+interface SessionDisplayNameHints {
+  displayName?: string;
+  preferredDisplayName?: string;
+  lastAssignedDisplayName?: string;
+}
+
 /** Normalize a string via UnicodeValidator (DMCP-SEC-004) */
 function normalizeInput(s: string): string {
   return UnicodeValidator.normalize(s).normalizedContent;
@@ -234,6 +240,12 @@ function normalizeConsoleProtocolVersion(version?: number): number {
     return version;
   }
   return LEGACY_CONSOLE_PROTOCOL_VERSION;
+}
+
+function chooseRequestedDisplayName(hints: SessionDisplayNameHints): string | undefined {
+  return normalizeOptionalInput(hints.lastAssignedDisplayName)
+    ?? normalizeOptionalInput(hints.displayName)
+    ?? normalizeOptionalInput(hints.preferredDisplayName);
 }
 
 /**
@@ -291,12 +303,6 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     };
   }
 
-  function chooseRequestedDisplayName(request: SessionLeaseRequest): string | undefined {
-    return normalizeOptionalInput(request.lastAssignedDisplayName)
-      ?? normalizeOptionalInput(request.displayName)
-      ?? normalizeOptionalInput(request.preferredDisplayName);
-  }
-
   function assignDisplayNameForRequest(sessionId: string, request: SessionLeaseRequest): string {
     const requestedDisplayName = chooseRequestedDisplayName(request);
     if (requestedDisplayName) {
@@ -335,6 +341,114 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     return null;
   }
 
+  function renewRuntimeLease(
+    runtimeMatch: SessionInfo,
+    request: SessionLeaseRequest,
+    now: string,
+  ): SessionLeaseResolution {
+    importedSessionGraceUntil.delete(request.sessionId);
+    if (runtimeMatch.status === 'ended') {
+      runtimeMatch.status = 'active';
+      logger.info('[IngestRoutes] Revived ended session still sending data', {
+        displayName: runtimeMatch.displayName,
+        sessionId: request.sessionId,
+      });
+    }
+
+    runtimeMatch.lastHeartbeat = now;
+    if (request.pid && !runtimeMatch.pid) {
+      runtimeMatch.pid = request.pid;
+      logger.info('[IngestRoutes] Recovered PID for orphaned session', {
+        displayName: runtimeMatch.displayName,
+        sessionId: request.sessionId,
+        pid: request.pid,
+      });
+    }
+    if (request.serverVersion) {
+      runtimeMatch.serverVersion = normalizeServerVersion(request.serverVersion);
+    }
+    if (request.consoleProtocolVersion !== undefined) {
+      runtimeMatch.consoleProtocolVersion = normalizeConsoleProtocolVersion(request.consoleProtocolVersion);
+    }
+    const normalizedStableSessionId = normalizeOptionalInput(request.stableSessionId);
+    if (normalizedStableSessionId && normalizedStableSessionId !== runtimeMatch.stableSessionId) {
+      runtimeMatch.stableSessionId = normalizedStableSessionId;
+      recordMetadataSync('stableSessionBindings', request.sessionId, {
+        stableSessionId: normalizedStableSessionId,
+        source: request.source,
+      });
+    }
+
+    return { session: runtimeMatch, resolution: 'runtime-renewal' };
+  }
+
+  function resumeStableLease(
+    resumable: SessionInfo,
+    request: SessionLeaseRequest,
+    now: string,
+  ): SessionLeaseResolution {
+    const requestedDisplayName = chooseRequestedDisplayName(request) ?? resumable.displayName;
+    const resumedDisplayName = request.isLeader
+      ? namePool.adoptLeader(request.sessionId, requestedDisplayName)
+      : namePool.adopt(request.sessionId, requestedDisplayName);
+    const resumedColor = getPuppetColor(resumedDisplayName) ?? resumable.color ?? '#3b82f6';
+    const resumedSession = buildSessionInfo(
+      {
+        ...request,
+        startedAt: request.startedAt || resumable.startedAt,
+        authenticated: request.authenticated ?? resumable.authenticated,
+        kind: request.kind ?? resumable.kind,
+        isLeader: request.isLeader ?? resumable.isLeader,
+        serverVersion: request.serverVersion ?? resumable.serverVersion,
+        consoleProtocolVersion: request.consoleProtocolVersion ?? resumable.consoleProtocolVersion,
+        stableSessionId: request.stableSessionId ?? resumable.stableSessionId ?? undefined,
+      },
+      resumedDisplayName,
+      resumedColor,
+      now,
+    );
+
+    sessions.delete(resumable.sessionId);
+    importedSessionGraceUntil.delete(resumable.sessionId);
+    sessions.set(request.sessionId, resumedSession);
+    recordMetadataSync('leaseResumptions', request.sessionId, {
+      previousSessionId: resumable.sessionId,
+      stableSessionId: resumedSession.stableSessionId,
+      displayName: resumedDisplayName,
+      source: request.source,
+    });
+    broadcasts.sessionBroadcast?.(resumedSession);
+    return { session: resumedSession, resolution: 'stable-resume' };
+  }
+
+  function allocateSessionLease(request: SessionLeaseRequest, now: string): SessionLeaseResolution {
+    const allocatedDisplayName = assignDisplayNameForRequest(request.sessionId, request);
+    const color = namePool.getColor(request.sessionId) ?? getPuppetColor(allocatedDisplayName) ?? '#3b82f6';
+    const info = buildSessionInfo(request, allocatedDisplayName, color, now);
+    sessions.set(request.sessionId, info);
+
+    const normalizedStableSessionId = normalizeOptionalInput(request.stableSessionId);
+    if (normalizedStableSessionId) {
+      recordMetadataSync('stableSessionBindings', request.sessionId, {
+        stableSessionId: normalizedStableSessionId,
+        source: request.source,
+      });
+    }
+    if (allocatedDisplayName === chooseRequestedDisplayName(request)) {
+      recordMetadataSync('displayNameAdoptions', request.sessionId, {
+        displayName: allocatedDisplayName,
+        source: request.source,
+      });
+    }
+    logger.info('[IngestRoutes] Session lease allocated', {
+      displayName: allocatedDisplayName,
+      sessionId: request.sessionId,
+      source: request.source,
+    });
+    broadcasts.sessionBroadcast?.(info);
+    return { session: info, resolution: 'new-allocation' };
+  }
+
   /** Execute a deferred kill if we now have a PID. */
   function tryExecutePendingKill(sessionId: string, pid?: number): void {
     const killPid = pid || sessions.get(sessionId)?.pid;
@@ -367,103 +481,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       const now = new Date().toISOString();
       const runtimeMatch = sessions.get(request.sessionId);
       if (runtimeMatch) {
-        importedSessionGraceUntil.delete(request.sessionId);
-        if (runtimeMatch.status === 'ended') {
-          runtimeMatch.status = 'active';
-          logger.info('[IngestRoutes] Revived ended session still sending data', {
-            displayName: runtimeMatch.displayName,
-            sessionId: request.sessionId,
-          });
-        }
-
-        runtimeMatch.lastHeartbeat = now;
-        if (request.pid && !runtimeMatch.pid) {
-          runtimeMatch.pid = request.pid;
-          logger.info('[IngestRoutes] Recovered PID for orphaned session', {
-            displayName: runtimeMatch.displayName,
-            sessionId: request.sessionId,
-            pid: request.pid,
-          });
-        }
-        if (request.serverVersion) {
-          runtimeMatch.serverVersion = normalizeServerVersion(request.serverVersion);
-        }
-        if (request.consoleProtocolVersion !== undefined) {
-          runtimeMatch.consoleProtocolVersion = normalizeConsoleProtocolVersion(request.consoleProtocolVersion);
-        }
-        const normalizedStableSessionId = normalizeOptionalInput(request.stableSessionId);
-        if (normalizedStableSessionId && normalizedStableSessionId !== runtimeMatch.stableSessionId) {
-          runtimeMatch.stableSessionId = normalizedStableSessionId;
-          recordMetadataSync('stableSessionBindings', request.sessionId, {
-            stableSessionId: normalizedStableSessionId,
-            source: request.source,
-          });
-        }
-
-        return { session: runtimeMatch, resolution: 'runtime-renewal' };
+        return renewRuntimeLease(runtimeMatch, request, now);
       }
 
       const resumable = findResumableSessionByStableId(request.stableSessionId, request.sessionId);
       if (resumable) {
-        const requestedDisplayName = chooseRequestedDisplayName(request) ?? resumable.displayName;
-        const resumedDisplayName = request.isLeader
-          ? namePool.adoptLeader(request.sessionId, requestedDisplayName)
-          : namePool.adopt(request.sessionId, requestedDisplayName);
-        const resumedColor = getPuppetColor(resumedDisplayName) ?? resumable.color ?? '#3b82f6';
-        const resumedSession = buildSessionInfo(
-          {
-            ...request,
-            startedAt: request.startedAt || resumable.startedAt,
-            authenticated: request.authenticated ?? resumable.authenticated,
-            kind: request.kind ?? resumable.kind,
-            isLeader: request.isLeader ?? resumable.isLeader,
-            serverVersion: request.serverVersion ?? resumable.serverVersion,
-            consoleProtocolVersion: request.consoleProtocolVersion ?? resumable.consoleProtocolVersion,
-            stableSessionId: request.stableSessionId ?? resumable.stableSessionId ?? undefined,
-          },
-          resumedDisplayName,
-          resumedColor,
-          now,
-        );
-
-        sessions.delete(resumable.sessionId);
-        importedSessionGraceUntil.delete(resumable.sessionId);
-        sessions.set(request.sessionId, resumedSession);
-        recordMetadataSync('leaseResumptions', request.sessionId, {
-          previousSessionId: resumable.sessionId,
-          stableSessionId: resumedSession.stableSessionId,
-          displayName: resumedDisplayName,
-          source: request.source,
-        });
-        broadcasts.sessionBroadcast?.(resumedSession);
-        return { session: resumedSession, resolution: 'stable-resume' };
+        return resumeStableLease(resumable, request, now);
       }
 
-      const allocatedDisplayName = assignDisplayNameForRequest(request.sessionId, request);
-      const color = namePool.getColor(request.sessionId) ?? getPuppetColor(allocatedDisplayName) ?? '#3b82f6';
-      const info = buildSessionInfo(request, allocatedDisplayName, color, now);
-      sessions.set(request.sessionId, info);
-
-      const normalizedStableSessionId = normalizeOptionalInput(request.stableSessionId);
-      if (normalizedStableSessionId) {
-        recordMetadataSync('stableSessionBindings', request.sessionId, {
-          stableSessionId: normalizedStableSessionId,
-          source: request.source,
-        });
-      }
-      if (allocatedDisplayName === chooseRequestedDisplayName(request)) {
-        recordMetadataSync('displayNameAdoptions', request.sessionId, {
-          displayName: allocatedDisplayName,
-          source: request.source,
-        });
-      }
-      logger.info('[IngestRoutes] Session lease allocated', {
-        displayName: allocatedDisplayName,
-        sessionId: request.sessionId,
-        source: request.source,
-      });
-      broadcasts.sessionBroadcast?.(info);
-      return { session: info, resolution: 'new-allocation' };
+      return allocateSessionLease(request, now);
     } catch (err) {
       logger.debug('[IngestRoutes] Failed to register or resume session lease', {
         sessionId: request.sessionId,
