@@ -97,7 +97,8 @@ const summary = sessions.map((session) => {
   const role = session.isLeader ? 'leader' : 'follower';
   const version = session.serverVersion ?? 'unknown';
   const name = session.displayName ?? session.sessionId ?? 'unknown';
-  return `${name}:${role}:${version}`;
+  const sessionId = session.sessionId ?? 'unknown-session';
+  return `${name}[${sessionId}]:${role}:${version}`;
 }).join(', ');
 console.log(`sessions: count=${sessions.length}${summary ? ` -> ${summary}` : ''}`);
 NODE

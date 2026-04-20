@@ -16,12 +16,21 @@ cleanup() {
 
 wait_for_sessions() {
   local description="$1"
-  local expected_pattern="$2"
+  shift
   local output=""
+  local pattern=""
 
   for _ in $(seq 1 "${SESSION_WAIT_RETRIES}"); do
     output="$("${SCRIPT_DIR}/observe-state.sh" --once)"
-    if [[ "${output}" =~ sessions:\ count=([0-9]+) ]] && printf '%s\n' "${output}" | grep -Eq "${expected_pattern}"; then
+    local matched_all=true
+    for pattern in "$@"; do
+      if ! printf '%s\n' "${output}" | grep -Eq "${pattern}"; then
+        matched_all=false
+        break
+      fi
+    done
+
+    if [[ "${output}" =~ sessions:\ count=([0-9]+) ]] && [[ "${matched_all}" == "true" ]]; then
       printf '%s\n' "${output}"
       return 0
     fi
@@ -40,8 +49,14 @@ trap cleanup EXIT
 "${SCRIPT_DIR}/reset-state.sh"
 docker compose -f "${COMPOSE_FILE}" up -d --build
 
-wait_for_sessions "initial mixed-version leader election" "count=([2-9]|[1-9][0-9]+)"
+wait_for_sessions \
+  "initial mixed-version leader election" \
+  "count=([2-9]|[1-9][0-9]+)" \
+  "\\[current-local\\]"
 
 "${SCRIPT_DIR}/inject-service.sh" legacy-225 "${TARGET_INJECT_SPEC}"
 
-wait_for_sessions "legacy injection to appear in sessions" "2\\.0\\.24"
+wait_for_sessions \
+  "legacy injection to appear in sessions" \
+  "\\[legacy-225\\]" \
+  "2\\.0\\.24"

@@ -32,6 +32,12 @@ services:
     image: dollhouse-mixed-version-current:local
     container_name: dollhouse-mixed-version-current
     init: true
+    # The production image runs as the non-root `node` user, but the harness
+    # intentionally shares one bind-mounted Dollhouse home with historical npm
+    # packages that still start as root. Run the current image as root here so
+    # it exercises the same shared-state semantics in CI instead of failing on
+    # chmod/chown during startup.
+    user: "0:0"
     depends_on:
       - netns
     network_mode: "service:netns"

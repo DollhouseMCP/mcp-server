@@ -64,7 +64,7 @@ import type { SessionInfo } from './IngestRoutes.js';
 const DEFAULT_CONSOLE_PORT = env.DOLLHOUSE_WEB_CONSOLE_PORT;
 const LEGACY_CONSOLE_FALLBACK_PORT = 3939;
 const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
-const LEADER_DISCOVERY_TIMEOUT_MS = 2_000;
+const LEADER_DISCOVERY_TIMEOUT_MS = env.DOLLHOUSE_CONSOLE_LEADER_DISCOVERY_TIMEOUT_MS;
 const LEADER_LEASE_RECONCILE_INTERVAL_MS = 2_000;
 const LEADER_LEASE_RECONCILE_MAX_INTERVAL_MS = 30_000;
 const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
@@ -223,10 +223,23 @@ interface FollowerAuthorityResolution {
   forcedClaim: boolean;
 }
 
+interface LeaderPreflightResolution {
+  election: ElectionResult;
+  discovery: PortLeaderDiscovery | null;
+  replacement: PortOwnerReplacementDecision | null;
+  demotedToFollower: boolean;
+}
+
 interface FollowerAuthorityDependencies {
   isLeaderWebConsoleReachableImpl?: typeof isLeaderWebConsoleReachable;
   discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
   forceClaimLeadershipImpl?: typeof forceClaimLeadership;
+  deleteLeaderLockImpl?: typeof deleteLeaderLock;
+}
+
+interface LeaderPreflightDependencies extends DiscoveryDependencies {
+  discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
+  readLeaderLockImpl?: typeof readLeaderLock;
   deleteLeaderLockImpl?: typeof deleteLeaderLock;
 }
 
@@ -275,7 +288,11 @@ export async function fetchLeaderSessionsSnapshot(
 
     const data = await response.json() as { sessions?: SessionInfo[] };
     return Array.isArray(data.sessions) ? data.sessions : [];
-  } catch {
+  } catch (err) {
+    logger.debug('[UnifiedConsole] Failed to fetch leader session snapshot', {
+      port,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return [];
   } finally {
     clearTimeout(timeout);
@@ -473,6 +490,13 @@ export function evaluatePortOwnerReplacement(
   };
 }
 
+export function shouldEvictDiscoveredOwner(
+  discovery: PortLeaderDiscovery,
+  replacement: PortOwnerReplacementDecision,
+): boolean {
+  return discovery.source !== 'synthetic' && replacement.shouldEvict && replacement.ownerPid !== null;
+}
+
 function buildBindFailureLogContext(
   consolePort: number,
   provisionalLeader: ConsoleLeaderInfo,
@@ -564,7 +588,7 @@ export async function resolveFollowerAuthority(
   }
 
   const replacement = evaluatePortOwnerReplacement(candidateLeader, discovery);
-  if (replacement.shouldEvict) {
+  if (shouldEvictDiscoveredOwner(discovery, replacement)) {
     await deleteLeaderLockImpl();
     logger.warn(
       discovery.ownerPid === election.leaderInfo.pid
@@ -605,6 +629,66 @@ export async function resolveFollowerAuthority(
     discovery,
     replacement,
     forcedClaim: false,
+  };
+}
+
+export async function resolveLeaderPreflightAuthority(
+  sessionId: string,
+  consolePort: number,
+  election: ElectionResult,
+  authToken: string | null,
+  deps: LeaderPreflightDependencies = {},
+): Promise<LeaderPreflightResolution> {
+  const discoverLeaderServingPortImpl = deps.discoverLeaderServingPortImpl ?? discoverLeaderServingPort;
+  const readLeaderLockImpl = deps.readLeaderLockImpl ?? readLeaderLock;
+  const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
+
+  const discovery = await discoverLeaderServingPortImpl(consolePort, authToken, deps);
+  if (!discovery.leaderInfo || discovery.ownerPid === null || discovery.ownerPid === election.leaderInfo.pid) {
+    return {
+      election,
+      discovery,
+      replacement: discovery.leaderInfo ? evaluatePortOwnerReplacement(election.leaderInfo, discovery) : null,
+      demotedToFollower: false,
+    };
+  }
+
+  const replacement = evaluatePortOwnerReplacement(election.leaderInfo, discovery);
+  if (shouldEvictDiscoveredOwner(discovery, replacement)) {
+    return {
+      election,
+      discovery,
+      replacement,
+      demotedToFollower: false,
+    };
+  }
+
+  const provisionalLock = await readLeaderLockImpl();
+  const provisionalLockMatches = (
+    provisionalLock?.pid === election.leaderInfo.pid &&
+    provisionalLock.port === election.leaderInfo.port &&
+    provisionalLock.sessionId === election.leaderInfo.sessionId
+  );
+
+  if (provisionalLockMatches) {
+    await deleteLeaderLockImpl();
+  }
+
+  logger.warn(
+    discovery.source === 'synthetic'
+      ? '[UnifiedConsole] Provisional leader detected an unknown active console owner before bind; following the existing port owner instead of forcing eviction'
+      : '[UnifiedConsole] Provisional leader detected a healthy console owner before bind; following the existing leader instead of forcing takeover',
+    {
+      ...buildAuthorityResolutionLogContext(consolePort, election.leaderInfo, discovery, replacement),
+      provisionalLockCleared: provisionalLockMatches,
+    },
+  );
+
+  return {
+    election: { role: 'follower', leaderInfo: discovery.leaderInfo },
+    discovery,
+    replacement,
+    demotedToFollower: true,
   };
 }
 
@@ -896,7 +980,7 @@ async function attemptForceTakeover(
   const initialFallback = await recoverLeaderBindFailure(currentElection.leaderInfo, consolePort, primaryToken);
   const initialReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, initialFallback);
 
-  if (!initialReplacement.shouldEvict || initialReplacement.ownerPid === null) {
+  if (!shouldEvictDiscoveredOwner(initialFallback, initialReplacement)) {
     return {
       webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
       election: currentElection,
@@ -912,7 +996,7 @@ async function attemptForceTakeover(
   const latestFallback = await discoverLeaderServingPort(consolePort, primaryToken);
   const recoveredSessions = await fetchLeaderSessionsSnapshot(consolePort, primaryToken);
   const latestReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, latestFallback);
-  if (!latestReplacement.shouldEvict || latestReplacement.ownerPid === null) {
+  if (!shouldEvictDiscoveredOwner(latestFallback, latestReplacement)) {
     logger.warn('[UnifiedConsole] Forced takeover target changed before eviction; skipping forced kill', {
       ...buildBindFailureLogContext(
         consolePort,
@@ -945,7 +1029,21 @@ async function attemptForceTakeover(
     ),
   });
 
-  const forcedKill = await killStaleProcessDetailed(latestReplacement.ownerPid, consolePort, {
+  const ownerPid = latestReplacement.ownerPid;
+  if (ownerPid === null) {
+    return {
+      webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
+      election: currentElection,
+      fallback: latestFallback,
+      replacement: latestReplacement,
+      recoveredSessions,
+      forcedKill: null,
+      takeoverAttempted: false,
+      reboundLockClaimed: false,
+    };
+  }
+
+  const forcedKill = await killStaleProcessDetailed(ownerPid, consolePort, {
     allowActiveHostParent: true,
   });
   if (!forcedKill.killed) {
@@ -1039,6 +1137,11 @@ export async function startUnifiedConsole(options: UnifiedConsoleOptions): Promi
 
   if (election.role === 'follower') {
     const resolved = await resolveFollowerAuthority(options.sessionId, consolePort, election);
+    election = resolved.election;
+  } else {
+    const { getPrimaryTokenFromFile } = await import('./consoleToken.js');
+    const authToken = await getPrimaryTokenFromFile(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+    const resolved = await resolveLeaderPreflightAuthority(options.sessionId, consolePort, election, authToken);
     election = resolved.election;
   }
 
