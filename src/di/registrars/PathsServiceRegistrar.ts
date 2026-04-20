@@ -24,7 +24,7 @@
 import * as os from 'node:os';
 import path from 'node:path';
 
-import { IUserPathResolver } from '../../paths/IUserPathResolver.js';
+import type { IUserPathResolver } from '../../paths/IUserPathResolver.js';
 import { LegacyDetectingPathResolver } from '../../paths/LegacyDetectingPathResolver.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 import { PathService, type UserIdResolver } from '../../paths/PathService.js';

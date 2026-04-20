@@ -22,7 +22,9 @@ import {
 } from '../../config/performance-constants.js';
 import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
-import { DatabaseMemoryStorageLayer } from '../../storage/DatabaseMemoryStorageLayer.js';
+// DatabaseMemoryStorageLayer is loaded dynamically via the DI-injected
+// createDatabaseStorageLayer factory. Type reference retained for the
+// override's return-type annotation if needed in future.
 import { MemoryMetadataExtractor } from '../../storage/MemoryMetadataExtractor.js';
 import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -164,8 +166,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Phase 4: Returns DatabaseMemoryStorageLayer when database deps are available.
    */
   protected override createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
-    if (this.databaseInstance && this.getCurrentUserId) {
-      return new DatabaseMemoryStorageLayer(this.databaseInstance, this.getCurrentUserId);
+    if (this.databaseInstance && this.getCurrentUserId && this.createDatabaseStorageLayer) {
+      // MemoryManager's DB storage layer is specialized (DatabaseMemoryStorageLayer),
+      // but the injected factory from DI handles creating the right variant.
+      return this.createDatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
     }
     // Note: Use this.elementDir (set by BaseElementManager before this is called),
     // not this.memoriesDir (set after super() returns).

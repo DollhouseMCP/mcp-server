@@ -23,8 +23,8 @@
  */
 
 import { ElementType } from '../portfolio/types.js';
-import { PackageResourceLocator } from './PackageResourceLocator.js';
-import { IUserPathResolver } from './IUserPathResolver.js';
+import type { PackageResourceLocator } from './PackageResourceLocator.js';
+import type { IUserPathResolver } from './IUserPathResolver.js';
 import {
   resolveDataDirectory,
   type DataDirKey,

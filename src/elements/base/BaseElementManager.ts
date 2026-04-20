@@ -39,8 +39,7 @@ import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
-import { DatabaseStorageLayer } from '../../storage/DatabaseStorageLayer.js';
-import { AbstractDatabaseStorageLayer } from '../../storage/AbstractDatabaseStorageLayer.js';
+import type { AbstractDatabaseStorageLayer } from '../../storage/AbstractDatabaseStorageLayer.js';
 import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -80,6 +79,17 @@ export interface BaseElementManagerOptions {
    * own userId — no stale singleton. Required when `databaseInstance` is set.
    */
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
+  /**
+   * Phase 4: Factory for creating the database storage layer. Injected by
+   * DI container only in DB mode so the drizzle-orm dependency graph is
+   * not statically loaded in file-only contexts. When absent,
+   * `createStorageLayer` falls back to the file-backed ElementStorageLayer.
+   */
+  createDatabaseStorageLayer?: (
+    db: import('../../database/connection.js').DatabaseInstance,
+    getUserId: import('../../database/UserContext.js').UserIdResolver,
+    elementType: string,
+  ) => IStorageLayer;
 }
 
 /**
@@ -109,6 +119,15 @@ export interface ElementManagerDeps {
    * for details. Required when `databaseInstance` is set.
    */
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
+  /**
+   * Phase 4: Factory for creating the database storage layer. Injected by
+   * DI container only in DB mode. See BaseElementManagerOptions for rationale.
+   */
+  createDatabaseStorageLayer?: (
+    db: import('../../database/connection.js').DatabaseInstance,
+    getUserId: import('../../database/UserContext.js').UserIdResolver,
+    elementType: string,
+  ) => IStorageLayer;
 }
 
 /**
@@ -151,7 +170,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   private watcherCleanup?: () => void;
   private readonly eventDispatcher: ElementEventDispatcher;
   private readonly autoReloadOnExternalChange: boolean;
-  private readonly elementType: ElementType;
+  protected readonly elementType: ElementType;
   private readonly memoryBudget?: CacheMemoryBudget;
   protected readonly backupService?: BackupService;
 
@@ -166,6 +185,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * context every time. Undefined in file-backed mode.
    */
   protected readonly getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
+  /** Phase 4: Injected factory for DB storage layer — undefined in file mode. */
+  protected readonly createDatabaseStorageLayer?: BaseElementManagerOptions['createDatabaseStorageLayer'];
 
   /** Map plural ElementType enum values to singular ContentValidator context.
    *  Partial because not all element types have a content context (e.g., ensembles). */
@@ -337,6 +358,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.activationRegistry = options.activationRegistry;
     this.databaseInstance = options.databaseInstance;
     this.getCurrentUserId = options.getCurrentUserId;
+    this.createDatabaseStorageLayer = options.createDatabaseStorageLayer;
 
     // Get the specialized validator for this element type
     this.validator = validationRegistry.getValidator(elementType);
@@ -405,8 +427,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses (e.g. MemoryManager) can override for type-specific behavior.
    */
   protected createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
-    if (this.databaseInstance && this.getCurrentUserId) {
-      return new DatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
+    if (this.databaseInstance && this.getCurrentUserId && this.createDatabaseStorageLayer) {
+      return this.createDatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
     }
     return new ElementStorageLayer(fileOperationsService, {
       elementDir: this.elementDir,

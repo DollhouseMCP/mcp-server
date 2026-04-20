@@ -30,16 +30,15 @@
  */
 
 import { env } from '../../config/env.js';
-import { bootstrapDatabase } from '../../database/bootstrap.js';
-import { createUserIdResolver } from '../../database/UserContext.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { UserIdResolver } from '../../database/UserContext.js';
 
-// Use the shared DiContainerFacade so multiple registrars don't drift.
-export type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+
+// Re-export for callers that import from this module.
+export type { DiContainerFacade };
 
 /**
  * Optional DB deps spread into element-manager constructors. Returns an empty
@@ -49,6 +48,11 @@ import type { DiContainerFacade } from '../DiContainerFacade.js';
 export interface OptionalDatabaseDeps {
   databaseInstance?: DatabaseInstance;
   getCurrentUserId?: UserIdResolver;
+  createDatabaseStorageLayer?: (
+    db: DatabaseInstance,
+    getUserId: UserIdResolver,
+    elementType: string,
+  ) => import('../../storage/IStorageLayer.js').IStorageLayer;
 }
 
 export class DatabaseServiceRegistrar {
@@ -69,6 +73,11 @@ export class DatabaseServiceRegistrar {
       );
     }
 
+    // Dynamic imports — drizzle-orm stays out of the static module graph
+    // so file-mode deployments and tests never load it.
+    const { bootstrapDatabase } = await import('../../database/bootstrap.js');
+    const { createUserIdResolver } = await import('../../database/UserContext.js');
+
     const result = await bootstrapDatabase({
       connectionUrl: env.DOLLHOUSE_DATABASE_URL,
       adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
@@ -80,6 +89,27 @@ export class DatabaseServiceRegistrar {
     container.register('DatabaseConnection', () => result.connection);
     // Drizzle instance (resolved by stores and storage layers)
     container.register('DatabaseInstance', () => result.db);
+
+    // Storage layer + state store factories — loaded here (async context) so
+    // drizzle-orm stays out of the static import graph entirely. File-mode
+    // code and tests never import these modules.
+    const { DatabaseStorageLayer } = await import('../../storage/DatabaseStorageLayer.js');
+    const { DatabaseMemoryStorageLayer } = await import('../../storage/DatabaseMemoryStorageLayer.js');
+    const { DatabaseActivationStateStore } = await import('../../state/DatabaseActivationStateStore.js');
+    const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
+    const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
+
+    container.register('DatabaseStorageLayerFactory', () =>
+      (db: DatabaseInstance, getUserId: UserIdResolver, elementType: string) => {
+        if (elementType === 'memories') {
+          return new DatabaseMemoryStorageLayer(db, getUserId);
+        }
+        return new DatabaseStorageLayer(db, getUserId, elementType);
+      }
+    );
+    container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
+    container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
+    container.register('DatabaseChallengeStoreClass', () => DatabaseChallengeStore);
 
     // The bootstrapped DB UUID is the identity every session binds to by default.
     // Per-session scoping is enforced by ContextTracker/AsyncLocalStorage: stdio
@@ -135,6 +165,7 @@ export class DatabaseServiceRegistrar {
       return {
         databaseInstance: container.resolve<DatabaseInstance>('DatabaseInstance'),
         getCurrentUserId: container.resolve<UserIdResolver>('UserIdResolver'),
+        createDatabaseStorageLayer: container.resolve('DatabaseStorageLayerFactory'),
       };
     }
     return {};

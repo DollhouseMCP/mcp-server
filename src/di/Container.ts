@@ -88,12 +88,13 @@ import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
 import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
-import { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
-import { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
-import { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
+import type { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
+import type { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
+import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
+import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -385,10 +386,12 @@ export class DollhouseContainer {
     this.register('PersonaDetails', () => new PersonaDetails(this.resolve('GitHubClient')));
 
     // PORTFOLIO & MANAGERS
-    this.register('PortfolioManager', () => new PortfolioManager(
-      this.resolve('FileOperationsService'),
-      undefined
-    ));
+    this.register('PortfolioManager', () => {
+      const config = this.hasRegistration('PathService')
+        ? { baseDir: this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('portfolio-root') }
+        : undefined;
+      return new PortfolioManager(this.resolve('FileOperationsService'), config);
+    });
     this.register('PersonaManager', () => new PersonaManager({
       portfolioManager: this.resolve('PortfolioManager'),
       indicatorConfig: this.resolve('IndicatorConfig'),
@@ -672,7 +675,8 @@ export class DollhouseContainer {
       if (this.hasRegistration('DatabaseInstance')) {
         const db = this.resolve<DatabaseInstance>('DatabaseInstance');
         const userId = this.resolve<string>('CurrentUserId');
-        return new DatabaseActivationStateStore(db, userId, session.sessionId);
+        const DbStore = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
+        return new DbStore(db, userId, session.sessionId);
       }
       return new FileActivationStateStore(
         this.resolve('FileOperationsService'),
@@ -686,7 +690,8 @@ export class DollhouseContainer {
       if (this.hasRegistration('DatabaseInstance')) {
         const db = this.resolve<DatabaseInstance>('DatabaseInstance');
         const userId = this.resolve<string>('CurrentUserId');
-        return new DatabaseConfirmationStore(db, userId, session.sessionId);
+        const DbStore = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
+        return new DbStore(db, userId, session.sessionId);
       }
       return new FileConfirmationStore(
         this.resolve('FileOperationsService'),
@@ -702,7 +707,8 @@ export class DollhouseContainer {
         const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
         const db = this.resolve<DatabaseInstance>('DatabaseInstance');
         const userId = this.resolve<string>('CurrentUserId');
-        return new DatabaseChallengeStore(db, userId, session.sessionId);
+        const DbStore = this.resolve<typeof DatabaseChallengeStore>('DatabaseChallengeStoreClass');
+        return new DbStore(db, userId, session.sessionId);
       }
       return new InMemoryChallengeStore();
     });
@@ -892,6 +898,10 @@ export class DollhouseContainer {
    * is deferred to completeDeferredSetup() which runs post-connect.
    */
   public async preparePortfolio(): Promise<void> {
+    // Path services must bootstrap before any manager resolution so
+    // PathService is available for PortfolioManager and downstream.
+    await new PathsServiceRegistrar().bootstrapAndRegister(this);
+
     // Bootstrap database connection when storage backend is 'database'.
     // Must happen before any manager resolution so DatabaseInstance is available.
     // All DB-specific wiring lives in DatabaseServiceRegistrar — Container stays
@@ -1697,10 +1707,12 @@ export class DollhouseContainer {
     if (this.hasRegistration('DatabaseInstance')) {
       const db = this.resolve<DatabaseInstance>('DatabaseInstance');
       const httpUserId = sessionContext.userId;
+      const DbActivation = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
+      const DbConfirmation = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
       child.register('ActivationStore', () =>
-        new DatabaseActivationStateStore(db, httpUserId, sid));
+        new DbActivation(db, httpUserId, sid));
       child.register('ConfirmationStore', () =>
-        new DatabaseConfirmationStore(db, httpUserId, sid));
+        new DbConfirmation(db, httpUserId, sid));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
     } else {
