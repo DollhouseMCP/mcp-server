@@ -33,6 +33,18 @@
   var lastReloadTargetVersion = '';
   var pendingLeaderReloadTimer = null;
   var showPolicySessions = loadPolicyDebugVisibility();
+  var CLIENT_PLATFORM_LABELS = {
+    'claude-code': 'Claude Code',
+    'claude-desktop': 'Claude Desktop',
+    'codex': 'Codex',
+    'cursor': 'Cursor',
+    'vscode': 'VS Code',
+    'windsurf': 'Windsurf',
+    'gemini-cli': 'Gemini CLI',
+    'cline': 'Cline',
+    'lmstudio': 'LM Studio',
+    'web-console': 'Web Console'
+  };
 
   function loadPolicyDebugVisibility() {
     try {
@@ -176,6 +188,55 @@
   /** NFC-normalize a string safely */
   function nfc(s) { try { return s.normalize('NFC'); } catch(e) { return s; } }
 
+  function normalizeClientPlatform(platform) {
+    if (typeof platform !== 'string') return '';
+    var normalized = nfc(platform).trim().toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'gemini') return 'gemini-cli';
+    return Object.prototype.hasOwnProperty.call(CLIENT_PLATFORM_LABELS, normalized) ? normalized : '';
+  }
+
+  function displayPlatform(session) {
+    if (!session || typeof session !== 'object') return '';
+    if (typeof session.clientPlatformLabel === 'string' && session.clientPlatformLabel.trim()) {
+      return nfc(session.clientPlatformLabel.trim());
+    }
+    var platform = normalizeClientPlatform(session.clientPlatform);
+    return platform ? CLIENT_PLATFORM_LABELS[platform] || '' : '';
+  }
+
+  function displayVersion(session) {
+    if (!session || typeof session !== 'object') return '';
+    var normalized = normalizeSemver(session.serverVersion);
+    if (!normalized && typeof session.serverVersion === 'string') {
+      normalized = nfc(session.serverVersion).trim();
+    }
+    if (!normalized) return '';
+    return normalized.charAt(0) === 'v' ? normalized : ('v' + normalized);
+  }
+
+  function getNewestKnownSessionVersion(list) {
+    if (!Array.isArray(list)) return '';
+    var newest = '';
+    for (var i = 0; i < list.length; i++) {
+      var session = list[i];
+      if (!session || isPolicyOnlySession(session) || session.status !== 'active') continue;
+      var version = normalizeSemver(session.serverVersion);
+      if (!version) continue;
+      if (!newest || compareSemver(version, newest) > 0) {
+        newest = version;
+      }
+    }
+    return newest;
+  }
+
+  function sessionHasUpdateAvailable(session, newestVersion) {
+    if (!session || !newestVersion || isPolicyOnlySession(session)) return false;
+    var version = normalizeSemver(session.serverVersion);
+    if (!version) return false;
+    return compareSemver(version, newestVersion) < 0;
+  }
+
   function isPolicyOnlySession(session) {
     return !!(session && session.isPolicyOnly);
   }
@@ -231,6 +292,9 @@
         isLeader: false,
         authenticated: false,
         kind: 'policy',
+        serverVersion: '',
+        clientPlatform: '',
+        clientPlatformLabel: '',
         isPolicyOnly: true,
       });
     }
@@ -254,10 +318,61 @@
   // Build a key from current sessions to detect changes
   function sessionListKey(list) {
     return list.map(function(s) {
-      return s.sessionId + ':' + s.status + ':' + (isPolicyOnlySession(s) ? 'policy' : 'live');
+      return [
+        s.sessionId,
+        s.status,
+        s.displayName || '',
+        s.serverVersion || '',
+        s.clientPlatform || '',
+        s.clientPlatformLabel || '',
+        s.isLeader ? 'leader' : 'member',
+        s.authenticated ? 'auth' : 'noauth',
+        isPolicyOnlySession(s) ? 'policy' : 'live'
+      ].join(':');
     }).join(',')
       + '|policyDebug:' + (showPolicySessions ? 'on' : 'off')
       + '|knownPolicy:' + policySessions.map(function(session) { return session.sessionId; }).join(',');
+  }
+
+  function normalizeLiveSessions(list) {
+    if (!Array.isArray(list)) return [];
+    var normalized = [];
+    var seen = new Set();
+
+    for (var i = 0; i < list.length; i++) {
+      var item = list[i];
+      if (!item || typeof item.sessionId !== 'string') continue;
+      var sessionId = nfc(item.sessionId).trim();
+      if (!sessionId || seen.has(sessionId)) continue;
+      seen.add(sessionId);
+
+      var clientPlatform = normalizeClientPlatform(item.clientPlatform);
+      var clientPlatformLabel = '';
+      if (typeof item.clientPlatformLabel === 'string' && item.clientPlatformLabel.trim()) {
+        clientPlatformLabel = nfc(item.clientPlatformLabel).trim();
+      } else if (clientPlatform) {
+        clientPlatformLabel = CLIENT_PLATFORM_LABELS[clientPlatform] || '';
+      }
+
+      normalized.push({
+        sessionId: sessionId,
+        displayName: nfc(typeof item.displayName === 'string' && item.displayName ? item.displayName : sessionId),
+        color: typeof item.color === 'string' ? item.color : '',
+        pid: typeof item.pid === 'number' ? item.pid : 0,
+        startedAt: typeof item.startedAt === 'string' ? item.startedAt : '',
+        lastHeartbeat: typeof item.lastHeartbeat === 'string' ? item.lastHeartbeat : '',
+        status: item.status === 'ended' ? 'ended' : 'active',
+        isLeader: !!item.isLeader,
+        authenticated: !!item.authenticated,
+        kind: typeof item.kind === 'string' ? item.kind : 'mcp',
+        serverVersion: normalizeSemver(item.serverVersion) || (typeof item.serverVersion === 'string' ? nfc(item.serverVersion).trim() : ''),
+        consoleProtocolVersion: typeof item.consoleProtocolVersion === 'number' ? item.consoleProtocolVersion : 0,
+        clientPlatform: clientPlatform,
+        clientPlatformLabel: clientPlatformLabel,
+      });
+    }
+
+    return normalized;
   }
 
   function setPolicyDebugVisibility(nextVisible, keepDropdownOpen) {
@@ -513,6 +628,7 @@
       if (!a.isLeader && b.isLeader) return 1;
       return 0;
     });
+    var newestKnownVersion = getNewestKnownSessionVersion(sorted);
 
     function appendSessionItem(s) {
       var item = document.createElement('div');
@@ -529,11 +645,36 @@
       if (s.color) dot.style.background = s.color;
       item.appendChild(dot);
 
+      var nameWrap = document.createElement('div');
+      nameWrap.className = 'session-dropdown-primary';
+
       var nameEl = document.createElement('span');
       nameEl.className = 'session-dropdown-name';
       nameEl.textContent = displayName(s);
       if (s.color) nameEl.style.color = s.color;
-      item.appendChild(nameEl);
+      nameWrap.appendChild(nameEl);
+
+      var versionText = displayVersion(s);
+      if (versionText) {
+        var metaRow = document.createElement('div');
+        metaRow.className = 'session-dropdown-meta';
+
+        var versionEl = document.createElement('span');
+        versionEl.className = 'session-dropdown-version';
+        versionEl.textContent = versionText;
+        metaRow.appendChild(versionEl);
+
+        if (sessionHasUpdateAvailable(s, newestKnownVersion)) {
+          var updateBadge = document.createElement('span');
+          updateBadge.className = 'session-dropdown-update';
+          updateBadge.textContent = 'Update available';
+          metaRow.appendChild(updateBadge);
+        }
+
+        nameWrap.appendChild(metaRow);
+      }
+
+      item.appendChild(nameWrap);
 
       // Session status badges (#1805) — for persisted policy sessions we
       // switch from "live/authenticated" semantics to "saved/no client".
@@ -554,6 +695,9 @@
       }
       item.appendChild(authBadge);
 
+      var clientWrap = document.createElement('div');
+      clientWrap.className = 'session-dropdown-badge-stack';
+
       var clientBadge = document.createElement('span');
       clientBadge.className = 'session-status-badge';
       if (isPolicyOnlySession(s)) {
@@ -569,7 +713,17 @@
         clientBadge.dataset.status = 'negative';
         clientBadge.title = 'No MCP client attached';
       }
-      item.appendChild(clientBadge);
+      clientWrap.appendChild(clientBadge);
+
+      var platformLabel = displayPlatform(s);
+      if (platformLabel) {
+        var clientLabel = document.createElement('span');
+        clientLabel.className = 'session-dropdown-client-label';
+        clientLabel.textContent = platformLabel;
+        clientWrap.appendChild(clientLabel);
+      }
+
+      item.appendChild(clientWrap);
 
       var uptimeEl = document.createElement('span');
       uptimeEl.className = 'session-dropdown-uptime';
@@ -727,7 +881,7 @@
       return res.json();
     }).then(function(data) {
       if (data && data.sessions) {
-        sessions = data.sessions;
+        sessions = normalizeLiveSessions(data.sessions);
         maybeForceReloadForNewLeader(sessions);
         updateSessionIndicator();
         updateSessionFilterOptions();
@@ -743,6 +897,7 @@
   window.DollhouseSessions = {
     getFilterSessionId: function() { return filterSessionId; },
     displayName: displayName,
+    displayPlatform: displayPlatform,
     getSessions: function() { return sessions; },
     getLiveSessions: getLiveSessions,
     getSelectableSessions: getSelectableSessions,

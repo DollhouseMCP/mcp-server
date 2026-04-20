@@ -46,6 +46,7 @@ import {
 } from './LeaderForwardingSink.js';
 import { PromotionManager } from './PromotionManager.js';
 import { ConsoleTokenStore } from './consoleToken.js';
+import { detectSessionClientPlatformId } from './sessionClientPlatform.js';
 import {
   findPidOnPort,
   killStaleProcessDetailed,
@@ -707,6 +708,7 @@ async function startAsLeader(
   election: ElectionResult,
   consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
+  const clientPlatform = detectSessionClientPlatformId();
   const { startWebServer } = await import('../server.js');
   const { pickRandomTokenName } = await import('./SessionNames.js');
 
@@ -800,7 +802,7 @@ async function startAsLeader(
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.
-  ingestResult.registerLeaderSession(options.sessionId, process.pid);
+  ingestResult.registerLeaderSession(options.sessionId, process.pid, clientPlatform);
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
@@ -853,6 +855,7 @@ async function startAsFollower(
   consolePort: number = DEFAULT_CONSOLE_PORT,
   initialAuthToken: string | null = null,
 ): Promise<UnifiedConsoleResult> {
+  const clientPlatform = detectSessionClientPlatformId();
   const leaderUrl = `http://127.0.0.1:${election.leaderInfo.port}`;
 
   // Read the console auth token (#1780) written by the leader. May be null
@@ -885,7 +888,13 @@ async function startAsFollower(
   options.registerLogSink(forwardingSink);
 
   // Start session heartbeat to the leader
-  sessionHeartbeat = new SessionHeartbeat(leaderUrl, options.sessionId, process.pid, authToken);
+  sessionHeartbeat = new SessionHeartbeat(
+    leaderUrl,
+    options.sessionId,
+    process.pid,
+    authToken,
+    clientPlatform,
+  );
   await sessionHeartbeat.start();
 
   logger.info('[UnifiedConsole] Follower started', {

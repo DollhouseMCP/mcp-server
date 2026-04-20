@@ -22,6 +22,10 @@ import { PACKAGE_VERSION } from '../../generated/version.js';
 import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
 import { CONSOLE_PROTOCOL_VERSION } from './LeaderElection.js';
+import {
+  detectSessionClientPlatformId,
+  type SessionClientPlatformId,
+} from './sessionClientPlatform.js';
 
 /** Maximum entries to buffer when leader is unreachable */
 const MAX_BUFFER_SIZE = 10_000;
@@ -221,6 +225,8 @@ export class SessionHeartbeat {
     private readonly pid: number,
     /** Optional console auth token (#1780). Included as Bearer header on ingest POSTs. */
     private readonly authToken: string | null = null,
+    /** Explicit MCP host platform metadata for this runtime. */
+    private readonly clientPlatform: SessionClientPlatformId | null = detectSessionClientPlatformId(),
   ) {}
 
   /** Notify the leader that this session has started */
@@ -257,6 +263,7 @@ export class SessionHeartbeat {
           startedAt: new Date().toISOString(),
           serverVersion: PACKAGE_VERSION,
           consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+          clientPlatform: this.clientPlatform ?? undefined,
         }),
         signal: controller.signal,
       });
