@@ -142,6 +142,7 @@
     "dist/web/public/**",
     "dist/seed-elements/**",
     "scripts/pretooluse-dollhouse.sh",
+    "scripts/permission-port-discovery.sh",
     "scripts/pretooluse-vscode.sh",
     "scripts/pretooluse-cursor.sh",
     "scripts/pretooluse-windsurf.sh",
