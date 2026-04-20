@@ -50,11 +50,12 @@ import { PromotionManager } from './PromotionManager.js';
 import { ConsoleTokenStore } from './consoleToken.js';
 import {
   findPidOnPort,
-  killStaleProcessDetailed,
-  type KillStaleProcessOutcome,
 } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
-import type { SessionInfo } from './IngestRoutes.js';
+import type {
+  ConsoleLeadershipHandoffDecision,
+  SessionInfo,
+} from './IngestRoutes.js';
 
 /**
  * Default console port from the env var. Used as fallback when no port
@@ -69,6 +70,9 @@ const SYNTHETIC_PORT_OWNER_SESSION_PREFIX = 'port-owner-';
 const LEADER_DISCOVERY_TIMEOUT_MS = env.DOLLHOUSE_CONSOLE_LEADER_DISCOVERY_TIMEOUT_MS;
 const LEADER_LEASE_RECONCILE_INTERVAL_MS = 2_000;
 const LEADER_LEASE_RECONCILE_MAX_INTERVAL_MS = 30_000;
+const LEADER_HANDOFF_REQUEST_TIMEOUT_MS = 2_000;
+const LEADER_HANDOFF_RELEASE_WAIT_MS = 5_000;
+const LEADER_HANDOFF_RELEASE_POLL_MS = 100;
 const FOLLOWER_AUTHORITY_MONITOR_CONFIG = {
   intervalMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_MS,
   jitterMs: env.DOLLHOUSE_CONSOLE_AUTHORITY_RECHECK_JITTER_MS,
@@ -213,7 +217,7 @@ interface ForceTakeoverAttemptResult {
   fallback: PortLeaderDiscovery;
   replacement: PortOwnerReplacementDecision;
   recoveredSessions: SessionInfo[];
-  forcedKill: KillStaleProcessOutcome | null;
+  handoff: ConsoleLeadershipHandoffDecision | null;
   takeoverAttempted: boolean;
   reboundLockClaimed: boolean;
 }
@@ -257,7 +261,6 @@ interface LeaderLeaseReconciliationDependencies {
   findPidOnPortImpl?: typeof findPidOnPort;
   claimLeadershipImpl?: typeof claimLeadership;
   deleteLeaderLockImpl?: typeof deleteLeaderLock;
-  killStaleProcessDetailedImpl?: typeof killStaleProcessDetailed;
   setTimeoutImpl?: typeof setTimeout;
   clearTimeoutImpl?: typeof clearTimeout;
 }
@@ -270,6 +273,85 @@ interface DiscoveryDependencies {
 
 function buildDiscoveryHeaders(authToken: string | null): Record<string, string> {
   return authToken ? { Authorization: `Bearer ${authToken}` } : {};
+}
+
+export interface LeaderHandoffDependencies {
+  fetchImpl?: typeof fetch;
+  findPidOnPortImpl?: typeof findPidOnPort;
+  setTimeoutImpl?: typeof setTimeout;
+}
+
+export async function requestLeaderHandoff(
+  port: number,
+  authToken: string | null,
+  candidateLeader: ConsoleLeaderInfo,
+  deps: LeaderHandoffDependencies = {},
+): Promise<ConsoleLeadershipHandoffDecision | null> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), LEADER_HANDOFF_REQUEST_TIMEOUT_MS);
+
+  try {
+    const response = await fetchImpl(`http://127.0.0.1:${port}/api/console/handoff`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...buildDiscoveryHeaders(authToken),
+      },
+      body: JSON.stringify({ candidateLeader }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok && response.status !== 409) {
+      return null;
+    }
+
+    const payload = await response.json() as Partial<ConsoleLeadershipHandoffDecision>;
+    if (!payload || typeof payload !== 'object' || typeof payload.accepted !== 'boolean' || !payload.leaderInfo) {
+      return null;
+    }
+
+    const { leaderInfo } = payload;
+
+    return {
+      accepted: payload.accepted,
+      reason: payload.reason ?? 'handoff-in-progress',
+      leaderInfo,
+    };
+  } catch (err) {
+    logger.debug('[UnifiedConsole] Leader handoff request failed', {
+      port,
+      candidateSessionId: candidateLeader.sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function waitForLeaderRelease(
+  port: number,
+  previousOwnerPid: number,
+  deps: LeaderHandoffDependencies = {},
+): Promise<boolean> {
+  const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
+  const setTimeoutImpl = deps.setTimeoutImpl ?? setTimeout;
+  const deadline = Date.now() + LEADER_HANDOFF_RELEASE_WAIT_MS;
+
+  while (Date.now() < deadline) {
+    const ownerPid = await findPidOnPortImpl(port);
+    if (ownerPid === null || ownerPid !== previousOwnerPid) {
+      return true;
+    }
+
+    await new Promise<void>((resolve) => {
+      const timer = setTimeoutImpl(resolve, LEADER_HANDOFF_RELEASE_POLL_MS);
+      timer.unref?.();
+    });
+  }
+
+  return false;
 }
 
 export async function fetchLeaderSessionsSnapshot(
@@ -525,7 +607,7 @@ function buildBindFailureLogContext(
   bindResult: WebServerResult['bindResult'],
   fallback: PortLeaderDiscovery,
   replacement?: PortOwnerReplacementDecision,
-  forcedKill?: KillStaleProcessOutcome | null,
+  handoff?: ConsoleLeadershipHandoffDecision | null,
 ) {
   return {
     port: consolePort,
@@ -543,9 +625,10 @@ function buildBindFailureLogContext(
     fallbackLeaderProtocolVersion: fallback.leaderInfo?.consoleProtocolVersion ?? CONSOLE_PROTOCOL_VERSION,
     replacementShouldEvict: replacement?.shouldEvict ?? false,
     replacementReason: replacement?.preference?.reason,
-    forcedKillReason: forcedKill?.reason,
-    forcedKillPid: forcedKill?.pid,
-    forcedKillDetail: forcedKill?.detail,
+    handoffAccepted: handoff?.accepted ?? false,
+    handoffReason: handoff?.reason ?? null,
+    handoffLeaderPid: handoff?.leaderInfo.pid ?? null,
+    handoffLeaderSessionId: handoff?.leaderInfo.sessionId ?? null,
   };
 }
 
@@ -853,7 +936,6 @@ export async function reconcileLeaderLease(
   const findPidOnPortImpl = deps.findPidOnPortImpl ?? findPidOnPort;
   const claimLeadershipImpl = deps.claimLeadershipImpl ?? claimLeadership;
   const deleteLeaderLockImpl = deps.deleteLeaderLockImpl ?? deleteLeaderLock;
-  const killStaleProcessDetailedImpl = deps.killStaleProcessDetailedImpl ?? killStaleProcessDetailed;
 
   const portOwnerPid = await findPidOnPortImpl(consolePort);
   if (portOwnerPid !== process.pid) {
@@ -882,9 +964,6 @@ export async function reconcileLeaderLease(
     replacementReason: replacement.preference?.reason ?? null,
   });
 
-  const killOutcome = await killStaleProcessDetailedImpl(currentLock.pid, consolePort, {
-    allowActiveHostParent: true,
-  });
   const lockAfterKill = await readLeaderLockImpl();
   let lockDeleted = false;
   let lockClaimAttempted = false;
@@ -908,9 +987,9 @@ export async function reconcileLeaderLease(
     displacedPid: currentLock.pid,
     displacedSessionId: currentLock.sessionId,
     displacedVersion: currentLock.serverVersion ?? LEGACY_SERVER_VERSION,
-    killAttempted: true,
-    killResult: killOutcome.reason,
-    killed: killOutcome.killed,
+    killAttempted: false,
+    killResult: null,
+    killed: false,
     lockDeleted,
     lockClaimAttempted,
     lockClaimed,
@@ -929,7 +1008,7 @@ export async function reconcileLeaderLease(
       finalLockOwnerPid: finalLock?.pid ?? null,
       finalLockOwnerSessionId: finalLock?.sessionId ?? null,
       finalLockOwnerVersion: finalLock?.serverVersion ?? null,
-      killResult: killOutcome.reason,
+      killResult: null,
       lockDeleted,
       lockClaimAttempted,
       lockClaimed,
@@ -1009,7 +1088,7 @@ async function attemptForceTakeover(
       fallback: initialFallback,
       replacement: initialReplacement,
       recoveredSessions: [],
-      forcedKill: null,
+      handoff: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
     };
@@ -1019,7 +1098,7 @@ async function attemptForceTakeover(
   const recoveredSessions = await fetchLeaderSessionsSnapshot(consolePort, primaryToken);
   const latestReplacement = evaluatePortOwnerReplacement(currentElection.leaderInfo, latestFallback);
   if (!shouldEvictDiscoveredOwner(latestFallback, latestReplacement)) {
-    logger.warn('[UnifiedConsole] Forced takeover target changed before eviction; skipping forced kill', {
+    logger.warn('[UnifiedConsole] Leadership handoff target changed before takeover; following the current leader instead', {
       ...buildBindFailureLogContext(
         consolePort,
         currentElection.leaderInfo,
@@ -1035,13 +1114,13 @@ async function attemptForceTakeover(
       fallback: latestFallback,
       replacement: latestReplacement,
       recoveredSessions,
-      forcedKill: null,
+      handoff: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
     };
   }
 
-  logger.warn('[UnifiedConsole] Attempting forced takeover from older or incompatible active leader', {
+  logger.warn('[UnifiedConsole] Requesting non-destructive leadership handoff from older or incompatible active leader', {
     ...buildBindFailureLogContext(
       consolePort,
       currentElection.leaderInfo,
@@ -1059,24 +1138,22 @@ async function attemptForceTakeover(
       fallback: latestFallback,
       replacement: latestReplacement,
       recoveredSessions,
-      forcedKill: null,
+      handoff: null,
       takeoverAttempted: false,
       reboundLockClaimed: false,
     };
   }
 
-  const forcedKill = await killStaleProcessDetailed(ownerPid, consolePort, {
-    allowActiveHostParent: true,
-  });
-  if (!forcedKill.killed) {
-    logger.warn('[UnifiedConsole] Forced takeover skipped or failed after identifying replaceable leader', {
+  const handoff = await requestLeaderHandoff(consolePort, primaryToken, currentElection.leaderInfo);
+  if (!handoff?.accepted) {
+    logger.warn('[UnifiedConsole] Leadership handoff was rejected or unavailable; following the existing leader', {
       ...buildBindFailureLogContext(
         consolePort,
         currentElection.leaderInfo,
         { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` },
         latestFallback,
         latestReplacement,
-        forcedKill,
+        handoff,
       ),
     });
     return {
@@ -1085,7 +1162,31 @@ async function attemptForceTakeover(
       fallback: latestFallback,
       replacement: latestReplacement,
       recoveredSessions,
-      forcedKill,
+      handoff,
+      takeoverAttempted: true,
+      reboundLockClaimed: false,
+    };
+  }
+
+  const released = await waitForLeaderRelease(consolePort, ownerPid);
+  if (!released) {
+    logger.warn('[UnifiedConsole] Leadership handoff was accepted but the older leader did not release the console port in time', {
+      ...buildBindFailureLogContext(
+        consolePort,
+        currentElection.leaderInfo,
+        { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` },
+        latestFallback,
+        latestReplacement,
+        handoff,
+      ),
+    });
+    return {
+      webResult: { bindResult: { success: false, error: 'EADDRINUSE', detail: `Port ${consolePort} already in use` } },
+      election: currentElection,
+      fallback: latestFallback,
+      replacement: latestReplacement,
+      recoveredSessions,
+      handoff,
       takeoverAttempted: true,
       reboundLockClaimed: false,
     };
@@ -1106,20 +1207,20 @@ async function attemptForceTakeover(
           reboundWebResult.bindResult,
           latestFallback,
           latestReplacement,
-          forcedKill,
+          handoff,
         ),
       });
     }
     reboundElection = { role: 'leader', leaderInfo: reboundLeaderInfo };
   } else {
-    logger.warn('[UnifiedConsole] Forced takeover killed old leader but bind retry still failed', {
+    logger.warn('[UnifiedConsole] Leadership handoff succeeded but the bind retry still failed', {
       ...buildBindFailureLogContext(
         consolePort,
         currentElection.leaderInfo,
         reboundWebResult.bindResult,
         latestFallback,
         latestReplacement,
-        forcedKill,
+        handoff,
       ),
     });
   }
@@ -1130,7 +1231,7 @@ async function attemptForceTakeover(
     fallback: latestFallback,
     replacement: latestReplacement,
     recoveredSessions,
-    forcedKill,
+    handoff,
     takeoverAttempted: true,
     reboundLockClaimed,
   };
@@ -1184,7 +1285,7 @@ async function startAsLeader(
   election: ElectionResult,
   consolePort: number = DEFAULT_CONSOLE_PORT,
 ): Promise<UnifiedConsoleResult> {
-  const { startWebServer } = await import('../server.js');
+  const { startWebServer, shutdownWebServer } = await import('../server.js');
   const { derivePreferredLeaderSessionName, pickRandomTokenName } = await import('./SessionNames.js');
 
   // Initialize the console token store (#1780). Creates the token file on
@@ -1204,16 +1305,98 @@ async function startAsLeader(
   // Pre-create a placeholder broadcast that we'll wire up after the server starts
   let liveBroadcast: ((entry: UnifiedLogEntry) => void) | undefined;
   let liveMetricsOnSnapshot: ((snapshot: MetricSnapshot) => void) | undefined;
+  let stopHeartbeat = () => {};
+  let stopLeaseMonitor = () => {};
+  let demotionInProgress = false;
+  let activeCleanup = async (): Promise<void> => {
+    stopHeartbeat();
+    stopLeaseMonitor();
+  };
+
+  const requestLeaderHandoff = async (candidateLeader: ConsoleLeaderInfo): Promise<ConsoleLeadershipHandoffDecision> => {
+    const currentLeaderInfo = createLeaderInfo(options.sessionId, consolePort);
+    const preference = evaluateLeaderPreference(candidateLeader, currentLeaderInfo);
+    if (!preference.shouldReplace) {
+      logger.info('[UnifiedConsole] Leadership handoff rejected because the requesting session is not preferred', {
+        currentLeaderSessionId: currentLeaderInfo.sessionId,
+        currentLeaderVersion: preference.existingVersion,
+        candidateSessionId: candidateLeader.sessionId,
+        candidateVersion: preference.candidateVersion,
+        reason: preference.reason,
+      });
+      return {
+        accepted: false,
+        reason: preference.reason,
+        leaderInfo: currentLeaderInfo,
+      };
+    }
+
+    if (demotionInProgress) {
+      return {
+        accepted: false,
+        reason: 'handoff-in-progress',
+        leaderInfo: currentLeaderInfo,
+      };
+    }
+
+    demotionInProgress = true;
+    logger.warn('[UnifiedConsole] Leadership handoff accepted; stepping down to follower for a newer compatible session', {
+      currentLeaderSessionId: currentLeaderInfo.sessionId,
+      currentLeaderVersion: currentLeaderInfo.serverVersion ?? LEGACY_SERVER_VERSION,
+      candidateSessionId: candidateLeader.sessionId,
+      candidateVersion: candidateLeader.serverVersion ?? LEGACY_SERVER_VERSION,
+      port: consolePort,
+    });
+
+    setImmediate(() => {
+      void (async () => {
+        try {
+          await activeCleanup();
+          shutdownWebServer();
+          await deleteLeaderLock();
+          const followerResult = await startAsFollower(
+            options,
+            { role: 'follower', leaderInfo: candidateLeader },
+            consolePort,
+            primaryToken.token,
+          );
+          activeCleanup = followerResult.cleanup;
+          logger.info('[UnifiedConsole] Former leader resumed as follower after leadership handoff', {
+            sessionId: options.sessionId,
+            stableSessionId: options.stableSessionId,
+            newLeaderSessionId: candidateLeader.sessionId,
+            port: consolePort,
+          });
+        } catch (err) {
+          demotionInProgress = false;
+          logger.error('[UnifiedConsole] Leadership handoff failed during leader demotion', {
+            sessionId: options.sessionId,
+            candidateLeaderSessionId: candidateLeader.sessionId,
+            port: consolePort,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })();
+    });
+
+    return {
+      accepted: true,
+      reason: preference.reason,
+      leaderInfo: currentLeaderInfo,
+    };
+  };
 
   // Create ingestion routes with a deferred broadcast (wired after server starts)
   const ingestResult = createIngestRoutes({
     logBroadcast: (entry) => liveBroadcast?.(entry),
     metricsOnSnapshot: (snapshot) => liveMetricsOnSnapshot?.(snapshot),
     storeMetricsSnapshot: (snapshot) => options.metricsSink?.onSnapshot(snapshot),
+    requestLeaderHandoff,
   });
 
   // Start the web server with ingest routes mounted before the SPA fallback.
-  // If the port is occupied by a stale process, retry with exponential backoff.
+  // If the port is occupied, later recovery prefers non-destructive leader handoff
+  // over process termination for verified Dollhouse sessions.
   const serverOpts = {
     portfolioDir: options.portfolioDir,
     memorySink: options.memorySink,
@@ -1225,8 +1408,9 @@ async function startAsLeader(
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
   };
-  // bindAndListen now handles EADDRINUSE by finding and killing the stale
-  // process on the port, then retrying. No external retry loop needed.
+  // bindAndListen handles the first bind attempt; explicit leader handoff logic
+  // below decides whether a newer compatible session should replace the current
+  // console leader without killing the live MCP process.
   let webResult = await startWebServer(serverOpts);
   let recoveredFollowerSessions: SessionInfo[] = [];
 
@@ -1252,7 +1436,7 @@ async function startAsLeader(
           webResult.bindResult,
           forceTakeover.fallback,
           forceTakeover.replacement,
-          forceTakeover.forcedKill,
+          forceTakeover.handoff,
         ),
         takeoverAttempted: forceTakeover.takeoverAttempted,
         reboundLockClaimed: forceTakeover.reboundLockClaimed,
@@ -1269,7 +1453,7 @@ async function startAsLeader(
           webResult.bindResult,
           forceTakeover.fallback,
           forceTakeover.replacement,
-          forceTakeover.forcedKill,
+          forceTakeover.handoff,
         ),
         takeoverAttempted: forceTakeover.takeoverAttempted,
         reboundLockClaimed: forceTakeover.reboundLockClaimed,
@@ -1317,8 +1501,12 @@ async function startAsLeader(
   logger.info('[UnifiedConsole] Ingestion routes mounted');
 
   // Start heartbeat and register cleanup
-  const stopHeartbeat = startHeartbeat(election.leaderInfo);
-  const stopLeaseMonitor = startLeaderLeaseMonitor(options.sessionId, consolePort);
+  stopHeartbeat = startHeartbeat(election.leaderInfo);
+  stopLeaseMonitor = startLeaderLeaseMonitor(options.sessionId, consolePort);
+  activeCleanup = async () => {
+    stopHeartbeat();
+    stopLeaseMonitor();
+  };
   registerLeaderCleanup();
 
   logger.info('[UnifiedConsole] Leader started', {
@@ -1330,10 +1518,7 @@ async function startAsLeader(
     role: 'leader',
     election,
     port: consolePort,
-    cleanup: async () => {
-      stopHeartbeat();
-      stopLeaseMonitor();
-    },
+    cleanup: async () => activeCleanup(),
   };
 }
 
