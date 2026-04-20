@@ -244,6 +244,22 @@ interface FollowerResumeLeaseContext {
   startedAt: string | null;
 }
 
+interface LeaderHandoffResumeContext {
+  options: UnifiedConsoleOptions;
+  candidateLeader: ConsoleLeaderInfo;
+  consolePort: number;
+  primaryToken: { token: string };
+  activeCleanup: () => Promise<void>;
+  shutdownWebServer: () => void;
+  ingestResult: IngestRoutesResultLike;
+  setActiveCleanup: (cleanup: () => Promise<void>) => void;
+  onFailure: () => void;
+}
+
+interface IngestRoutesResultLike {
+  getSessions: () => SessionInfo[];
+}
+
 interface FollowerAuthorityDependencies {
   isLeaderWebConsoleReachableImpl?: typeof isLeaderWebConsoleReachable;
   discoverLeaderServingPortImpl?: typeof discoverLeaderServingPort;
@@ -360,6 +376,67 @@ export async function waitForLeaderRelease(
   }
 
   return false;
+}
+
+function buildFollowerResumeLeaseContext(
+  ingestResult: IngestRoutesResultLike,
+  sessionId: string,
+): FollowerResumeLeaseContext | undefined {
+  const currentLeaderSession = ingestResult.getSessions().find((session) =>
+    session.sessionId === sessionId && session.kind === 'mcp'
+  );
+  return currentLeaderSession
+    ? {
+        displayName: currentLeaderSession.displayName,
+        color: currentLeaderSession.color,
+        startedAt: currentLeaderSession.startedAt,
+      }
+    : undefined;
+}
+
+async function resumeFormerLeaderAsFollowerAfterHandoff(
+  context: LeaderHandoffResumeContext,
+): Promise<void> {
+  const {
+    options,
+    candidateLeader,
+    consolePort,
+    primaryToken,
+    activeCleanup,
+    shutdownWebServer,
+    ingestResult,
+    setActiveCleanup,
+    onFailure,
+  } = context;
+
+  try {
+    const resumeLeaseContext = buildFollowerResumeLeaseContext(ingestResult, options.sessionId);
+    await activeCleanup();
+    shutdownWebServer();
+    await deleteLeaderLock();
+    const followerResult = await startAsFollower(
+      options,
+      { role: 'follower', leaderInfo: candidateLeader },
+      consolePort,
+      primaryToken.token,
+      resumeLeaseContext,
+    );
+    setActiveCleanup(followerResult.cleanup);
+    logger.info('[UnifiedConsole] Former leader resumed as follower after leadership handoff', {
+      sessionId: options.sessionId,
+      stableSessionId: options.stableSessionId,
+      newLeaderSessionId: candidateLeader.sessionId,
+      port: consolePort,
+    });
+  } catch (err) {
+    onFailure();
+    logger.error('[UnifiedConsole] Leadership handoff failed during leader demotion', {
+      sessionId: options.sessionId,
+      candidateLeaderSessionId: candidateLeader.sessionId,
+      port: consolePort,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export async function fetchLeaderSessionsSnapshot(
@@ -1357,45 +1434,21 @@ async function startAsLeader(
     });
 
     setImmediate(() => {
-      void (async () => {
-        try {
-          const currentLeaderSession = ingestResult.getSessions().find((session) =>
-            session.sessionId === options.sessionId && session.kind === 'mcp'
-          );
-          const resumeLeaseContext: FollowerResumeLeaseContext | undefined = currentLeaderSession
-            ? {
-                displayName: currentLeaderSession.displayName,
-                color: currentLeaderSession.color,
-                startedAt: currentLeaderSession.startedAt,
-              }
-            : undefined;
-          await activeCleanup();
-          shutdownWebServer();
-          await deleteLeaderLock();
-          const followerResult = await startAsFollower(
-            options,
-            { role: 'follower', leaderInfo: candidateLeader },
-            consolePort,
-            primaryToken.token,
-            resumeLeaseContext,
-          );
-          activeCleanup = followerResult.cleanup;
-          logger.info('[UnifiedConsole] Former leader resumed as follower after leadership handoff', {
-            sessionId: options.sessionId,
-            stableSessionId: options.stableSessionId,
-            newLeaderSessionId: candidateLeader.sessionId,
-            port: consolePort,
-          });
-        } catch (err) {
+      void resumeFormerLeaderAsFollowerAfterHandoff({
+        options,
+        candidateLeader,
+        consolePort,
+        primaryToken,
+        activeCleanup,
+        shutdownWebServer,
+        ingestResult,
+        setActiveCleanup: (cleanup) => {
+          activeCleanup = cleanup;
+        },
+        onFailure: () => {
           demotionInProgress = false;
-          logger.error('[UnifiedConsole] Leadership handoff failed during leader demotion', {
-            sessionId: options.sessionId,
-            candidateLeaderSessionId: candidateLeader.sessionId,
-            port: consolePort,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-      })();
+        },
+      });
     });
 
     return {
