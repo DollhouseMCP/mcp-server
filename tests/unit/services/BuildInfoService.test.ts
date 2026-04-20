@@ -13,6 +13,10 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { BuildInfoService, BuildInfo } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import {
+  clearCurrentConsoleSessionIdentity,
+  setCurrentConsoleSessionIdentity,
+} from '../../../src/services/currentConsoleSessionIdentity.js';
 
 describe('BuildInfoService', () => {
   let service: BuildInfoService;
@@ -25,6 +29,7 @@ describe('BuildInfoService', () => {
 
   afterEach(async () => {
     await container.dispose();
+    clearCurrentConsoleSessionIdentity();
     jest.restoreAllMocks();
     jest.clearAllMocks();
   });
@@ -50,6 +55,30 @@ describe('BuildInfoService', () => {
       expect(info.sessionId).toMatch(/^local-[a-f0-9]{10}$/);
       expect(info.runtimeSessionId).toMatch(new RegExp(`^${info.sessionId}-[a-z0-9]+$`));
       expect(info.sessionSource).toBe('derived');
+    });
+
+    it('should include live console session identity when available', async () => {
+      setCurrentConsoleSessionIdentity({
+        displayName: 'Bunraku',
+        authoritative: true,
+        role: 'follower',
+        kind: 'mcp',
+        color: '#123456',
+        serverVersion: '2.0.27-rc.14',
+        consoleProtocolVersion: 2,
+      });
+
+      const info = await service.getBuildInfo();
+
+      expect(info.consoleSession).toEqual({
+        displayName: 'Bunraku',
+        authoritative: true,
+        role: 'follower',
+        kind: 'mcp',
+        color: '#123456',
+        serverVersion: '2.0.27-rc.14',
+        consoleProtocolVersion: 2,
+      });
     });
 
     it('should populate package information', async () => {
@@ -159,6 +188,15 @@ describe('BuildInfoService', () => {
         sessionId: 'workspace-a1b2c3d4e5',
         runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
         sessionSource: 'derived',
+        consoleSession: {
+          displayName: 'Bunraku',
+          authoritative: true,
+          role: 'follower',
+          kind: 'mcp',
+          color: '#5C6370',
+          serverVersion: '1.3.2',
+          consoleProtocolVersion: 2,
+        },
         package: {
           name: '@dollhousemcp/mcp-server',
           version: '1.3.2'
@@ -209,6 +247,11 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Session ID**: workspace-a1b2c3d4e5');
       expect(formatted).toContain('**Runtime Session ID**: workspace-a1b2c3d4e5-k9');
       expect(formatted).toContain('**Identity Source**: Derived from workspace context');
+      expect(formatted).toContain('**Web Console Display Name**: Bunraku');
+      expect(formatted).toContain('**Web Console Role**: follower');
+      expect(formatted).toContain('**Web Console Kind**: mcp');
+      expect(formatted).toContain('**Web Console Identity**: Authoritative web console lease');
+      expect(formatted).toContain('**Web Console Color**: #5C6370');
       expect(formatted).toContain('## 🏗️ Build');
       expect(formatted).toContain('**Type**: git');
       expect(formatted).toContain('**Timestamp**: 2024-01-01T12:00:00.000Z');
@@ -278,6 +321,7 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**MCP Connection**: ❌ Disconnected');
       expect(formatted).toContain('**Session ID**: session-from-env');
       expect(formatted).toContain('**Identity Source**: Explicit environment');
+      expect(formatted).not.toContain('**Web Console Display Name**:');
       expect(formatted).not.toContain('**Runtime Session ID**:');
       expect(formatted).not.toContain('**Timestamp**:');
       expect(formatted).not.toContain('**Git Commit**:');
@@ -460,6 +504,9 @@ describe('BuildInfoService', () => {
 
     it('should produce deterministic output for same input', () => {
       const testInfo: BuildInfo = {
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
         package: { name: 'test', version: '1.0.0' },
         build: { type: 'git', gitCommit: 'abc123', gitBranch: 'main' },
         runtime: {
@@ -487,6 +534,50 @@ describe('BuildInfoService', () => {
       const formatted2 = service.formatBuildInfo(testInfo);
 
       expect(formatted1).toBe(formatted2);
+    });
+
+    it('should avoid provisional puppet names in build info output', () => {
+      const provisionalInfo: BuildInfo = {
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
+        consoleSession: {
+          displayName: null,
+          authoritative: false,
+          role: 'follower',
+          kind: 'mcp',
+          color: null,
+          serverVersion: '2.0.27-rc.14',
+          consoleProtocolVersion: 2,
+        },
+        package: { name: 'test', version: '1.0.0' },
+        build: { type: 'git' },
+        runtime: {
+          nodeVersion: 'v18.17.0',
+          platform: 'linux',
+          arch: 'x64',
+          uptime: 3600,
+          memoryUsage: { rss: 100, heapTotal: 200, heapUsed: 150, external: 50, arrayBuffers: 25 },
+        },
+        environment: {
+          nodeEnv: 'test',
+          isProduction: false,
+          isDevelopment: true,
+          isDebug: false,
+          isDocker: false,
+        },
+        server: {
+          startTime: new Date('2024-01-01T00:00:00.000Z'),
+          uptime: 3600000,
+          mcpConnection: true,
+        },
+      };
+
+      const formatted = service.formatBuildInfo(provisionalInfo);
+
+      expect(formatted).toContain('**Web Console Display Name**: pending authoritative assignment');
+      expect(formatted).toContain('**Web Console Identity**: Awaiting authoritative web console lease');
+      expect(formatted).not.toContain('**Web Console Color**:');
     });
   });
 
@@ -535,6 +626,9 @@ describe('BuildInfoService', () => {
 
     it('should format startup timing section in formatBuildInfo', () => {
       const testInfo: BuildInfo = {
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
         package: { name: 'test', version: '1.0.0' },
         build: { type: 'git' },
         runtime: {

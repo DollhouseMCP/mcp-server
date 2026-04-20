@@ -179,7 +179,7 @@ export interface IngestRoutesResult {
     pid: number,
     displayName?: string,
     stableSessionId?: string,
-  ) => void;
+  ) => SessionInfo | null;
   /** Register the web console as a session so the indicator is never empty (#1805) */
   registerConsoleSession: () => void;
 }
@@ -994,7 +994,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     pid: number,
     displayName?: string,
     stableSessionId?: string,
-  ): void {
+  ): SessionInfo | null {
     const leaseResolution = registerOrResumeSessionLease({
       sessionId,
       stableSessionId,
@@ -1017,7 +1017,9 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         pid,
         resolution: leaseResolution.resolution,
       });
+      return leaseResolution.session;
     }
+    return null;
   }
 
   /**

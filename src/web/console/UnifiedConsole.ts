@@ -19,6 +19,7 @@ import type { MemoryLogSink } from '../../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
 import type { WebServerOptions, WebServerResult } from '../server.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import {
@@ -52,6 +53,7 @@ import {
   findPidOnPort,
 } from './StaleProcessRecovery.js';
 import { env } from '../../config/env.js';
+import { setCurrentConsoleSessionIdentity } from '../../services/currentConsoleSessionIdentity.js';
 import type {
   ConsoleLeadershipHandoffDecision,
   SessionInfo,
@@ -1463,12 +1465,23 @@ async function startAsLeader(
   }
 
   // Register the leader only after the HTTP listener is actually serving the port.
-  ingestResult.registerLeaderSession(
+  const leaderSession = ingestResult.registerLeaderSession(
     options.sessionId,
     process.pid,
     derivePreferredLeaderSessionName(options.sessionId),
     options.stableSessionId,
   );
+  if (leaderSession) {
+    setCurrentConsoleSessionIdentity({
+      displayName: leaderSession.displayName,
+      authoritative: true,
+      role: 'leader',
+      kind: leaderSession.kind,
+      color: leaderSession.color,
+      serverVersion: leaderSession.serverVersion,
+      consoleProtocolVersion: leaderSession.consoleProtocolVersion,
+    });
+  }
 
   // Register the web console itself so the session indicator is never empty (#1805)
   ingestResult.registerConsoleSession();
@@ -1548,11 +1561,32 @@ async function startAsFollower(
     logger.debug('[UnifiedConsole] No console auth token file found; follower will POST without Bearer header');
   }
 
-  const { derivePreferredFollowerSessionName } = await import('./SessionNames.js');
+  const { derivePreferredFollowerSessionName, getPuppetColor } = await import('./SessionNames.js');
+  const preferredDisplayName = derivePreferredFollowerSessionName(options.sessionId);
   const leaseState = new SessionLeaseState(
-    derivePreferredFollowerSessionName(options.sessionId),
+    preferredDisplayName,
     options.stableSessionId,
+    (assignedDisplayName) => {
+      setCurrentConsoleSessionIdentity({
+        displayName: assignedDisplayName,
+        authoritative: true,
+        role: 'follower',
+        kind: 'mcp',
+        color: getPuppetColor(assignedDisplayName) ?? null,
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+      });
+    },
   );
+  setCurrentConsoleSessionIdentity({
+    displayName: null,
+    authoritative: false,
+    role: 'follower',
+    kind: 'mcp',
+    color: null,
+    serverVersion: PACKAGE_VERSION,
+    consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+  });
 
   // Per-instance promotion manager — tracks its own attempt counter so
   // multiple followers don't interfere with each other's promotion budgets.
