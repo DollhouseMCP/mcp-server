@@ -236,6 +236,21 @@
   white-space: nowrap;
 }
 
+.session-dropdown-name-group {
+  min-width: 0;
+  display: grid;
+  gap: 0.1rem;
+}
+
+.session-dropdown-version {
+  font-size: 0.68rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-500, #677893);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .session-dropdown-uptime {
   font-size: 0.7rem;
   font-family: var(--font-mono, monospace);
@@ -286,6 +301,10 @@
 
 [data-theme="dark"] .session-dropdown-name {
   color: var(--ink-900, #e0e8f0);
+}
+
+[data-theme="dark"] .session-dropdown-version {
+  color: var(--ink-500, #8899bb);
 }
 
 [data-theme="dark"] .session-dropdown-toggle-label {

@@ -387,6 +387,69 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('shows session versions in the dropdown and refreshes them when a session upgrades', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    let currentVersion = '2.0.27-rc.9';
+    win.DollhouseAuth.apiFetch = jest.fn().mockImplementation((url: string) => {
+      if (url !== '/api/sessions') {
+        return Promise.reject(new Error(`unexpected url ${url}`));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          sessions: [
+            {
+              sessionId: 'session-1',
+              stableSessionId: 'claude-code-main',
+              status: 'active',
+              displayName: 'Bunraku',
+              startedAt: '2026-04-20T10:00:00.000Z',
+              isLeader: true,
+              authenticated: true,
+              kind: 'mcp',
+              color: '#ff00ff',
+              serverVersion: currentVersion,
+            },
+          ],
+        }),
+      });
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionPollIntervalMs: 10,
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    expect(sessionBox).not.toBeNull();
+    sessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const initialVersion = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-version');
+    expect(initialVersion?.textContent).toBe('Claude Code • v2.0.27-rc.9');
+
+    currentVersion = '2.0.27-rc.10';
+    await wait(30);
+
+    const refreshedSessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    refreshedSessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const refreshedVersion = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-version');
+    expect(refreshedVersion?.textContent).toBe('Claude Code • v2.0.27-rc.10');
+
+    cleanup();
+  });
+
   it('keeps aggregate policy sources visible when selecting a persisted policy session', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="session-indicator"></div>
