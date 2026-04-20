@@ -187,6 +187,52 @@
     return parts.length >= 2 ? parts[1] : id.slice(0, 8);
   }
 
+  function displayVersion(session) {
+    if (!session || typeof session !== 'object' || typeof session.serverVersion !== 'string') return '';
+    var raw = nfc(session.serverVersion).trim();
+    if (!raw) return '';
+    var normalized = normalizeSemver(raw);
+    return normalized ? 'v' + normalized : raw;
+  }
+
+  function sessionIdentitySource(session) {
+    if (!session || typeof session !== 'object') return '';
+    if (typeof session.stableSessionId === 'string' && session.stableSessionId.trim()) {
+      return nfc(session.stableSessionId).trim().toLowerCase();
+    }
+    if (typeof session.sessionId === 'string' && session.sessionId.trim()) {
+      return nfc(session.sessionId).trim().toLowerCase();
+    }
+    return '';
+  }
+
+  function displayPlatform(session) {
+    if (!session || typeof session !== 'object') return '';
+    if (session.kind === 'console') return 'Web Console';
+
+    var identity = sessionIdentitySource(session);
+    if (!identity) return '';
+
+    var platformMap = [
+      ['claude-code', 'Claude Code'],
+      ['codex', 'Codex'],
+      ['cursor', 'Cursor'],
+      ['vscode', 'VS Code'],
+      ['windsurf', 'Windsurf'],
+      ['gemini', 'Gemini'],
+      ['cline', 'Cline'],
+      ['lmstudio', 'LM Studio'],
+    ];
+
+    for (var i = 0; i < platformMap.length; i++) {
+      if (identity.indexOf(platformMap[i][0]) === 0) {
+        return platformMap[i][1];
+      }
+    }
+
+    return '';
+  }
+
   function getLiveSessions() {
     return sessions.filter(function(s) { return s.status === 'active'; });
   }
@@ -254,7 +300,15 @@
   // Build a key from current sessions to detect changes
   function sessionListKey(list) {
     return list.map(function(s) {
-      return s.sessionId + ':' + s.status + ':' + (isPolicyOnlySession(s) ? 'policy' : 'live');
+      return [
+        s.sessionId,
+        s.status,
+        isPolicyOnlySession(s) ? 'policy' : 'live',
+        displayName(s),
+        displayPlatform(s),
+        displayVersion(s),
+        s.isLeader ? 'leader' : 'follower',
+      ].join(':');
     }).join(',')
       + '|policyDebug:' + (showPolicySessions ? 'on' : 'off')
       + '|knownPolicy:' + policySessions.map(function(session) { return session.sessionId; }).join(',');
@@ -529,11 +583,33 @@
       if (s.color) dot.style.background = s.color;
       item.appendChild(dot);
 
+      var nameGroup = document.createElement('span');
+      nameGroup.className = 'session-dropdown-name-group';
+
       var nameEl = document.createElement('span');
       nameEl.className = 'session-dropdown-name';
       nameEl.textContent = displayName(s);
       if (s.color) nameEl.style.color = s.color;
-      item.appendChild(nameEl);
+      nameGroup.appendChild(nameEl);
+
+      var metaParts = [];
+      var platform = displayPlatform(s);
+      if (platform) {
+        metaParts.push(platform);
+      }
+      var version = displayVersion(s);
+      if (version) {
+        metaParts.push(version);
+      }
+      if (metaParts.length) {
+        var versionEl = document.createElement('span');
+        versionEl.className = 'session-dropdown-version';
+        versionEl.textContent = metaParts.join(' \u2022 ');
+        versionEl.title = metaParts.join(' • ');
+        nameGroup.appendChild(versionEl);
+      }
+
+      item.appendChild(nameGroup);
 
       // Session status badges (#1805) — for persisted policy sessions we
       // switch from "live/authenticated" semantics to "saved/no client".
