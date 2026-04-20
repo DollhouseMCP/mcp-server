@@ -460,6 +460,14 @@ describe('Console Failure Modes', () => {
     it('sends server version metadata with session events', async () => {
       const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
         ok: true,
+        json: async () => ({
+          ok: true,
+          lease: {
+            sessionId: 'test-session',
+            stableSessionId: 'claude-code-main',
+            displayName: 'Bunraku',
+          },
+        }),
       } as Response);
 
       try {
@@ -488,6 +496,94 @@ describe('Console Failure Modes', () => {
         expect(body.serverVersion).toBe(PACKAGE_VERSION);
         expect(body.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
         expect(body.displayName).toBe('Bunraku');
+        expect(body.preferredDisplayName).toBe('Bunraku');
+        expect(body.stableSessionId).toBe('claude-code-main');
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it('applies the leader-assigned lease name to subsequent heartbeats', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            ok: true,
+            lease: {
+              sessionId: 'test-session',
+              stableSessionId: 'claude-code-main',
+              displayName: 'Mortimer',
+            },
+          }),
+        } as Response)
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({ ok: true }),
+        } as Response);
+
+      try {
+        const { SessionHeartbeat } = await import(
+          '../../../../src/web/console/LeaderForwardingSink.js'
+        );
+
+        const heartbeat = new SessionHeartbeat(
+          'http://127.0.0.1:41715',
+          'test-session',
+          process.pid,
+          null,
+          'Bunraku',
+          'claude-code-main',
+        );
+
+        await heartbeat.start();
+        await heartbeat.stop();
+
+        const secondCall = fetchSpy.mock.calls[1];
+        const body = parseRequestBody((secondCall?.[1] as RequestInit | undefined)?.body);
+        expect(body.displayName).toBe('Mortimer');
+        expect(body.lastAssignedDisplayName).toBe('Mortimer');
+      } finally {
+        fetchSpy.mockRestore();
+      }
+    });
+
+    it('reuses the leader-assigned lease name across other forwarding channels', async () => {
+      const fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+        ok: true,
+        json: async () => ({ ok: true }),
+      } as Response);
+
+      try {
+        const {
+          LeaderForwardingMetricsSink,
+          SessionLeaseState,
+        } = await import('../../../../src/web/console/LeaderForwardingSink.js');
+
+        const leaseState = new SessionLeaseState('Bunraku', 'claude-code-main');
+        leaseState.applyLease({
+          sessionId: 'test-session',
+          stableSessionId: 'claude-code-main',
+          displayName: 'Mortimer',
+        });
+
+        const sink = new LeaderForwardingMetricsSink(
+          'http://127.0.0.1:41715',
+          'test-session',
+          null,
+          leaseState,
+        );
+
+        await sink.onSnapshot({
+          totals: { total: 1, allowed: 1, denied: 0, asked: 0 },
+          rates: { allowRate: 1, denyRate: 0, askRate: 0 },
+          topTools: [],
+          timeWindow: { start: 0, end: 1 },
+        });
+
+        const body = parseRequestBody((fetchSpy.mock.calls[0]?.[1] as RequestInit | undefined)?.body);
+        expect(body.displayName).toBe('Mortimer');
+        expect(body.preferredDisplayName).toBe('Bunraku');
+        expect(body.lastAssignedDisplayName).toBe('Mortimer');
         expect(body.stableSessionId).toBe('claude-code-main');
       } finally {
         fetchSpy.mockRestore();

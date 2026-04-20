@@ -243,7 +243,7 @@ describe('Session registry (#1805)', () => {
     it('preserves follower-provided display names and stable session identity', async () => {
       const app = buildApp(ingestResult);
 
-      await request(app)
+      const startResponse = await request(app)
         .post('/api/ingest/session')
         .send({
           sessionId: 'follower-identity-001',
@@ -254,12 +254,102 @@ describe('Session registry (#1805)', () => {
           startedAt: new Date().toISOString(),
         });
 
+      expect(startResponse.status).toBe(200);
+      expect(startResponse.body.lease).toEqual(expect.objectContaining({
+        sessionId: 'follower-identity-001',
+        stableSessionId: 'claude-code-main',
+        displayName: 'Bunraku',
+      }));
+
       const res = await request(app).get('/api/sessions');
       expect(res.status).toBe(200);
       const follower = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'follower-identity-001');
       expect(follower).toBeDefined();
       expect(follower.displayName).toBe('Bunraku');
       expect(follower.stableSessionId).toBe('claude-code-main');
+    });
+
+    it('keeps the leader-assigned name on heartbeat even if the follower proposes a different one later', async () => {
+      const app = buildApp(ingestResult);
+
+      const started = await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'follower-same-runtime',
+          stableSessionId: 'claude-main',
+          displayName: 'Bunraku',
+          event: 'started',
+          pid: 12345,
+          startedAt: new Date().toISOString(),
+        });
+
+      expect(started.body.lease.displayName).toBe('Bunraku');
+
+      const heartbeat = await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'follower-same-runtime',
+          stableSessionId: 'claude-main',
+          displayName: 'Skipper',
+          preferredDisplayName: 'Skipper',
+          lastAssignedDisplayName: 'Bunraku',
+          event: 'heartbeat',
+          pid: 12345,
+          startedAt: new Date().toISOString(),
+        });
+
+      expect(heartbeat.body.lease.displayName).toBe('Bunraku');
+
+      const res = await request(app).get('/api/sessions');
+      const follower = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'follower-same-runtime');
+      expect(follower.displayName).toBe('Bunraku');
+    });
+
+    it('resumes an ended stable session with the prior leader-assigned display name', async () => {
+      const app = buildApp(ingestResult);
+
+      await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'runtime-old',
+          stableSessionId: 'claude-shared',
+          displayName: 'Bunraku',
+          event: 'started',
+          pid: 111,
+          startedAt: '2026-04-20T03:00:00.000Z',
+        });
+
+      await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'runtime-old',
+          event: 'stopped',
+          pid: 111,
+          startedAt: '2026-04-20T03:00:00.000Z',
+        });
+
+      const resumed = await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'runtime-new',
+          stableSessionId: 'claude-shared',
+          preferredDisplayName: 'Skipper',
+          lastAssignedDisplayName: 'Bunraku',
+          event: 'started',
+          pid: 222,
+          startedAt: '2026-04-20T03:05:00.000Z',
+        });
+
+      expect(resumed.body.lease).toEqual(expect.objectContaining({
+        sessionId: 'runtime-new',
+        stableSessionId: 'claude-shared',
+        displayName: 'Bunraku',
+      }));
+
+      const res = await request(app).get('/api/sessions');
+      const follower = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'runtime-new');
+      expect(follower.displayName).toBe('Bunraku');
+      expect(follower.stableSessionId).toBe('claude-shared');
     });
   });
 
