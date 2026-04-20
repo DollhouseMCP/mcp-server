@@ -34,7 +34,7 @@ describe('Session registry (#1805)', () => {
 
   describe('registerLeaderSession', () => {
     it('registers a leader session with authenticated=true and kind=mcp', () => {
-      ingestResult.registerLeaderSession('test-leader-001', process.pid);
+      ingestResult.registerLeaderSession('test-leader-001', process.pid, 'claude-code');
       const sessions = ingestResult.getSessions();
       expect(sessions).toHaveLength(1);
       expect(sessions[0].authenticated).toBe(true);
@@ -43,6 +43,8 @@ describe('Session registry (#1805)', () => {
       expect(sessions[0].status).toBe('active');
       expect(sessions[0].serverVersion).toBe(PACKAGE_VERSION);
       expect(sessions[0].consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
+      expect(sessions[0].clientPlatform).toBe('claude-code');
+      expect(sessions[0].clientPlatformLabel).toBe('Claude Code');
     });
 
     it('assigns a puppet display name', () => {
@@ -88,6 +90,8 @@ describe('Session registry (#1805)', () => {
       expect(consoleSessions[0].kind).toBe('console');
       expect(consoleSessions[0].displayName).toBe('Web Console');
       expect(consoleSessions[0].status).toBe('active');
+      expect(consoleSessions[0].clientPlatform).toBe('web-console');
+      expect(consoleSessions[0].clientPlatformLabel).toBe('Web Console');
     });
 
     it('is idempotent — calling twice does not create duplicates', () => {
@@ -169,6 +173,7 @@ describe('Session registry (#1805)', () => {
           startedAt: new Date().toISOString(),
           serverVersion: '2.0.99',
           consoleProtocolVersion: 1,
+          clientPlatform: 'codex',
         });
 
       const res = await request(app).get('/api/sessions');
@@ -177,6 +182,8 @@ describe('Session registry (#1805)', () => {
       expect(follower).toBeDefined();
       expect(follower.serverVersion).toBe('2.0.99');
       expect(follower.consoleProtocolVersion).toBe(1);
+      expect(follower.clientPlatform).toBe('codex');
+      expect(follower.clientPlatformLabel).toBe('Codex');
     });
   });
 
@@ -245,6 +252,8 @@ describe('Session registry (#1805)', () => {
         kind: 'console',
         serverVersion: PACKAGE_VERSION,
         consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+        clientPlatform: 'web-console',
+        clientPlatformLabel: 'Web Console',
       }));
       expect(session.sessionId).toMatch(/^console-\d+$/);
       expect(session.color).toBe('#6366f1');
