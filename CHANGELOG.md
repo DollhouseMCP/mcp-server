@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.27-rc.16] - 2026-04-20
+
+- Version bump
+
 ## [2.0.26] - 2026-04-17
 
 - Version bump
