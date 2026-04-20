@@ -353,6 +353,79 @@ describe('Session registry (#1805)', () => {
     });
   });
 
+  describe('POST /api/console/handoff', () => {
+    it('accepts a newer compatible leader handoff request', async () => {
+      const requestLeaderHandoff = jest.fn().mockResolvedValue({
+        accepted: true,
+        reason: 'newer-compatible-version',
+        leaderInfo: {
+          version: 1,
+          pid: process.pid,
+          port: 41715,
+          sessionId: 'current-leader',
+          startedAt: '2026-04-20T18:00:00.000Z',
+          heartbeat: '2026-04-20T18:00:00.000Z',
+          serverVersion: PACKAGE_VERSION,
+          consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+        },
+      });
+      ingestResult = createIngestRoutes({
+        logBroadcast: () => {},
+        requestLeaderHandoff,
+      });
+      const app = buildApp(ingestResult);
+
+      const res = await request(app)
+        .post('/api/console/handoff')
+        .send({
+          candidateLeader: {
+            version: 1,
+            pid: 12345,
+            port: 41715,
+            sessionId: 'candidate-newest',
+            startedAt: '2026-04-20T18:01:00.000Z',
+            heartbeat: '2026-04-20T18:01:00.000Z',
+            serverVersion: '9.9.9',
+            consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+          },
+        });
+
+      expect(res.status).toBe(202);
+      expect(requestLeaderHandoff).toHaveBeenCalledWith(expect.objectContaining({
+        sessionId: 'candidate-newest',
+        pid: 12345,
+        port: 41715,
+        serverVersion: '9.9.9',
+        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+      }));
+      expect(res.body).toEqual(expect.objectContaining({
+        accepted: true,
+        reason: 'newer-compatible-version',
+      }));
+    });
+
+    it('rejects an invalid handoff payload before invoking the callback', async () => {
+      const requestLeaderHandoff = jest.fn();
+      ingestResult = createIngestRoutes({
+        logBroadcast: () => {},
+        requestLeaderHandoff,
+      });
+      const app = buildApp(ingestResult);
+
+      const res = await request(app)
+        .post('/api/console/handoff')
+        .send({
+          candidateLeader: {
+            pid: 12345,
+            port: 41715,
+          },
+        });
+
+      expect(res.status).toBe(400);
+      expect(requestLeaderHandoff).not.toHaveBeenCalled();
+    });
+  });
+
   describe('stale session reaper', () => {
     it('does not reap console sessions (they have no heartbeat)', async () => {
       ingestResult.registerConsoleSession();

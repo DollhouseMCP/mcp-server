@@ -29,7 +29,9 @@ import {
   shouldEvictDiscoveredOwner,
   resolveFollowerAuthority,
   resolveLeaderPreflightAuthority,
+  requestLeaderHandoff,
   startFollowerAuthorityMonitor,
+  waitForLeaderRelease,
   reconcileLeaderLease,
   startLeaderLeaseMonitor,
 } from '../../../../src/web/console/UnifiedConsole.js';
@@ -1067,18 +1069,88 @@ describe('startFollowerAuthorityMonitor', () => {
   });
 });
 
+describe('requestLeaderHandoff', () => {
+  it('posts the candidate leader info and returns the leader decision', async () => {
+    const fetchStub = jest.fn<typeof fetch>().mockResolvedValue({
+      ok: true,
+      status: 202,
+      json: async () => ({
+        accepted: true,
+        reason: 'newer-compatible-version',
+        leaderInfo: {
+          version: 1,
+          pid: 57117,
+          port: 41715,
+          sessionId: 'current-leader',
+          startedAt: '2026-04-20T18:00:00.000Z',
+          heartbeat: '2026-04-20T18:00:00.000Z',
+          serverVersion: '2.0.27-rc.10',
+          consoleProtocolVersion: 1,
+        },
+      }),
+    } as Response);
+
+    const candidateLeader: ConsoleLeaderInfo = {
+      version: 1,
+      pid: process.pid,
+      port: 41715,
+      sessionId: 'candidate-newest',
+      startedAt: '2026-04-20T18:01:00.000Z',
+      heartbeat: '2026-04-20T18:01:00.000Z',
+      serverVersion: PACKAGE_VERSION,
+      consoleProtocolVersion: 1,
+    };
+
+    const result = await requestLeaderHandoff(41715, 'token-123', candidateLeader, {
+      fetchImpl: fetchStub,
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      accepted: true,
+      reason: 'newer-compatible-version',
+      leaderInfo: expect.objectContaining({
+        sessionId: 'current-leader',
+        serverVersion: '2.0.27-rc.10',
+      }),
+    }));
+    expect(fetchStub).toHaveBeenCalledWith('http://127.0.0.1:41715/api/console/handoff', expect.objectContaining({
+      method: 'POST',
+      headers: expect.objectContaining({
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer token-123',
+      }),
+      body: JSON.stringify({ candidateLeader }),
+      signal: expect.any(AbortSignal),
+    }));
+  });
+});
+
+describe('waitForLeaderRelease', () => {
+  it('returns true once the previous port owner relinquishes the console port', async () => {
+    const findPidOnPortImpl = jest
+      .fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').findPidOnPort>()
+      .mockResolvedValueOnce(57117)
+      .mockResolvedValueOnce(null);
+
+    const timerHandle = { unref: jest.fn() } as unknown as ReturnType<typeof setTimeout>;
+    const setTimeoutImpl = jest.fn<typeof setTimeout>((callback) => {
+      callback();
+      return timerHandle;
+    });
+
+    await expect(waitForLeaderRelease(41715, 57117, {
+      findPidOnPortImpl,
+      setTimeoutImpl,
+    })).resolves.toBe(true);
+  });
+});
+
 describe('reconcileLeaderLease', () => {
-  it('reclaims the lock and evicts the displaced lock writer when this process owns the console port', async () => {
+  it('reclaims the lock without killing the displaced lock writer when this process owns the console port', async () => {
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>()
       .mockResolvedValue(true);
     const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>()
       .mockResolvedValue();
-    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>()
-      .mockResolvedValue({
-        killed: true,
-        reason: 'terminated',
-        pid: 3877,
-      });
     const displacedLock = {
       version: 1,
       pid: 3877,
@@ -1110,13 +1182,9 @@ describe('reconcileLeaderLease', () => {
       readLeaderLockImpl,
       claimLeadershipImpl,
       deleteLeaderLockImpl,
-      killStaleProcessDetailedImpl,
     });
 
     expect(result).toBe('reconciled');
-    expect(killStaleProcessDetailedImpl).toHaveBeenCalledWith(3877, 41715, {
-      allowActiveHostParent: true,
-    });
     expect(deleteLeaderLockImpl).toHaveBeenCalledTimes(1);
     expect(claimLeadershipImpl).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 'session-newest',
@@ -1126,7 +1194,6 @@ describe('reconcileLeaderLease', () => {
 
   it('does nothing when this process does not own the console port', async () => {
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>();
-    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>();
 
     const result = await reconcileLeaderLease('session-newest', 41715, {
       findPidOnPortImpl: async () => 3877,
@@ -1141,25 +1208,17 @@ describe('reconcileLeaderLease', () => {
         consoleProtocolVersion: 1,
       }),
       claimLeadershipImpl,
-      killStaleProcessDetailedImpl,
     });
 
     expect(result).toBe('not-port-owner');
-    expect(killStaleProcessDetailedImpl).not.toHaveBeenCalled();
     expect(claimLeadershipImpl).not.toHaveBeenCalled();
   });
 
-  it('returns reclaim-failed when the displaced lock cannot be reclaimed after eviction', async () => {
+  it('returns reclaim-failed when the displaced lock cannot be reclaimed after non-destructive lock replacement', async () => {
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>()
       .mockResolvedValue(false);
     const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>()
       .mockResolvedValue();
-    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>()
-      .mockResolvedValue({
-        killed: true,
-        reason: 'terminated',
-        pid: 3877,
-      });
     const displacedLock = {
       version: 1,
       pid: 3877,
@@ -1191,7 +1250,6 @@ describe('reconcileLeaderLease', () => {
       readLeaderLockImpl,
       claimLeadershipImpl,
       deleteLeaderLockImpl,
-      killStaleProcessDetailedImpl,
     });
 
     expect(result).toBe('reclaim-failed');
@@ -1208,7 +1266,6 @@ describe('startLeaderLeaseMonitor', () => {
     const claimLeadershipImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').claimLeadership>();
     const deleteLeaderLockImpl = jest.fn<typeof import('../../../../src/web/console/LeaderElection.js').deleteLeaderLock>()
       .mockResolvedValue();
-    const killStaleProcessDetailedImpl = jest.fn<typeof import('../../../../src/web/console/StaleProcessRecovery.js').killStaleProcessDetailed>();
     const clearTimeoutImpl = jest.fn<typeof clearTimeout>();
     const reclaimedLock = {
       version: 1,
@@ -1233,7 +1290,6 @@ describe('startLeaderLeaseMonitor', () => {
       readLeaderLockImpl,
       claimLeadershipImpl,
       deleteLeaderLockImpl,
-      killStaleProcessDetailedImpl,
     });
 
     expect(timeoutCallback).not.toBeNull();
@@ -1243,7 +1299,6 @@ describe('startLeaderLeaseMonitor', () => {
     timeoutCallback?.();
     await flushAuthorityMonitorTick();
     await flushAuthorityMonitorTick();
-    expect(killStaleProcessDetailedImpl).not.toHaveBeenCalled();
     expect(claimLeadershipImpl).not.toHaveBeenCalled();
     expect(deleteLeaderLockImpl).not.toHaveBeenCalled();
     expect(scheduledDelays).toEqual([2_000, 4_000]);
@@ -1252,7 +1307,6 @@ describe('startLeaderLeaseMonitor', () => {
     await flushAuthorityMonitorTick();
     await flushAuthorityMonitorTick();
 
-    expect(killStaleProcessDetailedImpl).not.toHaveBeenCalled();
     expect(claimLeadershipImpl).not.toHaveBeenCalled();
     expect(scheduledDelays).toEqual([2_000, 4_000, 8_000]);
 

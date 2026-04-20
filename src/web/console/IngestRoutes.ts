@@ -31,6 +31,8 @@ import { logger } from '../../utils/logger.js';
 import { env } from '../../config/env.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import {
+  type ConsoleLeaderInfo,
+  type LeaderPreferenceDecision,
   CONSOLE_PROTOCOL_VERSION,
   LEGACY_CONSOLE_PROTOCOL_VERSION,
 } from './LeaderElection.js';
@@ -159,6 +161,7 @@ export interface IngestBroadcasts {
   metricsOnSnapshot?: (snapshot: MetricSnapshot) => void;
   storeMetricsSnapshot?: (snapshot: MetricSnapshot, sessionId: string) => void;
   sessionBroadcast?: (event: SessionInfo) => void;
+  requestLeaderHandoff?: (candidateLeader: ConsoleLeaderInfo) => Promise<ConsoleLeadershipHandoffDecision>;
 }
 
 /**
@@ -179,6 +182,16 @@ export interface IngestRoutesResult {
   ) => void;
   /** Register the web console as a session so the indicator is never empty (#1805) */
   registerConsoleSession: () => void;
+}
+
+export type ConsoleLeadershipHandoffReason =
+  | LeaderPreferenceDecision['reason']
+  | 'handoff-in-progress';
+
+export interface ConsoleLeadershipHandoffDecision {
+  accepted: boolean;
+  reason: ConsoleLeadershipHandoffReason;
+  leaderInfo: ConsoleLeaderInfo;
 }
 
 type SessionLeaseSource =
@@ -245,6 +258,33 @@ function normalizeConsoleProtocolVersion(version?: number): number {
     return version;
   }
   return LEGACY_CONSOLE_PROTOCOL_VERSION;
+}
+
+function normalizeCandidateLeaderInfo(value: unknown): ConsoleLeaderInfo | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  const candidate = value as Partial<ConsoleLeaderInfo>;
+  const sessionId = normalizeOptionalInput(candidate.sessionId);
+  if (!sessionId || typeof candidate.pid !== 'number' || !Number.isInteger(candidate.pid) || candidate.pid <= 0) {
+    return null;
+  }
+  if (typeof candidate.port !== 'number' || !Number.isInteger(candidate.port) || candidate.port <= 0) {
+    return null;
+  }
+
+  const now = new Date().toISOString();
+  return {
+    version: Number.isInteger(candidate.version) ? candidate.version as number : 1,
+    pid: candidate.pid,
+    port: candidate.port,
+    sessionId,
+    startedAt: normalizeOptionalInput(candidate.startedAt) ?? now,
+    heartbeat: normalizeOptionalInput(candidate.heartbeat) ?? now,
+    serverVersion: normalizeServerVersion(candidate.serverVersion),
+    consoleProtocolVersion: normalizeConsoleProtocolVersion(candidate.consoleProtocolVersion),
+  };
 }
 
 function chooseRequestedDisplayName(hints: SessionDisplayNameHints): string | undefined {
@@ -742,6 +782,22 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           }
         : {}),
     });
+  });
+
+  router.post('/api/console/handoff', async (req: Request, res: Response) => {
+    if (!broadcasts.requestLeaderHandoff) {
+      res.status(501).json({ error: 'Leader handoff unsupported' });
+      return;
+    }
+
+    const candidateLeader = normalizeCandidateLeaderInfo((req.body as { candidateLeader?: unknown } | undefined)?.candidateLeader);
+    if (!candidateLeader) {
+      res.status(400).json({ error: 'Invalid candidate leader info' });
+      return;
+    }
+
+    const decision = await broadcasts.requestLeaderHandoff(candidateLeader);
+    res.status(decision.accepted ? 202 : 409).json(decision);
   });
 
   /**
