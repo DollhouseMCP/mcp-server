@@ -435,7 +435,9 @@ describe('Web console cleanup regressions', () => {
     await wait(DEFAULT_WAIT_MS);
 
     const initialVersion = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-version');
-    expect(initialVersion?.textContent).toBe('Claude Code • v2.0.27-rc.9');
+    const initialClientLabel = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-client-label');
+    expect(initialVersion?.textContent).toBe('v2.0.27-rc.9');
+    expect(initialClientLabel?.textContent).toBe('Claude Code');
 
     currentVersion = '2.0.27-rc.10';
     await wait(30);
@@ -445,7 +447,9 @@ describe('Web console cleanup regressions', () => {
     await wait(DEFAULT_WAIT_MS);
 
     const refreshedVersion = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-version');
-    expect(refreshedVersion?.textContent).toBe('Claude Code • v2.0.27-rc.10');
+    const refreshedClientLabel = win.document.querySelector('.session-dropdown-item[data-session-id="session-1"] .session-dropdown-client-label');
+    expect(refreshedVersion?.textContent).toBe('v2.0.27-rc.10');
+    expect(refreshedClientLabel?.textContent).toBe('Claude Code');
 
     cleanup();
   });

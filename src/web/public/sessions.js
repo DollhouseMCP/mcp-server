@@ -592,20 +592,12 @@
       if (s.color) nameEl.style.color = s.color;
       nameGroup.appendChild(nameEl);
 
-      var metaParts = [];
-      var platform = displayPlatform(s);
-      if (platform) {
-        metaParts.push(platform);
-      }
       var version = displayVersion(s);
       if (version) {
-        metaParts.push(version);
-      }
-      if (metaParts.length) {
         var versionEl = document.createElement('span');
         versionEl.className = 'session-dropdown-version';
-        versionEl.textContent = metaParts.join(' \u2022 ');
-        versionEl.title = metaParts.join(' • ');
+        versionEl.textContent = version;
+        versionEl.title = version;
         nameGroup.appendChild(versionEl);
       }
 
@@ -630,6 +622,9 @@
       }
       item.appendChild(authBadge);
 
+      var clientGroup = document.createElement('span');
+      clientGroup.className = 'session-dropdown-client-group';
+
       var clientBadge = document.createElement('span');
       clientBadge.className = 'session-status-badge';
       if (isPolicyOnlySession(s)) {
@@ -645,7 +640,17 @@
         clientBadge.dataset.status = 'negative';
         clientBadge.title = 'No MCP client attached';
       }
-      item.appendChild(clientBadge);
+      clientGroup.appendChild(clientBadge);
+
+      var platform = displayPlatform(s);
+      if (platform) {
+        var clientLabel = document.createElement('span');
+        clientLabel.className = 'session-dropdown-client-label';
+        clientLabel.textContent = platform;
+        clientLabel.title = platform;
+        clientGroup.appendChild(clientLabel);
+      }
+      item.appendChild(clientGroup);
 
       var uptimeEl = document.createElement('span');
       uptimeEl.className = 'session-dropdown-uptime';
