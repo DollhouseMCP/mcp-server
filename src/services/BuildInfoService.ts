@@ -211,10 +211,12 @@ export class BuildInfoService {
       const authorityLabel = info.consoleSession.authoritative
         ? 'Authoritative web console lease'
         : 'Awaiting authoritative web console lease';
-      sessionLines.push(`- **Web Console Display Name**: ${info.consoleSession.displayName ?? 'pending authoritative assignment'}`);
-      sessionLines.push(`- **Web Console Role**: ${info.consoleSession.role}`);
-      sessionLines.push(`- **Web Console Kind**: ${info.consoleSession.kind}`);
-      sessionLines.push(`- **Web Console Identity**: ${authorityLabel}`);
+      sessionLines.push(
+        `- **Web Console Display Name**: ${info.consoleSession.displayName ?? 'pending authoritative assignment'}`,
+        `- **Web Console Role**: ${info.consoleSession.role}`,
+        `- **Web Console Kind**: ${info.consoleSession.kind}`,
+        `- **Web Console Identity**: ${authorityLabel}`,
+      );
       if (info.consoleSession.authoritative && info.consoleSession.color) {
         sessionLines.push(`- **Web Console Color**: ${info.consoleSession.color}`);
       }
