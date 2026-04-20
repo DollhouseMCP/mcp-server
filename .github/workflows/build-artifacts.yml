@@ -87,6 +87,9 @@ jobs:
           
           echo "✅ All build artifacts verified successfully!"
 
+      - name: Verify npm package contents
+        run: npm run verify:package-assets
+
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
