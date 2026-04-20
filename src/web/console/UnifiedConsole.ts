@@ -311,10 +311,12 @@ export async function requestLeaderHandoff(
       return null;
     }
 
+    const { leaderInfo } = payload;
+
     return {
       accepted: payload.accepted,
       reason: payload.reason ?? 'handoff-in-progress',
-      leaderInfo: payload.leaderInfo as ConsoleLeaderInfo,
+      leaderInfo,
     };
   } catch (err) {
     logger.debug('[UnifiedConsole] Leader handoff request failed', {
