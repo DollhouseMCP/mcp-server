@@ -8,8 +8,18 @@ COMPOSE_FILE="${REPO_ROOT}/docker/docker-compose.mixed-version.yml"
 TARGET_INJECT_SPEC="${TARGET_INJECT_SPEC:-@dollhousemcp/mcp-server@2.0.24}"
 SESSION_WAIT_RETRIES="${SESSION_WAIT_RETRIES:-30}"
 SESSION_WAIT_SLEEP_SECONDS="${SESSION_WAIT_SLEEP_SECONDS:-2}"
+LAST_REPORT_PATH=""
+
+capture_report() {
+  local label="$1"
+  LAST_REPORT_PATH="$("${SCRIPT_DIR}/report-state.sh" --label "${label}")"
+  echo "State report (${label}): ${LAST_REPORT_PATH}"
+}
 
 cleanup() {
+  if [[ -n "$(docker compose -f "${COMPOSE_FILE}" ps --status running --services 2>/dev/null)" ]]; then
+    capture_report "pre-cleanup"
+  fi
   docker compose -f "${COMPOSE_FILE}" down >/dev/null 2>&1 || true
   return 0
 }
@@ -39,6 +49,7 @@ wait_for_sessions() {
 
   echo "Timed out waiting for ${description}" >&2
   printf '%s\n' "${output}" >&2
+  capture_report "timeout-${description// /-}" >&2
   echo "Recent container logs:" >&2
   docker compose -f "${COMPOSE_FILE}" logs --tail=40 current-local stable-226 legacy-225 legacy-219 >&2 || true
   return 1
@@ -60,3 +71,5 @@ wait_for_sessions \
   "legacy injection to appear in sessions" \
   "\\[legacy-225\\]" \
   "2\\.0\\.24"
+
+capture_report "success"
