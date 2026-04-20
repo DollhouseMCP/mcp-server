@@ -274,12 +274,14 @@ describe('Console port configuration (#1840)', () => {
       expect(source).toContain('another process holds this port');
     });
 
-    it('only kills verified DollhouseMCP processes on port conflict', async () => {
+    it('never auto-kills verified DollhouseMCP processes on port conflict', async () => {
       const source = await readFile(join(SRC, 'src/web/console/StaleProcessRecovery.ts'), 'utf8');
-      // killStaleProcess verifies the process is DollhouseMCP before sending signals
+      // Startup recovery inspects DollhouseMCP occupants but requires explicit
+      // orphan proof before it can send signals.
       expect(source).toContain('dollhousemcp');
       expect(source).toContain('mcp-server');
-      expect(source).toContain('SIGTERM');
+      expect(source).toContain('allowVerifiedDollhouseKill');
+      expect(source).toContain('requires_orphan_proof');
     });
 
     it('resolves promise on conflict (does not throw)', async () => {

@@ -1,9 +1,11 @@
 /**
- * Stale process detection and recovery (#1850).
+ * Non-destructive stale process inspection (#1850).
  *
- * Finds and kills zombie DollhouseMCP processes that squat on the console
- * port after their session has ended. Used by bindAndListen in server.ts
- * when EADDRINUSE occurs.
+ * Detects when another process is already holding the console port and
+ * classifies whether it looks like DollhouseMCP. Startup recovery is
+ * intentionally non-destructive for verified Dollhouse sessions: authority
+ * issues should demote/follow existing sessions rather than killing them.
+ * Operators can still explicitly dismiss true orphans from the web console.
  *
  * Extracted to a standalone module so it can be tested without importing
  * the full Express server and its dependency chain.
@@ -75,6 +77,7 @@ export interface KillStaleProcessOutcome {
     | 'inspect_failed'
     | 'different_user'
     | 'not_dollhouse_process'
+    | 'requires_orphan_proof'
     | 'active_host_parent'
     | 'terminated'
     | 'already_dead'
@@ -88,6 +91,7 @@ export interface KillStaleProcessOutcome {
 }
 
 export interface KillStaleProcessOptions {
+  allowVerifiedDollhouseKill?: boolean;
   allowActiveHostParent?: boolean;
 }
 
@@ -161,11 +165,23 @@ async function getKillGuardFailure(
     return buildKillOutcome(false, 'not_dollhouse_process', processInfo);
   }
 
+  const parentCommand = processInfo.parentPid > ROOT_PARENT_PID
+    ? (await getProcessCommand(processInfo.parentPid)) ?? undefined
+    : undefined;
+
+  if (!options.allowVerifiedDollhouseKill) {
+    await logger.warn(`[WebUI] Port ${port} held by another DollhouseMCP session (pid ${processInfo.pid}) — not auto-killing`, {
+      cmdLine: processInfo.command,
+      parentPid: processInfo.parentPid,
+      parentCommand,
+    });
+    return buildKillOutcome(false, 'requires_orphan_proof', processInfo, parentCommand);
+  }
+
   if (processInfo.parentPid <= ROOT_PARENT_PID || !isPidAlive(processInfo.parentPid)) {
     return null;
   }
 
-  const parentCommand = (await getProcessCommand(processInfo.parentPid)) ?? undefined;
   if (!options.allowActiveHostParent && parentCommand && isRecognizedMcpHostParent(parentCommand)) {
     await logger.warn(`[WebUI] Port ${port} held by active client-backed DollhouseMCP process (pid ${processInfo.pid}) — not killing`, {
       cmdLine: processInfo.command,
@@ -336,9 +352,11 @@ export async function findPidOnPort(port: number): Promise<number | null> {
 }
 
 /**
- * Kill a stale process holding a port. Sends SIGTERM, waits briefly,
- * then SIGKILL if still alive. Only kills DollhouseMCP processes
- * (verified by checking the command line and user ownership).
+ * Kill a process holding a port.
+ *
+ * This helper is intentionally conservative. By default it refuses to signal
+ * verified DollhouseMCP sessions unless the caller opts in with explicit
+ * orphan proof via `allowVerifiedDollhouseKill`.
  *
  * Timeout: 1s for ps verification. Kill wait: 300ms × 10 polls = 3s
  * before escalating to SIGKILL. Total worst case: ~4s.
@@ -380,9 +398,11 @@ export async function killStaleProcessDetailed(
 }
 
 /**
- * Detect and recover from a stale process squatting on the port.
+ * Inspect the process squatting on the port.
  * Compares the port holder's PID against the leader lock file to determine
- * if it's a squatter. Returns true if the squatter was killed.
+ * if it's a fresh leader, but refuses to auto-kill verified DollhouseMCP
+ * sessions. Returns true only when a future caller provides orphan proof and
+ * the occupant is actually terminated.
  *
  * Timeouts: lsof 1s, ps 1s, SIGTERM wait 3s — max ~5s total.
  */

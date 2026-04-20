@@ -848,12 +848,14 @@ if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTes
       const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
       const noBrowser = process.argv.includes('--no-open');
 
-      // Pre-flight: kill any stale DollhouseMCP process squatting on our port
-      // BEFORE any container/server setup. This is the definitive fix for #1850 —
-      // clear the port first, then start cleanly.
-      // Race condition note: a new process could grab the port between kill and
-      // our bind, but recoverStalePort's TOCTOU mitigation (500ms lock file
-      // re-read) and bindAndListen's own recovery handle that edge case.
+      // Pre-flight: inspect any existing DollhouseMCP process on our port
+      // BEFORE any container/server setup. Recovery is intentionally
+      // non-destructive for verified Dollhouse sessions; operators can use the
+      // session UI to dismiss proven orphans explicitly.
+      // Race condition note: a new process could grab the port between inspect
+      // and bind, but recoverStalePort's TOCTOU mitigation (500ms lock file
+      // re-read) and bindAndListen's own conflict handling keep that edge case
+      // visible instead of silently terminating another session.
       const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
       try {
         const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');

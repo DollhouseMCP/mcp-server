@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { ChildProcess } from 'node:child_process';
 
 const execAsync = promisify(execFile);
 
@@ -47,6 +48,65 @@ function listenOnPort(): Promise<{ server: net.Server; port: number }> {
 
 function closeServer(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
+}
+
+async function waitFor<T>(
+  description: string,
+  fn: () => Promise<T | null>,
+  timeoutMs = 5_000,
+  intervalMs = 100,
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const result = await fn();
+    if (result !== null) {
+      return result;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
+}
+
+async function spawnFakeDollhouseServer(port: number): Promise<{ child: ChildProcess; tempDir: string }> {
+  const { spawn } = await import('node:child_process');
+  const tempDir = await mkdtemp(join(tmpdir(), 'fake-dollhouse-port-holder-'));
+  const scriptDir = join(tempDir, 'node_modules', '.bin');
+  const scriptPath = join(scriptDir, 'mcp-server');
+  await mkdir(scriptDir, { recursive: true });
+  await writeFile(
+    scriptPath,
+    [
+      "const net = require('node:net');",
+      'const port = Number(process.argv[2]);',
+      "const server = net.createServer();",
+      "server.listen(port, '127.0.0.1');",
+      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
+      "process.on('SIGINT', () => server.close(() => process.exit(0)));",
+      'setInterval(() => {}, 1000);',
+    ].join('\n'),
+  );
+
+  const child = spawn(process.execPath, [scriptPath, String(port)], {
+    stdio: 'ignore',
+  });
+
+  await waitFor(
+    `fake Dollhouse server on port ${port}`,
+    async () => ((await Recovery.findPidOnPort(port)) === child.pid ? child.pid ?? null : null),
+  );
+
+  return { child, tempDir };
+}
+
+async function cleanupFakeDollhouseServer(child: ChildProcess, tempDir: string): Promise<void> {
+  if (child.pid) {
+    try {
+      process.kill(child.pid, 'SIGKILL');
+    } catch {
+      // already dead
+    }
+  }
+  await rm(tempDir, { recursive: true, force: true });
 }
 
 /** Helper matching the same logic as StaleProcessRecovery.ts binary detection. */
@@ -115,6 +175,23 @@ describe('Stale Process Recovery (#1850)', () => {
           try { process.kill(childPid, 'SIGKILL'); } catch { /* dead */ }
         }
       }, 10000);
+
+      it('refuses to auto-kill a verified DollhouseMCP process without orphan proof', async () => {
+        const port = await getFreePort();
+        const { child, tempDir } = await spawnFakeDollhouseServer(port);
+        const childPid = child.pid;
+        expect(childPid).toBeDefined();
+        if (!childPid) return;
+
+        try {
+          const outcome = await Recovery.killStaleProcessDetailed(childPid, port);
+          expect(outcome.killed).toBe(false);
+          expect(outcome.reason).toBe('requires_orphan_proof');
+          expect(() => process.kill(childPid, 0)).not.toThrow();
+        } finally {
+          await cleanupFakeDollhouseServer(child, tempDir);
+        }
+      }, 15000);
     }
   });
 
@@ -136,6 +213,24 @@ describe('Stale Process Recovery (#1850)', () => {
         await closeServer(server);
       }
     }, 10000);
+
+    if (process.platform !== 'win32') {
+      it('does not auto-kill a verified DollhouseMCP server on the port', async () => {
+        const port = await getFreePort();
+        const { child, tempDir } = await spawnFakeDollhouseServer(port);
+        const childPid = child.pid;
+        expect(childPid).toBeDefined();
+        if (!childPid) return;
+
+        try {
+          expect(await Recovery.recoverStalePort(port)).toBe(false);
+          expect(() => process.kill(childPid, 0)).not.toThrow();
+          expect(await Recovery.findPidOnPort(port)).toBe(childPid);
+        } finally {
+          await cleanupFakeDollhouseServer(child, tempDir);
+        }
+      }, 15000);
+    }
   });
 
   // ── Lock file mismatch scenarios ──────────────────────────────────────

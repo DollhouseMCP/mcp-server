@@ -2,7 +2,7 @@
  * Integration tests for standalone --web mode (#1850).
  *
  * Verifies the --web startup path has the correct structure:
- * 1. Pre-flight zombie kill runs BEFORE container setup
+ * 1. Pre-flight port inspection runs BEFORE container setup
  * 2. completeDeferredSetup() is NOT called (prevents leader election conflict)
  * 3. Port file sweep runs independently
  * 4. startWebServer is called with full sinks
@@ -28,7 +28,7 @@ describe('Standalone --web mode (#1850)', () => {
     webModeSource = await readFile(path.join(PROJECT_ROOT, 'src/index.ts'), 'utf8');
   });
 
-  describe('Pre-flight zombie kill', () => {
+  describe('Pre-flight port inspection', () => {
     it('calls recoverStalePort before container bootstrap', () => {
       const webBlock = getWebModeBlock(webModeSource);
       const recoverIdx = webBlock.indexOf('recoverStalePort(targetPort)');
@@ -40,7 +40,7 @@ describe('Standalone --web mode (#1850)', () => {
 
     it('logs recovery failures instead of swallowing them', () => {
       const preflightSection = webModeSource.slice(
-        webModeSource.indexOf('Pre-flight: kill any stale'),
+        webModeSource.indexOf('Pre-flight: inspect any existing'),
         webModeSource.indexOf('let mcpAqlHandler'),
       );
       expect(preflightSection).toContain('console.error');
@@ -102,7 +102,7 @@ describe('Standalone --web mode (#1850)', () => {
   describe('Race condition documentation', () => {
     it('documents the TOCTOU mitigation in the pre-flight comment', () => {
       const preflightSection = webModeSource.slice(
-        webModeSource.indexOf('Pre-flight: kill any stale'),
+        webModeSource.indexOf('Pre-flight: inspect any existing'),
         webModeSource.indexOf('const targetPort'),
       );
       expect(preflightSection).toContain('TOCTOU');
