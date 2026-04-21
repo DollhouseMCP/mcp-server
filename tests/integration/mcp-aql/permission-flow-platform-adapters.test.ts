@@ -18,6 +18,9 @@
  * These tests verify the TRANSLATION layer, not the policy evaluation
  * itself (that's covered by permission-flow-matrix.test.ts).
  *
+ * Keep adapter expectations in sync with
+ * docs/architecture/permission-hook-platform-contracts.md.
+ *
  * @module
  */
 

@@ -4,6 +4,9 @@
  * In mcp-server, permission routes are mounted on the unified web
  * console (port 41715). These tests verify port file lifecycle, HTTP
  * endpoint behavior, hook script compatibility, and error recovery.
+ *
+ * Keep platform-specific stdout/exit assertions in sync with
+ * docs/architecture/permission-hook-platform-contracts.md.
  */
 
 import { describe, expect, it, afterEach } from '@jest/globals';
@@ -18,6 +21,10 @@ const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
 const PID_PORT_FILE = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
+const CURSOR_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-cursor.sh');
+const GEMINI_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-gemini.sh');
+const VSCODE_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-vscode.sh');
+const WINDSURF_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-windsurf.sh');
 const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 const BASH_BINARY = '/bin/bash';
 
@@ -389,6 +396,35 @@ describe('Permission Server Integration', () => {
       expect(stdout.trim()).toBe('');
     });
 
+    itBash('hook script should fail open when permission requests time out', async () => {
+      let testPort = 0;
+      const mockServer = http.createServer((_req, _res) => {
+        // Intentionally never respond so curl hits its max-time window.
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        },
+        {
+          DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '1',
+          DOLLHOUSE_HOOK_MAX_RETRIES: '0',
+        },
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+    });
+
     itBash('hook script should emit Codex-compatible JSON for allow decisions', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
@@ -478,6 +514,262 @@ describe('Permission Server Integration', () => {
           permissionDecision: 'allow',
           permissionDecisionReason: '',
         },
+      });
+    });
+
+    itBash('cursor hook wrapper should preserve Cursor permission responses', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              permission: 'deny',
+              reason: 'Blocked by policy',
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'Bash',
+          toolInput: { command: 'git status' },
+        },
+        {},
+        CURSOR_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: { command: 'git status' },
+        platform: 'cursor',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        permission: 'deny',
+        reason: 'Blocked by policy',
+      });
+    });
+
+    itBash('gemini hook wrapper should preserve Gemini decision payloads', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              decision: 'allow',
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'Write',
+          toolInput: { file_path: 'notes.txt' },
+        },
+        {},
+        GEMINI_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(capturedBody).toEqual({
+        tool_name: 'Write',
+        input: { file_path: 'notes.txt' },
+        platform: 'gemini',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        decision: 'allow',
+      });
+    });
+
+    itBash('vscode hook wrapper should normalize terminal commands and preserve ask responses', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                hookEventName: 'PreToolUse',
+                permissionDecision: 'ask',
+                permissionDecisionReason: 'Needs approval',
+              },
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'runTerminalCommand',
+          toolInput: { command: 'npm install' },
+          cwd: '/workspace',
+        },
+        {},
+        VSCODE_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: {
+          command: 'npm install',
+          cwd: '/workspace',
+        },
+        platform: 'vscode',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'ask',
+          permissionDecisionReason: 'Needs approval',
+        },
+      });
+    });
+
+    itBash('vscode hook wrapper should fail open silently on malformed responses', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ unexpected: true }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'runTerminalCommand',
+          toolInput: { command: 'npm test' },
+        },
+        {},
+        VSCODE_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: { command: 'npm test' },
+        platform: 'vscode',
+        session_id: 'session-hook-test',
+      });
+    });
+
+    itBash('windsurf hook wrapper should map deny decisions to exit code 2', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              allowed: false,
+              reason: 'Blocked by policy',
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout, stderr } = await runHookScript(
+        {
+          hook_event_name: 'pre_mcp_tool_use',
+          tool_name: 'Read',
+          tool_arguments: { file_path: 'src/index.ts' },
+        },
+        {},
+        WINDSURF_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(2);
+      expect(stdout.trim()).toBe('');
+      expect(stderr).toContain('Blocked by policy');
+      expect(capturedBody).toEqual({
+        tool_name: 'Read',
+        input: { file_path: 'src/index.ts' },
+        platform: 'windsurf',
+        session_id: 'session-hook-test',
       });
     });
 
@@ -645,9 +937,10 @@ async function reserveUnusedLoopbackPort(): Promise<number> {
 function runHookScript(
   payload: Record<string, unknown>,
   envOverrides: Record<string, string> = {},
-): Promise<{ code: number; stdout: string }> {
+  scriptPath = HOOK_SCRIPT,
+): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+    const hookProc = spawn(BASH_BINARY, [scriptPath], {
       env: {
         HOME: os.homedir(),
         PATH: SAFE_TEST_PATH,
@@ -657,8 +950,10 @@ function runHookScript(
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';
+    let err = '';
     hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
-    hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+    hookProc.stderr.on('data', (data: Buffer) => { err += data.toString(); });
+    hookProc.on('close', (c: number) => resolve({ code: c, stdout: out, stderr: err }));
     hookProc.stdin.write(JSON.stringify(payload));
     hookProc.stdin.end();
   });

@@ -3,6 +3,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 
+// Keep Dockerized wrapper assertions in sync with
+// docs/architecture/permission-hook-platform-contracts.md.
+
 jest.setTimeout(180_000);
 
 const SAFE_HOST_PATH = '/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin';
