@@ -13,7 +13,12 @@ import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
-import { getPermissionHookStatusAsync, reconcilePermissionHookStatus } from '../../utils/permissionHooks.js';
+import {
+  getLastPermissionHookStartupRepairSummary,
+  getPermissionHookStatusAsync,
+  reconcilePermissionHookStatus,
+  summarizePermissionHookHealth,
+} from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import {
@@ -494,6 +499,16 @@ export function registerPermissionRoutes(
       const allowOperations = (data.combinedAllowOperations as string[] | undefined) ?? [];
       const confirmOperations = (data.combinedConfirmOperations as string[] | undefined) ?? [];
 
+      const hookStartupRepair = getLastPermissionHookStartupRepairSummary();
+      const hookHealthHost = hookStatus.host ?? hookHost ?? 'managed-host';
+      const hookHealth = summarizePermissionHookHealth({
+        installedHosts: hookStatus.installed || hookStatus.assetsPrepared ? [hookHealthHost] : [],
+        currentHosts: hookStatus.assetsCurrent ? [hookHealthHost] : [],
+        repairedHosts: hookStatus.autoRepaired ? [hookHealthHost] : [],
+        needsRepairHosts: hookStatus.needsRepair ? [hookHealthHost] : [],
+        lastStartupRepair: hookStartupRepair,
+      });
+
       res.json({
         ...(sessionId ? { sessionId } : {}),
         activeElementCount: data.activeElementCount,
@@ -517,6 +532,8 @@ export function registerPermissionRoutes(
         hookAutoRepaired: hookStatus.autoRepaired,
         hookNeedsRepair: hookStatus.needsRepair,
         hookRepairError: hookStatus.repairError,
+        hookHealth,
+        hookStartupRepair,
         authority: authorityState,
         authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],

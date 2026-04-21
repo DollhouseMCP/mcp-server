@@ -17,22 +17,49 @@
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
 RUN_DIR="$HOME/.dollhouse/run"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
+source "$SCRIPT_DIR/permission-hook-config.sh"
+# shellcheck disable=SC2034 # Consumed by permission-port-discovery.sh after sourcing.
 PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
-AUTHORITY_CACHE_TTL_SECONDS=2
-MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
-INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-[[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || MAX_RETRIES=2
-[[ "$INITIAL_TIMEOUT" =~ ^[0-9]+$ ]] || INITIAL_TIMEOUT=5
+permission_hook_load_runtime_config
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then
     echo "[pretooluse] $*" >&2
   fi
+  return 0
+}
+
+emit_allow_response() {
+  case "$HOOK_PLATFORM" in
+    claude_code|vscode)
+      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+      ;;
+    codex)
+      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":""}}'
+      ;;
+    cursor)
+      printf '%s\n' '{"permission":"allow"}'
+      ;;
+    gemini)
+      printf '%s\n' '{"decision":"allow"}'
+      ;;
+    *)
+      printf '%s\n' '{}'
+      ;;
+  esac
+
+  return 0
+}
+
+fail_open() {
+  local message="$1"
+  debug "$message"
+  emit_allow_response
   return 0
 }
 
@@ -156,11 +183,12 @@ normalize_response() {
   return 0
 }
 
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 # Discover the port from the shared file or the newest live PID-keyed file
 if ! PORT=$(resolve_permission_port); then
-  debug "No usable permission server port file found — fail open"
+  fail_open "No usable permission server port file found — fail open"
   exit 0
 fi
 
@@ -176,7 +204,7 @@ TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2
 
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
-  debug "Could not parse tool_name from input — fail open"
+  fail_open "Could not parse tool_name from input — fail open"
   exit 0
 fi
 
@@ -188,7 +216,7 @@ AUTHORITY_MODE=$(resolve_authority_mode "$AUTHORITY_HOST")
 debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
 
 if [[ "$AUTHORITY_MODE" == "off" ]]; then
-  debug "Authority mode is off — hook no-op"
+  fail_open "Authority mode is off — hook no-op"
   exit 0
 fi
 
@@ -222,14 +250,15 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
     debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
     if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
-      debug "Non-JSON response for platform $HOOK_PLATFORM — fail open"
+      fail_open "Non-JSON response for platform $HOOK_PLATFORM — fail open"
       exit 0
     fi
     NORMALIZED_RESPONSE=$(normalize_response "$RESPONSE")
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
       echo "$NORMALIZED_RESPONSE"
     else
-      debug "Malformed response for platform $HOOK_PLATFORM — fail open"
+      fail_open "Malformed response for platform $HOOK_PLATFORM — fail open"
+      exit 0
     fi
     exit 0
   fi
@@ -244,5 +273,5 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 done
 
 # All retries exhausted — fail open
-debug "All $((MAX_RETRIES + 1)) attempts failed — fail open"
+fail_open "All $((MAX_RETRIES + 1)) attempts failed — fail open"
 exit 0

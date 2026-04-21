@@ -326,9 +326,18 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
   );
   if (process.env.NODE_ENV !== 'test') {
-    repairPermissionHooksOnStartup().catch(err =>
-      logger.warn(`[Setup] Permission hook startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
-    );
+    repairPermissionHooksOnStartup()
+      .then((summary) => {
+        if (summary.needsRepairCount > 0) {
+          logger.warn(
+            `[Setup] Permission hook startup repair completed with ${summary.needsRepairCount} issue(s) ` +
+            `across ${summary.hostResults.length} host(s)`,
+          );
+        }
+      })
+      .catch(err =>
+        logger.warn(`[Setup] Permission hook startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+      );
   }
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)

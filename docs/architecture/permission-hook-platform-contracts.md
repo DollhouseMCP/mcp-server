@@ -51,9 +51,115 @@ Client-specific normalization includes:
 - Missing permission server port file: allow / no-op
 - Connection failure or timeout: allow / no-op
 - Malformed server response:
-  - JSON-based clients: allow / no-op with empty stdout
+  - JSON-based clients: allow with an explicit valid allow payload for that platform
   - Windsurf: allow with exit `0`
 - Legacy Codex bare `{}` allow responses are normalized into an explicit `hookSpecificOutput.permissionDecision = "allow"` payload for compatibility
+
+## Runtime Configuration Bounds
+
+The shared shell configuration helper (`scripts/permission-hook-config.sh`) validates the runtime tuning knobs before any wrapper uses them:
+
+| Variable | Default | Minimum | Maximum | Notes |
+| --- | --- | --- | --- | --- |
+| `DOLLHOUSE_HOOK_AUTHORITY_CACHE_TTL_SECONDS` | `2` | `0` | `30` | Controls how long hook wrappers reuse the authority-mode cache before rereading `permission-authority.json` |
+| `DOLLHOUSE_HOOK_MAX_RETRIES` | `2` | `0` | `5` | Caps transient retry loops for the HTTP permission call |
+| `DOLLHOUSE_HOOK_INITIAL_TIMEOUT` | `5` | `1` | `30` | Initial curl timeout in seconds before exponential backoff doubles it |
+
+Invalid or out-of-range values are clamped or reset to safe defaults so local overrides cannot accidentally produce malformed fail-open behavior.
+
+## Platform-Specific Behavior Notes
+
+- Claude Code, Codex, and VS Code all require structured JSON on stdout even when the hook is failing open.
+- Cursor and Gemini CLI preserve their native stdout contracts, but still pass through the shared port discovery and HTTP retry logic.
+- Windsurf is intentionally different: it never emits a JSON allow/deny envelope. It returns exit code `0` to allow and `2` to block.
+- Startup hook asset repair runs sequentially because several hosts share `~/.dollhouse/hooks/pretooluse-dollhouse.sh` and `permission-port-discovery.sh`; concurrent rewrites were flaky on Windows.
+- Startup repair results are surfaced through:
+  - `get_build_info`
+  - `/api/permissions/status`
+  - `/api/health`
+
+## Example Payloads
+
+### Claude Code / VS Code allow
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow"
+  }
+}
+```
+
+### Claude Code / VS Code deny
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Command blocked by active Dollhouse policy."
+  }
+}
+```
+
+### Codex allow
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": ""
+  }
+}
+```
+
+### Codex deny
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Command blocked by active Dollhouse policy."
+  }
+}
+```
+
+### Cursor allow
+
+```json
+{
+  "permission": "allow"
+}
+```
+
+### Cursor deny
+
+```json
+{
+  "permission": "deny",
+  "reason": "Command blocked by active Dollhouse policy."
+}
+```
+
+### Gemini CLI allow
+
+```json
+{
+  "decision": "allow"
+}
+```
+
+### Gemini CLI deny
+
+```json
+{
+  "decision": "deny",
+  "reason": "Command blocked by active Dollhouse policy."
+}
+```
 
 ## Verification Matrix
 

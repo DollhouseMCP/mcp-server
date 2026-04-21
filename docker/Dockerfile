@@ -19,7 +19,12 @@ COPY tsconfig.json ./
 COPY packages/ ./packages/
 
 # Install dependencies (includes local @dollhousemcp/safety package)
-RUN npm ci
+# Retry transient npm registry failures that occasionally show up in CI builders.
+RUN npm ci \
+    --fetch-retries=5 \
+    --fetch-retry-factor=2 \
+    --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000
 
 # Copy source code
 COPY src/ ./src/
@@ -59,7 +64,12 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev \
+    --fetch-retries=5 \
+    --fetch-retry-factor=2 \
+    --fetch-retry-mintimeout=20000 \
+    --fetch-retry-maxtimeout=120000 \
+    && npm cache clean --force
 
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
