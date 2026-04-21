@@ -92,9 +92,11 @@ export async function createIsolatedContainer(
 
   const previousPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
   const previousHome = process.env.HOME;
+  const previousHomeDirEnv = process.env.DOLLHOUSE_HOME_DIR;
 
   process.env.DOLLHOUSE_PORTFOLIO_DIR = portfolioDir;
   process.env.HOME = tempRoot;
+  process.env.DOLLHOUSE_HOME_DIR = tempRoot;
 
   const container = new DollhouseContainer();
 
@@ -114,6 +116,12 @@ export async function createIsolatedContainer(
         process.env.HOME = previousHome;
       } else {
         delete process.env.HOME;
+      }
+
+      if (previousHomeDirEnv !== undefined) {
+        process.env.DOLLHOUSE_HOME_DIR = previousHomeDirEnv;
+      } else {
+        delete process.env.DOLLHOUSE_HOME_DIR;
       }
 
       await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -138,10 +146,12 @@ export async function createIntegrationContainer(
   process.env.DOLLHOUSE_PORTFOLIO_DIR = portfolioDir;
 
   const previousHome = process.env.HOME;
+  const previousDollhouseHomeDir = process.env.DOLLHOUSE_HOME_DIR;
   const derivedHome = options.homeDir
     ?? (tempRoot ? tempRoot : path.resolve(portfolioDir, '..', '..'));
   if (derivedHome) {
     process.env.HOME = derivedHome;
+    process.env.DOLLHOUSE_HOME_DIR = derivedHome;
   }
 
   const container = new DollhouseContainer();
@@ -157,16 +167,22 @@ export async function createIntegrationContainer(
     portfolioDir,
     dispose: async () => {
       await container.dispose();
-      if (previousPortfolioDir) {
+      if (previousPortfolioDir !== undefined) {
         process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
       } else {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
       }
 
-      if (previousHome) {
+      if (previousHome !== undefined) {
         process.env.HOME = previousHome;
       } else {
         delete process.env.HOME;
+      }
+
+      if (previousDollhouseHomeDir !== undefined) {
+        process.env.DOLLHOUSE_HOME_DIR = previousDollhouseHomeDir;
+      } else {
+        delete process.env.DOLLHOUSE_HOME_DIR;
       }
 
       if (tempRoot) {

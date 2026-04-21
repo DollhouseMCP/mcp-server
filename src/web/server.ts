@@ -13,7 +13,7 @@
 
 import express from 'express';
 import { join, dirname, extname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 import { mkdir, readdir, readFile as readFileFs } from 'node:fs/promises';
@@ -52,7 +52,7 @@ const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const _packageLocator = new PackageResourceLocator();
 /**
  * Default port for standalone `startWebServer` calls. Reads from the
  * `DOLLHOUSE_WEB_CONSOLE_PORT` env var so there is a single source of
@@ -363,7 +363,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   options.additionalRouters?.forEach(router => app.use(router));
 
   // Static frontend files
-  const publicDir = join(__dirname, 'public');
+  let publicDir: string;
+  try {
+    publicDir = _packageLocator.resolve('web/public');
+  } catch (err) {
+    logger.error('[WebServer] Failed to resolve web/public directory — static assets unavailable', { error: err });
+    throw new Error('Web console static assets directory not found. Ensure the package is built (npm run build).');
+  }
   // Serve static assets but skip index.html — the SPA fallback below
   // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
   // meta tag). Without this, express.static serves the raw template

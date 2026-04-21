@@ -62,7 +62,7 @@ export class OperationalTelemetry {
     return () => { this.logListener = undefined; };
   }
 
-  constructor(private fileOperations: IFileOperationsService) {}
+  constructor(private fileOperations: IFileOperationsService, private stateDir?: string) {}
 
   /**
    * Check if telemetry is enabled
@@ -156,14 +156,14 @@ export class OperationalTelemetry {
    * @returns Configuration with paths to telemetry files
    */
   private getConfig(): TelemetryConfig {
-    // Allow overriding home directory via DOLLHOUSE_HOME_DIR (for testing)
-    // This follows the pattern used by DOLLHOUSE_PORTFOLIO_DIR and DOLLHOUSE_CACHE_DIR
+    // Use DI-provided stateDir (from PathService) when available;
+    // fall back to legacy path for direct construction (tests).
     const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-    const dollhouseDir = path.join(homeDir, '.dollhouse');
+    const dir = this.stateDir ?? path.join(homeDir, '.dollhouse');
     return {
       enabled: this.isEnabled(),
-      installIdPath: path.join(dollhouseDir, '.telemetry-id'),
-      logPath: path.join(dollhouseDir, 'telemetry.log'),
+      installIdPath: path.join(dir, '.telemetry-id'),
+      logPath: path.join(dir, 'telemetry.log'),
     };
   }
 

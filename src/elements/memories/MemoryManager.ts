@@ -20,6 +20,9 @@ import {
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
+
+const _packageLocator = new PackageResourceLocator();
 // DatabaseMemoryStorageLayer is loaded dynamically via the DI-injected
 // createDatabaseStorageLayer factory. Type reference retained for the
 // override's return-type annotation if needed in future.
@@ -39,7 +42,6 @@ import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { fileURLToPath } from 'url';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 
@@ -1384,37 +1386,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const seedFileName = 'dollhousemcp-baseline-knowledge.yaml';
       logger.debug(`[MemoryManager] Step 1: Target seed file: ${seedFileName}`);
 
-      // Construct paths
-      // When running from dist/elements/memories/MemoryManager.js:
-      //   Go up to dist/ then into seed-elements/memories/
-      // When running from src/elements/memories/MemoryManager.ts:
-      //   Go up to src/ then into seed-elements/memories/
-      // FIX: Use fileURLToPath for cross-platform Windows compatibility
-      // On Windows, URL.pathname returns /C:/Users/... which is invalid
-      // fileURLToPath correctly converts file:// URLs to native paths
-      const currentModuleDir = path.dirname(fileURLToPath(import.meta.url));
-      logger.debug(`[MemoryManager] Step 2: Current module directory: ${currentModuleDir}`);
+      const locator = _packageLocator;
+      const seedRelativePath = `seed-elements/memories/${seedFileName}`;
+      const seedSourcePath = await locator.locate(seedRelativePath);
 
-      // Try dist location first (production/built code)
-      let seedSourcePath = path.resolve(currentModuleDir, '../../seed-elements/memories', seedFileName);
-      logger.info(`[MemoryManager] Step 3: Trying seed path (dist): ${seedSourcePath}`);
-
-      // Check if it exists, if not try src location (development/test)
-      if (await this.fileOperations.exists(seedSourcePath)) {
-        logger.info(`[MemoryManager] ✅ Step 4: Found seed file in dist location`);
-      } else {
-        logger.warn(`[MemoryManager] ⚠️  Step 4: Seed file not in dist location, trying src...`);
-        // Try src location
-        seedSourcePath = path.resolve(currentModuleDir, '../../../src/seed-elements/memories', seedFileName);
-        logger.info(`[MemoryManager] Step 4b: Trying seed path (src): ${seedSourcePath}`);
-      }
-
-      // Check if the seed file exists
-      if (!await this.fileOperations.exists(seedSourcePath)) {
-        logger.error(`[MemoryManager] ❌ Step 5: Seed file not found at ${seedSourcePath}`);
+      if (!seedSourcePath) {
+        logger.error(`[MemoryManager] ❌ Seed file not found: ${seedRelativePath}`);
         return;
       }
-      logger.info(`[MemoryManager] ✅ Step 5: Verified seed file exists at: ${seedSourcePath}`);
+      logger.info(`[MemoryManager] ✅ Found seed file at: ${seedSourcePath}`);
 
       // Check if file already exists in user portfolio
       // ISSUE #5: Seed files are system files - ALWAYS use latest version

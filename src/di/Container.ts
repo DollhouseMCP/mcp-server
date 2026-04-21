@@ -301,7 +301,12 @@ export class DollhouseContainer {
       globalLimitBytes: getValidatedGlobalCacheMemoryBytes(),
     }));
     this.register('APICache', () => new APICache());
-    this.register('CollectionCache', () => new CollectionCache(this.resolve('FileOperationsService'), undefined));
+    this.register('CollectionCache', () => new CollectionCache(
+      this.resolve('FileOperationsService'),
+      this.hasRegistration('PathService')
+        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
+        : undefined,
+    ));
     this.register('RateLimitTracker', () => new Map<string, number[]>());
     this.register('FileLockManager', () => new FileLockManager());
     this.register('FileOperationsService', () => new FileOperationsService(this.resolve('FileLockManager')));
@@ -309,9 +314,13 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'),
       { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },
     ));
-    this.register('ConfigManager', () => {
-      return new ConfigManager(this.resolve('FileOperationsService'), os);
-    });
+    this.register('ConfigManager', () => new ConfigManager(
+      this.resolve('FileOperationsService'),
+      os,
+      this.hasRegistration('PathService')
+        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('config')
+        : undefined,
+    ));
     // Issue #51: Generic retention policy service with strategy pattern
     this.register('RetentionPolicyService', () => {
       const service = new RetentionPolicyService(this.resolve('ConfigManager'));
@@ -508,7 +517,10 @@ export class DollhouseContainer {
 
     // TELEMETRY
     this.register('OperationalTelemetry', () => new OperationalTelemetry(
-      this.resolve('FileOperationsService')
+      this.resolve('FileOperationsService'),
+      this.hasRegistration('PathService')
+        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('state')
+        : undefined,
     ));
 
     // BACKUP SERVICE (Issue #659: Universal backup for all element types)

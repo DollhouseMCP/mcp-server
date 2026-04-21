@@ -9,7 +9,7 @@
 import { GitHubAuthManager, DeviceCodeResponse } from '../auth/GitHubAuthManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
-import { fileURLToPath } from 'url';
+import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 import * as path from 'path';
 import { homedir } from 'os';
 import * as child_process from 'child_process';
@@ -105,15 +105,14 @@ export class GitHubAuthHandler {
           
           let helperPath: string | null = null;
           try {
-            const __filename = fileURLToPath(import.meta.url);
-            const __dirname = path.dirname(__filename);
-            
+            const locator = new PackageResourceLocator();
+            const pkgRoot = locator.getPackageRoot();
+
             const overrideHelper = process.env.DOLLHOUSE_OAUTH_HELPER;
             const possiblePaths = [
-              path.join(__dirname, '..', 'oauth-helper.mjs'),
-              path.join(process.cwd(), 'oauth-helper.mjs'),
-              path.join(__dirname, 'oauth-helper.mjs'),
-              path.join(__dirname, '..', '..', 'oauth-helper.mjs')
+              path.join(pkgRoot, 'dist', 'oauth-helper.mjs'),
+              path.join(pkgRoot, 'src', 'oauth-helper.mjs'),
+              path.join(pkgRoot, 'oauth-helper.mjs'),
             ];
             if (overrideHelper) {
               possiblePaths.unshift(overrideHelper);
@@ -128,10 +127,9 @@ export class GitHubAuthHandler {
             }
             
             if (!helperPath) {
-              logger.error('OAUTH_INDEX_2734: oauth-helper.mjs not found', { 
+              logger.error('OAUTH_INDEX_2734: oauth-helper.mjs not found', {
                 searchedPaths: possiblePaths,
-                cwd: process.cwd(),
-                dirname: __dirname
+                packageRoot: pkgRoot,
               });
               throw new Error(`OAUTH_HELPER_NOT_FOUND: oauth-helper.mjs not found at line 2734. Searched: ${possiblePaths.join(', ')}`);
             }
