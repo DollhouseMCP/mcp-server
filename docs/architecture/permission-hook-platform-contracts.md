@@ -51,7 +51,7 @@ Client-specific normalization includes:
 - Missing permission server port file: allow / no-op
 - Connection failure or timeout: allow / no-op
 - Malformed server response:
-  - JSON-based clients: allow / no-op with empty stdout
+  - JSON-based clients: allow with an explicit valid allow payload for that platform
   - Windsurf: allow with exit `0`
 - Legacy Codex bare `{}` allow responses are normalized into an explicit `hookSpecificOutput.permissionDecision = "allow"` payload for compatibility
 

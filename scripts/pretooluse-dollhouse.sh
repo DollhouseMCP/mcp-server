@@ -36,6 +36,34 @@ debug() {
   return 0
 }
 
+emit_allow_response() {
+  case "$HOOK_PLATFORM" in
+    claude_code|vscode)
+      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+      ;;
+    codex)
+      printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":""}}'
+      ;;
+    cursor)
+      printf '%s\n' '{"permission":"allow"}'
+      ;;
+    gemini)
+      printf '%s\n' '{"decision":"allow"}'
+      ;;
+    *)
+      printf '%s\n' '{}'
+      ;;
+  esac
+
+  return 0
+}
+
+fail_open() {
+  debug "$1"
+  emit_allow_response
+  exit 0
+}
+
 authority_host_for_platform() {
   case "$HOOK_PLATFORM" in
     claude_code) echo "claude-code" ;;
@@ -160,8 +188,7 @@ source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 # Discover the port from the shared file or the newest live PID-keyed file
 if ! PORT=$(resolve_permission_port); then
-  debug "No usable permission server port file found — fail open"
-  exit 0
+  fail_open "No usable permission server port file found — fail open"
 fi
 
 ENDPOINT="http://127.0.0.1:${PORT}/api/evaluate_permission"
@@ -176,8 +203,7 @@ TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2
 
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
-  debug "Could not parse tool_name from input — fail open"
-  exit 0
+  fail_open "Could not parse tool_name from input — fail open"
 fi
 
 debug "Evaluating: $TOOL_NAME"
@@ -188,8 +214,7 @@ AUTHORITY_MODE=$(resolve_authority_mode "$AUTHORITY_HOST")
 debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
 
 if [[ "$AUTHORITY_MODE" == "off" ]]; then
-  debug "Authority mode is off — hook no-op"
-  exit 0
+  fail_open "Authority mode is off — hook no-op"
 fi
 
 if [[ -n "${DOLLHOUSE_SESSION_ID:-}" ]]; then
@@ -222,14 +247,13 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   if [[ $CURL_EXIT -eq 0 ]] && [[ -n "$RESPONSE" ]]; then
     debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
     if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
-      debug "Non-JSON response for platform $HOOK_PLATFORM — fail open"
-      exit 0
+      fail_open "Non-JSON response for platform $HOOK_PLATFORM — fail open"
     fi
     NORMALIZED_RESPONSE=$(normalize_response "$RESPONSE")
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
       echo "$NORMALIZED_RESPONSE"
     else
-      debug "Malformed response for platform $HOOK_PLATFORM — fail open"
+      fail_open "Malformed response for platform $HOOK_PLATFORM — fail open"
     fi
     exit 0
   fi
@@ -244,5 +268,4 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 done
 
 # All retries exhausted — fail open
-debug "All $((MAX_RETRIES + 1)) attempts failed — fail open"
-exit 0
+fail_open "All $((MAX_RETRIES + 1)) attempts failed — fail open"

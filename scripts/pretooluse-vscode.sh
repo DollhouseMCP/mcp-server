@@ -22,11 +22,21 @@ debug() {
   return 0
 }
 
+emit_allow_response() {
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}'
+  return 0
+}
+
+fail_open() {
+  debug "$1"
+  emit_allow_response
+  exit 0
+}
+
 source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 if ! PORT=$(resolve_permission_port); then
-  debug "No usable permission server port file found — fail open"
-  exit 0
+  fail_open "No usable permission server port file found — fail open"
 fi
 
 ENDPOINT="http://127.0.0.1:${PORT}/api/evaluate_permission"
@@ -84,8 +94,7 @@ case "$RAW_TOOL_NAME" in
 esac
 
 if [[ -z "$TOOL_NAME" ]]; then
-  debug "Could not parse VS Code tool name — fail open"
-  exit 0
+  fail_open "Could not parse VS Code tool name — fail open"
 fi
 
 if [[ -z "$TOOL_INPUT" ]]; then
@@ -147,7 +156,7 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
     if [[ -n "$HOOK_RESPONSE" ]]; then
       echo "$HOOK_RESPONSE"
     else
-      debug "Permission evaluation returned an unrecognized response — fail open"
+      fail_open "Permission evaluation returned an unrecognized response — fail open"
     fi
     exit 0
   fi
@@ -159,5 +168,4 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
   fi
 done
 
-debug "Permission evaluation failed — fail open"
-exit 0
+fail_open "Permission evaluation failed — fail open"
