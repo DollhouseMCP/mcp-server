@@ -21,7 +21,12 @@ const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
-import { getPermissionHookStatusAsync, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
+import {
+  installPermissionHook,
+  reconcilePermissionHookStatus,
+  type InstallPermissionHookResult,
+  type PermissionHookStatus,
+} from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -71,6 +76,7 @@ type ConfigPathClient =
   | 'claude'
   | 'claude-code'
   | 'cursor'
+  | 'vscode'
   | 'windsurf'
   | 'cline'
   | 'lmstudio'
@@ -116,6 +122,11 @@ function getConfigPath(client: string): string | null {
     },
     'claude-code': () => join(home, '.claude.json'),
     'cursor': () => join(home, '.cursor', 'mcp.json'),
+    'vscode': () => {
+      if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+      if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Code', 'User', 'settings.json');
+      return join(home, '.config', 'Code', 'User', 'settings.json');
+    },
     'windsurf': () => join(home, '.codeium', 'windsurf', 'mcp_config.json'),
     'cline': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
@@ -553,11 +564,10 @@ function logLicenseWorkerDeliveryFailure(
   deliveryResult: { status?: number; error: string; responseBody?: string },
 ): void {
   logger.error(message, {
-    email: licenseData.email,
     tier: licenseData.tier,
     status: deliveryResult.status ?? null,
     error: deliveryResult.error,
-    responseBody: deliveryResult.responseBody ?? null,
+    responseBodyLength: deliveryResult.responseBody?.length ?? 0,
   });
 }
 
@@ -566,6 +576,10 @@ export function createSetupRoutes(opts?: {
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
   /** Override permission hook installer. For testing only. */
   _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
+  /** Override permission hook status reconciler. For testing only. */
+  _reconcilePermissionHookStatus?: (client: string) => Promise<PermissionHookStatus>;
+  /** Enable automatic hook asset repair during detect. Defaults off in tests. */
+  _autoRepairPermissionHooksOnDetect?: boolean;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -581,6 +595,9 @@ export function createSetupRoutes(opts?: {
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
   const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
+  const autoRepairPermissionHooksOnDetect = opts?._autoRepairPermissionHooksOnDetect ?? process.env.NODE_ENV !== 'test';
+  const hookStatusReconciler = opts?._reconcilePermissionHookStatus ?? (async (client: string) =>
+    reconcilePermissionHookStatus(client, { autoRepair: autoRepairPermissionHooksOnDetect }));
   const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -588,6 +605,7 @@ export function createSetupRoutes(opts?: {
       { id: 'claude', name: 'Claude Desktop' },
       { id: 'claude-code', name: 'Claude Code' },
       { id: 'cursor', name: 'Cursor' },
+      { id: 'vscode', name: 'VS Code' },
       { id: 'cline', name: 'Cline' },
       { id: 'windsurf', name: 'Windsurf' },
       { id: 'lmstudio', name: 'LM Studio' },
@@ -604,10 +622,14 @@ export function createSetupRoutes(opts?: {
           support: { level: SETUP_SUPPORT_LEVELS[id] },
           ...detection,
         };
-        if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
-          const hookStatus = await getPermissionHookStatusAsync(undefined, id);
+        if (id === 'claude-code' || id === 'cursor' || id === 'vscode' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+          const hookStatus = await hookStatusReconciler(id);
           result.hookInstalled = hookStatus.installed;
           result.hookAssetsPrepared = hookStatus.assetsPrepared;
+          result.hookAssetsCurrent = hookStatus.assetsCurrent;
+          result.hookAutoRepaired = hookStatus.autoRepaired;
+          result.hookNeedsRepair = hookStatus.needsRepair;
+          result.hookRepairError = hookStatus.repairError;
         }
         results[id] = result;
       }
@@ -829,7 +851,7 @@ export function createSetupRoutes(opts?: {
       licenseData.verificationRequestedAt = new Date().toISOString();
       await writeLicense(licenseData);
 
-      logger.info(`[Setup] License pending verification: ${licenseData.tier} (${licenseData.email})`);
+      logger.info(`[Setup] License pending verification: ${licenseData.tier}`);
 
       SecurityMonitor.logSecurityEvent({
         type: 'CONFIG_UPDATED',
@@ -838,7 +860,6 @@ export function createSetupRoutes(opts?: {
         details: `License verification initiated: ${licenseData.tier}`,
         additionalData: {
           tier: licenseData.tier,
-          email: licenseData.email,
         },
       });
 
@@ -847,7 +868,7 @@ export function createSetupRoutes(opts?: {
       // PostHog's event pipeline (1-5 min delay).
       const deliveryResult = await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
       if (deliveryResult.ok) {
-        logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
+        logger.info(`[Setup] Verification email sent directly via Worker for ${licenseData.tier}`);
       } else {
         logLicenseWorkerDeliveryFailure('[Setup] Verification email delivery failed', licenseData, deliveryResult);
 
@@ -917,7 +938,8 @@ export function createSetupRoutes(opts?: {
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'HIGH',
         source: 'setupRoutes.verifyLicenseHandler',
-        details: `Verification max attempts exceeded for: ${license.email}`,
+        details: `Verification max attempts exceeded for tier: ${license.tier}`,
+        additionalData: { tier: license.tier },
       });
       res.status(400).json({ error: 'Too many failed attempts. Please submit the form again to receive a new code.' });
       return;
@@ -946,14 +968,17 @@ export function createSetupRoutes(opts?: {
     delete license.verificationRequestedAt;
     await writeLicense(license);
 
-    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email}) — ${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`);
+    logger.info(
+      `[Setup] License verified and activated: ${license.tier} — ` +
+      `${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`,
+    );
 
     SecurityMonitor.logSecurityEvent({
       type: 'CONFIG_UPDATED',
       severity: 'LOW',
       source: 'setupRoutes.verifyLicenseHandler',
       details: `License activated after email verification: ${license.tier}`,
-      additionalData: { tier: license.tier, email: license.email },
+      additionalData: { tier: license.tier },
     });
 
     // Send confirmation email + PostHog activation event with analytics
@@ -1008,10 +1033,10 @@ export function createSetupRoutes(opts?: {
         return;
       }
 
-      logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
+      logger.info(`[Setup] Verification code resent directly via Worker for ${license.tier}`);
     } catch (workerError) {
       logger.error('[Setup] Unexpected verification resend failure', {
-        email: license.email,
+        tier: license.tier,
         error: workerError instanceof Error ? workerError.message : String(workerError),
       });
       res.status(500).json({ error: 'Failed to resend verification code.' });

@@ -292,6 +292,36 @@ describe('Setup Routes — API Endpoints', () => {
       expect(res.body['lmstudio'].support.level).toBe('mcp_only');
     });
 
+    it('includes repaired hook freshness metadata for native hook clients', async () => {
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { detectHandler } = createSetupRoutes({
+        _reconcilePermissionHookStatus: async (client: string) => ({
+          installed: client === 'codex',
+          configured: client === 'codex',
+          assetsPrepared: true,
+          assetsCurrent: true,
+          autoRepaired: client === 'codex',
+          needsRepair: false,
+          host: client,
+          scriptPath: `/Users/test/.dollhouse/hooks/pretooluse-${client}.sh`,
+        }),
+      });
+
+      const testApp = express();
+      testApp.get('/api/setup/detect', detectHandler);
+
+      const res = await request(testApp)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      expect(res.body.codex.hookInstalled).toBe(true);
+      expect(res.body.codex.hookAssetsPrepared).toBe(true);
+      expect(res.body.codex.hookAssetsCurrent).toBe(true);
+      expect(res.body.codex.hookAutoRepaired).toBe(true);
+      expect(res.body.codex.hookNeedsRepair).toBe(false);
+      expect(res.body.vscode.hookAssetsCurrent).toBe(true);
+    });
+
     it('includes currentConfig when installed', async () => {
       const res = await request(app)
         .get('/api/setup/detect')

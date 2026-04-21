@@ -68,6 +68,7 @@ describe('BuildInfoService', () => {
 
       expect(info.build).toHaveProperty('type');
       expect(['git', 'npm', 'unknown']).toContain(info.build.type);
+      expect(info.build).not.toHaveProperty('collectionFix');
       
       // Optional fields
       if (info.build.gitCommit) {
@@ -119,6 +120,16 @@ describe('BuildInfoService', () => {
       expect(typeof info.server.uptime).toBe('number');
       expect(info.server.uptime).toBeGreaterThanOrEqual(0);
       expect(info.server.mcpConnection).toBe(true);
+    });
+
+    it('includes permission hook audit summary in build info', async () => {
+      const info = await service.getBuildInfo();
+
+      expect(info.permissionHooks).toBeDefined();
+      expect(Array.isArray(info.permissionHooks?.installedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
     });
 
     it('should have consistent results across calls', async () => {
@@ -194,7 +205,13 @@ describe('BuildInfoService', () => {
           startTime: new Date('2024-01-01T10:00:00.000Z'),
           uptime: 7200000, // 2 hours in ms
           mcpConnection: true
-        }
+        },
+        permissionHooks: {
+          installedHosts: [],
+          currentHosts: [],
+          repairedHosts: [],
+          needsRepairHosts: [],
+        },
       };
     });
 
@@ -214,6 +231,7 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Timestamp**: 2024-01-01T12:00:00.000Z');
       expect(formatted).toContain('**Git Commit**: `abc123def`');
       expect(formatted).toContain('**Git Branch**: main');
+      expect(formatted).not.toContain('collection-fix');
       expect(formatted).toContain('## 💻 Runtime');
       expect(formatted).toContain('**Node.js**: v18.17.0');
       expect(formatted).toContain('**Platform**: linux');
@@ -230,6 +248,10 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Started**: 2024-01-01T10:00:00.000Z');
       expect(formatted).toContain('**Uptime**: 2h');
       expect(formatted).toContain('**MCP Connection**: ✅ Connected');
+      expect(formatted).toContain('## 🔐 Permission Hooks');
+      expect(formatted).toContain('**Installed Hosts**: None');
+      expect(formatted).toContain('**Current Assets**: None');
+      expect(formatted).toContain('**Needs Repair**: None');
     });
 
     it('should handle missing optional fields gracefully', () => {

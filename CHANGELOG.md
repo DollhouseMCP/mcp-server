@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.29] - 2026-04-21
+
+- Added explicit session platform metadata and update-available status in the web console session dropdown
+- Improved dropdown alignment for session status, platform, and uptime columns
+- Fixed Codex pre-tool-use hook JSON output and expanded hook contract coverage across supported clients
+- Automatically verify and refresh installed local permission hook assets when they go stale
+
 ## [2.0.28] - 2026-04-21
 
 - Add explicit session client metadata and update-available status in the web console dropdown, with improved layout alignment.
