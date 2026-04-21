@@ -255,6 +255,13 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     description: 'Clear all entries from a memory element (irreversible)',
   },
 
+  // ===== SYSTEM operations (infrastructure management) =====
+  migrate_portfolio_layout: {
+    endpoint: 'EXECUTE',
+    handler: 'System.migratePortfolioLayout',
+    description: 'Migrate flat single-user layout to per-user multi-user layout. Modes: status (detect layout), preview (dry-run), execute (perform migration).',
+  },
+
   // ===== EXECUTE endpoint (runtime execution lifecycle) =====
   // These operations manage the execution lifecycle of executable elements
   // (agents, workflows, pipelines). Unlike CRUD which manages definitions,

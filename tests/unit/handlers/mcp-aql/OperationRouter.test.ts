@@ -86,6 +86,8 @@ describe('OperationRouter', () => {
         'delete_element',
         'clear',
         'clear_github_auth',
+        // SYSTEM operations
+        'migrate_portfolio_layout',
         // EXECUTE operations (Issue #244 - CRUDE)
         'execute_agent',
         'complete_execution',

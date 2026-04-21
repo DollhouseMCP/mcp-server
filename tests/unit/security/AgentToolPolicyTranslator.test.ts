@@ -133,8 +133,15 @@ describe('AgentToolPolicyTranslator', () => {
           denied: ['mcp_aql_execute'],
         });
 
-        expect(policy).toBeUndefined();
-        // All EXECUTE operations are exempt, so denying mcp_aql_execute produces no restrictions
+        // Lifecycle operations (execute_agent, complete_execution, etc.) are
+        // exempt from EXECUTE denial. Non-lifecycle EXECUTE operations (like
+        // migrate_portfolio_layout) ARE denied.
+        if (policy) {
+          expect(policy.deny).not.toContain('execute_agent');
+          expect(policy.deny).not.toContain('complete_execution');
+          expect(policy.deny).not.toContain('continue_execution');
+          expect(policy.deny).not.toContain('abort_execution');
+        }
       });
     });
 

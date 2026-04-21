@@ -22,6 +22,7 @@
  */
 
 import * as os from 'node:os';
+import * as fs from 'node:fs/promises';
 import path from 'node:path';
 
 import type { IUserPathResolver } from '../../paths/IUserPathResolver.js';
@@ -89,6 +90,23 @@ export class PathsServiceRegistrar {
       portfolioRoot,
     });
 
+    const anchorRoot = userPathResolver.getAnchorRoot();
+    const resolvedLegacy = path.resolve(legacyRoot);
+
+    // On fresh installs (no legacy root detected), create the base
+    // directory structure so the per-user layout is ready from the start.
+    // `~/DollhouseMCP/users/` and `~/DollhouseMCP/shared/` are created
+    // so PortfolioManager.initialize() has a proper root to work with,
+    // and Step 4.6's shared pool has a slot reserved.
+    if (userPathResolver.getLayout() === 'per-user' && anchorRoot !== resolvedLegacy) {
+      try {
+        await fs.mkdir(path.join(portfolioRoot, 'users'), { recursive: true });
+        await fs.mkdir(path.join(portfolioRoot, 'shared'), { recursive: true });
+      } catch {
+        // Non-fatal — dirs may already exist or filesystem may be read-only
+      }
+    }
+
     // Build the shared ResolveOptions applied to every resolveDataDir
     // call. When the detected anchor matches the legacy root, all
     // app-internal paths resolve under it (byte-identical to
@@ -97,8 +115,6 @@ export class PathsServiceRegistrar {
     // `env` is deliberately NOT captured here — resolveDataDirectory
     // re-reads `process.env` on every call so operators can rotate
     // DOLLHOUSE_*_DIR env vars at runtime without restarting.
-    const anchorRoot = userPathResolver.getAnchorRoot();
-    const resolvedLegacy = path.resolve(legacyRoot);
     const dataDirectoryOptions: Partial<ResolveOptions> = {
       platform: process.platform,
       homeDir,

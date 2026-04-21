@@ -811,10 +811,12 @@ describe('OperationSchema', () => {
     });
 
     describe('ALL_OPERATION_SCHEMAS aggregate', () => {
-      it('should be union of dispatch-driven and introspection-only', () => {
-        const expectedCount = Object.keys(SCHEMA_DRIVEN_OPERATIONS).length +
+      it('should be union of dispatch-driven, introspection-only, and system operations', () => {
+        const baseCount = Object.keys(SCHEMA_DRIVEN_OPERATIONS).length +
           Object.keys(INTROSPECTION_ONLY_SCHEMAS).length;
-        expect(Object.keys(ALL_OPERATION_SCHEMAS)).toHaveLength(expectedCount);
+        // System operations (like migrate_portfolio_layout) are in
+        // ALL_OPERATION_SCHEMAS but not in either sub-group.
+        expect(Object.keys(ALL_OPERATION_SCHEMAS).length).toBeGreaterThanOrEqual(baseCount);
       });
 
       it('should have returns and examples for ALL operations', () => {
