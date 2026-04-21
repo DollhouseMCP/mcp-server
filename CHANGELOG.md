@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.30] - 2026-04-21
+
+- Improve hook reliability across Codex and other supported clients, including fail-open JSON behavior.
+- Automatically refresh stale local hook assets and surface repair outcomes in status/build info.
+- Add session platform metadata, update-available labeling, and cleaner dropdown alignment in the web console.
+
 ## [2.0.29] - 2026-04-21
 
 - Added explicit session platform metadata and update-available status in the web console session dropdown
