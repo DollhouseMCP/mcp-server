@@ -15,7 +15,7 @@ import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
 import { resolveSessionIdentity } from './sessionIdentity.js';
-import { getPermissionHookAuditSummary } from '../utils/permissionHooks.js';
+import { getPermissionHookAuditSummary, type PermissionHookStartupRepairSummary } from '../utils/permissionHooks.js';
 
 export interface BuildInfo {
   sessionId: string;
@@ -56,6 +56,7 @@ export interface BuildInfo {
     currentHosts: string[];
     repairedHosts: string[];
     needsRepairHosts: string[];
+    lastStartupRepair: PermissionHookStartupRepairSummary | null;
   };
   /** Issue #706: Startup timing and readiness status. */
   startup?: {
@@ -122,7 +123,7 @@ export class BuildInfoService {
       : { isDocker: false, info: undefined };
     const permissionHookInfo = results[2].status === 'fulfilled'
       ? results[2].value
-      : { installedHosts: [], currentHosts: [], repairedHosts: [], needsRepairHosts: [] };
+      : { installedHosts: [], currentHosts: [], repairedHosts: [], needsRepairHosts: [], lastStartupRepair: null };
 
     // Log any failures for diagnostics
     const failures: string[] = [];
@@ -268,6 +269,13 @@ export class BuildInfoService {
       const needsRepairHosts = info.permissionHooks.needsRepairHosts.length > 0
         ? info.permissionHooks.needsRepairHosts.join(', ')
         : 'None';
+      const lastStartupRepair = info.permissionHooks.lastStartupRepair;
+      const startupRepairIssues = lastStartupRepair
+        ? lastStartupRepair.hostResults
+          .filter((result) => result.outcome === 'needs_repair' || result.outcome === 'error')
+          .map((result) => result.repairError ? `${result.host} (${result.repairError})` : result.host)
+          .join('; ')
+        : '';
 
       lines.push(
         '',
@@ -276,6 +284,14 @@ export class BuildInfoService {
         `- **Current Assets**: ${currentHosts}`,
         `- **Needs Repair**: ${needsRepairHosts}`,
       );
+
+      if (lastStartupRepair) {
+        lines.push(
+          `- **Last Startup Audit**: ${lastStartupRepair.completedAt} (${lastStartupRepair.durationMs}ms)`,
+          `- **Startup Repairs Applied**: ${lastStartupRepair.repairedCount}`,
+          `- **Startup Repair Issues**: ${startupRepairIssues || 'None'}`,
+        );
+      }
     }
 
     // Issue #706: Startup timing

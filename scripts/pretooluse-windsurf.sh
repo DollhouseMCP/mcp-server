@@ -6,6 +6,7 @@
 # evaluations and then maps the response back to Windsurf exit codes.
 
 RUN_DIR="$HOME/.dollhouse/run"
+# shellcheck disable=SC2034 # Consumed by permission-port-discovery.sh after sourcing.
 PORT_FILE="$RUN_DIR/permission-server.port"
 MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
 INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
@@ -22,6 +23,7 @@ debug() {
   return 0
 }
 
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 if ! PORT=$(resolve_permission_port); then

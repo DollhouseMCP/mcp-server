@@ -17,6 +17,7 @@
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
 RUN_DIR="$HOME/.dollhouse/run"
+# shellcheck disable=SC2034 # Consumed by permission-port-discovery.sh after sourcing.
 PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
 AUTHORITY_CACHE_TTL_SECONDS=2
@@ -184,6 +185,7 @@ normalize_response() {
   return 0
 }
 
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 # Discover the port from the shared file or the newest live PID-keyed file

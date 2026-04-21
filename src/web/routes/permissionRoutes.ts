@@ -13,7 +13,11 @@ import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
-import { getPermissionHookStatusAsync, reconcilePermissionHookStatus } from '../../utils/permissionHooks.js';
+import {
+  getLastPermissionHookStartupRepairSummary,
+  getPermissionHookStatusAsync,
+  reconcilePermissionHookStatus,
+} from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import {
@@ -517,6 +521,7 @@ export function registerPermissionRoutes(
         hookAutoRepaired: hookStatus.autoRepaired,
         hookNeedsRepair: hookStatus.needsRepair,
         hookRepairError: hookStatus.repairError,
+        hookStartupRepair: getLastPermissionHookStartupRepairSummary(),
         authority: authorityState,
         authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
