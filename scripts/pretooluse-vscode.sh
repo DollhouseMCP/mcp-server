@@ -29,9 +29,10 @@ emit_allow_response() {
 }
 
 fail_open() {
-  debug "$1"
+  local message="$1"
+  debug "$message"
   emit_allow_response
-  exit 0
+  return 0
 }
 
 # shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
@@ -39,6 +40,7 @@ source "$SCRIPT_DIR/permission-port-discovery.sh"
 
 if ! PORT=$(resolve_permission_port); then
   fail_open "No usable permission server port file found — fail open"
+  exit 0
 fi
 
 ENDPOINT="http://127.0.0.1:${PORT}/api/evaluate_permission"
@@ -97,6 +99,7 @@ esac
 
 if [[ -z "$TOOL_NAME" ]]; then
   fail_open "Could not parse VS Code tool name — fail open"
+  exit 0
 fi
 
 if [[ -z "$TOOL_INPUT" ]]; then
@@ -159,6 +162,7 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
       echo "$HOOK_RESPONSE"
     else
       fail_open "Permission evaluation returned an unrecognized response — fail open"
+      exit 0
     fi
     exit 0
   fi
@@ -171,3 +175,4 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
 done
 
 fail_open "Permission evaluation failed — fail open"
+exit 0

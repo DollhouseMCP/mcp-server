@@ -60,9 +60,10 @@ emit_allow_response() {
 }
 
 fail_open() {
-  debug "$1"
+  local message="$1"
+  debug "$message"
   emit_allow_response
-  exit 0
+  return 0
 }
 
 authority_host_for_platform() {
@@ -191,6 +192,7 @@ source "$SCRIPT_DIR/permission-port-discovery.sh"
 # Discover the port from the shared file or the newest live PID-keyed file
 if ! PORT=$(resolve_permission_port); then
   fail_open "No usable permission server port file found — fail open"
+  exit 0
 fi
 
 ENDPOINT="http://127.0.0.1:${PORT}/api/evaluate_permission"
@@ -206,6 +208,7 @@ TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
   fail_open "Could not parse tool_name from input — fail open"
+  exit 0
 fi
 
 debug "Evaluating: $TOOL_NAME"
@@ -217,6 +220,7 @@ debug "Authority mode for ${AUTHORITY_HOST:-unknown}: $AUTHORITY_MODE"
 
 if [[ "$AUTHORITY_MODE" == "off" ]]; then
   fail_open "Authority mode is off — hook no-op"
+  exit 0
 fi
 
 if [[ -n "${DOLLHOUSE_SESSION_ID:-}" ]]; then
@@ -250,12 +254,14 @@ while [[ $ATTEMPT -le $MAX_RETRIES ]]; do
     debug "Response (attempt $((ATTEMPT+1))): $RESPONSE"
     if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
       fail_open "Non-JSON response for platform $HOOK_PLATFORM — fail open"
+      exit 0
     fi
     NORMALIZED_RESPONSE=$(normalize_response "$RESPONSE")
     if [[ -n "$NORMALIZED_RESPONSE" ]]; then
       echo "$NORMALIZED_RESPONSE"
     else
       fail_open "Malformed response for platform $HOOK_PLATFORM — fail open"
+      exit 0
     fi
     exit 0
   fi
@@ -271,3 +277,4 @@ done
 
 # All retries exhausted — fail open
 fail_open "All $((MAX_RETRIES + 1)) attempts failed — fail open"
+exit 0
