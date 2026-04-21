@@ -32,21 +32,36 @@ export function defaultMemoryFileFilter(filename: string): boolean {
   return !filename.includes('.backup-') && !filename.toLowerCase().includes('backup');
 }
 
+/**
+ * Optional resolver for per-user directory scoping. When provided,
+ * ElementStorageLayer resolves the element directory dynamically at
+ * call time (via ContextTracker userId) instead of using the static
+ * `elementDir` from the caller. Absent in single-user (stdio) mode.
+ */
+export type ElementDirResolverFactory = (elementType: string) => (() => string);
+
 export class FileStorageLayerFactory implements IStorageLayerFactory {
   constructor(
     private readonly fileOps: FileOperationsService,
     private readonly memoryConfig: MemoryStorageConfig,
+    private readonly elementDirResolverFactory?: ElementDirResolverFactory,
   ) {}
 
   createForElement(elementType: string, options: FileStorageOptions): IStorageLayer {
+    const resolver = this.elementDirResolverFactory?.(elementType);
+
     if (elementType === 'memories') {
       return new MemoryStorageLayer(this.fileOps, {
         memoriesDir: options.elementDir,
+        memoriesDirResolver: resolver,
         scanCooldownMs: options.scanCooldownMs,
         indexDebounceMs: this.memoryConfig.indexDebounceMs,
         fileFilter: this.memoryConfig.fileFilter,
       });
     }
-    return new ElementStorageLayer(this.fileOps, options);
+    return new ElementStorageLayer(this.fileOps, {
+      ...options,
+      elementDirResolver: resolver,
+    });
   }
 }

@@ -18,7 +18,7 @@ import type { FileOperationsService } from '../services/FileOperationsService.js
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 export interface ElementStorageLayerOptions {
-  /** Absolute path to the element directory */
+  /** Absolute path to the element directory (static; used when no resolver is provided) */
   elementDir: string;
   /** File extension to filter (e.g. '.md') */
   fileExtension: string;
@@ -26,26 +26,59 @@ export interface ElementStorageLayerOptions {
   scanCooldownMs?: number;
   /** Override the storage backend (useful for testing) */
   storageBackend?: IStorageBackend;
+  /**
+   * Dynamic per-user directory resolver. When present, overrides the static
+   * `elementDir` at call time. Used in HTTP multi-user mode where each
+   * session resolves to a different user's portfolio directory. The
+   * resolver reads userId from ContextTracker's active session scope.
+   *
+   * Scan results are keyed by the resolved dir so different users get
+   * independent caches.
+   */
+  elementDirResolver?: () => string;
 }
 
 const EMPTY_DIFF: ManifestDiffResult = { added: [], modified: [], removed: [], unchanged: [] };
 
+/**
+ * Per-directory scan state. In multi-user mode, each user's directory
+ * gets its own independent cache entry — no thrashing or cross-user
+ * data leakage when concurrent requests hit the same root-scoped
+ * ElementStorageLayer instance.
+ */
+interface DirScanState {
+  manifest: StorageManifest;
+  index: MetadataIndex;
+  lastScanTimestamp: number;
+  scanInProgress: Promise<ManifestDiffResult> | null;
+}
+
 export class ElementStorageLayer implements IStorageLayer {
   private readonly backend: IStorageBackend;
-  private readonly manifest = new StorageManifest();
-  private readonly index = new MetadataIndex();
-  private readonly elementDir: string;
+  private readonly staticElementDir: string;
+  private readonly elementDirResolver?: () => string;
   private readonly fileExtension: string;
   private readonly scanCooldownMs: number;
 
-  private lastScanTimestamp = 0;
-  private scanInProgress: Promise<ManifestDiffResult> | null = null;
+  /**
+   * Per-directory scan state. In single-user mode this map has one
+   * entry. In multi-user mode each user's resolved dir gets its own
+   * manifest, index, cooldown, and in-flight scan promise — fully
+   * independent, no race conditions across users.
+   *
+   * Growth: bounded by unique users who have connected (not sessions).
+   * Each entry holds ~1-2KB of metadata per file in the dir. For the
+   * target deployment scale (10-50 users), total footprint is small.
+   * purgeDirState(dir) exists for future eviction if scale demands it.
+   */
+  private readonly dirStates = new Map<string, DirScanState>();
 
   constructor(
     fileOperationsService: FileOperationsService,
     options: ElementStorageLayerOptions
   ) {
-    this.elementDir = options.elementDir;
+    this.staticElementDir = options.elementDir;
+    this.elementDirResolver = options.elementDirResolver;
     this.fileExtension = options.fileExtension;
     this.scanCooldownMs = options.scanCooldownMs ?? 1000;
 
@@ -56,6 +89,27 @@ export class ElementStorageLayer implements IStorageLayer {
     }
   }
 
+  /** The active element directory — dynamic when a resolver is present. */
+  private get elementDir(): string {
+    return this.elementDirResolver ? this.elementDirResolver() : this.staticElementDir;
+  }
+
+  /** Get or create the scan state for the current directory. */
+  private getState(): DirScanState {
+    const dir = this.elementDir;
+    let state = this.dirStates.get(dir);
+    if (!state) {
+      state = {
+        manifest: new StorageManifest(),
+        index: new MetadataIndex(),
+        lastScanTimestamp: 0,
+        scanInProgress: null,
+      };
+      this.dirStates.set(dir, state);
+    }
+    return state;
+  }
+
   /**
    * Scan the element directory for changes.
    * - No-op if within cooldown period (returns empty diff)
@@ -63,22 +117,26 @@ export class ElementStorageLayer implements IStorageLayer {
    * - Updates index and manifest based on diff
    */
   async scan(): Promise<ManifestDiffResult> {
+    const state = this.getState();
+    const currentDir = this.elementDir;
+
     const now = Date.now();
-    if (now - this.lastScanTimestamp < this.scanCooldownMs) {
-      logger.debug(`ElementStorageLayer.scan: COOLDOWN ACTIVE for ${path.basename(this.elementDir)} — skipping disk I/O (${this.scanCooldownMs - (now - this.lastScanTimestamp)}ms remaining)`);
+    if (now - state.lastScanTimestamp < this.scanCooldownMs) {
+      logger.debug(`ElementStorageLayer.scan: COOLDOWN ACTIVE for ${path.basename(currentDir)} — skipping disk I/O (${this.scanCooldownMs - (now - state.lastScanTimestamp)}ms remaining)`);
       return EMPTY_DIFF;
     }
 
-    // Deduplicate concurrent scans
-    if (this.scanInProgress) {
-      return this.scanInProgress;
+    // Deduplicate concurrent scans FOR THE SAME DIRECTORY.
+    // Each user's dir has its own scanInProgress promise — no cross-user leakage.
+    if (state.scanInProgress) {
+      return state.scanInProgress;
     }
 
-    this.scanInProgress = this.performScan();
+    state.scanInProgress = this.performScanForDir(currentDir, state);
     try {
-      return await this.scanInProgress;
+      return await state.scanInProgress;
     } finally {
-      this.scanInProgress = null;
+      state.scanInProgress = null;
     }
   }
 
@@ -92,43 +150,31 @@ export class ElementStorageLayer implements IStorageLayer {
    */
   async listSummaries(_options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {
     await this.scan();
-    return this.index.getAll();
+    return this.getState().index.getAll();
   }
 
-  /**
-   * Trigger scan and return all indexed file paths.
-   */
   async getIndexedPaths(): Promise<string[]> {
     await this.scan();
-    return this.index.getPaths();
+    return this.getState().index.getPaths();
   }
 
-  /**
-   * O(1) name-to-path lookup from the index. Does not trigger a scan.
-   */
   getPathByName(name: string): string | undefined {
     const normalizedName = UnicodeValidator.normalize(name).normalizedContent;
-    return this.index.getPathByName(normalizedName);
+    return this.getState().index.getPathByName(normalizedName);
   }
 
-  /**
-   * Returns true if at least one scan has completed (index is authoritative).
-   */
   hasCompletedScan(): boolean {
-    return this.lastScanTimestamp > 0;
+    return this.getState().lastScanTimestamp > 0;
   }
 
-  /**
-   * Notify the storage layer that a file was saved.
-   * Re-stats and re-parses the file to update index/manifest.
-   */
   async notifySaved(relativePath: string, absolutePath: string): Promise<void> {
+    const state = this.getState();
     try {
       const meta = await this.backend.stat(absolutePath);
       const content = await this.backend.readFile(absolutePath);
       const fm = FrontmatterParser.extractMetadata(content);
 
-      this.index.set({
+      state.index.set({
         filePath: relativePath,
         name: fm.name,
         description: fm.description,
@@ -138,7 +184,7 @@ export class ElementStorageLayer implements IStorageLayer {
         mtimeMs: meta.mtimeMs,
         sizeBytes: meta.sizeBytes,
       });
-      this.manifest.set(relativePath, meta.mtimeMs);
+      state.manifest.set(relativePath, meta.mtimeMs);
     } catch (error) {
       logger.debug('ElementStorageLayer.notifySaved failed, invalidating', {
         relativePath,
@@ -148,42 +194,45 @@ export class ElementStorageLayer implements IStorageLayer {
     }
   }
 
-  /**
-   * Notify the storage layer that a file was deleted.
-   * Removes the entry from index and manifest.
-   */
   notifyDeleted(relativePath: string): void {
-    this.index.remove(relativePath);
-    this.manifest.remove(relativePath);
+    const state = this.getState();
+    state.index.remove(relativePath);
+    state.manifest.remove(relativePath);
   }
 
-  /**
-   * Force the next scan() to hit disk by resetting the cooldown timer.
-   */
   invalidate(): void {
-    this.lastScanTimestamp = 0;
+    // Only invalidate the CURRENT dir's state — a save/parse failure for
+    // one user should not force a re-scan for every other user.
+    this.getState().lastScanTimestamp = 0;
+  }
+
+  clear(): void {
+    for (const state of this.dirStates.values()) {
+      state.index.clear();
+      state.manifest.clear();
+      state.lastScanTimestamp = 0;
+    }
   }
 
   /**
-   * Reset all state (index, manifest, cooldown).
+   * Remove cached scan state for a specific directory. Called during
+   * session cleanup to prevent unbounded growth of the per-dir cache
+   * in long-running multi-user deployments.
    */
-  clear(): void {
-    this.index.clear();
-    this.manifest.clear();
-    this.lastScanTimestamp = 0;
+  purgeDirState(dir: string): void {
+    this.dirStates.delete(dir);
   }
 
   // ---- private ----
 
-  private async performScan(): Promise<ManifestDiffResult> {
+  private async performScanForDir(dir: string, state: DirScanState): Promise<ManifestDiffResult> {
     try {
-      const exists = await this.backend.directoryExists(this.elementDir);
+      const exists = await this.backend.directoryExists(dir);
       if (!exists) {
-        // Directory doesn't exist — clear everything and return
-        const removedPaths = this.index.getPaths();
-        this.index.clear();
-        this.manifest.clear();
-        this.lastScanTimestamp = Date.now();
+        const removedPaths = state.index.getPaths();
+        state.index.clear();
+        state.manifest.clear();
+        state.lastScanTimestamp = Date.now();
         return {
           added: [],
           modified: [],
@@ -193,15 +242,15 @@ export class ElementStorageLayer implements IStorageLayer {
       }
 
       // 1. List + stat
-      const files = await this.backend.listFiles(this.elementDir, this.fileExtension);
-      const stats = await this.backend.statMany(this.elementDir, files);
+      const files = await this.backend.listFiles(dir, this.fileExtension);
+      const stats = await this.backend.statMany(dir, files);
 
       // 2. Diff against manifest
-      const diff = this.manifest.diff(stats);
+      const diff = state.manifest.diff(stats);
 
       const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
       if (hasChanges) {
-        logger.debug(`ElementStorageLayer.scan: DISK SCAN for ${path.basename(this.elementDir)} — ${files.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
+        logger.debug(`ElementStorageLayer.scan: DISK SCAN for ${path.basename(dir)} — ${files.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
       }
 
       // 3. For added/modified: read frontmatter, update index
@@ -209,12 +258,12 @@ export class ElementStorageLayer implements IStorageLayer {
       await Promise.all(
         toIndex.map(async (relPath) => {
           try {
-            const absPath = path.join(this.elementDir, relPath);
+            const absPath = path.join(dir, relPath);
             const content = await this.backend.readFile(absPath);
             const fm = FrontmatterParser.extractMetadata(content);
             const meta = stats.get(relPath);
 
-            this.index.set({
+            state.index.set({
               filePath: relPath,
               name: fm.name,
               description: fm.description,
@@ -225,7 +274,6 @@ export class ElementStorageLayer implements IStorageLayer {
               sizeBytes: meta?.sizeBytes ?? 0,
             });
           } catch (error) {
-            // Parse failure is non-fatal — skip this entry
             logger.debug(`ElementStorageLayer: failed to index ${relPath}`, {
               error: error instanceof Error ? error.message : String(error),
             });
@@ -235,17 +283,17 @@ export class ElementStorageLayer implements IStorageLayer {
 
       // 4. For removed: remove from index
       for (const relPath of diff.removed) {
-        this.index.remove(relPath);
+        state.index.remove(relPath);
       }
 
       // 5. Update manifest and timestamp
-      this.manifest.update(stats);
-      this.lastScanTimestamp = Date.now();
+      state.manifest.update(stats);
+      state.lastScanTimestamp = Date.now();
 
       return diff;
     } catch (error) {
       logger.error('ElementStorageLayer.performScan failed', error);
-      this.lastScanTimestamp = Date.now(); // Prevent retry storms
+      state.lastScanTimestamp = Date.now();
       return EMPTY_DIFF;
     }
   }

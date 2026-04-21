@@ -19,26 +19,62 @@ import { logger } from '../utils/logger.js';
 import { RegexValidator } from './regexValidator.js';
 import { SECURITY_LIMITS } from './constants.js';
 
+/**
+ * Per-user allowlist for session-scoped PathValidator instances.
+ * Specifies which directories the session's user can write to and
+ * read from. Used by HTTP multi-user mode; stdio uses the simpler
+ * single-dir constructor form.
+ */
+export interface PathValidatorAllowlist {
+  writeDirs: string[];
+  readOnlyDirs?: string[];
+  allowedExtensions?: string[];
+}
+
 export class PathValidator {
   // ── Instance fields (per-PathValidator, replaces static state) ─────
 
+  /** All directories that can be read (write dirs + read-only dirs). */
   private readonly allowedDirectories: string[];
+  /** Directories that can be written to. Subset of allowedDirectories. */
+  private readonly writableDirectories: string[];
   private readonly allowedExtensions: string[];
   private resolvedAllowedDirs: Promise<string[]> | null = null;
+  private resolvedWritableDirs: Promise<string[]> | null = null;
 
   /**
-   * @param personasDir - Primary directory for persona files
-   * @param allowedExtensions - Optional override for allowed file extensions
+   * Overload 1: legacy single-dir form (stdio, backward compat).
+   * All dirs are writable (single-user, no shared pool).
+   * Overload 2: structured allowlist form (per-user HTTP sessions).
+   * writeDirs are writable; readOnlyDirs are read-only.
    */
-  constructor(personasDir: string, allowedExtensions?: string[]) {
-    // Deduplicate allowed directories (personasDir and PERSONAS_DIR may resolve to the same path)
-    this.allowedDirectories = [...new Set([
-      path.resolve(personasDir),
-      path.resolve('./custom-personas'),
-      path.resolve('./backups'),
-      ...(process.env.PERSONAS_DIR ? [path.resolve(process.env.PERSONAS_DIR)] : []),
-    ])];
-    this.allowedExtensions = allowedExtensions ?? ['.md', '.markdown', '.txt', '.yml', '.yaml'];
+  constructor(personasDir: string, allowedExtensions?: string[]);
+  constructor(allowlist: PathValidatorAllowlist);
+  constructor(
+    personasDirOrAllowlist: string | PathValidatorAllowlist,
+    allowedExtensions?: string[],
+  ) {
+    if (typeof personasDirOrAllowlist === 'string') {
+      // Legacy form: single personas dir + hardcoded extras (all writable)
+      const personasDir = personasDirOrAllowlist;
+      const dirs = [...new Set([
+        path.resolve(personasDir),
+        path.resolve('./custom-personas'),
+        path.resolve('./backups'),
+        ...(process.env.PERSONAS_DIR ? [path.resolve(process.env.PERSONAS_DIR)] : []),
+      ])];
+      this.allowedDirectories = dirs;
+      this.writableDirectories = dirs;
+      this.allowedExtensions = allowedExtensions ?? ['.md', '.markdown', '.txt', '.yml', '.yaml'];
+    } else {
+      // Structured form: explicit write + read-only dirs
+      const allowlist = personasDirOrAllowlist;
+      const writeDirs = [...new Set(allowlist.writeDirs.map(d => path.resolve(d)))];
+      const readOnlyDirs = [...new Set((allowlist.readOnlyDirs ?? []).map(d => path.resolve(d)))];
+      this.writableDirectories = writeDirs;
+      this.allowedDirectories = [...new Set([...writeDirs, ...readOnlyDirs])];
+      this.allowedExtensions = allowlist.allowedExtensions ?? ['.md', '.markdown', '.txt', '.yml', '.yaml'];
+    }
   }
 
   // ── Instance methods ──────────────────────────────────────────────
@@ -139,6 +175,9 @@ export class PathValidator {
   async safeWriteFile(filePath: string, content: string): Promise<void> {
     const validatedPath = await this.validatePersonaPath(filePath);
 
+    // Enforce write-only dirs (read-only dirs like shared/ are not writable)
+    await this.validatePathIsWritable(validatedPath);
+
     if (content.length > 500000) {
       throw new Error('Content too large');
     }
@@ -149,6 +188,27 @@ export class PathValidator {
     const tempPath = `${validatedPath}.tmp`;
     await fs.writeFile(tempPath, content, 'utf-8');
     await fs.rename(tempPath, validatedPath);
+  }
+
+  private async validatePathIsWritable(realPath: string): Promise<void> {
+    if (!this.resolvedWritableDirs) {
+      this.resolvedWritableDirs = (async () => {
+        return Promise.all(
+          this.writableDirectories.map(async (dir) => {
+            try { return await fs.realpath(dir); }
+            catch { return dir; }
+          })
+        );
+      })();
+    }
+    const writableDirs = await this.resolvedWritableDirs;
+    const isWritable = writableDirs.some(dir =>
+      realPath.startsWith(dir + path.sep) || realPath === dir
+    );
+    if (!isWritable) {
+      logger.error('Write access denied — path is in a read-only directory', { path: realPath });
+      throw new Error('Write access denied');
+    }
   }
 
   // ── Root instance management ──────────────────────────────────────
@@ -177,6 +237,15 @@ export class PathValidator {
   }
 
   // ── Static delegation methods (backward compatibility) ────────────
+  //
+  // These methods delegate to the ROOT instance (_rootInstance), NOT to
+  // any session-scoped instance. In HTTP multi-user mode, session-scoped
+  // PathValidator instances are resolved from the SessionContainer via
+  // DI — callers that go through instance methods (validatePersonaPath,
+  // safeWriteFile, safeReadFile) get per-user isolation. Callers that
+  // use the static methods below always get the root (permissive)
+  // instance. This is a pre-existing design limitation of the static
+  // delegation pattern, not introduced by per-user isolation.
 
   /**
    * Initialize the static root instance.

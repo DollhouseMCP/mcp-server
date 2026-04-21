@@ -97,6 +97,7 @@ import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 import { FileStorageLayerFactory, defaultMemoryFileFilter } from "../storage/FileStorageLayerFactory.js";
 import type { IStorageLayerFactory } from "../storage/IStorageLayerFactory.js";
+import { validateUserId } from "../paths/validateUserId.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -1706,16 +1707,38 @@ export class DollhouseContainer {
     // Issue #1948: Create a child container for this session's scoped services
     const child = new SessionContainer(this, sid);
 
-    // Register per-session persistence stores.
-    // HTTP sessions are ephemeral — ActivationStore.initialize() is intentionally
-    // NOT called here (unlike stdio). Activation state starts fresh per connection.
-    //
-    // Phase 4: when DB mode is active, HTTP sessions use the Database* stores
-    // scoped to this session's userId. File* stores are used for file-backed
-    // deployments only.
+    // ── Per-user path resolution for this session ────────────────────
+    // Resolve the active user's directories once per session creation.
+    // These are used to scope file-mode stores and the session-scoped
+    // PathValidator to this user's subtree.
+    const userPathResolver = this.resolve<import('../paths/IUserPathResolver.js').IUserPathResolver>('UserPathResolver');
+    const httpUserId = validateUserId(sessionContext.userId);
+    const userStateDir = userPathResolver.getUserStateDir(httpUserId);
+    const userAuthDir = userPathResolver.getUserAuthDir(httpUserId);
+    const userBackupsDir = userPathResolver.getUserBackupsDir(httpUserId);
+    const userSecurityDir = userPathResolver.getUserSecurityDir(httpUserId);
+    const userPortfolioDir = userPathResolver.getUserPortfolioDir(httpUserId);
+
+    // ── Session-scoped PathValidator ────────────────────────────────
+    // Restricts this session's file operations to the user's subtree.
+    // The root PathValidator (used by stdio) is permissive; HTTP sessions
+    // get a locked-down instance that only allows writes inside the
+    // user's dirs and reads from user dirs + shared pool.
+    const sharedPoolDir = this.hasRegistration('PathService')
+      ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('shared-pool')
+      : undefined;
+    child.register('PathValidator', () => new PathValidator({
+      writeDirs: [userPortfolioDir, userStateDir, userAuthDir, userBackupsDir, userSecurityDir],
+      readOnlyDirs: sharedPoolDir ? [sharedPoolDir] : [],
+    }));
+
+    // ── Per-session persistence stores ──────────────────────────────
+    // HTTP sessions are ephemeral — ActivationStore.initialize() is
+    // intentionally NOT called here. Activation state starts fresh per
+    // connection. File-mode stores receive the user's state dir;
+    // DB-mode stores are scoped via RLS on userId.
     if (this.hasRegistration('DatabaseInstance')) {
       const db = this.resolve<DatabaseInstance>('DatabaseInstance');
-      const httpUserId = sessionContext.userId;
       const DbActivation = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
       const DbConfirmation = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
       child.register('ActivationStore', () =>
@@ -1726,12 +1749,31 @@ export class DollhouseContainer {
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
     } else {
       child.register('ActivationStore', () =>
-        new FileActivationStateStore(this.resolve('FileOperationsService'), undefined, sid));
+        new FileActivationStateStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('ConfirmationStore', () =>
-        new FileConfirmationStore(this.resolve('FileOperationsService'), undefined, sid));
+        new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
     }
+
+    // ── Per-user service overrides (Group B) ──────────────────────────
+    // TokenManager, BackupService, and DangerZoneEnforcer are root-scoped
+    // for stdio (single user). HTTP sessions override them with per-user
+    // instances so auth tokens, backups, and security blocks are isolated.
+    child.register('TokenManager', () => new TokenManager(
+      this.resolve('FileOperationsService'), userAuthDir
+    ));
+    child.register('BackupService', () => new BackupService(
+      this.resolve('FileOperationsService'),
+      {
+        backupRootDir: userBackupsDir,
+        maxBackupsPerElement: getValidatedMaxBackupsPerElement(),
+        enabled: STORAGE_LAYER_CONFIG.BACKUPS_ENABLED,
+      }
+    ));
+    child.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
+      this.resolve('FileOperationsService'), userSecurityDir
+    ));
 
     // Bridge: attach per-session activation store to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
