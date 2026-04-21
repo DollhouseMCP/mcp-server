@@ -239,6 +239,143 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('renders explicit client platform labels and update-available metadata in the session dropdown', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [
+          {
+            sessionId: 'session-new',
+            status: 'active',
+            displayName: 'Bert',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: true,
+            authenticated: true,
+            kind: 'mcp',
+            color: '#1d4ed8',
+            serverVersion: '2.0.27',
+            clientPlatform: 'claude-code',
+            clientPlatformLabel: 'Claude Code',
+          },
+          {
+            sessionId: 'session-old',
+            status: 'active',
+            displayName: 'Teddy',
+            startedAt: '2026-04-20T17:30:00.000Z',
+            isLeader: false,
+            authenticated: false,
+            kind: 'mcp',
+            color: '#92400e',
+            serverVersion: '2.0.26',
+            clientPlatform: 'codex',
+            clientPlatformLabel: 'Codex',
+          },
+          {
+            sessionId: 'console-1',
+            status: 'active',
+            displayName: 'Web Console',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: false,
+            authenticated: true,
+            kind: 'console',
+            color: '#6366f1',
+            serverVersion: '2.0.27',
+            clientPlatform: 'web-console',
+            clientPlatformLabel: 'Web Console',
+          },
+        ],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    (win.document.querySelector('.session-box') as HTMLButtonElement | null)?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const leaderItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-new"]') as HTMLElement | null;
+    const oldItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-old"]') as HTMLElement | null;
+    const consoleItem = win.document.querySelector('.session-dropdown-item[data-session-id="console-1"]') as HTMLElement | null;
+
+    expect(leaderItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.27');
+    expect(leaderItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Claude Code');
+
+    expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.26');
+    expect(oldItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Codex');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.getAttribute('title')).toBe(
+      'A newer local DollhouseMCP session version is active.',
+    );
+
+    expect(consoleItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Web Console');
+
+    cleanup();
+  });
+
+  it('handles prerelease update comparisons and missing platform metadata safely', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [
+          {
+            sessionId: 'session-new',
+            status: 'active',
+            displayName: 'Bert',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: true,
+            authenticated: true,
+            kind: 'mcp',
+            color: '#1d4ed8',
+            serverVersion: '2.0.27-rc.17',
+            clientPlatform: 'claude-code',
+            clientPlatformLabel: 'Claude Code',
+          },
+          {
+            sessionId: 'session-old',
+            status: 'active',
+            displayName: 'Teddy',
+            startedAt: '2026-04-20T17:30:00.000Z',
+            isLeader: false,
+            authenticated: false,
+            kind: 'mcp',
+            color: '#92400e',
+            serverVersion: '2.0.27-rc.16',
+            clientPlatform: null,
+            clientPlatformLabel: null,
+          },
+        ],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    (win.document.querySelector('.session-box') as HTMLButtonElement | null)?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const oldItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-old"]') as HTMLElement | null;
+
+    expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.27-rc.16');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-client-label')).toBeNull();
+
+    cleanup();
+  });
+
   it('injects the log session filter into .log-controls and populates active sessions', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="session-indicator"></div>

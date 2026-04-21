@@ -66,7 +66,8 @@
   position: absolute;
   top: calc(100% + 0.4rem);
   right: 0;
-  min-width: 480px;
+  width: min(34rem, calc(100vw - 1rem));
+  box-sizing: border-box;
   background: var(--paper-strong, #fff);
   border: 1px solid var(--line, #c8d5e9);
   border-radius: var(--radius-md, 0.85rem);
@@ -184,10 +185,11 @@
 
 .session-dropdown-item {
   display: grid;
-  grid-template-columns: 1rem 8px 1fr 62px 72px 3.5rem 1.2rem;
+  grid-template-columns: 1rem 8px minmax(0, 1fr) 5.5rem 6.75rem 4.5rem 1.2rem;
   align-items: center;
-  gap: 0.4rem;
-  padding: 0.45rem 0.75rem;
+  column-gap: 0.7rem;
+  row-gap: 0.3rem;
+  padding: 0.55rem 0.9rem;
   font-size: var(--step--1, 0.82rem);
   cursor: pointer;
   transition: background 0.1s;
@@ -235,12 +237,51 @@
   white-space: nowrap;
 }
 
+.session-dropdown-primary {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.18rem;
+  align-self: center;
+}
+
+.session-dropdown-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.session-dropdown-version {
+  font-size: 0.7rem;
+  font-family: var(--font-mono, monospace);
+  color: var(--ink-500, #677893);
+  white-space: nowrap;
+}
+
+.session-dropdown-update {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background: #ecfdf5;
+  color: #166534;
+  border: 1px solid #86efac;
+  white-space: nowrap;
+}
+
 .session-dropdown-uptime {
   font-size: 0.7rem;
   font-family: var(--font-mono, monospace);
   color: var(--ink-500, #677893);
   white-space: nowrap;
   text-align: right;
+  min-width: 4.5rem;
+  justify-self: end;
 }
 
 .session-dropdown-role {
@@ -285,6 +326,16 @@
 
 [data-theme="dark"] .session-dropdown-name {
   color: var(--ink-900, #e0e8f0);
+}
+
+[data-theme="dark"] .session-dropdown-version {
+  color: var(--ink-500, #8899bb);
+}
+
+[data-theme="dark"] .session-dropdown-update {
+  background: #052e16;
+  color: #bbf7d0;
+  border-color: #166534;
 }
 
 [data-theme="dark"] .session-dropdown-toggle-label {
@@ -363,15 +414,40 @@
  * - Color (blue=positive, orange=negative — colorblind-safe pair)
  */
 .session-status-badge {
-  display: inline-block;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
   white-space: nowrap;
   text-align: center;
-  min-width: 52px;
+  min-width: 4.75rem;
+  box-sizing: border-box;
+}
+
+.session-dropdown-item > .session-status-badge {
+  justify-self: center;
+}
+
+.session-dropdown-badge-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-self: center;
+  gap: 0.24rem;
+  width: 100%;
+  max-width: 6.75rem;
+}
+
+.session-dropdown-client-label {
+  font-size: 0.62rem;
+  line-height: 1.15;
+  color: var(--ink-500, #677893);
+  text-align: center;
+  width: 100%;
 }
 
 .session-status-badge[data-status="positive"] {
@@ -396,6 +472,10 @@
   background: #431407;
   color: #fdba74;
   border-color: #9a3412;
+}
+
+[data-theme="dark"] .session-dropdown-client-label {
+  color: var(--ink-500, #8899bb);
 }
 
 /* Session filter in the log viewer */

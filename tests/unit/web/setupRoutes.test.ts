@@ -2057,6 +2057,15 @@ describe('Setup Tab — Channel Selector Interactions', () => {
       expect(status?.textContent).toContain('Permissions & security tools are unavailable for Claude Desktop right now.');
       expect(status?.textContent).not.toContain('already configured for this client');
     });
+
+    it('links to the platform contract reference for advanced hook details', () => {
+      const intro = document.getElementById('setup-permissions-intro');
+      const link = intro?.querySelector('a[href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/architecture/permission-hook-platform-contracts.md"]') as HTMLAnchorElement | null;
+
+      expect(link).not.toBeNull();
+      expect(link?.textContent).toContain('platform contract reference');
+      expect(link?.target).toBe('_blank');
+    });
   });
 });
 

@@ -13,6 +13,9 @@
   const PKG = '@dollhousemcp/mcp-server';
   const HOOKS_DIR = '~/.dollhouse/hooks';
   const HOOK_BASE_SCRIPT_PATH = `${HOOKS_DIR}/pretooluse-dollhouse.sh`;
+  const HOOK_CONTRACT_DOC_URL = 'https://github.com/DollhouseMCP/mcp-server/blob/main/docs/architecture/permission-hook-platform-contracts.md';
+  // Keep hook entrypoints and output expectations in sync with
+  // docs/architecture/permission-hook-platform-contracts.md.
 
   /** Platform registry — drives config generation AND panel rendering */
   const PLATFORMS = [
@@ -1591,6 +1594,7 @@ codex_hooks = true`;
     intro.innerHTML = `<div class="setup-permissions-note">
         <strong>Permissions &amp; Security</strong>
         <p>Use this mode to turn on permission enforcement for supported clients. Claude Code is fully guided in this release. Gemini CLI, Cursor, VS Code, Windsurf, and Codex have native partial support, while Cline and LM Studio stay in the MCP and fallback lane for now. Other clients will be marked as coming soon.</p>
+        <p class="setup-hint">Need the advanced client-by-client hook contract details? <a href="${HOOK_CONTRACT_DOC_URL}" target="_blank" rel="noopener noreferrer">Read the platform contract reference</a>.</p>
       </div>`;
   };
 

@@ -29,6 +29,11 @@ import {
   CONSOLE_PROTOCOL_VERSION,
   LEGACY_CONSOLE_PROTOCOL_VERSION,
 } from './LeaderElection.js';
+import {
+  getSessionClientPlatformLabel,
+  normalizeSessionClientPlatformId,
+  type SessionClientPlatformId,
+} from './sessionClientPlatform.js';
 
 /** Maximum payload size for ingestion requests */
 const MAX_PAYLOAD_SIZE = '1mb';
@@ -77,6 +82,10 @@ export interface SessionInfo {
   serverVersion: string;
   /** Console/session contract version used for compatibility-aware takeover. */
   consoleProtocolVersion: number;
+  /** Explicit MCP host platform, when the session reported one. */
+  clientPlatform: SessionClientPlatformId | null;
+  /** Human-readable MCP host label for UI rendering. */
+  clientPlatformLabel: string;
 }
 
 /**
@@ -105,6 +114,7 @@ export interface SessionEventPayload {
   startedAt: string;
   serverVersion?: string;
   consoleProtocolVersion?: number;
+  clientPlatform?: string;
 }
 
 /**
@@ -126,7 +136,7 @@ export interface IngestRoutesResult {
   /** Get all tracked sessions */
   getSessions: () => SessionInfo[];
   /** Register the leader as a session */
-  registerLeaderSession: (sessionId: string, pid: number) => void;
+  registerLeaderSession: (sessionId: string, pid: number, clientPlatform?: string | null) => void;
   /** Register the web console as a session so the indicator is never empty (#1805) */
   registerConsoleSession: () => void;
 }
@@ -148,6 +158,10 @@ function normalizeConsoleProtocolVersion(version?: number): number {
     return version;
   }
   return LEGACY_CONSOLE_PROTOCOL_VERSION;
+}
+
+function normalizeClientPlatform(platform?: string | null): SessionClientPlatformId | null {
+  return normalizeSessionClientPlatformId(platform);
 }
 
 /**
@@ -197,11 +211,13 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     authenticated = false,
     serverVersion?: string,
     consoleProtocolVersion?: number,
+    clientPlatform?: string,
   ): SessionInfo | null {
     try {
       const displayName = namePool.assign(sessionId);
       const color = namePool.getColor(sessionId) ?? '#3b82f6';
       const now = new Date().toISOString();
+      const normalizedClientPlatform = normalizeClientPlatform(clientPlatform);
       const info: SessionInfo = {
         sessionId, displayName, color,
         pid: pid || 0,
@@ -209,6 +225,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         status: 'active', isLeader: false, authenticated, kind: 'mcp',
         serverVersion: normalizeServerVersion(serverVersion),
         consoleProtocolVersion: normalizeConsoleProtocolVersion(consoleProtocolVersion),
+        clientPlatform: normalizedClientPlatform,
+        clientPlatformLabel: getSessionClientPlatformLabel(normalizedClientPlatform),
       };
       sessions.set(sessionId, info);
       logger.info('[IngestRoutes] Auto-registered orphaned session', {
@@ -234,6 +252,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     authenticated = false,
     serverVersion?: string,
     consoleProtocolVersion?: number,
+    clientPlatform?: string,
   ): SessionInfo | null {
     if (killedSessions.has(sessionId)) return null;
     if (pendingKills.has(sessionId)) {
@@ -243,7 +262,14 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
 
     const existing = sessions.get(sessionId);
     if (!existing) {
-      return autoRegister(sessionId, pid, authenticated, serverVersion, consoleProtocolVersion);
+      return autoRegister(
+        sessionId,
+        pid,
+        authenticated,
+        serverVersion,
+        consoleProtocolVersion,
+        clientPlatform,
+      );
     }
 
     if (existing.status === 'ended') {
@@ -264,6 +290,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     }
     if (consoleProtocolVersion !== undefined) {
       existing.consoleProtocolVersion = normalizeConsoleProtocolVersion(consoleProtocolVersion);
+    }
+    if (clientPlatform !== undefined) {
+      existing.clientPlatform = normalizeClientPlatform(clientPlatform);
+      existing.clientPlatformLabel = getSessionClientPlatformLabel(existing.clientPlatform);
     }
     return existing;
   }
@@ -366,12 +396,15 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
         const displayName = namePool.assign(payload.sessionId);
         const color = namePool.getColor(payload.sessionId) ?? '#3b82f6';
         const isAuthenticated = Boolean((res as any).locals?.tokenEntry);
+        const normalizedClientPlatform = normalizeClientPlatform(payload.clientPlatform);
         sessions.set(payload.sessionId, {
           sessionId: payload.sessionId, displayName, color,
           pid: payload.pid, startedAt: payload.startedAt || now, lastHeartbeat: now,
           status: 'active', isLeader: false, authenticated: isAuthenticated, kind: 'mcp',
           serverVersion: normalizeServerVersion(payload.serverVersion),
           consoleProtocolVersion: normalizeConsoleProtocolVersion(payload.consoleProtocolVersion),
+          clientPlatform: normalizedClientPlatform,
+          clientPlatformLabel: getSessionClientPlatformLabel(normalizedClientPlatform),
         });
         logger.info('[IngestRoutes] Session registered', {
           displayName, sessionId: payload.sessionId, pid: payload.pid, color,
@@ -402,6 +435,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
           false,
           payload.serverVersion,
           payload.consoleProtocolVersion,
+          payload.clientPlatform,
         );
         break;
       }
@@ -438,12 +472,14 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
               localSessions.push({
                 ...ls,
                 authenticated: false,
-                kind: ls.kind || 'mcp',
-                serverVersion: normalizeServerVersion(ls.serverVersion),
-                consoleProtocolVersion: normalizeConsoleProtocolVersion(ls.consoleProtocolVersion),
-              });
-            }
+              kind: ls.kind || 'mcp',
+              serverVersion: normalizeServerVersion(ls.serverVersion),
+              consoleProtocolVersion: normalizeConsoleProtocolVersion(ls.consoleProtocolVersion),
+              clientPlatform: normalizeClientPlatform(ls.clientPlatform),
+              clientPlatformLabel: getSessionClientPlatformLabel(normalizeClientPlatform(ls.clientPlatform)),
+            });
           }
+        }
         }
       } catch {
         // Legacy instance not running or unreachable — that's fine
@@ -564,9 +600,10 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     return Array.from(sessions.values()).filter(s => s.status === 'active');
   }
 
-  function registerLeaderSession(sessionId: string, pid: number): void {
+  function registerLeaderSession(sessionId: string, pid: number, clientPlatform?: string | null): void {
     const displayName = namePool.assign(sessionId, true);
     const color = namePool.getColor(sessionId) ?? '#3b82f6';
+    const normalizedClientPlatform = normalizeClientPlatform(clientPlatform ?? undefined);
     sessions.set(sessionId, {
       sessionId,
       displayName,
@@ -580,6 +617,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       kind: 'mcp',
       serverVersion: PACKAGE_VERSION,
       consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+      clientPlatform: normalizedClientPlatform,
+      clientPlatformLabel: getSessionClientPlatformLabel(normalizedClientPlatform),
     });
     logger.info('[IngestRoutes] Leader session registered', { displayName, sessionId, pid, color });
   }
@@ -593,6 +632,7 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
     const consoleId = `console-${process.pid}`;
     if (sessions.has(consoleId)) return;
     const displayName = 'Web Console';
+    const normalizedClientPlatform: SessionClientPlatformId = 'web-console';
     sessions.set(consoleId, {
       sessionId: consoleId,
       displayName,
@@ -606,6 +646,8 @@ export function createIngestRoutes(broadcasts: IngestBroadcasts): IngestRoutesRe
       kind: 'console',
       serverVersion: PACKAGE_VERSION,
       consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+      clientPlatform: normalizedClientPlatform,
+      clientPlatformLabel: getSessionClientPlatformLabel(normalizedClientPlatform),
     });
     logger.info('[IngestRoutes] Console session registered', { sessionId: consoleId, pid: process.pid });
   }

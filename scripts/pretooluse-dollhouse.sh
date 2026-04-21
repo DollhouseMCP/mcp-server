@@ -20,10 +20,13 @@ RUN_DIR="$HOME/.dollhouse/run"
 PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
 AUTHORITY_CACHE_TTL_SECONDS=2
-MAX_RETRIES=2
-INITIAL_TIMEOUT=5
+MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
+INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+[[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || MAX_RETRIES=2
+[[ "$INITIAL_TIMEOUT" =~ ^[0-9]+$ ]] || INITIAL_TIMEOUT=5
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {
@@ -106,6 +109,37 @@ normalize_response() {
             hookSpecificOutput: {
               hookEventName: "PreToolUse",
               permissionDecision: .decision,
+              permissionDecisionReason: (.reason // .message // "")
+            }
+          }
+        else
+          empty
+        end
+      ' 2>/dev/null
+      ;;
+    codex)
+      echo "$response" | jq -c '
+        if type == "object" and (keys | length) == 0 then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "allow",
+              permissionDecisionReason: ""
+            }
+          }
+        elif (.hookSpecificOutput.permissionDecision? | type) == "string" then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: (if .hookSpecificOutput.permissionDecision == "allow" then "allow" else "deny" end),
+              permissionDecisionReason: (.hookSpecificOutput.permissionDecisionReason // .hookSpecificOutput.reason // .reason // .message // "")
+            }
+          }
+        elif (.decision? | type) == "string" and (.decision | IN("allow", "deny", "ask")) then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: (if .decision == "allow" then "allow" else "deny" end),
               permissionDecisionReason: (.reason // .message // "")
             }
           }
