@@ -26,4 +26,5 @@ export interface ElementCrudContext {
   elementQueryService: ElementQueryService;
   validationRegistry: ValidationRegistry;
   backupService?: BackupService;
+  forkOnEditStrategy?: import('../../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy;
 }

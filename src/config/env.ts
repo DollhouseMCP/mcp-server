@@ -132,6 +132,21 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
 
   // ============================================================================
+  // Shared Pool Configuration (Step 4.6)
+  // ============================================================================
+  /** Override the upstream collection base URL. When set, install_collection_content
+   *  fetches from this URL instead of the default DollhouseMCP GitHub collection. */
+  DOLLHOUSE_COLLECTION_URL: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Comma-separated additional hostnames to add to GitHubClient's SSRF allowlist.
+   *  Each entry must be a valid hostname (no scheme, no path, no wildcards). */
+  DOLLHOUSE_COLLECTION_ALLOWLIST: z.string().optional()
+    .transform(parseAllowedHosts),
+  /** Override the shared-pool seed directory for deployment-supplied elements. */
+  DOLLHOUSE_SHARED_POOL_DIR: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+
+  // ============================================================================
   // Test Configuration
   // ============================================================================
   TEST_BASE_DIR: z.string().optional(),
@@ -143,6 +158,8 @@ const envSchema = z.object({
   // Feature Flags
   // ============================================================================
   DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION: z.coerce.boolean().default(false),
+  /** Enable the shared public element pool (Step 4.6). Default: false (opt-in). */
+  DOLLHOUSE_SHARED_POOL_ENABLED: z.coerce.boolean().default(false),
   ENABLE_DEBUG: z.coerce.boolean().default(false),
   TEST_VERBOSE_LOGGING: z.coerce.boolean().default(false),
 

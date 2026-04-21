@@ -95,6 +95,9 @@ import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
+// SharedPoolServiceRegistrar is dynamically imported in preparePortfolio()
+// to keep the shared-pool module out of the static import graph. Deleting
+// src/collection/shared-pool/ does not break compilation.
 import { FileStorageLayerFactory, defaultMemoryFileFilter } from "../storage/FileStorageLayerFactory.js";
 import type { IStorageLayerFactory } from "../storage/IStorageLayerFactory.js";
 import { validateUserId } from "../paths/validateUserId.js";
@@ -365,18 +368,24 @@ export class DollhouseContainer {
     });
 
     // GITHUB & COLLECTION
+    // GitHubClient's SSRF allowlist is extended by DOLLHOUSE_COLLECTION_ALLOWLIST
+    // when the shared pool is enabled. The default hosts (api.github.com,
+    // raw.githubusercontent.com) are always included.
     this.register('GitHubClient', () => new GitHubClient(
       this.resolve('APICache'),
       this.resolve('RateLimitTracker'),
-      this.resolve('TokenManager')
+      this.resolve('TokenManager'),
+      env.DOLLHOUSE_COLLECTION_ALLOWLIST ?? undefined,
     ));
     this.register('GitHubAuthManager', () => new GitHubAuthManager(
       this.resolve('APICache'),
       this.resolve('ConfigManager'),
       this.resolve('TokenManager')
     ));
+    // CollectionIndexManager's index URL is overridable via DOLLHOUSE_COLLECTION_URL.
     this.register('CollectionIndexManager', () => new CollectionIndexManager({
-      fileOperations: this.resolve('FileOperationsService')
+      fileOperations: this.resolve('FileOperationsService'),
+      indexUrl: env.DOLLHOUSE_COLLECTION_URL,
     }));
     this.register('CollectionBrowser', () => new CollectionBrowser(this.resolve('GitHubClient'), this.resolve('CollectionCache'), this.resolve('CollectionIndexManager')));
     this.register('CollectionSearch', () => new CollectionSearch(
@@ -411,6 +420,7 @@ export class DollhouseContainer {
       backupService: this.resolve('BackupService'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     this.register('InitializationService', () => new InitializationService(
       this.resolve('PersonaManager')
@@ -425,7 +435,10 @@ export class DollhouseContainer {
     this.register('ElementInstaller', () => new ElementInstaller(this.resolve('GitHubClient'), {
       portfolioManager: this.resolve('PortfolioManager'),
       unifiedIndexManager: this.resolve('UnifiedIndexManager'),
-      fileOperations: this.resolve('FileOperationsService')
+      fileOperations: this.resolve('FileOperationsService'),
+      sharedPoolInstaller: this.hasRegistration('SharedPoolInstaller')
+        ? this.resolve('SharedPoolInstaller')
+        : undefined,
     }));
     this.register('PortfolioRepoManager', () => new PortfolioRepoManager(
       this.resolve('TokenManager'),
@@ -563,6 +576,7 @@ export class DollhouseContainer {
       activationRegistry: this.resolve('SessionActivationRegistry'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     this.register('TemplateManager', () => new TemplateManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -577,6 +591,7 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
     this.register('AgentManager', () => new AgentManager({
@@ -599,6 +614,7 @@ export class DollhouseContainer {
       verificationStore: this.resolve('ChallengeStore'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -615,6 +631,7 @@ export class DollhouseContainer {
       activationRegistry: this.resolve('SessionActivationRegistry'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     this.register('EnsembleManager', () => new EnsembleManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -631,6 +648,7 @@ export class DollhouseContainer {
       activationRegistry: this.resolve('SessionActivationRegistry'),
       storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
+      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
     }));
     // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
     // to avoid eager resolution during constructor (breaks test containers).
@@ -918,6 +936,26 @@ export class DollhouseContainer {
     // out of the bootstrap/registration details.
     if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
       await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
+    }
+
+    // Shared pool services — feature-flag gated (default: off).
+    // Must run after PathsServiceRegistrar and DatabaseServiceRegistrar
+    // so PathService and (optionally) DatabaseInstance are available.
+    const { SharedPoolServiceRegistrar } = await import('../collection/shared-pool/SharedPoolServiceRegistrar.js');
+    await new SharedPoolServiceRegistrar().bootstrapAndRegister(this);
+
+    // Run deployment seed loader if the shared pool is enabled.
+    // Idempotent — safe on every startup. Runs after the registrar so
+    // SharedPoolInstaller and ProvenanceStore are available.
+    if (this.hasRegistration('DeploymentSeedLoader')) {
+      try {
+        const seedLoader = this.resolve<{ loadSeeds(): Promise<unknown> }>('DeploymentSeedLoader');
+        await seedLoader.loadSeeds();
+      } catch (err) {
+        logger.warn('[Container] Deployment seed loading failed (non-fatal)', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
 
     // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)
@@ -1476,6 +1514,7 @@ export class DollhouseContainer {
       this.resolve('PolicyExportService'),
       this.resolve('SessionActivationRegistry'),
       this.resolve('ContextTracker'),
+      this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
     );
     // Register for lazy resolution by PolicyExportService
     this.register('ElementCRUDHandler', () => elementCrudHandler);

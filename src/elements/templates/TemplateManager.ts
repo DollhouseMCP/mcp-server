@@ -38,6 +38,7 @@ export class TemplateManager extends BaseElementManager<Template> {
         backupService: deps.backupService,
         storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
       },
       deps.fileOperationsService,
       deps.validationRegistry,

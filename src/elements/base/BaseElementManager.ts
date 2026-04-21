@@ -84,6 +84,8 @@ export interface BaseElementManagerOptions {
    *
    */
   storageLayerFactory: IStorageLayerFactory;
+  /** Step 4.6: File-mode shared-pool discovery for include_public. */
+  publicElementDiscovery?: import('../../collection/shared-pool/PublicElementDiscovery.js').PublicElementDiscovery;
 }
 
 /**
@@ -110,6 +112,8 @@ export interface ElementManagerDeps {
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
   /** Phase 4: Storage-agnostic factory. See BaseElementManagerOptions. */
   storageLayerFactory: IStorageLayerFactory;
+  /** Step 4.6: File-mode shared-pool discovery for include_public. */
+  publicElementDiscovery?: import('../../collection/shared-pool/PublicElementDiscovery.js').PublicElementDiscovery;
 }
 
 /**
@@ -168,6 +172,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected readonly getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
   /** Phase 4: Storage-agnostic factory for creating the storage layer. */
   protected readonly storageLayerFactory: IStorageLayerFactory;
+  /** Step 4.6: File-mode shared-pool discovery for include_public. */
+  protected readonly publicElementDiscovery?: import('../../collection/shared-pool/PublicElementDiscovery.js').PublicElementDiscovery;
 
   /** Map plural ElementType enum values to singular ContentValidator context.
    *  Partial because not all element types have a content context (e.g., ensembles). */
@@ -339,6 +345,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.activationRegistry = options.activationRegistry;
     this.getCurrentUserId = options.getCurrentUserId;
     this.storageLayerFactory = options.storageLayerFactory;
+    this.publicElementDiscovery = options.publicElementDiscovery;
 
     // Get the specialized validator for this element type
     this.validator = validationRegistry.getValidator(elementType);
@@ -877,8 +884,43 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         })
       );
 
-      // Filter out failed loads and return
-      return elements.filter((e): e is Awaited<T> => e !== null) as T[];
+      // Filter out failed loads
+      const userElements = elements.filter((e): e is Awaited<T> => e !== null) as T[];
+
+      // Step 4.6: Augment with shared-pool elements when include_public is on.
+      // Shared files live outside this.elementDir, so we read and parse them
+      // directly rather than going through load() (which validates against
+      // the user's element directory).
+      if (options?.includePublic && this.publicElementDiscovery) {
+        try {
+          const userFileNames = new Set(files.map(f => path.basename(f)));
+          const sharedFiles = await this.publicElementDiscovery.discoverPublicElements(
+            this.elementType, userFileNames,
+          );
+          const sharedElements = await Promise.all(
+            sharedFiles.map(async (absPath) => {
+              try {
+                const content = await this.fileOperations.readElementFile(absPath, this.elementType, {
+                  source: `${this.constructor.name}.list:shared`,
+                });
+                const parsed = this.parseContent(content);
+                this.migrateMetadataDefaults(parsed.data, absPath);
+                const metadata = await this.parseMetadata(parsed.data);
+                return this.createElement(metadata, parsed.content);
+              } catch {
+                return null;
+              }
+            }),
+          );
+          for (const el of sharedElements) {
+            if (el) userElements.push(el);
+          }
+        } catch {
+          logger.debug(`[${this.constructor.name}] Shared-pool discovery failed; returning user elements only`);
+        }
+      }
+
+      return userElements;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         const label = this.getElementLabelCapitalized();

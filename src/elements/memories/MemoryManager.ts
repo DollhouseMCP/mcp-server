@@ -124,6 +124,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
       },
       deps.fileOperationsService,
       deps.validationRegistry,

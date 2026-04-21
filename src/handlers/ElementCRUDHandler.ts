@@ -82,6 +82,7 @@ export class ElementCRUDHandler {
     private readonly policyExportService?: PolicyExportService,
     private readonly activationRegistry?: SessionActivationRegistry,
     private readonly contextTracker?: ContextTracker,
+    private readonly forkOnEditStrategy?: import('../collection/shared-pool/ForkOnEditStrategy.js').ForkOnEditStrategy,
   ) {
     // Initialize strategy map with all element type strategies
     this.strategies = new Map<string, ElementActivationStrategy>([
@@ -142,6 +143,7 @@ export class ElementCRUDHandler {
       elementQueryService: this.elementQueryService,
       validationRegistry: this.validationRegistry,
       backupService: this.backupService,
+      forkOnEditStrategy: this.forkOnEditStrategy,
     };
   }
 

@@ -48,6 +48,7 @@ export class SkillManager extends BaseElementManager<Skill> {
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
       },
       deps.fileOperationsService,
       deps.validationRegistry,

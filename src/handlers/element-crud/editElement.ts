@@ -553,10 +553,27 @@ export async function editElement(
     return error(`Element type '${labelPlural}' is not yet supported for editing`);
   }
 
-  const element = await resolveElementByName(manager, normalizedType, name);
+  let element = await resolveElementByName(manager, normalizedType, name);
   if (!element) {
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
+  }
+
+  // Step 4.6: Fork-on-edit — if the element is from the shared pool,
+  // materialize a private copy in the user's portfolio before editing.
+  if (context.forkOnEditStrategy) {
+    const forkResult = await context.forkOnEditStrategy.evaluateAndFork({
+      element: element as { metadata: { name: string }; id?: string; getFilePath?: () => string; rawContent?: string },
+      elementType: normalizedType,
+      userElementDir: context.portfolioManager.getElementDir(normalizedType as import('../../portfolio/types.js').ElementType),
+    });
+    if (forkResult.forked) {
+      // Re-resolve the element from the user's portfolio (the fork)
+      const forkedElement = await resolveElementByName(manager, normalizedType, name);
+      if (forkedElement) {
+        element = forkedElement;
+      }
+    }
   }
 
   // Check for unknown properties and generate warnings
