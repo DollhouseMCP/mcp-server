@@ -61,6 +61,21 @@ export interface PermissionHookAuditSummary {
   currentHosts: string[];
   repairedHosts: string[];
   needsRepairHosts: string[];
+  lastStartupRepair: PermissionHookStartupRepairSummary | null;
+}
+
+export interface PermissionHookStartupRepairHostResult extends PermissionHookStatus {
+  host: string;
+  outcome: 'current' | 'repaired' | 'needs_repair' | 'not_installed' | 'error';
+}
+
+export interface PermissionHookStartupRepairSummary {
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  repairedCount: number;
+  needsRepairCount: number;
+  hostResults: PermissionHookStartupRepairHostResult[];
 }
 
 interface HookAssetDescriptor {
@@ -86,6 +101,8 @@ const MANAGED_HOOK_WRAPPER_BASENAMES = {
 const WRAPPER_HOOK_HOSTS = Object.keys(MANAGED_HOOK_WRAPPER_BASENAMES) as Array<keyof typeof MANAGED_HOOK_WRAPPER_BASENAMES>;
 
 const AUTO_REPAIRABLE_HOOK_HOSTS = ['claude-code', ...WRAPPER_HOOK_HOSTS] as const;
+
+let lastPermissionHookStartupRepairSummary: PermissionHookStartupRepairSummary | null = null;
 
 function repoRootFromModule(): string {
   const currentFile = fileURLToPath(import.meta.url);
@@ -438,6 +455,43 @@ function buildHookRepairFailureStatus(
   };
 }
 
+function toStartupRepairOutcome(status: PermissionHookStatus): PermissionHookStartupRepairHostResult['outcome'] {
+  if (status.repairError) return 'error';
+  if (status.autoRepaired) return 'repaired';
+  if (status.needsRepair && (status.installed || status.assetsPrepared)) return 'needs_repair';
+  if (status.assetsCurrent) return 'current';
+  return 'not_installed';
+}
+
+function toStartupRepairHostResult(
+  host: string,
+  status: PermissionHookStatus,
+): PermissionHookStartupRepairHostResult {
+  return {
+    ...status,
+    host,
+    outcome: toStartupRepairOutcome(status),
+  };
+}
+
+function cloneStartupRepairSummary(
+  summary: PermissionHookStartupRepairSummary | null,
+): PermissionHookStartupRepairSummary | null {
+  if (!summary) return null;
+  return {
+    ...summary,
+    hostResults: summary.hostResults.map((result) => ({ ...result })),
+  };
+}
+
+export function getLastPermissionHookStartupRepairSummary(): PermissionHookStartupRepairSummary | null {
+  return cloneStartupRepairSummary(lastPermissionHookStartupRepairSummary);
+}
+
+export function _resetPermissionHookStartupRepairSummaryForTests(): void {
+  lastPermissionHookStartupRepairSummary = null;
+}
+
 export async function reconcilePermissionHookStatus(
   host: string,
   options: ReconcilePermissionHookOptions = {},
@@ -501,38 +555,71 @@ export async function getPermissionHookAuditSummary(homeDir = homedir()): Promis
     currentHosts,
     repairedHosts,
     needsRepairHosts,
+    lastStartupRepair: getLastPermissionHookStartupRepairSummary(),
   };
 }
 
-export async function repairPermissionHooksOnStartup(homeDir = homedir()): Promise<void> {
+export async function repairPermissionHooksOnStartup(
+  homeDir = homedir(),
+  sourceScriptPath?: string,
+): Promise<PermissionHookStartupRepairSummary> {
   const startedAt = Date.now();
-  let repairedCount = 0;
-  let needsRepairCount = 0;
+  const startedAtIso = new Date(startedAt).toISOString();
+  const hostResults: PermissionHookStartupRepairHostResult[] = [];
 
-  await Promise.allSettled(
-    AUTO_REPAIRABLE_HOOK_HOSTS.map(async (host) => {
+  // Process sequentially because several hosts share the same bridge/helper
+  // targets under ~/.dollhouse/hooks, and concurrent writes are flaky on Windows.
+  for (const host of AUTO_REPAIRABLE_HOOK_HOSTS) {
+    try {
       const status = await reconcilePermissionHookStatus(host, {
         homeDir,
         autoRepair: true,
+        sourceScriptPath,
       });
 
       if (status.autoRepaired) {
-        repairedCount += 1;
         logger.info(`[PermissionHooks] Refreshed installed hook assets for ${host}`);
       } else if (status.needsRepair && status.installed) {
-        needsRepairCount += 1;
         logger.warn(
           `[PermissionHooks] Hook assets still need repair for ${host}` +
           (status.repairError ? `: ${status.repairError}` : ''),
         );
       }
-    }),
-  );
 
+      hostResults.push(toStartupRepairHostResult(host, status));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[PermissionHooks] Startup hook repair failed for ${host}: ${message}`);
+      hostResults.push({
+        host,
+        installed: false,
+        assetsPrepared: false,
+        assetsCurrent: false,
+        autoRepaired: false,
+        needsRepair: true,
+        repairError: message,
+        outcome: 'error',
+      } satisfies PermissionHookStartupRepairHostResult);
+    }
+  }
+  const repairedCount = hostResults.filter((result) => result.outcome === 'repaired').length;
+  const needsRepairCount = hostResults.filter((result) =>
+    result.outcome === 'needs_repair' || result.outcome === 'error').length;
+  const completedAt = Date.now();
+  const summary: PermissionHookStartupRepairSummary = {
+    startedAt: startedAtIso,
+    completedAt: new Date(completedAt).toISOString(),
+    durationMs: completedAt - startedAt,
+    repairedCount,
+    needsRepairCount,
+    hostResults,
+  };
+  lastPermissionHookStartupRepairSummary = cloneStartupRepairSummary(summary);
   logger.info(
-    `[PermissionHooks] Startup hook asset audit completed in ${Date.now() - startedAt}ms ` +
+    `[PermissionHooks] Startup hook asset audit completed in ${summary.durationMs}ms ` +
     `(repaired=${repairedCount}, needsRepair=${needsRepairCount})`,
   );
+  return summary;
 }
 
 function normalizeHooksRoot(parsed: Record<string, unknown>): Record<string, unknown[]> {

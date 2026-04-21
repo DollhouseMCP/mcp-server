@@ -12,7 +12,12 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
-import { getPermissionHookMarkerPath, installPermissionHook } from '../../../src/utils/permissionHooks.js';
+import {
+  _resetPermissionHookStartupRepairSummaryForTests,
+  getPermissionHookMarkerPath,
+  installPermissionHook,
+  repairPermissionHooksOnStartup,
+} from '../../../src/utils/permissionHooks.js';
 
 function createMockHandler(readResult?: unknown) {
   return {
@@ -45,9 +50,11 @@ describe('permissionRoutes', () => {
 
   beforeEach(async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'permission-routes-home-'));
+    _resetPermissionHookStartupRepairSummaryForTests();
   });
 
   afterEach(async () => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     await unlink(latestPortFile).catch(() => {});
     await rm(tempHome, { recursive: true, force: true });
   });
@@ -221,6 +228,7 @@ describe('permissionRoutes', () => {
   describe('GET /api/permissions/status', () => {
     it('should return policy status', async () => {
       await installPermissionHook('codex', { homeDir: tempHome });
+      await repairPermissionHooksOnStartup(tempHome);
 
       const handler = {
         handleRead: jest.fn().mockResolvedValue([{
@@ -275,6 +283,15 @@ describe('permissionRoutes', () => {
       expect(res.body.hookAssetsCurrent).toBe(true);
       expect(res.body.hookAutoRepaired).toBe(false);
       expect(res.body.hookNeedsRepair).toBe(false);
+      expect(res.body.hookStartupRepair).toEqual(
+        expect.objectContaining({
+          repairedCount: expect.any(Number),
+          needsRepairCount: expect.any(Number),
+          hostResults: expect.arrayContaining([
+            expect.objectContaining({ host: 'codex' }),
+          ]),
+        }),
+      );
       expect(res.body.enforcementReady).toBe(false);
       expect(res.body.advisory).toContain('NOT enforced');
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);

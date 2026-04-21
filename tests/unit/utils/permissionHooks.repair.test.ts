@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
+  _resetPermissionHookStartupRepairSummaryForTests,
   getPermissionHookAuditSummary,
+  getLastPermissionHookStartupRepairSummary,
   getPermissionHookScriptPath,
   installPermissionHook,
   reconcilePermissionHookStatus,
@@ -16,9 +18,11 @@ describe('permissionHooks repair flows', () => {
 
   beforeEach(async () => {
     tempHome = await mkdtemp(join(tmpdir(), 'permission-hooks-repair-'));
+    _resetPermissionHookStartupRepairSummaryForTests();
   });
 
   afterEach(async () => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     await rm(tempHome, { recursive: true, force: true });
   });
 
@@ -68,22 +72,44 @@ describe('permissionHooks repair flows', () => {
     await installPermissionHook('claude-code', { homeDir: tempHome });
     await writeFile(getPermissionHookScriptPath(tempHome), '#!/bin/bash\necho stale-shared\n', 'utf-8');
 
-    await expect(repairPermissionHooksOnStartup(tempHome)).resolves.not.toThrow();
+    const summary = await repairPermissionHooksOnStartup(tempHome);
 
     const status = await reconcilePermissionHookStatus('claude-code', { homeDir: tempHome });
+    const hostSummary = summary.hostResults.find((result) => result.host === 'claude-code');
+
     expect(status.assetsCurrent).toBe(true);
     expect(status.needsRepair).toBe(false);
+    expect(summary.repairedCount).toBeGreaterThanOrEqual(1);
+    expect(hostSummary?.outcome).toBe('repaired');
+    expect(getLastPermissionHookStartupRepairSummary()).toEqual(summary);
   });
 
   it('summarizes installed and repair-needed hook hosts for build info', async () => {
     await installPermissionHook('claude-code', { homeDir: tempHome });
     await installPermissionHook('codex', { homeDir: tempHome });
     await writeFile(getPermissionHookScriptPath(tempHome), '#!/bin/bash\necho stale-shared\n', 'utf-8');
+    await repairPermissionHooksOnStartup(tempHome);
 
     const summary = await getPermissionHookAuditSummary(tempHome);
 
     expect(summary.installedHosts).toEqual(expect.arrayContaining(['claude-code', 'codex']));
-    expect(summary.currentHosts).not.toContain('claude-code');
-    expect(summary.needsRepairHosts).toEqual(expect.arrayContaining(['claude-code', 'codex']));
+    expect(summary.currentHosts).toEqual(expect.arrayContaining(['claude-code', 'codex']));
+    expect(summary.needsRepairHosts).toEqual([]);
+    expect(summary.lastStartupRepair).toBeTruthy();
+  });
+
+  it('records startup repair errors with per-host reasons', async () => {
+    await installPermissionHook('codex', { homeDir: tempHome });
+    await writeFile(getPermissionHookScriptPath(tempHome), '#!/bin/bash\necho stale-shared\n', 'utf-8');
+
+    const failedSummary = await repairPermissionHooksOnStartup(
+      tempHome,
+      join(tempHome, 'missing-shared-script.sh'),
+    );
+    const errorHost = failedSummary.hostResults.find((result) => result.host === 'codex');
+
+    expect(failedSummary.needsRepairCount).toBeGreaterThanOrEqual(1);
+    expect(errorHost?.outcome).toBe('error');
+    expect(errorHost?.repairError).toContain('ENOENT');
   });
 });

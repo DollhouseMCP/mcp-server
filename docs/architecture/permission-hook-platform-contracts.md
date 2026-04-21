@@ -51,9 +51,92 @@ Client-specific normalization includes:
 - Missing permission server port file: allow / no-op
 - Connection failure or timeout: allow / no-op
 - Malformed server response:
-  - JSON-based clients: allow / no-op with empty stdout
+  - JSON-based clients: allow with an explicit valid allow payload for that platform
   - Windsurf: allow with exit `0`
 - Legacy Codex bare `{}` allow responses are normalized into an explicit `hookSpecificOutput.permissionDecision = "allow"` payload for compatibility
+
+## Example Payloads
+
+### Claude Code / VS Code allow
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow"
+  }
+}
+```
+
+### Claude Code / VS Code deny
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Command blocked by active Dollhouse policy."
+  }
+}
+```
+
+### Codex allow
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "allow",
+    "permissionDecisionReason": ""
+  }
+}
+```
+
+### Codex deny
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason": "Command blocked by active Dollhouse policy."
+  }
+}
+```
+
+### Cursor allow
+
+```json
+{
+  "permission": "allow"
+}
+```
+
+### Cursor deny
+
+```json
+{
+  "permission": "deny",
+  "reason": "Command blocked by active Dollhouse policy."
+}
+```
+
+### Gemini CLI allow
+
+```json
+{
+  "decision": "allow"
+}
+```
+
+### Gemini CLI deny
+
+```json
+{
+  "decision": "deny",
+  "reason": "Command blocked by active Dollhouse policy."
+}
+```
 
 ## Verification Matrix
 

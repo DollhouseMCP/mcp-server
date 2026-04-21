@@ -13,17 +13,23 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { BuildInfoService, BuildInfo } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import {
+  _resetPermissionHookStartupRepairSummaryForTests,
+  repairPermissionHooksOnStartup,
+} from '../../../src/utils/permissionHooks.js';
 
 describe('BuildInfoService', () => {
   let service: BuildInfoService;
   let container: DollhouseContainer;
 
   beforeEach(() => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     container = new DollhouseContainer();
     service = container.resolve<BuildInfoService>('BuildInfoService');
   });
 
   afterEach(async () => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     await container.dispose();
     jest.restoreAllMocks();
     jest.clearAllMocks();
@@ -123,6 +129,7 @@ describe('BuildInfoService', () => {
     });
 
     it('includes permission hook audit summary in build info', async () => {
+      await repairPermissionHooksOnStartup();
       const info = await service.getBuildInfo();
 
       expect(info.permissionHooks).toBeDefined();
@@ -130,6 +137,8 @@ describe('BuildInfoService', () => {
       expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
+      expect(info.permissionHooks?.lastStartupRepair).toBeTruthy();
+      expect(Array.isArray(info.permissionHooks?.lastStartupRepair?.hostResults)).toBe(true);
     });
 
     it('should have consistent results across calls', async () => {
@@ -211,6 +220,34 @@ describe('BuildInfoService', () => {
           currentHosts: [],
           repairedHosts: [],
           needsRepairHosts: [],
+          lastStartupRepair: {
+            startedAt: '2024-01-01T09:59:58.000Z',
+            completedAt: '2024-01-01T10:00:00.000Z',
+            durationMs: 2000,
+            repairedCount: 1,
+            needsRepairCount: 1,
+            hostResults: [
+              {
+                host: 'codex',
+                installed: true,
+                assetsPrepared: true,
+                assetsCurrent: true,
+                autoRepaired: true,
+                needsRepair: false,
+                outcome: 'repaired',
+              },
+              {
+                host: 'vscode',
+                installed: true,
+                assetsPrepared: true,
+                assetsCurrent: false,
+                autoRepaired: false,
+                needsRepair: true,
+                repairError: 'ENOENT: missing shared script',
+                outcome: 'error',
+              },
+            ],
+          },
         },
       };
     });
@@ -252,6 +289,9 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Installed Hosts**: None');
       expect(formatted).toContain('**Current Assets**: None');
       expect(formatted).toContain('**Needs Repair**: None');
+      expect(formatted).toContain('**Last Startup Audit**: 2024-01-01T10:00:00.000Z (2000ms)');
+      expect(formatted).toContain('**Startup Repairs Applied**: 1');
+      expect(formatted).toContain('**Startup Repair Issues**: vscode (ENOENT: missing shared script)');
     });
 
     it('should handle missing optional fields gracefully', () => {
