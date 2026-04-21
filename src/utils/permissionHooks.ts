@@ -565,41 +565,43 @@ export async function repairPermissionHooksOnStartup(
 ): Promise<PermissionHookStartupRepairSummary> {
   const startedAt = Date.now();
   const startedAtIso = new Date(startedAt).toISOString();
-  const hostResults = await Promise.all(
-    AUTO_REPAIRABLE_HOOK_HOSTS.map(async (host) => {
-      try {
-        const status = await reconcilePermissionHookStatus(host, {
-          homeDir,
-          autoRepair: true,
-          sourceScriptPath,
-        });
+  const hostResults: PermissionHookStartupRepairHostResult[] = [];
 
-        if (status.autoRepaired) {
-          logger.info(`[PermissionHooks] Refreshed installed hook assets for ${host}`);
-        } else if (status.needsRepair && status.installed) {
-          logger.warn(
-            `[PermissionHooks] Hook assets still need repair for ${host}` +
-            (status.repairError ? `: ${status.repairError}` : ''),
-          );
-        }
+  // Process sequentially because several hosts share the same bridge/helper
+  // targets under ~/.dollhouse/hooks, and concurrent writes are flaky on Windows.
+  for (const host of AUTO_REPAIRABLE_HOOK_HOSTS) {
+    try {
+      const status = await reconcilePermissionHookStatus(host, {
+        homeDir,
+        autoRepair: true,
+        sourceScriptPath,
+      });
 
-        return toStartupRepairHostResult(host, status);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.warn(`[PermissionHooks] Startup hook repair failed for ${host}: ${message}`);
-        return {
-          host,
-          installed: false,
-          assetsPrepared: false,
-          assetsCurrent: false,
-          autoRepaired: false,
-          needsRepair: true,
-          repairError: message,
-          outcome: 'error',
-        } satisfies PermissionHookStartupRepairHostResult;
+      if (status.autoRepaired) {
+        logger.info(`[PermissionHooks] Refreshed installed hook assets for ${host}`);
+      } else if (status.needsRepair && status.installed) {
+        logger.warn(
+          `[PermissionHooks] Hook assets still need repair for ${host}` +
+          (status.repairError ? `: ${status.repairError}` : ''),
+        );
       }
-    }),
-  );
+
+      hostResults.push(toStartupRepairHostResult(host, status));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.warn(`[PermissionHooks] Startup hook repair failed for ${host}: ${message}`);
+      hostResults.push({
+        host,
+        installed: false,
+        assetsPrepared: false,
+        assetsCurrent: false,
+        autoRepaired: false,
+        needsRepair: true,
+        repairError: message,
+        outcome: 'error',
+      } satisfies PermissionHookStartupRepairHostResult);
+    }
+  }
   const repairedCount = hostResults.filter((result) => result.outcome === 'repaired').length;
   const needsRepairCount = hostResults.filter((result) =>
     result.outcome === 'needs_repair' || result.outcome === 'error').length;
