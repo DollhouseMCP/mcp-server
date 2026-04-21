@@ -241,6 +241,9 @@ describe('Permission Server Integration', () => {
     itBash('hook script should discover server via port file and get a response', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const tempRunDir = path.join(tempHome, '.dollhouse', 'run');
+      const tempPortFile = path.join(tempRunDir, 'permission-server.port');
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           let body = '';
@@ -263,15 +266,15 @@ describe('Permission Server Integration', () => {
 
       // Start server and write port file
       testPort = await listenOnLoopback(mockServer);
-      await fs.mkdir(RUN_DIR, { recursive: true });
-      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+      await fs.mkdir(tempRunDir, { recursive: true });
+      await fs.writeFile(tempPortFile, String(testPort), 'utf-8');
 
       // Run hook script
       const { spawn } = await import('node:child_process');
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
           env: {
-            HOME: os.homedir(),
+            HOME: tempHome,
             PATH: SAFE_TEST_PATH,
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
           },
@@ -289,8 +292,7 @@ describe('Permission Server Integration', () => {
 
       // Cleanup and assert
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
-      await fs.unlink(PORT_FILE).catch(() => {});
-      await fs.unlink(PID_PORT_FILE).catch(() => {});
+      await fs.rm(tempHome, { recursive: true, force: true });
 
       expect(code).toBe(0);
       expect(capturedBody).toEqual({
