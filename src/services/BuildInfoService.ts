@@ -15,6 +15,7 @@ import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
 import { resolveSessionIdentity } from './sessionIdentity.js';
+import { getPermissionHookAuditSummary } from '../utils/permissionHooks.js';
 
 export interface BuildInfo {
   sessionId: string;
@@ -50,6 +51,12 @@ export interface BuildInfo {
     startTime: Date;
     uptime: number;
     mcpConnection: boolean;
+  };
+  permissionHooks?: {
+    installedHosts: string[];
+    currentHosts: string[];
+    repairedHosts: string[];
+    needsRepairHosts: string[];
   };
   /** Issue #706: Startup timing and readiness status. */
   startup?: {
@@ -100,7 +107,8 @@ export class BuildInfoService {
     // Use Promise.allSettled to collect all available info, even if some sources fail
     const results = await Promise.allSettled([
       this.getGitInfo(),
-      this.getDockerInfo()
+      this.getDockerInfo(),
+      getPermissionHookAuditSummary(),
     ]);
 
     // Package info comes from build-time generated constants
@@ -113,6 +121,9 @@ export class BuildInfoService {
     const dockerInfo = results[1].status === 'fulfilled'
       ? results[1].value
       : { isDocker: false, info: undefined };
+    const permissionHookInfo = results[2].status === 'fulfilled'
+      ? results[2].value
+      : { installedHosts: [], currentHosts: [], repairedHosts: [], needsRepairHosts: [] };
 
     // Log any failures for diagnostics
     const failures: string[] = [];
@@ -121,6 +132,9 @@ export class BuildInfoService {
     }
     if (results[1].status === 'rejected') {
       failures.push(`docker info: ${results[1].reason}`);
+    }
+    if (results[2].status === 'rejected') {
+      failures.push(`permission hook audit: ${results[2].reason}`);
     }
 
     if (failures.length > 0) {
@@ -172,6 +186,7 @@ export class BuildInfoService {
         uptime: Date.now() - this.startTime.getTime(),
         mcpConnection: true // We're connected if this method is being called via MCP
       },
+      permissionHooks: permissionHookInfo,
       startup: startupInfo,
     };
   }
@@ -244,6 +259,26 @@ export class BuildInfoService {
     lines.push(`- **Started**: ${info.server.startTime.toISOString()}`);
     lines.push(`- **Uptime**: ${this.formatUptime(info.server.uptime / 1000)}`);
     lines.push(`- **MCP Connection**: ${info.server.mcpConnection ? '✅ Connected' : '❌ Disconnected'}`);
+
+    if (info.permissionHooks) {
+      const installedHosts = info.permissionHooks.installedHosts.length > 0
+        ? info.permissionHooks.installedHosts.join(', ')
+        : 'None';
+      const currentHosts = info.permissionHooks.currentHosts.length > 0
+        ? info.permissionHooks.currentHosts.join(', ')
+        : 'None';
+      const needsRepairHosts = info.permissionHooks.needsRepairHosts.length > 0
+        ? info.permissionHooks.needsRepairHosts.join(', ')
+        : 'None';
+
+      lines.push(
+        '',
+        '## 🔐 Permission Hooks',
+        `- **Installed Hosts**: ${installedHosts}`,
+        `- **Current Assets**: ${currentHosts}`,
+        `- **Needs Repair**: ${needsRepairHosts}`,
+      );
+    }
 
     // Issue #706: Startup timing
     if (info.startup) {

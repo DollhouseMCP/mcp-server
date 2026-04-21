@@ -13,7 +13,7 @@ import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
 import { ensureLatestPortFile } from '../portDiscovery.js';
-import { getPermissionHookStatusAsync } from '../../utils/permissionHooks.js';
+import { getPermissionHookStatusAsync, reconcilePermissionHookStatus } from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import {
@@ -48,6 +48,32 @@ interface PermissionDecisionDetail {
   monospace?: boolean;
 }
 
+type PermissionDecisionTargetKey =
+  | 'file_path'
+  | 'path'
+  | 'url'
+  | 'pattern'
+  | 'query'
+  | 'element_name'
+  | 'request_id';
+
+interface PermissionDecisionInput extends Record<string, unknown> {
+  command?: string;
+  file_path?: string;
+  path?: string;
+  url?: string;
+  pattern?: string;
+  query?: string;
+  element_name?: string;
+  request_id?: string;
+}
+
+interface PermissionDecisionTargetDescriptor {
+  key: PermissionDecisionTargetKey;
+  label: string;
+  monospace?: boolean;
+}
+
 interface KnownPolicySession {
   sessionId: string;
   displayName: string;
@@ -62,7 +88,7 @@ interface PermissionDecisionTracker {
   trackDecision(
     sessionId: string | undefined,
     toolName: string,
-    input: Record<string, unknown>,
+    input: PermissionDecisionInput,
     result: Record<string, unknown>,
     platform: string,
   ): void;
@@ -142,7 +168,7 @@ function normalizePermissionResponseForPlatform(
 
 function buildDecisionDetails(
   toolName: string,
-  input: Record<string, unknown>,
+  input: PermissionDecisionInput,
   result: Record<string, unknown>,
   platform: string,
 ): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
@@ -156,7 +182,7 @@ function buildDecisionDetails(
     details.push({ label: 'Command', value: input.command, monospace: true });
   }
 
-  const targetDescriptors: Array<{ key: string; label: string; monospace?: boolean }> = [
+  const targetDescriptors: PermissionDecisionTargetDescriptor[] = [
     { key: 'file_path', label: 'File', monospace: true },
     { key: 'path', label: 'Path', monospace: true },
     { key: 'url', label: 'URL' },
@@ -202,7 +228,7 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
     trackDecision(
       sessionId: string | undefined,
       toolName: string,
-      input: Record<string, unknown>,
+      input: PermissionDecisionInput,
       result: Record<string, unknown>,
       platform: string,
     ): void {
@@ -309,11 +335,12 @@ async function selfHealLatestPermissionPortFile(port: number | undefined): Promi
 async function resolveInstalledPermissionAuthorityHosts(
   homeDir: string,
   authorityState: Awaited<ReturnType<typeof readPermissionAuthorityState>>,
+  autoRepairHookAssets: boolean,
 ): Promise<PermissionAuthorityHost[]> {
   const installedStatuses = await Promise.all(
     PERMISSION_AUTHORITY_HOSTS.map(async (host) => ({
       host,
-      status: await getPermissionHookStatusAsync(homeDir, host),
+      status: await reconcilePermissionHookStatus(host, { homeDir, autoRepair: autoRepairHookAssets }),
     })),
   );
 
@@ -334,6 +361,7 @@ async function resolveInstalledPermissionAuthorityHosts(
  */
 export interface RegisterPermissionRoutesOptions {
   homeDir?: string;
+  autoRepairHookAssets?: boolean;
 }
 
 export function registerPermissionRoutes(
@@ -342,6 +370,7 @@ export function registerPermissionRoutes(
   options: RegisterPermissionRoutesOptions = {},
 ): void {
   const authorityHomeDir = options.homeDir ?? homedir();
+  const autoRepairHookAssets = options.autoRepairHookAssets ?? process.env.NODE_ENV !== 'test';
   const decisionTracker = createPermissionDecisionTracker();
   /**
    * POST /api/evaluate_permission
@@ -358,7 +387,7 @@ export function registerPermissionRoutes(
 
     const body = req.body as {
       tool_name?: string;
-      input?: Record<string, unknown>;
+      input?: PermissionDecisionInput;
       platform?: string;
       session_id?: string;
     };
@@ -447,7 +476,15 @@ export function registerPermissionRoutes(
 
       const data = opResult.data as Record<string, unknown>;
       const authorityState = await readPermissionAuthorityState(authorityHomeDir);
-      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(authorityHomeDir, authorityState);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(
+        authorityHomeDir,
+        authorityState,
+        autoRepairHookAssets,
+      );
+      const hookHost = typeof data.hookHost === 'string' ? data.hookHost : undefined;
+      const hookStatus = hookHost
+        ? await reconcilePermissionHookStatus(hookHost, { homeDir: authorityHomeDir, autoRepair: autoRepairHookAssets })
+        : await getPermissionHookStatusAsync(authorityHomeDir);
       const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
       const denyPatterns = (data.combinedDenyPatterns as string[] | undefined) ?? [];
@@ -473,8 +510,13 @@ export function registerPermissionRoutes(
         elements,
         knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
-        hookInstalled: data.hookInstalled,
+        hookInstalled: hookStatus.installed,
         hookHost: data.hookHost,
+        hookAssetsPrepared: hookStatus.assetsPrepared,
+        hookAssetsCurrent: hookStatus.assetsCurrent,
+        hookAutoRepaired: hookStatus.autoRepaired,
+        hookNeedsRepair: hookStatus.needsRepair,
+        hookRepairError: hookStatus.repairError,
         authority: authorityState,
         authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
@@ -493,7 +535,11 @@ export function registerPermissionRoutes(
   router.get('/permissions/authority', async (_req, res) => {
     try {
       const authorityState = await readPermissionAuthorityState(authorityHomeDir);
-      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(authorityHomeDir, authorityState);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(
+        authorityHomeDir,
+        authorityState,
+        autoRepairHookAssets,
+      );
       res.json({
         ...authorityState,
         supportedHosts: installedAuthorityHosts,

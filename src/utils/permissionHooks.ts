@@ -20,6 +20,10 @@ export interface PermissionHookStatus {
   installed: boolean;
   configured?: boolean;
   assetsPrepared?: boolean;
+  assetsCurrent?: boolean;
+  autoRepaired?: boolean;
+  needsRepair?: boolean;
+  repairError?: string;
   host?: string;
   scriptPath?: string;
   settingsPath?: string;
@@ -45,6 +49,43 @@ export interface InstallPermissionHookOptions {
   sourceScriptPath?: string;
   now?: Date;
 }
+
+export interface ReconcilePermissionHookOptions {
+  homeDir?: string;
+  sourceScriptPath?: string;
+  autoRepair?: boolean;
+}
+
+export interface PermissionHookAuditSummary {
+  installedHosts: string[];
+  currentHosts: string[];
+  repairedHosts: string[];
+  needsRepairHosts: string[];
+}
+
+interface HookAssetDescriptor {
+  kind: 'bridge' | 'port-helper' | 'wrapper';
+  sourcePath: string;
+  targetPath: string;
+}
+
+interface HookAssetAuditResult {
+  assetsPrepared: boolean;
+  assetsCurrent: boolean;
+  staleAssets: HookAssetDescriptor[];
+}
+
+const MANAGED_HOOK_WRAPPER_BASENAMES = {
+  'vscode': 'pretooluse-vscode.sh',
+  'cursor': 'pretooluse-cursor.sh',
+  'windsurf': 'pretooluse-windsurf.sh',
+  'gemini-cli': 'pretooluse-gemini.sh',
+  'codex': 'pretooluse-codex.sh',
+} as const;
+
+const WRAPPER_HOOK_HOSTS = Object.keys(MANAGED_HOOK_WRAPPER_BASENAMES) as Array<keyof typeof MANAGED_HOOK_WRAPPER_BASENAMES>;
+
+const AUTO_REPAIRABLE_HOOK_HOSTS = ['claude-code', ...WRAPPER_HOOK_HOSTS] as const;
 
 function repoRootFromModule(): string {
   const currentFile = fileURLToPath(import.meta.url);
@@ -141,20 +182,8 @@ function summarizeMarkerStatuses(markerPaths: Iterable<string>): PermissionHookS
 }
 
 function getHookWrapperBasename(host: string): string | null {
-  switch (normalizeHookHost(host)) {
-    case 'vscode':
-      return 'pretooluse-vscode.sh';
-    case 'cursor':
-      return 'pretooluse-cursor.sh';
-    case 'windsurf':
-      return 'pretooluse-windsurf.sh';
-    case 'gemini-cli':
-      return 'pretooluse-gemini.sh';
-    case 'codex':
-      return 'pretooluse-codex.sh';
-    default:
-      return null;
-  }
+  const normalizedHost = normalizeHookHost(host);
+  return MANAGED_HOOK_WRAPPER_BASENAMES[normalizedHost as keyof typeof MANAGED_HOOK_WRAPPER_BASENAMES] ?? null;
 }
 
 function getHookWrapperPath(host: string, homeDir = homedir()): string | null {
@@ -166,6 +195,87 @@ function getHookSourcePath(host: string): string {
   const root = repoRootFromModule();
   const basename = getHookWrapperBasename(host);
   return basename ? join(root, 'scripts', basename) : join(root, 'scripts', 'pretooluse-dollhouse.sh');
+}
+
+function supportsManagedHookAssets(host: string): boolean {
+  const normalized = normalizeHookHost(host);
+  return normalized === 'claude-code' || getHookWrapperBasename(normalized) !== null;
+}
+
+function getPrimaryHookScriptPath(host: string, homeDir = homedir()): string {
+  return getHookWrapperPath(host, homeDir) ?? getPermissionHookScriptPath(homeDir);
+}
+
+function getManagedHookAssets(
+  host: string,
+  homeDir = homedir(),
+  sourceScriptPath?: string,
+): HookAssetDescriptor[] {
+  const normalized = normalizeHookHost(host);
+  const hooksDir = dirname(getPermissionHookScriptPath(homeDir));
+  const assets: HookAssetDescriptor[] = [
+    {
+      kind: 'bridge',
+      sourcePath: sourceScriptPath ?? join(repoRootFromModule(), 'scripts', 'pretooluse-dollhouse.sh'),
+      targetPath: getPermissionHookScriptPath(homeDir),
+    },
+    {
+      kind: 'port-helper',
+      sourcePath: join(repoRootFromModule(), 'scripts', 'permission-port-discovery.sh'),
+      targetPath: join(hooksDir, 'permission-port-discovery.sh'),
+    },
+  ];
+
+  const wrapperTargetPath = getHookWrapperPath(normalized, homeDir);
+  if (wrapperTargetPath) {
+    assets.push({
+      kind: 'wrapper',
+      sourcePath: getHookSourcePath(normalized),
+      targetPath: wrapperTargetPath,
+    });
+  }
+
+  return assets;
+}
+
+async function readOptionalUtf8File(filePath: string): Promise<string | undefined> {
+  try {
+    return await readFile(filePath, 'utf-8');
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+async function auditHookAssets(
+  host: string,
+  homeDir = homedir(),
+  sourceScriptPath?: string,
+): Promise<HookAssetAuditResult> {
+  const assets = getManagedHookAssets(host, homeDir, sourceScriptPath);
+  const staleAssets: HookAssetDescriptor[] = [];
+  let assetsPrepared = true;
+
+  for (const asset of assets) {
+    const sourceRaw = await readFile(asset.sourcePath, 'utf-8');
+    const targetRaw = await readOptionalUtf8File(asset.targetPath);
+    if (targetRaw === undefined) {
+      assetsPrepared = false;
+      staleAssets.push(asset);
+      continue;
+    }
+    if (targetRaw !== sourceRaw) {
+      staleAssets.push(asset);
+    }
+  }
+
+  return {
+    assetsPrepared,
+    assetsCurrent: staleAssets.length === 0,
+    staleAssets,
+  };
 }
 
 export function getPermissionHookMarkerPath(homeDir = homedir(), host?: string): string {
@@ -266,6 +376,163 @@ export async function getPermissionHookStatusAsync(homeDir = homedir(), host?: s
   }
 
   return summarizeMarkerStatuses(await collectHookMarkerPathsAsync(homeDir));
+}
+
+function shouldAttemptHookAssetRepair(
+  status: PermissionHookStatus,
+  audit: HookAssetAuditResult,
+): boolean {
+  return Boolean(
+    status.installed
+    || status.assetsPrepared
+    || status.scriptPath
+    || audit.assetsPrepared
+    || audit.staleAssets.length > 0,
+  );
+}
+
+function buildFallbackPermissionHookStatus(
+  baseStatus: PermissionHookStatus,
+  normalizedHost: string,
+  homeDir: string,
+): PermissionHookStatus {
+  return {
+    ...baseStatus,
+    host: baseStatus.host ?? normalizedHost,
+    scriptPath: baseStatus.scriptPath ?? getPrimaryHookScriptPath(normalizedHost, homeDir),
+  };
+}
+
+async function auditAndMaybeRepairHookAssets(
+  normalizedHost: string,
+  homeDir: string,
+  sourceScriptPath: string | undefined,
+  autoRepair: boolean,
+  fallbackStatus: PermissionHookStatus,
+): Promise<{ audit: HookAssetAuditResult; autoRepaired: boolean }> {
+  let audit = await auditHookAssets(normalizedHost, homeDir, sourceScriptPath);
+  let autoRepaired = false;
+
+  if (!audit.assetsCurrent && autoRepair && shouldAttemptHookAssetRepair(fallbackStatus, audit)) {
+    await installHookAssetsForHost(normalizedHost, homeDir, sourceScriptPath);
+    audit = await auditHookAssets(normalizedHost, homeDir, sourceScriptPath);
+    autoRepaired = audit.assetsCurrent;
+  }
+
+  return { audit, autoRepaired };
+}
+
+function buildHookRepairFailureStatus(
+  fallbackStatus: PermissionHookStatus,
+  error: unknown,
+): PermissionHookStatus {
+  const message = error instanceof Error ? error.message : String(error);
+  logger.warn(`[PermissionHooks] Failed to reconcile hook assets for ${fallbackStatus.host}: ${message}`);
+
+  return {
+    ...fallbackStatus,
+    assetsCurrent: false,
+    autoRepaired: false,
+    needsRepair: true,
+    repairError: message,
+  };
+}
+
+export async function reconcilePermissionHookStatus(
+  host: string,
+  options: ReconcilePermissionHookOptions = {},
+): Promise<PermissionHookStatus> {
+  const normalizedHost = normalizeHookHost(host);
+  const homeDir = options.homeDir ?? homedir();
+  const sourceScriptPath = options.sourceScriptPath;
+  const autoRepair = options.autoRepair ?? false;
+  const baseStatus = readHostSpecificHookStatus(homeDir, normalizedHost);
+
+  if (!supportsManagedHookAssets(normalizedHost)) {
+    return baseStatus;
+  }
+
+  const fallbackStatus = buildFallbackPermissionHookStatus(baseStatus, normalizedHost, homeDir);
+
+  try {
+    const { audit, autoRepaired } = await auditAndMaybeRepairHookAssets(
+      normalizedHost,
+      homeDir,
+      sourceScriptPath,
+      autoRepair,
+      fallbackStatus,
+    );
+
+    return {
+      ...fallbackStatus,
+      assetsPrepared: audit.assetsPrepared,
+      assetsCurrent: audit.assetsCurrent,
+      autoRepaired,
+      needsRepair: !audit.assetsCurrent,
+    };
+  } catch (error) {
+    return buildHookRepairFailureStatus(fallbackStatus, error);
+  }
+}
+
+export async function getPermissionHookAuditSummary(homeDir = homedir()): Promise<PermissionHookAuditSummary> {
+  const statuses = await Promise.all(
+    AUTO_REPAIRABLE_HOOK_HOSTS.map(async (host) => ({
+      host,
+      status: await reconcilePermissionHookStatus(host, { homeDir }),
+    })),
+  );
+
+  const installedHosts = statuses
+    .filter(({ status }) => status.installed || status.assetsPrepared)
+    .map(({ host }) => host);
+  const currentHosts = statuses
+    .filter(({ status }) => status.assetsCurrent)
+    .map(({ host }) => host);
+  const repairedHosts = statuses
+    .filter(({ status }) => status.autoRepaired)
+    .map(({ host }) => host);
+  const needsRepairHosts = statuses
+    .filter(({ status }) => status.needsRepair)
+    .map(({ host }) => host);
+
+  return {
+    installedHosts,
+    currentHosts,
+    repairedHosts,
+    needsRepairHosts,
+  };
+}
+
+export async function repairPermissionHooksOnStartup(homeDir = homedir()): Promise<void> {
+  const startedAt = Date.now();
+  let repairedCount = 0;
+  let needsRepairCount = 0;
+
+  await Promise.allSettled(
+    AUTO_REPAIRABLE_HOOK_HOSTS.map(async (host) => {
+      const status = await reconcilePermissionHookStatus(host, {
+        homeDir,
+        autoRepair: true,
+      });
+
+      if (status.autoRepaired) {
+        repairedCount += 1;
+        logger.info(`[PermissionHooks] Refreshed installed hook assets for ${host}`);
+      } else if (status.needsRepair && status.installed) {
+        needsRepairCount += 1;
+        logger.warn(
+          `[PermissionHooks] Hook assets still need repair for ${host}` +
+          (status.repairError ? `: ${status.repairError}` : ''),
+        );
+      }
+    }),
+  );
+
+  logger.info(
+    `[PermissionHooks] Startup hook asset audit completed in ${Date.now() - startedAt}ms ` +
+    `(repaired=${repairedCount}, needsRepair=${needsRepairCount})`,
+  );
 }
 
 function normalizeHooksRoot(parsed: Record<string, unknown>): Record<string, unknown[]> {

@@ -21,7 +21,12 @@ const __dirname = dirname(__filename);
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
-import { getPermissionHookStatusAsync, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
+import {
+  installPermissionHook,
+  reconcilePermissionHookStatus,
+  type InstallPermissionHookResult,
+  type PermissionHookStatus,
+} from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -71,6 +76,7 @@ type ConfigPathClient =
   | 'claude'
   | 'claude-code'
   | 'cursor'
+  | 'vscode'
   | 'windsurf'
   | 'cline'
   | 'lmstudio'
@@ -116,6 +122,11 @@ function getConfigPath(client: string): string | null {
     },
     'claude-code': () => join(home, '.claude.json'),
     'cursor': () => join(home, '.cursor', 'mcp.json'),
+    'vscode': () => {
+      if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+      if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Code', 'User', 'settings.json');
+      return join(home, '.config', 'Code', 'User', 'settings.json');
+    },
     'windsurf': () => join(home, '.codeium', 'windsurf', 'mcp_config.json'),
     'cline': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
@@ -566,6 +577,10 @@ export function createSetupRoutes(opts?: {
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
   /** Override permission hook installer. For testing only. */
   _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
+  /** Override permission hook status reconciler. For testing only. */
+  _reconcilePermissionHookStatus?: (client: string) => Promise<PermissionHookStatus>;
+  /** Enable automatic hook asset repair during detect. Defaults off in tests. */
+  _autoRepairPermissionHooksOnDetect?: boolean;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -581,6 +596,9 @@ export function createSetupRoutes(opts?: {
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
   const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
+  const autoRepairPermissionHooksOnDetect = opts?._autoRepairPermissionHooksOnDetect ?? process.env.NODE_ENV !== 'test';
+  const hookStatusReconciler = opts?._reconcilePermissionHookStatus ?? (async (client: string) =>
+    reconcilePermissionHookStatus(client, { autoRepair: autoRepairPermissionHooksOnDetect }));
   const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -588,6 +606,7 @@ export function createSetupRoutes(opts?: {
       { id: 'claude', name: 'Claude Desktop' },
       { id: 'claude-code', name: 'Claude Code' },
       { id: 'cursor', name: 'Cursor' },
+      { id: 'vscode', name: 'VS Code' },
       { id: 'cline', name: 'Cline' },
       { id: 'windsurf', name: 'Windsurf' },
       { id: 'lmstudio', name: 'LM Studio' },
@@ -604,10 +623,14 @@ export function createSetupRoutes(opts?: {
           support: { level: SETUP_SUPPORT_LEVELS[id] },
           ...detection,
         };
-        if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
-          const hookStatus = await getPermissionHookStatusAsync(undefined, id);
+        if (id === 'claude-code' || id === 'cursor' || id === 'vscode' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+          const hookStatus = await hookStatusReconciler(id);
           result.hookInstalled = hookStatus.installed;
           result.hookAssetsPrepared = hookStatus.assetsPrepared;
+          result.hookAssetsCurrent = hookStatus.assetsCurrent;
+          result.hookAutoRepaired = hookStatus.autoRepaired;
+          result.hookNeedsRepair = hookStatus.needsRepair;
+          result.hookRepairError = hookStatus.repairError;
         }
         results[id] = result;
       }

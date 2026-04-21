@@ -225,6 +225,16 @@
       } else if (data.permissionPromptActive) {
         hookDot.dataset.status = 'active';
         hookLabel.textContent = 'Prompt tool active';
+      } else if (data.hookNeedsRepair) {
+        hookDot.dataset.status = 'warning';
+        hookLabel.textContent = data.hookHost
+          ? `Hook needs repair (${data.hookHost})`
+          : 'Hook needs repair';
+      } else if (data.hookAutoRepaired) {
+        hookDot.dataset.status = 'active';
+        hookLabel.textContent = data.hookHost
+          ? `Hook refreshed (${data.hookHost})`
+          : 'Hook refreshed';
       } else if (data.hookInstalled) {
         hookDot.dataset.status = 'active';
         hookLabel.textContent = data.hookHost ? `Hook installed (${data.hookHost})` : 'Hook installed';

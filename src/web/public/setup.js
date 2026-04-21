@@ -680,6 +680,13 @@ codex_hooks = true`;
   const updatePermissionInstallButton = (btn, detected) => {
     if (!btn || btn.classList.contains('is-success')) return;
 
+    if (detected?.hookNeedsRepair) {
+      btn.textContent = 'Repair hooks';
+      btn.disabled = false;
+      btn.classList.remove('is-match');
+      return;
+    }
+
     if (detected?.hookInstalled) {
       btn.textContent = 'Permissions enabled';
       btn.disabled = true;
@@ -1119,7 +1126,30 @@ codex_hooks = true`;
     return PERMISSION_SUPPORT_MATRIX[platformId];
   };
 
+  const getHookRepairStatusCopy = (support, detected) => {
+    if (detected?.hookNeedsRepair) {
+      return {
+        tone: 'warning',
+        titleText: `${support.label} hook files need repair.`,
+        messageText: 'DollhouseMCP detected stale local hook assets. Use Configure Now below to rewrite them, or reload the local server so the automatic repair pass can run again.',
+      };
+    }
+
+    if (detected?.hookAutoRepaired) {
+      return {
+        tone: 'info',
+        titleText: `${support.label} hook files were refreshed automatically.`,
+        messageText: 'The installed local hook assets were updated to match this release. Restart the client if it is already running.',
+      };
+    }
+
+    return null;
+  };
+
   const getFullNativePermissionStatusCopy = (support, detected) => {
+    const repairCopy = getHookRepairStatusCopy(support, detected);
+    if (repairCopy) return repairCopy;
+
     if (detected?.hookInstalled) {
       return {
         tone: 'info',
@@ -1145,6 +1175,9 @@ codex_hooks = true`;
 
   const getPartialPermissionStatusCopy = (support, detected) => {
     const activationLabel = support.label === 'Codex' ? 'Bash guardrails' : 'permission hooks';
+    const repairCopy = getHookRepairStatusCopy(support, detected);
+    if (repairCopy) return repairCopy;
+
     if (detected?.hookInstalled) {
       return {
         tone: 'info',
@@ -1185,6 +1218,9 @@ codex_hooks = true`;
   };
 
   const getManualPermissionStatusCopy = (support, detected) => {
+    const repairCopy = getHookRepairStatusCopy(support, detected);
+    if (repairCopy) return repairCopy;
+
     if (detected?.hookAssetsPrepared) {
       return {
         tone: 'info',
