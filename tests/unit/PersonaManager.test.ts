@@ -16,6 +16,7 @@ import { TriggerValidationService } from '../../src/services/validation/TriggerV
 import { ValidationService } from '../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
 import { SerializationService } from '../../src/services/SerializationService.js';
+import { createTestStorageFactory } from '../helpers/createTestStorageFactory.js';
 
 /**
  * PersonaManager Unit Tests
@@ -92,6 +93,7 @@ describe('PersonaManager', () => {
       serializationService: new SerializationService(),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       personaImporter: mockPersonaImporter,
       notifier: mockNotifier,
     });
@@ -607,6 +609,7 @@ const seedPersonaCache = (entries: Array<[string, Persona]>) => {
           serializationService: new SerializationService(),
           metadataService: freshMetadataService,
           eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
           personaImporter: mockPersonaImporter,
           notifier: mockNotifier,
         });

@@ -38,6 +38,7 @@ import { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import { EnsembleManager } from '../../src/elements/ensembles/EnsembleManager.js';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
 import { FileWatchService } from '../../src/services/FileWatchService.js';
+import { createTestStorageFactory } from './createTestStorageFactory.js';
 import { TokenManager } from '../../src/security/tokenManager.js';
 import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.js';
 import type { IndicatorConfig } from '../../src/config/indicator-config.js';
@@ -519,6 +520,7 @@ export function createRealSkillManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 
@@ -555,6 +557,7 @@ export function createRealTemplateManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 
@@ -591,6 +594,7 @@ export function createRealMemoryManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 
@@ -627,6 +631,7 @@ export function createRealEnsembleManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 
@@ -677,6 +682,7 @@ export function createRealAgentManager(
     metadataService,
     eventDispatcher: new ElementEventDispatcher(),
     fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 
@@ -739,6 +745,7 @@ export function createRealPersonaManager(
     fileWatchService,
     personaImporter: overrides?.personaImporter,
     notifier: overrides?.notifier,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
   });
 }
 

@@ -32,7 +32,6 @@
 import { env } from '../../config/env.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
-import type { DatabaseInstance } from '../../database/connection.js';
 import type { UserIdResolver } from '../../database/UserContext.js';
 
 import type { DiContainerFacade } from '../DiContainerFacade.js';
@@ -40,20 +39,6 @@ import type { DiContainerFacade } from '../DiContainerFacade.js';
 // Re-export for callers that import from this module.
 export type { DiContainerFacade };
 
-/**
- * Optional DB deps spread into element-manager constructors. Returns an empty
- * object when DB mode is inactive so callers can use `...resolveDatabaseDeps()`
- * without a flag check.
- */
-export interface OptionalDatabaseDeps {
-  databaseInstance?: DatabaseInstance;
-  getCurrentUserId?: UserIdResolver;
-  createDatabaseStorageLayer?: (
-    db: DatabaseInstance,
-    getUserId: UserIdResolver,
-    elementType: string,
-  ) => import('../../storage/IStorageLayer.js').IStorageLayer;
-}
 
 export class DatabaseServiceRegistrar {
   /**
@@ -90,53 +75,42 @@ export class DatabaseServiceRegistrar {
     // Drizzle instance (resolved by stores and storage layers)
     container.register('DatabaseInstance', () => result.db);
 
-    // Storage layer + state store factories — loaded here (async context) so
-    // drizzle-orm stays out of the static import graph entirely. File-mode
+    // Storage layer factory + state store classes — loaded here (async context)
+    // so drizzle-orm stays out of the static import graph entirely. File-mode
     // code and tests never import these modules.
-    const { DatabaseStorageLayer } = await import('../../storage/DatabaseStorageLayer.js');
-    const { DatabaseMemoryStorageLayer } = await import('../../storage/DatabaseMemoryStorageLayer.js');
+    const { DatabaseStorageLayerFactory } = await import('../../storage/DatabaseStorageLayerFactory.js');
     const { DatabaseActivationStateStore } = await import('../../state/DatabaseActivationStateStore.js');
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
 
-    container.register('DatabaseStorageLayerFactory', () =>
-      (db: DatabaseInstance, getUserId: UserIdResolver, elementType: string) => {
-        if (elementType === 'memories') {
-          return new DatabaseMemoryStorageLayer(db, getUserId);
-        }
-        return new DatabaseStorageLayer(db, getUserId, elementType);
-      }
-    );
     container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
     container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
     container.register('DatabaseChallengeStoreClass', () => DatabaseChallengeStore);
 
     // The bootstrapped DB UUID is the identity every session binds to by default.
-    // Per-session scoping is enforced by ContextTracker/AsyncLocalStorage: stdio
-    // sessions and single-tenant HTTP sessions both carry this UUID as their
-    // SessionContext.userId. When multi-tenant auth lands, HTTP sessions
-    // override it at session creation time. Either way, storage layers read the
-    // userId out of the active session context per call, NOT from a singleton.
     container.register('BootstrappedUserId', () => result.userId);
 
     // 'CurrentUserId' still exists for legacy per-session constructors
     // (ActivationStore/ConfirmationStore/ChallengeStore) that are resolved at
-    // startup/session-init time — i.e. OUTSIDE a request scope, where there
-    // is no active ContextTracker session yet. For stdio, this is safe because
-    // there's only one tenant. For HTTP+DB, each HTTP session resolves it
-    // from its own child-container scope at session creation (see
-    // createServerForHttpSession) and the bootstrapped UUID is the default
-    // until per-request auth identity lands.
+    // startup/session-init time — outside a request scope where there is no
+    // active ContextTracker session yet.
     container.register('CurrentUserId', () => result.userId);
 
-    // 'UserIdResolver' is the per-call resolver used by storage layers. It
-    // reads from the active ContextTracker session scope, so each MCP tool
-    // call sees its own session's userId. stdio has one static session, HTTP
-    // has one per connection — the resolver is the same code.
+    // 'UserIdResolver' — the per-call resolver used by storage layers. Reads
+    // from ContextTracker's active session scope. Must be registered BEFORE
+    // the StorageLayerFactory override below resolves it.
     container.register('UserIdResolver', () => {
       const tracker = container.resolve<ContextTracker>('ContextTracker');
       return createUserIdResolver(tracker);
     });
+
+    // Override the file-mode StorageLayerFactory with the DB-backed variant.
+    // Resolved AFTER UserIdResolver is registered so the factory captures
+    // the DB-specific resolver (not the PathsServiceRegistrar fallback).
+    const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
+    container.register('StorageLayerFactory', () =>
+      new DatabaseStorageLayerFactory(result.db, userIdResolver)
+    );
 
     // Re-register StdioSession with the bootstrapped DB UUID. registerServices()
     // already set up a fallback factory that checks BootstrappedUserId, but by
@@ -150,24 +124,4 @@ export class DatabaseServiceRegistrar {
     }));
   }
 
-  /**
-   * Resolve database deps for element managers.
-   *
-   * Returns the DatabaseInstance plus a per-call userId resolver. The resolver
-   * reads from ContextTracker's active session context, so each HTTP request's
-   * scope supplies its own user identity — no singleton, no tenant bleed.
-   *
-   * Returns `{}` when database mode is inactive, so spreading into deps is a
-   * no-op. Callers don't need to guard with a flag check.
-   */
-  public static resolveDatabaseDeps(container: DiContainerFacade): OptionalDatabaseDeps {
-    if (container.hasRegistration('DatabaseInstance')) {
-      return {
-        databaseInstance: container.resolve<DatabaseInstance>('DatabaseInstance'),
-        getCurrentUserId: container.resolve<UserIdResolver>('UserIdResolver'),
-        createDatabaseStorageLayer: container.resolve('DatabaseStorageLayerFactory'),
-      };
-    }
-    return {};
-  }
 }

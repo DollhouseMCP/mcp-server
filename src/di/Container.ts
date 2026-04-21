@@ -11,7 +11,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { loadIndicatorConfig } from "../config/indicator-config.js";
 import { env } from "../config/env.js";
 import { APICache, CollectionCache, CollectionIndexCache, CacheMemoryBudget } from "../cache/index.js";
-import { getValidatedGlobalCacheMemoryBytes, getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
+import { getValidatedGlobalCacheMemoryBytes, getValidatedMaxBackupsPerElement, getValidatedIndexDebounce, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
 import { BackupService } from "../services/BackupService.js";
 import {
   GitHubClient,
@@ -95,6 +95,8 @@ import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
+import { FileStorageLayerFactory, defaultMemoryFileFilter } from "../storage/FileStorageLayerFactory.js";
+import type { IStorageLayerFactory } from "../storage/IStorageLayerFactory.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
@@ -255,21 +257,6 @@ export class DollhouseContainer {
     return this.services.has(name);
   }
 
-  /**
-   * Resolve database deps for element managers (Phase 4).
-   *
-   * Returns the DatabaseInstance plus a per-call userId resolver. The resolver
-   * reads from ContextTracker's active session context, so each HTTP request's
-   * scope supplies its own user identity — no singleton, no tenant bleed.
-   *
-   * Returns {} when database mode is inactive, so spreading into deps is a no-op.
-   */
-  private resolveDatabaseDeps() {
-    // Thin wrapper around DatabaseServiceRegistrar.resolveDatabaseDeps so
-    // element-manager factories can keep calling `...this.resolveDatabaseDeps()`
-    // without knowing about the registrar. Returns {} when DB mode is off.
-    return DatabaseServiceRegistrar.resolveDatabaseDeps(this);
-  }
 
   public resolve<T>(name: string): T {
     const service = this.services.get(name);
@@ -318,6 +305,10 @@ export class DollhouseContainer {
     this.register('RateLimitTracker', () => new Map<string, number[]>());
     this.register('FileLockManager', () => new FileLockManager());
     this.register('FileOperationsService', () => new FileOperationsService(this.resolve('FileLockManager')));
+    this.register<IStorageLayerFactory>('StorageLayerFactory', () => new FileStorageLayerFactory(
+      this.resolve('FileOperationsService'),
+      { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },
+    ));
     this.register('ConfigManager', () => {
       return new ConfigManager(this.resolve('FileOperationsService'), os);
     });
@@ -408,7 +399,8 @@ export class DollhouseContainer {
       fileWatchService: this.resolve('FileWatchService'),
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     this.register('InitializationService', () => new InitializationService(
       this.resolve('PersonaManager')
@@ -556,7 +548,8 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     this.register('TemplateManager', () => new TemplateManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -569,7 +562,8 @@ export class DollhouseContainer {
       memoryBudget: this.resolve('CacheMemoryBudget'),
       backupService: this.resolve('BackupService'),
       eventDispatcher: this.resolve('ElementEventDispatcher'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
     this.register('AgentManager', () => new AgentManager({
@@ -590,7 +584,8 @@ export class DollhouseContainer {
       elementManagerResolver: (name: string) => this.resolve(name) as import('../elements/agents/AgentManager.js').ResolvedElementManager,
       dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
       verificationStore: this.resolve('ChallengeStore'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     this.register('MemoryManager', () => new MemoryManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -605,7 +600,8 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     this.register('EnsembleManager', () => new EnsembleManager({
       portfolioManager: this.resolve('PortfolioManager'),
@@ -620,7 +616,8 @@ export class DollhouseContainer {
       eventDispatcher: this.resolve('ElementEventDispatcher'),
       contextTracker: this.resolve('ContextTracker'),
       activationRegistry: this.resolve('SessionActivationRegistry'),
-      ...this.resolveDatabaseDeps(),
+      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
+      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
     }));
     // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
     // to avoid eager resolution during constructor (breaks test containers).

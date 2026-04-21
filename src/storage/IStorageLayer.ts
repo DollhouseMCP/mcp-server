@@ -72,6 +72,14 @@ export interface IStorageLayer {
    * Reset all state (index, manifest, cooldown).
    */
   clear(): void;
+
+  /**
+   * Reverse lookup: element ID (UUID in DB mode) → element name.
+   * Optional — only implemented by database-backed layers where
+   * paths are UUIDs rather than human-readable filenames. File-mode
+   * layers return undefined (the name is derivable from the path).
+   */
+  getNameById?(id: string): string | undefined;
 }
 
 // ── Database Storage Extension ──────────────────────────────────────

@@ -26,6 +26,7 @@ import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
+import { createTestStorageFactory } from '../helpers/createTestStorageFactory.js';
 
 describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
   let testDir: string;
@@ -97,6 +98,7 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
       serializationService,
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     });
 
     // Create MigrationManager and OperationalTelemetry for ServerStartup

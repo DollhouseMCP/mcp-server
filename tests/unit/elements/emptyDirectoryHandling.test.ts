@@ -24,6 +24,7 @@ import { ElementType } from '../../../src/portfolio/types.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 describe('Empty Directory Handling', () => {
   let testDir: string;
@@ -110,6 +111,7 @@ describe('Empty Directory Handling', () => {
         serializationService,
         metadataService,
         eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       }));
       const manager = container.resolve<AgentManager>('AgentManager');
       
@@ -145,6 +147,7 @@ describe('Empty Directory Handling', () => {
         serializationService,
         metadataService,
         eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       }));
       const manager = container.resolve<AgentManager>('AgentManager');
 
@@ -190,6 +193,7 @@ describe('Empty Directory Handling', () => {
         serializationService,
         metadataService,
         eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       }));
       const agentManager = container.resolve<AgentManager>('AgentManager');
       const templateManager = container.resolve<TemplateManager>('TemplateManager');

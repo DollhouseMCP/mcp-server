@@ -29,6 +29,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -99,6 +100,7 @@ describe('AgentManager', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');

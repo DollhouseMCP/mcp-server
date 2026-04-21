@@ -29,6 +29,7 @@ import { ValidationService } from '../../../src/services/validation/ValidationSe
 import { ElementType } from '../../../src/portfolio/types.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 describe('PersonaFinding - Multi-Strategy Search', () => {
   let personaManager: PersonaManager;
@@ -153,6 +154,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       serializationService: new SerializationService(),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     });
 
     // Populate cache with test personas

@@ -16,11 +16,9 @@ import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import {
-  getValidatedScanCooldown,
-  getValidatedIndexDebounce,
   STORAGE_LAYER_CONFIG
 } from '../../config/performance-constants.js';
-import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
 // DatabaseMemoryStorageLayer is loaded dynamically via the DI-injected
 // createDatabaseStorageLayer factory. Type reference retained for the
@@ -39,7 +37,6 @@ import { TriggerValidationService } from '../../services/validation/TriggerValid
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { fileURLToPath } from 'url';
@@ -49,21 +46,6 @@ import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../ha
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
 
-/**
- * Issue #13: Utility function to check if a filename is a backup file
- * Backup files should not be loaded by list() - they are archived data, not active memories
- *
- * Backup patterns include:
- * - .backup- timestamp pattern (e.g., name.backup-2025-11-14-22-40-57-303.yaml)
- * - Any file with 'backup' in the name (case-insensitive)
- * - Files in backup/ or backups/ directories (handled at directory level)
- *
- * @param filename - The filename to check (without directory path)
- * @returns true if the file is a backup file that should be excluded
- */
-function isBackupFile(filename: string): boolean {
-  return filename.includes('.backup-') || filename.toLowerCase().includes('backup');
-}
 
 /**
  * Issue #39: Check if a memory name contains backup patterns (corrupted name)
@@ -138,7 +120,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
-        databaseInstance: deps.databaseInstance,
+        storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
       },
       deps.fileOperationsService,
@@ -161,25 +143,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return this.resolveActivationSet('memories', this._localActiveMemoryNames);
   }
 
-  /**
-   * Phase 2: Override factory to use MemoryStorageLayer for multi-directory scanning.
-   * Phase 4: Returns DatabaseMemoryStorageLayer when database deps are available.
-   */
-  protected override createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
-    if (this.databaseInstance && this.getCurrentUserId && this.createDatabaseStorageLayer) {
-      // MemoryManager's DB storage layer is specialized (DatabaseMemoryStorageLayer),
-      // but the injected factory from DI handles creating the right variant.
-      return this.createDatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
-    }
-    // Note: Use this.elementDir (set by BaseElementManager before this is called),
-    // not this.memoriesDir (set after super() returns).
-    return new MemoryStorageLayer(fileOperationsService, {
-      memoriesDir: this.elementDir,
-      scanCooldownMs: getValidatedScanCooldown(),
-      indexDebounceMs: getValidatedIndexDebounce(),
-      fileFilter: (filename: string) => !isBackupFile(filename),
-    });
-  }
+  // createStorageLayer() override REMOVED — the injected IStorageLayerFactory
+  // handles memories (FileStorageLayerFactory creates MemoryStorageLayer;
+  // DatabaseStorageLayerFactory creates DatabaseMemoryStorageLayer). The
+  // factory receives memory-specific config (indexDebounceMs, fileFilter)
+  // at construction time from DI.
 
   protected override getElementLabel(): string {
     return 'memory';

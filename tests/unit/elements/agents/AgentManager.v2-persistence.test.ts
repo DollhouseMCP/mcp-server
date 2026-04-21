@@ -39,6 +39,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { normalizeAutonomyKeys, normalizeResilienceKeys, normalizeGoalKeys, isOneOf } from '../../../../src/elements/agents/constants.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -217,6 +218,7 @@ describe('AgentManager v2 Metadata Persistence', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');

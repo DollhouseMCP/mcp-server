@@ -80,7 +80,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
-        databaseInstance: deps.databaseInstance,
+        storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
       },
       deps.fileOperationsService,

@@ -137,7 +137,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
-        databaseInstance: deps.databaseInstance,
+        storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
       },
       deps.fileOperationsService,

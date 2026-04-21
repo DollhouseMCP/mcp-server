@@ -119,7 +119,12 @@ describe('Element YAML security (BaseElementManager integration)', () => {
     );
 
     // Create TestElementManager with proper DI including ValidationRegistry
-    manager = new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher() }, fileOperationsService, validationRegistry);
+    const { FileStorageLayerFactory } = await import('../../../src/storage/FileStorageLayerFactory.js');
+    const storageLayerFactory = new FileStorageLayerFactory(fileOperationsService, {
+      indexDebounceMs: 2000,
+      fileFilter: () => true,
+    });
+    manager = new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher(), storageLayerFactory }, fileOperationsService, validationRegistry);
   });
 
   afterEach(async () => {

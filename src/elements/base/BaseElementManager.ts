@@ -38,9 +38,8 @@ import { FileWatchService } from '../../services/FileWatchService.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
-import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
-import type { AbstractDatabaseStorageLayer } from '../../storage/AbstractDatabaseStorageLayer.js';
 import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import {
@@ -70,26 +69,21 @@ export interface BaseElementManagerOptions {
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
-  /** Phase 4: Database instance for database-backed storage */
-  databaseInstance?: import('../../database/connection.js').DatabaseInstance;
   /**
-   * Phase 4: Per-call resolver returning the current user's UUID. In DB mode,
-   * storage layers invoke this on every query. Resolves from ContextTracker's
-   * session context, so in HTTP transport each request's scope supplies its
-   * own userId — no stale singleton. Required when `databaseInstance` is set.
+   * Phase 4: Per-call resolver returning the current user's UUID. Used
+   * by listFromDatabase() for cache hygiene (evicting foreign rows from
+   * the per-user cache when includePublic is active). Resolves from
+   * ContextTracker's session context. Undefined in file-only mode.
    */
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
   /**
-   * Phase 4: Factory for creating the database storage layer. Injected by
-   * DI container only in DB mode so the drizzle-orm dependency graph is
-   * not statically loaded in file-only contexts. When absent,
-   * `createStorageLayer` falls back to the file-backed ElementStorageLayer.
+   * Phase 4: Storage-agnostic factory. Creates the correct storage layer
+   * for this element type (file-backed or DB-backed) based on the active
+   * deployment mode. Injected by DI; callers never import or reference
+   * a specific backend.
+   *
    */
-  createDatabaseStorageLayer?: (
-    db: import('../../database/connection.js').DatabaseInstance,
-    getUserId: import('../../database/UserContext.js').UserIdResolver,
-    elementType: string,
-  ) => IStorageLayer;
+  storageLayerFactory: IStorageLayerFactory;
 }
 
 /**
@@ -112,22 +106,10 @@ export interface ElementManagerDeps {
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
-  /** Phase 4: Database instance for database-backed storage */
-  databaseInstance?: import('../../database/connection.js').DatabaseInstance;
-  /**
-   * Phase 4: Per-call user UUID resolver. See BaseElementManagerOptions
-   * for details. Required when `databaseInstance` is set.
-   */
+  /** Phase 4: Per-call user UUID resolver. See BaseElementManagerOptions. */
   getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
-  /**
-   * Phase 4: Factory for creating the database storage layer. Injected by
-   * DI container only in DB mode. See BaseElementManagerOptions for rationale.
-   */
-  createDatabaseStorageLayer?: (
-    db: import('../../database/connection.js').DatabaseInstance,
-    getUserId: import('../../database/UserContext.js').UserIdResolver,
-    elementType: string,
-  ) => IStorageLayer;
+  /** Phase 4: Storage-agnostic factory. See BaseElementManagerOptions. */
+  storageLayerFactory: IStorageLayerFactory;
 }
 
 /**
@@ -178,15 +160,14 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected readonly contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
   protected readonly activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
-  /** Phase 4: Database instance for database-backed storage */
-  protected readonly databaseInstance?: import('../../database/connection.js').DatabaseInstance;
   /**
    * Phase 4: Per-call user UUID resolver — reads from the active session
-   * context every time. Undefined in file-backed mode.
+   * context every time. Undefined in file-backed mode. Used by
+   * listFromDatabase() for cache hygiene.
    */
   protected readonly getCurrentUserId?: import('../../database/UserContext.js').UserIdResolver;
-  /** Phase 4: Injected factory for DB storage layer — undefined in file mode. */
-  protected readonly createDatabaseStorageLayer?: BaseElementManagerOptions['createDatabaseStorageLayer'];
+  /** Phase 4: Storage-agnostic factory for creating the storage layer. */
+  protected readonly storageLayerFactory: IStorageLayerFactory;
 
   /** Map plural ElementType enum values to singular ContentValidator context.
    *  Partial because not all element types have a content context (e.g., ensembles). */
@@ -356,9 +337,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.backupService = options.backupService;
     this.contextTracker = options.contextTracker;
     this.activationRegistry = options.activationRegistry;
-    this.databaseInstance = options.databaseInstance;
     this.getCurrentUserId = options.getCurrentUserId;
-    this.createDatabaseStorageLayer = options.createDatabaseStorageLayer;
+    this.storageLayerFactory = options.storageLayerFactory;
 
     // Get the specialized validator for this element type
     this.validator = validationRegistry.getValidator(elementType);
@@ -417,25 +397,24 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       );
     }
 
-    this.storageLayer = this.createStorageLayer(fileOperationsService);
+    this.storageLayer = this.createStorageLayer();
   }
 
   /**
-   * Factory method for creating the storage layer.
-   * Returns DatabaseStorageLayer when database deps are available,
-   * otherwise ElementStorageLayer for file-backed .md elements.
-   * Subclasses (e.g. MemoryManager) can override for type-specific behavior.
+   * Factory method for creating the storage layer. Delegates to the
+   * injected IStorageLayerFactory which decides the backend (file or
+   * database) based on deployment mode. Subclasses no longer need to
+   * override this — the factory handles type-specific variants
+   * internally (e.g. MemoryStorageLayer for memories).
    */
-  protected createStorageLayer(fileOperationsService: FileOperationsService): IStorageLayer {
-    if (this.databaseInstance && this.getCurrentUserId && this.createDatabaseStorageLayer) {
-      return this.createDatabaseStorageLayer(this.databaseInstance, this.getCurrentUserId, this.elementType);
-    }
-    return new ElementStorageLayer(fileOperationsService, {
+  protected createStorageLayer(): IStorageLayer {
+    return this.storageLayerFactory.createForElement(this.elementType, {
       elementDir: this.elementDir,
       fileExtension: this.getFileExtension(),
       scanCooldownMs: getValidatedScanCooldown(),
     });
   }
+
 
   /**
    * Extract the element name from a relative file path.
@@ -1222,8 +1201,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
         if (isDbMode) {
           // Database mode: resolve element name from storage layer's reverse index
-          const dbLayer = this.storageLayer as AbstractDatabaseStorageLayer;
-          const elementName = dbLayer.getNameById(relativePath)
+          const elementName = this.storageLayer.getNameById?.(relativePath)
             ?? this.extractNameFromPath(relativePath);
           await (this.storageLayer as IWritableStorageLayer).deleteContent(this.elementType, elementName);
         } else {

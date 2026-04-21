@@ -23,6 +23,7 @@ import { TriggerValidationService } from '../../../src/services/validation/Trigg
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 describe('Version Persistence', () => {
   let testDir: string;
@@ -75,6 +76,7 @@ describe('Version Persistence', () => {
       serializationService,
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     }));
     agentManager = container.resolve<AgentManager>('AgentManager');
   });

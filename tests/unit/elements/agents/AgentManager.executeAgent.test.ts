@@ -31,6 +31,7 @@ import { SerializationService } from '../../../../src/services/SerializationServ
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import type { ExecuteAgentResult } from '../../../../src/elements/agents/types.js';
 import { AGENT_LIMITS } from '../../../../src/elements/agents/constants.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -194,6 +195,7 @@ describe('AgentManager.executeAgent', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       elementManagerResolver,
     });
 
