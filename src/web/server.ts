@@ -22,6 +22,7 @@ import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes, repairNvmLauncherOnStartup } from './routes/setupRoutes.js';
+import { repairPermissionHooksOnStartup } from '../utils/permissionHooks.js';
 import { createTotpRoutes } from './routes/totpRoutes.js';
 import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
@@ -324,6 +325,11 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   repairNvmLauncherOnStartup().catch(err =>
     logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
   );
+  if (process.env.NODE_ENV !== 'test') {
+    repairPermissionHooksOnStartup().catch(err =>
+      logger.warn(`[Setup] Permission hook startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+    );
+  }
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {

@@ -121,6 +121,16 @@ describe('BuildInfoService', () => {
       expect(info.server.mcpConnection).toBe(true);
     });
 
+    it('includes permission hook audit summary in build info', async () => {
+      const info = await service.getBuildInfo();
+
+      expect(info.permissionHooks).toBeDefined();
+      expect(Array.isArray(info.permissionHooks?.installedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
+    });
+
     it('should have consistent results across calls', async () => {
       const info1 = await service.getBuildInfo();
       const info2 = await service.getBuildInfo();
@@ -194,7 +204,13 @@ describe('BuildInfoService', () => {
           startTime: new Date('2024-01-01T10:00:00.000Z'),
           uptime: 7200000, // 2 hours in ms
           mcpConnection: true
-        }
+        },
+        permissionHooks: {
+          installedHosts: [],
+          currentHosts: [],
+          repairedHosts: [],
+          needsRepairHosts: [],
+        },
       };
     });
 
@@ -230,6 +246,10 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Started**: 2024-01-01T10:00:00.000Z');
       expect(formatted).toContain('**Uptime**: 2h');
       expect(formatted).toContain('**MCP Connection**: ✅ Connected');
+      expect(formatted).toContain('## 🔐 Permission Hooks');
+      expect(formatted).toContain('**Installed Hosts**: None');
+      expect(formatted).toContain('**Current Assets**: None');
+      expect(formatted).toContain('**Needs Repair**: None');
     });
 
     it('should handle missing optional fields gracefully', () => {

@@ -12,7 +12,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
-import { getPermissionHookMarkerPath } from '../../../src/utils/permissionHooks.js';
+import { getPermissionHookMarkerPath, installPermissionHook } from '../../../src/utils/permissionHooks.js';
 
 function createMockHandler(readResult?: unknown) {
   return {
@@ -220,6 +220,8 @@ describe('permissionRoutes', () => {
 
   describe('GET /api/permissions/status', () => {
     it('should return policy status', async () => {
+      await installPermissionHook('codex', { homeDir: tempHome });
+
       const handler = {
         handleRead: jest.fn().mockResolvedValue([{
           success: true,
@@ -239,13 +241,13 @@ describe('permissionRoutes', () => {
               },
             ],
             permissionPromptActive: false,
-            hookInstalled: false,
+            hookHost: 'codex',
             enforcementReady: false,
             advisory: 'Policies are loaded but NOT enforced.',
           },
         }]),
       } as any;
-      const app = createApp(handler);
+      const app = createApp(handler, { homeDir: tempHome });
 
       const res = await request(app).get('/api/permissions/status');
 
@@ -268,7 +270,11 @@ describe('permissionRoutes', () => {
           confirmRules: ['Bash:git merge*', 'edit_*'],
         }),
       ]);
-      expect(res.body.hookInstalled).toBe(false);
+      expect(res.body.hookInstalled).toBe(true);
+      expect(res.body.hookAssetsPrepared).toBe(true);
+      expect(res.body.hookAssetsCurrent).toBe(true);
+      expect(res.body.hookAutoRepaired).toBe(false);
+      expect(res.body.hookNeedsRepair).toBe(false);
       expect(res.body.enforcementReady).toBe(false);
       expect(res.body.advisory).toContain('NOT enforced');
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);
