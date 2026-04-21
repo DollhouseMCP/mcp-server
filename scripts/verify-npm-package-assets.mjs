@@ -16,6 +16,7 @@ const REQUIRED_PACKAGE_ENTRIES = [
   'dist/seed-elements/memories',
   'scripts/pretooluse-dollhouse.sh',
   'scripts/permission-port-discovery.sh',
+  'scripts/permission-hook-config.sh',
   'server.json',
 ];
 

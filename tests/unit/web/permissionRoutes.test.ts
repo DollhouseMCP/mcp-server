@@ -283,6 +283,12 @@ describe('permissionRoutes', () => {
       expect(res.body.hookAssetsCurrent).toBe(true);
       expect(res.body.hookAutoRepaired).toBe(false);
       expect(res.body.hookNeedsRepair).toBe(false);
+      expect(res.body.hookHealth).toEqual(
+        expect.objectContaining({
+          status: expect.any(String),
+          message: expect.any(String),
+        }),
+      );
       expect(res.body.hookStartupRepair).toEqual(
         expect.objectContaining({
           repairedCount: expect.any(Number),

@@ -445,6 +445,44 @@ describe('Permission Server Integration', () => {
       });
     });
 
+    itBash('hook script should clamp invalid timeout and retry overrides to safe bounds', async () => {
+      let testPort = 0;
+      const mockServer = http.createServer((_req, _res) => {
+        // Intentionally never respond so curl exercises the bounded timeout path.
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const startedAt = Date.now();
+      const { code, stdout } = await runHookScript(
+        {
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        },
+        {
+          DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '0',
+          DOLLHOUSE_HOOK_MAX_RETRIES: '-1',
+          DOLLHOUSE_HOOK_AUTHORITY_CACHE_TTL_SECONDS: '999',
+        },
+      );
+      const elapsedMs = Date.now() - startedAt;
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+        },
+      });
+      expect(elapsedMs).toBeLessThan(20_000);
+    }, 20000);
+
     itBash('hook script should emit Codex-compatible JSON for allow decisions', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
@@ -504,10 +542,12 @@ describe('Permission Server Integration', () => {
       const codexScript = path.join(tempHome, 'pretooluse-codex.sh');
       const sharedScript = path.join(tempHome, 'pretooluse-dollhouse.sh');
       const portHelper = path.join(tempHome, 'permission-port-discovery.sh');
+      const configHelper = path.join(tempHome, 'permission-hook-config.sh');
 
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-codex.sh'), codexScript);
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh'), sharedScript);
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'permission-port-discovery.sh'), portHelper);
+      await fs.copyFile(path.join(process.cwd(), 'scripts', 'permission-hook-config.sh'), configHelper);
 
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [codexScript], {

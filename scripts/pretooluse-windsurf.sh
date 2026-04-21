@@ -6,15 +6,13 @@
 # evaluations and then maps the response back to Windsurf exit codes.
 
 RUN_DIR="$HOME/.dollhouse/run"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
+source "$SCRIPT_DIR/permission-hook-config.sh"
 # shellcheck disable=SC2034 # Consumed by permission-port-discovery.sh after sourcing.
 PORT_FILE="$RUN_DIR/permission-server.port"
-MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
-INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
 HOOK_PLATFORM="windsurf"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-[[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || MAX_RETRIES=2
-[[ "$INITIAL_TIMEOUT" =~ ^[0-9]+$ ]] || INITIAL_TIMEOUT=5
+permission_hook_load_runtime_config
 
 debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then

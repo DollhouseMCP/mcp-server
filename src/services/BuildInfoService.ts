@@ -15,7 +15,12 @@ import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
 import { resolveSessionIdentity } from './sessionIdentity.js';
-import { getPermissionHookAuditSummary, type PermissionHookStartupRepairSummary } from '../utils/permissionHooks.js';
+import {
+  getPermissionHookAuditSummary,
+  summarizePermissionHookHealth,
+  type PermissionHookHealthSummary,
+  type PermissionHookStartupRepairSummary,
+} from '../utils/permissionHooks.js';
 
 export interface BuildInfo {
   sessionId: string;
@@ -52,6 +57,7 @@ export interface BuildInfo {
     mcpConnection: boolean;
   };
   permissionHooks?: {
+    health: PermissionHookHealthSummary;
     installedHosts: string[];
     currentHosts: string[];
     repairedHosts: string[];
@@ -124,6 +130,7 @@ export class BuildInfoService {
     const permissionHookInfo = results[2].status === 'fulfilled'
       ? results[2].value
       : { installedHosts: [], currentHosts: [], repairedHosts: [], needsRepairHosts: [], lastStartupRepair: null };
+    const permissionHookHealth = summarizePermissionHookHealth(permissionHookInfo);
 
     // Log any failures for diagnostics
     const failures: string[] = [];
@@ -185,7 +192,10 @@ export class BuildInfoService {
         uptime: Date.now() - this.startTime.getTime(),
         mcpConnection: true // We're connected if this method is being called via MCP
       },
-      permissionHooks: permissionHookInfo,
+      permissionHooks: {
+        ...permissionHookInfo,
+        health: permissionHookHealth,
+      },
       startup: startupInfo,
     };
   }
@@ -280,6 +290,7 @@ export class BuildInfoService {
       lines.push(
         '',
         '## 🔐 Permission Hooks',
+        `- **Health**: ${info.permissionHooks.health.status.toUpperCase()} — ${info.permissionHooks.health.message}`,
         `- **Installed Hosts**: ${installedHosts}`,
         `- **Current Assets**: ${currentHosts}`,
         `- **Needs Repair**: ${needsRepairHosts}`,

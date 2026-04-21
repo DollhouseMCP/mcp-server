@@ -17,17 +17,14 @@
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
 
 RUN_DIR="$HOME/.dollhouse/run"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
+source "$SCRIPT_DIR/permission-hook-config.sh"
 # shellcheck disable=SC2034 # Consumed by permission-port-discovery.sh after sourcing.
 PORT_FILE="$RUN_DIR/permission-server.port"
 AUTHORITY_FILE="$RUN_DIR/permission-authority.json"
-AUTHORITY_CACHE_TTL_SECONDS=2
-MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
-INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-[[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || MAX_RETRIES=2
-[[ "$INITIAL_TIMEOUT" =~ ^[0-9]+$ ]] || INITIAL_TIMEOUT=5
+permission_hook_load_runtime_config
 
 # Debug logging helper — writes to stderr so it doesn't pollute stdout
 debug() {

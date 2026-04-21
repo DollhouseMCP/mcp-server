@@ -137,6 +137,12 @@ describe('BuildInfoService', () => {
       expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
+      expect(info.permissionHooks?.health).toEqual(
+        expect.objectContaining({
+          status: expect.any(String),
+          message: expect.any(String),
+        }),
+      );
       expect(info.permissionHooks?.lastStartupRepair).toBeTruthy();
       expect(Array.isArray(info.permissionHooks?.lastStartupRepair?.hostResults)).toBe(true);
     });
@@ -216,6 +222,13 @@ describe('BuildInfoService', () => {
           mcpConnection: true
         },
         permissionHooks: {
+          health: {
+            status: 'warning',
+            message: '1 hook host still needs repair',
+            repairedCount: 1,
+            needsRepairCount: 1,
+            lastCheckedAt: '2024-01-01T10:00:00.000Z',
+          },
           installedHosts: [],
           currentHosts: [],
           repairedHosts: [],
@@ -286,6 +299,7 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Uptime**: 2h');
       expect(formatted).toContain('**MCP Connection**: ✅ Connected');
       expect(formatted).toContain('## 🔐 Permission Hooks');
+      expect(formatted).toContain('**Health**: WARNING — 1 hook host still needs repair');
       expect(formatted).toContain('**Installed Hosts**: None');
       expect(formatted).toContain('**Current Assets**: None');
       expect(formatted).toContain('**Needs Repair**: None');
