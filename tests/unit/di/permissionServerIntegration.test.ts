@@ -389,6 +389,98 @@ describe('Permission Server Integration', () => {
       expect(stdout.trim()).toBe('');
     });
 
+    itBash('hook script should emit Codex-compatible JSON for allow decisions', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              hookSpecificOutput: {
+                permissionDecision: 'allow',
+              },
+            }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'Bash',
+          toolInput: { command: 'node -p "require(\'./package.json\').version"' },
+        },
+        { DOLLHOUSE_HOOK_PLATFORM: 'codex' },
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: { command: 'node -p "require(\'./package.json\').version"' },
+        platform: 'codex',
+        session_id: 'session-hook-test',
+      });
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason: '',
+        },
+      });
+    });
+
+    itBash('hook script should normalize legacy empty Codex allow responses', async () => {
+      let testPort = 0;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({}));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'Bash',
+          toolInput: { command: 'pwd' },
+        },
+        { DOLLHOUSE_HOOK_PLATFORM: 'codex' },
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(JSON.parse(stdout.trim())).toEqual({
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'allow',
+          permissionDecisionReason: '',
+        },
+      });
+    });
+
     itBash('hook script should fall back to the newest live PID-keyed port file and restore the shared file', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
@@ -550,13 +642,17 @@ async function reserveUnusedLoopbackPort(): Promise<number> {
   return port;
 }
 
-function runHookScript(payload: Record<string, unknown>): Promise<{ code: number; stdout: string }> {
+function runHookScript(
+  payload: Record<string, unknown>,
+  envOverrides: Record<string, string> = {},
+): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
     const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
       env: {
         HOME: os.homedir(),
         PATH: SAFE_TEST_PATH,
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
+        ...envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],
     });

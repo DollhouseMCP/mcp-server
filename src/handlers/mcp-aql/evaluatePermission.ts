@@ -64,9 +64,15 @@ function formatWindsurf(decision: string, reason?: string): Record<string, unkno
   return withReason({ allowed: decision === 'allow' }, reason);
 }
 
-/** Codex: wraps in hookSpecificOutput, maps 'ask' to 'deny' */
+/** Codex: explicit PreToolUse payload, maps 'ask' to 'deny' */
 function formatCodex(decision: string, reason?: string): Record<string, unknown> {
-  return { hookSpecificOutput: withReason({ permissionDecision: decision === 'ask' ? 'deny' : decision }, reason) };
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: decision === 'ask' ? 'deny' : decision,
+      permissionDecisionReason: reason ?? '',
+    },
+  };
 }
 
 /** Claude Code (default): uses hookSpecificOutput.permissionDecision for PreToolUse */
