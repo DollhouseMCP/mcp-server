@@ -343,6 +343,9 @@ describe('Permission Server Integration', () => {
     });
 
     itBash('hook script should pass through already-wrapped Claude responses unchanged', async () => {
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const tempRunDir = path.join(tempHome, '.dollhouse', 'run');
+      const tempPortFile = path.join(tempRunDir, 'permission-server.port');
       let testPort = 0;
       const wrappedResponse = {
         hookSpecificOutput: {
@@ -362,17 +365,19 @@ describe('Permission Server Integration', () => {
       });
 
       testPort = await listenOnLoopback(mockServer);
-      await fs.mkdir(RUN_DIR, { recursive: true });
-      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+      await fs.mkdir(tempRunDir, { recursive: true });
+      await fs.writeFile(tempPortFile, String(testPort), 'utf-8');
 
-      const { stdout } = await runHookScript({
-        tool_name: 'Edit',
-        tool_input: { file_path: 'src/index.ts' },
-      });
+      const { stdout } = await runHookScript(
+        {
+          tool_name: 'Edit',
+          tool_input: { file_path: 'src/index.ts' },
+        },
+        { HOME: tempHome },
+      );
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
-      await fs.unlink(PORT_FILE).catch(() => {});
-      await fs.unlink(PID_PORT_FILE).catch(() => {});
+      await fs.rm(tempHome, { recursive: true, force: true });
 
       expect(JSON.parse(stdout.trim())).toEqual(wrappedResponse);
     });

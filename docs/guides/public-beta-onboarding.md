@@ -110,7 +110,7 @@ To switch back:
 
 ## Step 4: Explore What's Available
 
-DollhouseMCP ships with 37 starter elements across all 6 types:
+DollhouseMCP ships with 38 starter elements across all 6 types:
 
 ### Personas (7)
 | Name | What It Does |
@@ -157,7 +157,7 @@ DollhouseMCP ships with 37 starter elements across all 6 types:
 | Test Generator | Automated test creation |
 | Task Manager | Task orchestration |
 
-### Memories (3)
+### Memories (4)
 | Name | What It Does |
 |------|-------------|
 | Conversation History | Session conversation tracking |

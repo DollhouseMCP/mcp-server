@@ -22,6 +22,12 @@ import {
   writeHookMarker,
   writeBackupIfPresent,
 } from './permissionHookShared.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+
+function normalizePermissionHookClient(client: string): string {
+  const normalizedClient = UnicodeValidator.normalize(client).normalizedContent;
+  return normalizeHookHost(normalizedClient);
+}
 
 export function ensureClaudePreToolUseHook(
   parsed: Record<string, unknown>,
@@ -576,7 +582,7 @@ export async function installPermissionHook(
   client: string,
   options: InstallPermissionHookOptions = {},
 ): Promise<InstallPermissionHookResult> {
-  const normalizedClient = normalizeHookHost(client);
+  const normalizedClient = normalizePermissionHookClient(client);
   const homeDir = options.homeDir ?? homedir();
   const installedAt = (options.now ?? new Date()).toISOString();
 

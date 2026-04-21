@@ -202,6 +202,48 @@ export async function getPermissionHookAuditSummary(homeDir = homedir()): Promis
   };
 }
 
+function formatHookHostLabel(count: number): string {
+  return `${count} hook host${count === 1 ? '' : 's'}`;
+}
+
+function formatHookVerb(count: number, singular: string, plural: string): string {
+  return count === 1 ? singular : plural;
+}
+
+function buildPermissionHookHealthMessage(
+  summary: PermissionHookAuditSummary,
+  hadErrors: boolean,
+  repairedCount: number,
+  needsRepairCount: number,
+): string {
+  if (hadErrors) {
+    if (needsRepairCount > 0) {
+      const hostLabel = formatHookHostLabel(needsRepairCount);
+      const verb = formatHookVerb(needsRepairCount, 'needs', 'need');
+      return `${hostLabel} still ${verb} attention after startup repair`;
+    }
+
+    return 'A startup hook repair failed and needs attention';
+  }
+
+  if (needsRepairCount > 0) {
+    const hostLabel = formatHookHostLabel(needsRepairCount);
+    const verb = formatHookVerb(needsRepairCount, 'needs', 'need');
+    return `${hostLabel} still ${verb} repair`;
+  }
+
+  if (repairedCount > 0) {
+    const hostLabel = formatHookHostLabel(repairedCount);
+    return `${hostLabel} repaired on startup`;
+  }
+
+  if (summary.currentHosts.length > 0) {
+    return 'Managed hook assets are current';
+  }
+
+  return 'No managed hook assets currently installed';
+}
+
 export function summarizePermissionHookHealth(
   summary: PermissionHookAuditSummary,
 ): PermissionHookHealthSummary {
@@ -211,13 +253,17 @@ export function summarizePermissionHookHealth(
   );
   const needsRepairCount = lastStartupRepair?.needsRepairCount ?? summary.needsRepairHosts.length;
   const repairedCount = lastStartupRepair?.repairedCount ?? summary.repairedHosts.length;
+  const message = buildPermissionHookHealthMessage(
+    summary,
+    hadErrors,
+    repairedCount,
+    needsRepairCount,
+  );
 
   if (hadErrors) {
     return {
       status: 'error',
-      message: needsRepairCount > 0
-        ? `${needsRepairCount} hook host${needsRepairCount === 1 ? '' : 's'} still ${needsRepairCount === 1 ? 'needs' : 'need'} attention after startup repair`
-        : 'A startup hook repair failed and needs attention',
+      message,
       repairedCount,
       needsRepairCount,
       lastCheckedAt: lastStartupRepair?.completedAt,
@@ -227,7 +273,7 @@ export function summarizePermissionHookHealth(
   if (needsRepairCount > 0) {
     return {
       status: 'warning',
-      message: `${needsRepairCount} hook host${needsRepairCount === 1 ? '' : 's'} still ${needsRepairCount === 1 ? 'needs' : 'need'} repair`,
+      message,
       repairedCount,
       needsRepairCount,
       lastCheckedAt: lastStartupRepair?.completedAt,
@@ -237,7 +283,7 @@ export function summarizePermissionHookHealth(
   if (repairedCount > 0) {
     return {
       status: 'ok',
-      message: `${repairedCount} hook host${repairedCount === 1 ? '' : 's'} repaired on startup`,
+      message,
       repairedCount,
       needsRepairCount,
       lastCheckedAt: lastStartupRepair?.completedAt,
@@ -246,9 +292,7 @@ export function summarizePermissionHookHealth(
 
   return {
     status: 'ok',
-    message: summary.currentHosts.length > 0
-      ? 'Managed hook assets are current'
-      : 'No managed hook assets currently installed',
+    message,
     repairedCount,
     needsRepairCount,
     lastCheckedAt: lastStartupRepair?.completedAt,
