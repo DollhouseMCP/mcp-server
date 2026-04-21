@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.28] - 2026-04-21
+
+- Add explicit session client metadata and update-available status in the web console dropdown, with improved layout alignment.
+- Fix Codex pre-tool-use allow-hook output so Bash permission checks no longer fail with invalid JSON.
+- Audit and document permission-hook contracts across supported clients, including stronger fail-open regression coverage and setup guidance.
+
 ## [2.0.27] - 2026-04-20
 
 - Version bump
