@@ -3,11 +3,11 @@
 This document is the authoritative contract for DollhouseMCP permission hook output across the supported local clients.
 
 Keep this file in sync with:
-- `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/src/handlers/mcp-aql/evaluatePermission.ts`
-- `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/scripts/pretooluse-dollhouse.sh`
-- `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/tests/unit/di/permissionServerIntegration.test.ts`
-- `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/tests/integration/hooks/permission-hook-docker.test.ts`
-- `/Users/mick/Developer/Organizations/DollhouseMCP/active/mcp-server/tests/integration/mcp-aql/permission-flow-platform-adapters.test.ts`
+- `src/handlers/mcp-aql/evaluatePermission.ts`
+- `scripts/pretooluse-dollhouse.sh`
+- `tests/unit/di/permissionServerIntegration.test.ts`
+- `tests/integration/hooks/permission-hook-docker.test.ts`
+- `tests/integration/mcp-aql/permission-flow-platform-adapters.test.ts`
 
 ## Principles
 

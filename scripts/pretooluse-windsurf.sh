@@ -7,10 +7,13 @@
 
 RUN_DIR="$HOME/.dollhouse/run"
 PORT_FILE="$RUN_DIR/permission-server.port"
-MAX_RETRIES=2
-INITIAL_TIMEOUT=5
+MAX_RETRIES="${DOLLHOUSE_HOOK_MAX_RETRIES:-2}"
+INITIAL_TIMEOUT="${DOLLHOUSE_HOOK_INITIAL_TIMEOUT:-5}"
 HOOK_PLATFORM="windsurf"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+[[ "$MAX_RETRIES" =~ ^[0-9]+$ ]] || MAX_RETRIES=2
+[[ "$INITIAL_TIMEOUT" =~ ^[0-9]+$ ]] || INITIAL_TIMEOUT=5
 
 debug() {
   if [[ "${DOLLHOUSE_HOOK_DEBUG:-0}" == "1" ]]; then

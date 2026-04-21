@@ -396,6 +396,35 @@ describe('Permission Server Integration', () => {
       expect(stdout.trim()).toBe('');
     });
 
+    itBash('hook script should fail open when permission requests time out', async () => {
+      let testPort = 0;
+      const mockServer = http.createServer((_req, _res) => {
+        // Intentionally never respond so curl hits its max-time window.
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          tool_name: 'Read',
+          tool_input: { file_path: './test-fixture.txt' },
+        },
+        {
+          DOLLHOUSE_HOOK_INITIAL_TIMEOUT: '1',
+          DOLLHOUSE_HOOK_MAX_RETRIES: '0',
+        },
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+    });
+
     itBash('hook script should emit Codex-compatible JSON for allow decisions', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
@@ -646,6 +675,51 @@ describe('Permission Server Integration', () => {
           permissionDecision: 'ask',
           permissionDecisionReason: 'Needs approval',
         },
+      });
+    });
+
+    itBash('vscode hook wrapper should fail open silently on malformed responses', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ unexpected: true }));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(RUN_DIR, { recursive: true });
+      await fs.writeFile(PORT_FILE, String(testPort), 'utf-8');
+
+      const { code, stdout } = await runHookScript(
+        {
+          toolName: 'runTerminalCommand',
+          toolInput: { command: 'npm test' },
+        },
+        {},
+        VSCODE_HOOK_SCRIPT,
+      );
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.unlink(PORT_FILE).catch(() => {});
+      await fs.unlink(PID_PORT_FILE).catch(() => {});
+
+      expect(code).toBe(0);
+      expect(stdout.trim()).toBe('');
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: { command: 'npm test' },
+        platform: 'vscode',
+        session_id: 'session-hook-test',
       });
     });
 
