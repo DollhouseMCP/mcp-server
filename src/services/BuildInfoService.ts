@@ -30,7 +30,6 @@ export interface BuildInfo {
     type: 'git' | 'npm' | 'unknown';
     gitCommit?: string;
     gitBranch?: string;
-    collectionFix?: string;  // Version identifier for verification
   };
   runtime: {
     nodeVersion: string;
@@ -164,7 +163,6 @@ export class BuildInfoService {
         type: BUILD_TYPE,
         gitCommit: gitInfo.commit,
         gitBranch: gitInfo.branch,
-        collectionFix: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
       },
       runtime: {
         nodeVersion: process.version,

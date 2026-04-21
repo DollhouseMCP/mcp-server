@@ -68,6 +68,7 @@ describe('BuildInfoService', () => {
 
       expect(info.build).toHaveProperty('type');
       expect(['git', 'npm', 'unknown']).toContain(info.build.type);
+      expect(info.build).not.toHaveProperty('collectionFix');
       
       // Optional fields
       if (info.build.gitCommit) {
@@ -230,6 +231,7 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Timestamp**: 2024-01-01T12:00:00.000Z');
       expect(formatted).toContain('**Git Commit**: `abc123def`');
       expect(formatted).toContain('**Git Branch**: main');
+      expect(formatted).not.toContain('collection-fix');
       expect(formatted).toContain('## 💻 Runtime');
       expect(formatted).toContain('**Node.js**: v18.17.0');
       expect(formatted).toContain('**Platform**: linux');
