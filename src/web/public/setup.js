@@ -13,6 +13,8 @@
   const PKG = '@dollhousemcp/mcp-server';
   const HOOKS_DIR = '~/.dollhouse/hooks';
   const HOOK_BASE_SCRIPT_PATH = `${HOOKS_DIR}/pretooluse-dollhouse.sh`;
+  // Keep hook entrypoints and output expectations in sync with
+  // docs/architecture/permission-hook-platform-contracts.md.
 
   /** Platform registry — drives config generation AND panel rendering */
   const PLATFORMS = [

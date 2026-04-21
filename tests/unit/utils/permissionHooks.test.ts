@@ -3,6 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+// Keep installed wrapper-script expectations in sync with
+// docs/architecture/permission-hook-platform-contracts.md.
+
 import {
   ensureClaudePreToolUseHook,
   ensureCodexPreToolUseHook,
