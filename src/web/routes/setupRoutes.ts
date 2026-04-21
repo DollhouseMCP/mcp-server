@@ -564,11 +564,10 @@ function logLicenseWorkerDeliveryFailure(
   deliveryResult: { status?: number; error: string; responseBody?: string },
 ): void {
   logger.error(message, {
-    email: licenseData.email,
     tier: licenseData.tier,
     status: deliveryResult.status ?? null,
     error: deliveryResult.error,
-    responseBody: deliveryResult.responseBody ?? null,
+    responseBodyLength: deliveryResult.responseBody?.length ?? 0,
   });
 }
 
@@ -852,7 +851,7 @@ export function createSetupRoutes(opts?: {
       licenseData.verificationRequestedAt = new Date().toISOString();
       await writeLicense(licenseData);
 
-      logger.info(`[Setup] License pending verification: ${licenseData.tier} (${licenseData.email})`);
+      logger.info(`[Setup] License pending verification: ${licenseData.tier}`);
 
       SecurityMonitor.logSecurityEvent({
         type: 'CONFIG_UPDATED',
@@ -861,7 +860,6 @@ export function createSetupRoutes(opts?: {
         details: `License verification initiated: ${licenseData.tier}`,
         additionalData: {
           tier: licenseData.tier,
-          email: licenseData.email,
         },
       });
 
@@ -870,7 +868,7 @@ export function createSetupRoutes(opts?: {
       // PostHog's event pipeline (1-5 min delay).
       const deliveryResult = await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
       if (deliveryResult.ok) {
-        logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
+        logger.info(`[Setup] Verification email sent directly via Worker for ${licenseData.tier}`);
       } else {
         logLicenseWorkerDeliveryFailure('[Setup] Verification email delivery failed', licenseData, deliveryResult);
 
@@ -940,7 +938,8 @@ export function createSetupRoutes(opts?: {
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'HIGH',
         source: 'setupRoutes.verifyLicenseHandler',
-        details: `Verification max attempts exceeded for: ${license.email}`,
+        details: `Verification max attempts exceeded for tier: ${license.tier}`,
+        additionalData: { tier: license.tier },
       });
       res.status(400).json({ error: 'Too many failed attempts. Please submit the form again to receive a new code.' });
       return;
@@ -969,14 +968,17 @@ export function createSetupRoutes(opts?: {
     delete license.verificationRequestedAt;
     await writeLicense(license);
 
-    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email}) — ${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`);
+    logger.info(
+      `[Setup] License verified and activated: ${license.tier} — ` +
+      `${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`,
+    );
 
     SecurityMonitor.logSecurityEvent({
       type: 'CONFIG_UPDATED',
       severity: 'LOW',
       source: 'setupRoutes.verifyLicenseHandler',
       details: `License activated after email verification: ${license.tier}`,
-      additionalData: { tier: license.tier, email: license.email },
+      additionalData: { tier: license.tier },
     });
 
     // Send confirmation email + PostHog activation event with analytics
@@ -1031,10 +1033,10 @@ export function createSetupRoutes(opts?: {
         return;
       }
 
-      logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
+      logger.info(`[Setup] Verification code resent directly via Worker for ${license.tier}`);
     } catch (workerError) {
       logger.error('[Setup] Unexpected verification resend failure', {
-        email: license.email,
+        tier: license.tier,
         error: workerError instanceof Error ? workerError.message : String(workerError),
       });
       res.status(500).json({ error: 'Failed to resend verification code.' });
