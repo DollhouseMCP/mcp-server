@@ -114,6 +114,37 @@ normalize_response() {
         end
       ' 2>/dev/null
       ;;
+    codex)
+      echo "$response" | jq -c '
+        if type == "object" and (keys | length) == 0 then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "allow",
+              permissionDecisionReason: ""
+            }
+          }
+        elif (.hookSpecificOutput.permissionDecision? | type) == "string" then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: (if .hookSpecificOutput.permissionDecision == "allow" then "allow" else "deny" end),
+              permissionDecisionReason: (.hookSpecificOutput.permissionDecisionReason // .hookSpecificOutput.reason // .reason // .message // "")
+            }
+          }
+        elif (.decision? | type) == "string" and (.decision | IN("allow", "deny", "ask")) then
+          {
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: (if .decision == "allow" then "allow" else "deny" end),
+              permissionDecisionReason: (.reason // .message // "")
+            }
+          }
+        else
+          empty
+        end
+      ' 2>/dev/null
+      ;;
     *)
       echo "$response"
       ;;

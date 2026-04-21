@@ -88,12 +88,24 @@ describe('evaluatePermission', () => {
         .toEqual({ allowed: false, reason: 'Nope' });
     });
 
+    it('should format codex allow response', () => {
+      expect(formatPermissionResponse('allow', 'codex', input))
+        .toEqual({
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'allow',
+            permissionDecisionReason: '',
+          },
+        });
+    });
+
     it('should format codex response (maps ask to deny)', () => {
       expect(formatPermissionResponse('ask', 'codex', input, 'Review needed'))
         .toEqual({
           hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
             permissionDecision: 'deny',
-            reason: 'Review needed',
+            permissionDecisionReason: 'Review needed',
           },
         });
     });
