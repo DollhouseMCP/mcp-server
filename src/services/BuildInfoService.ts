@@ -17,6 +17,7 @@ import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
 import { resolveSessionIdentity } from './sessionIdentity.js';
 import {
   getPermissionHookAuditSummary,
+  type PermissionHookDiagnosticRecord,
   summarizePermissionHookHealth,
   type PermissionHookHealthSummary,
   type PermissionHookStartupRepairSummary,
@@ -62,6 +63,8 @@ export interface BuildInfo {
     currentHosts: string[];
     repairedHosts: string[];
     needsRepairHosts: string[];
+    diagnosticsPath: string;
+    lastDiagnostic: PermissionHookDiagnosticRecord | null;
     lastStartupRepair: PermissionHookStartupRepairSummary | null;
   };
   /** Issue #706: Startup timing and readiness status. */
@@ -129,7 +132,15 @@ export class BuildInfoService {
       : { isDocker: false, info: undefined };
     const permissionHookInfo = results[2].status === 'fulfilled'
       ? results[2].value
-      : { installedHosts: [], currentHosts: [], repairedHosts: [], needsRepairHosts: [], lastStartupRepair: null };
+      : {
+        installedHosts: [],
+        currentHosts: [],
+        repairedHosts: [],
+        needsRepairHosts: [],
+        diagnosticsPath: '',
+        lastDiagnostic: null,
+        lastStartupRepair: null,
+      };
     const permissionHookHealth = summarizePermissionHookHealth(permissionHookInfo);
 
     // Log any failures for diagnostics
@@ -296,12 +307,30 @@ export class BuildInfoService {
         `- **Needs Repair**: ${needsRepairHosts}`,
       );
 
+      if (info.permissionHooks.diagnosticsPath) {
+        lines.push(`- **Diagnostics Log**: ${info.permissionHooks.diagnosticsPath}`);
+      }
+
       if (lastStartupRepair) {
         lines.push(
           `- **Last Startup Audit**: ${lastStartupRepair.completedAt} (${lastStartupRepair.durationMs}ms)`,
           `- **Startup Repairs Applied**: ${lastStartupRepair.repairedCount}`,
           `- **Startup Repair Issues**: ${startupRepairIssues || 'None'}`,
         );
+      }
+
+      if (info.permissionHooks.lastDiagnostic) {
+        const lastDiagnostic = info.permissionHooks.lastDiagnostic;
+        lines.push(
+          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${lastDiagnostic.event}${lastDiagnostic.outcome ? ` / ${lastDiagnostic.outcome}` : ''})`,
+          `- **Last Diagnostic Stage**: ${lastDiagnostic.stage}`,
+          `- **Last Diagnostic Input Bytes**: ${lastDiagnostic.rawInputLength ?? 0}`,
+          `- **Last Diagnostic Normalized Bytes**: ${lastDiagnostic.normalizedResponseLength ?? 0}`,
+          `- **Last Diagnostic Emitted Bytes**: ${lastDiagnostic.emittedResponseLength ?? 0}`,
+        );
+        if (lastDiagnostic.reason) {
+          lines.push(`- **Last Diagnostic Reason**: ${lastDiagnostic.reason}`);
+        }
       }
     }
 

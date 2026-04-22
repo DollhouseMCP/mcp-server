@@ -90,13 +90,7 @@ describe('evaluatePermission', () => {
 
     it('should format codex allow response', () => {
       expect(formatPermissionResponse('allow', 'codex', input))
-        .toEqual({
-          hookSpecificOutput: {
-            hookEventName: 'PreToolUse',
-            permissionDecision: 'allow',
-            permissionDecisionReason: '',
-          },
-        });
+        .toEqual({});
     });
 
     it('should format codex response (maps ask to deny)', () => {

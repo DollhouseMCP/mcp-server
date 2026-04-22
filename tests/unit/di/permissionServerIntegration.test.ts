@@ -490,7 +490,7 @@ describe('Permission Server Integration', () => {
       expect(elapsedMs).toBeLessThan(20_000);
     }, 20000);
 
-    itBash('hook script should emit Codex-compatible JSON for allow decisions', async () => {
+    itBash('hook script should stay silent for Codex allow decisions', async () => {
       let testPort = 0;
       let capturedBody: Record<string, unknown> | null = null;
       const mockServer = http.createServer((req, res) => {
@@ -535,21 +535,16 @@ describe('Permission Server Integration', () => {
         platform: 'codex',
         session_id: 'session-hook-test',
       });
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-          permissionDecisionReason: '',
-        },
-      });
+      expect(stdout).toBe('');
     });
 
-    itBash('codex hook wrapper should emit allow JSON when fail-open triggers before the server is ready', async () => {
+    itBash('codex hook wrapper should fail open silently when the server is not ready', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
       const codexScript = path.join(tempHome, 'pretooluse-codex.sh');
       const sharedScript = path.join(tempHome, 'pretooluse-dollhouse.sh');
       const portHelper = path.join(tempHome, 'permission-port-discovery.sh');
       const configHelper = path.join(tempHome, 'permission-hook-config.sh');
+      const diagnosticsLog = path.join(tempHome, '.dollhouse', 'run', 'permission-hook-diagnostics.jsonl');
 
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-codex.sh'), codexScript);
       await fs.copyFile(path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh'), sharedScript);
@@ -558,7 +553,11 @@ describe('Permission Server Integration', () => {
 
       const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
         const hookProc = spawn(BASH_BINARY, [codexScript], {
-          env: { HOME: tempHome, PATH: SAFE_TEST_PATH },
+          env: {
+            HOME: tempHome,
+            PATH: SAFE_TEST_PATH,
+            DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: diagnosticsLog,
+          },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
@@ -571,19 +570,38 @@ describe('Permission Server Integration', () => {
         hookProc.stdin.end();
       });
 
-      await fs.rm(tempHome, { recursive: true, force: true });
-
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-          permissionDecisionReason: '',
-        },
-      });
+      expect(stdout).toBe('');
+      const diagnosticLines = (await fs.readFile(diagnosticsLog, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(diagnosticLines).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: 'received_input',
+            platform: 'codex',
+            rawInput: JSON.stringify({
+              toolName: 'Bash',
+              toolInput: { command: 'pwd' },
+            }),
+          }),
+          expect.objectContaining({
+            event: 'complete',
+            outcome: 'fail_open',
+            stage: 'port_discovery_failed',
+            platform: 'codex',
+            toolName: 'Bash',
+            normalizedResponseLength: 0,
+            emittedResponseLength: 0,
+          }),
+        ]),
+      );
+
+      await fs.rm(tempHome, { recursive: true, force: true });
     });
 
-    itBash('hook script should normalize legacy empty Codex allow responses', async () => {
+    itBash('hook script should preserve empty stdout for legacy Codex allow responses', async () => {
       let testPort = 0;
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
@@ -612,13 +630,7 @@ describe('Permission Server Integration', () => {
       await fs.unlink(PID_PORT_FILE).catch(() => {});
 
       expect(code).toBe(0);
-      expect(JSON.parse(stdout.trim())).toEqual({
-        hookSpecificOutput: {
-          hookEventName: 'PreToolUse',
-          permissionDecision: 'allow',
-          permissionDecisionReason: '',
-        },
-      });
+      expect(stdout).toBe('');
     });
 
     itBash('cursor hook wrapper should preserve Cursor permission responses', async () => {
@@ -1054,6 +1066,10 @@ function runHookScript(
         HOME: os.homedir(),
         PATH: SAFE_TEST_PATH,
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
+        DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: path.join(
+          os.tmpdir(),
+          `permission-hook-test-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`,
+        ),
         ...envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],

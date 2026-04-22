@@ -13,7 +13,7 @@ Keep this file in sync with:
 
 - Every supported hook client has one explicit, documented stdout contract.
 - Shared shell wrappers may normalize server output, but they must not invent undocumented fail-open shapes.
-- If a client expects structured JSON, DollhouseMCP should emit that structure explicitly for both allow and deny paths.
+- If a client expects structured JSON, DollhouseMCP should emit that structure explicitly for supported decision paths.
 - Windsurf is the exception: its hook contract is exit-code based instead of stdout-JSON based.
 - Hook installation assets must point each client to the wrapper script that matches its contract.
 
@@ -22,7 +22,7 @@ Keep this file in sync with:
 | Client | Installed hook script | Permission platform id | Expected hook result |
 | --- | --- | --- | --- |
 | Claude Code | `pretooluse-dollhouse.sh` | `claude_code` | JSON on stdout: `hookSpecificOutput.hookEventName = "PreToolUse"`, `permissionDecision = "allow" | "deny" | "ask"` |
-| Codex | `pretooluse-codex.sh` | `codex` | JSON on stdout: `hookSpecificOutput.hookEventName = "PreToolUse"`, `permissionDecision = "allow" | "deny"`, `permissionDecisionReason` optional but emitted as `""` on allow |
+| Codex | `pretooluse-codex.sh` | `codex` | Allow: exit `0` with zero stdout bytes. Deny: JSON on stdout: `hookSpecificOutput.hookEventName = "PreToolUse"`, `permissionDecision = "deny"`, `permissionDecisionReason` optional |
 | Cursor | `pretooluse-cursor.sh` | `cursor` | JSON on stdout: `{ permission: "allow" | "deny" | "ask", reason? }` |
 | VS Code / Copilot | `pretooluse-vscode.sh` | `vscode` | JSON on stdout: Claude-compatible `hookSpecificOutput` payload |
 | Gemini CLI | `pretooluse-gemini.sh` | `gemini` | JSON on stdout: `{ decision: "allow" | "deny", reason? }` |
@@ -51,9 +51,10 @@ Client-specific normalization includes:
 - Missing permission server port file: allow / no-op
 - Connection failure or timeout: allow / no-op
 - Malformed server response:
-  - JSON-based clients: allow with an explicit valid allow payload for that platform
+  - JSON-based clients: allow with an explicit valid allow payload for that platform, except Codex `PreToolUse`
+  - Codex `PreToolUse`: allow with zero stdout bytes
   - Windsurf: allow with exit `0`
-- Legacy Codex bare `{}` allow responses are normalized into an explicit `hookSpecificOutput.permissionDecision = "allow"` payload for compatibility
+- Legacy Codex bare `{}` allow responses stay empty on stdout because current Codex `PreToolUse` only supports explicit deny/block responses
 
 ## Runtime Configuration Bounds
 
@@ -69,7 +70,9 @@ Invalid or out-of-range values are clamped or reset to safe defaults so local ov
 
 ## Platform-Specific Behavior Notes
 
-- Claude Code, Codex, and VS Code all require structured JSON on stdout even when the hook is failing open.
+- Claude Code and VS Code require structured JSON on stdout even when the hook is failing open.
+- Codex `PreToolUse` currently supports deny/block only; explicit `permissionDecision: "allow"` and `"ask"` are parsed by Codex but not supported, so DollhouseMCP leaves the allow path as zero stdout bytes.
+- Codex allow/no-op tests must assert exact empty stdout, not `trim() === ""`, because even a lone newline is still hook output.
 - Cursor and Gemini CLI preserve their native stdout contracts, but still pass through the shared port discovery and HTTP retry logic.
 - Windsurf is intentionally different: it never emits a JSON allow/deny envelope. It returns exit code `0` to allow and `2` to block.
 - Startup hook asset repair runs sequentially because several hosts share `~/.dollhouse/hooks/pretooluse-dollhouse.sh` and `permission-port-discovery.sh`; concurrent rewrites were flaky on Windows.
@@ -77,6 +80,7 @@ Invalid or out-of-range values are clamped or reset to safe defaults so local ov
   - `get_build_info`
   - `/api/permissions/status`
   - `/api/health`
+- Shared hook diagnostics are appended to `~/.dollhouse/run/permission-hook-diagnostics.jsonl`, and the latest record is surfaced through the same runtime health/status endpoints. The JSONL record includes raw input, normalized/emitted response lengths, retry data, and the final stage so silent Codex allow paths are still inspectable.
 
 ## Example Payloads
 
@@ -105,14 +109,10 @@ Invalid or out-of-range values are clamped or reset to safe defaults so local ov
 
 ### Codex allow
 
-```json
-{
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "allow",
-    "permissionDecisionReason": ""
-  }
-}
+Codex `PreToolUse` allow is a zero-byte stdout success path:
+
+```text
+[no stdout]
 ```
 
 ### Codex deny

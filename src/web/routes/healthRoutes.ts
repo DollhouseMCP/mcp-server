@@ -54,6 +54,8 @@ export function createHealthRoutes(options: HealthRoutesOptions): Router {
         installedHosts: permissionHookAudit.installedHosts,
         currentHosts: permissionHookAudit.currentHosts,
         needsRepairHosts: permissionHookAudit.needsRepairHosts,
+        diagnosticsPath: permissionHookAudit.diagnosticsPath,
+        lastDiagnostic: permissionHookAudit.lastDiagnostic,
         lastStartupRepair: permissionHookAudit.lastStartupRepair,
       };
     } catch (error) {

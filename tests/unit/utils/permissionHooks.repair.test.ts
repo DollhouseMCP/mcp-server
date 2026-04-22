@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   _resetPermissionHookStartupRepairSummaryForTests,
   getPermissionHookAuditSummary,
+  getPermissionHookDiagnosticsPath,
   getLastPermissionHookStartupRepairSummary,
   getPermissionHookScriptPath,
   installPermissionHook,
@@ -88,6 +89,19 @@ describe('permissionHooks repair flows', () => {
     await installPermissionHook('claude-code', { homeDir: tempHome });
     await installPermissionHook('codex', { homeDir: tempHome });
     await writeFile(getPermissionHookScriptPath(tempHome), '#!/bin/bash\necho stale-shared\n', 'utf-8');
+    await writeFile(
+      getPermissionHookDiagnosticsPath(tempHome),
+      `${JSON.stringify({
+        timestamp: '2026-04-22T04:00:00.000Z',
+        invocationId: 'diag-1',
+        event: 'complete',
+        platform: 'codex',
+        stage: 'response_normalized',
+        outcome: 'success',
+        toolName: 'Bash',
+      })}\n`,
+      'utf-8',
+    );
     await repairPermissionHooksOnStartup(tempHome);
 
     const summary = await getPermissionHookAuditSummary(tempHome);
@@ -95,6 +109,14 @@ describe('permissionHooks repair flows', () => {
     expect(summary.installedHosts).toEqual(expect.arrayContaining(['claude-code', 'codex']));
     expect(summary.currentHosts).toEqual(expect.arrayContaining(['claude-code', 'codex']));
     expect(summary.needsRepairHosts).toEqual([]);
+    expect(summary.diagnosticsPath).toBe(getPermissionHookDiagnosticsPath(tempHome));
+    expect(summary.lastDiagnostic).toEqual(
+      expect.objectContaining({
+        invocationId: 'diag-1',
+        platform: 'codex',
+        outcome: 'success',
+      }),
+    );
     expect(summary.lastStartupRepair).toBeTruthy();
   });
 

@@ -12,9 +12,11 @@ import {
   auditHookAssets,
   collectHookMarkerPaths,
   collectHookMarkerPathsAsync,
+  getPermissionHookDiagnosticsPath,
   getPrimaryHookScriptPath,
   installHookAssetsForHost,
   normalizeHookHost,
+  readLastPermissionHookDiagnostic,
   readHostSpecificHookStatus,
   summarizeMarkerStatuses,
   supportsManagedHookAssets,
@@ -192,12 +194,16 @@ export async function getPermissionHookAuditSummary(homeDir = homedir()): Promis
   const needsRepairHosts = statuses
     .filter(({ status }) => status.needsRepair)
     .map(({ host }) => host);
+  const diagnosticsPath = getPermissionHookDiagnosticsPath(homeDir);
+  const lastDiagnostic = await readLastPermissionHookDiagnostic(homeDir);
 
   return {
     installedHosts,
     currentHosts,
     repairedHosts,
     needsRepairHosts,
+    diagnosticsPath,
+    lastDiagnostic,
     lastStartupRepair: getLastPermissionHookStartupRepairSummary(),
   };
 }

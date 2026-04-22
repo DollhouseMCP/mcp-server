@@ -17,6 +17,15 @@ describe('healthRoutes', () => {
         currentHosts: ['codex'],
         repairedHosts: [],
         needsRepairHosts: [],
+        diagnosticsPath: '/tmp/permission-hook-diagnostics.jsonl',
+        lastDiagnostic: {
+          timestamp: '2026-04-22T04:00:00.000Z',
+          invocationId: 'diag-1',
+          event: 'complete',
+          platform: 'codex',
+          stage: 'response_normalized',
+          outcome: 'success',
+        },
         lastStartupRepair: {
           startedAt: '2026-04-21T20:00:00.000Z',
           completedAt: '2026-04-21T20:00:01.000Z',
@@ -39,6 +48,11 @@ describe('healthRoutes', () => {
         installedHosts: ['codex'],
         currentHosts: ['codex'],
         needsRepairHosts: [],
+        diagnosticsPath: '/tmp/permission-hook-diagnostics.jsonl',
+        lastDiagnostic: expect.objectContaining({
+          invocationId: 'diag-1',
+          outcome: 'success',
+        }),
       }),
     );
   });

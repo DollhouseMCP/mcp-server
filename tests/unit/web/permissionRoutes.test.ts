@@ -14,6 +14,7 @@ import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promise
 import { registerPermissionRoutes } from '../../../src/web/routes/permissionRoutes.js';
 import {
   _resetPermissionHookStartupRepairSummaryForTests,
+  getPermissionHookDiagnosticsPath,
   getPermissionHookMarkerPath,
   installPermissionHook,
   repairPermissionHooksOnStartup,
@@ -229,6 +230,19 @@ describe('permissionRoutes', () => {
     it('should return policy status', async () => {
       await installPermissionHook('codex', { homeDir: tempHome });
       await repairPermissionHooksOnStartup(tempHome);
+      await writeFile(
+        getPermissionHookDiagnosticsPath(tempHome),
+        `${JSON.stringify({
+          timestamp: '2026-04-22T04:00:00.000Z',
+          invocationId: 'diag-1',
+          event: 'complete',
+          platform: 'codex',
+          stage: 'response_normalized',
+          outcome: 'success',
+          toolName: 'Bash',
+        })}\n`,
+        'utf-8',
+      );
 
       const handler = {
         handleRead: jest.fn().mockResolvedValue([{
@@ -298,6 +312,14 @@ describe('permissionRoutes', () => {
           ]),
         }),
       );
+      expect(res.body.hookDiagnostics).toEqual({
+        logPath: getPermissionHookDiagnosticsPath(tempHome),
+        lastEvent: expect.objectContaining({
+          invocationId: 'diag-1',
+          outcome: 'success',
+          platform: 'codex',
+        }),
+      });
       expect(res.body.enforcementReady).toBe(false);
       expect(res.body.advisory).toContain('NOT enforced');
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);

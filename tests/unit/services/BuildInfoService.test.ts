@@ -137,12 +137,21 @@ describe('BuildInfoService', () => {
       expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
       expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
+      expect(typeof info.permissionHooks?.diagnosticsPath).toBe('string');
       expect(info.permissionHooks?.health).toEqual(
         expect.objectContaining({
           status: expect.any(String),
           message: expect.any(String),
         }),
       );
+      if (info.permissionHooks?.lastDiagnostic) {
+        expect(info.permissionHooks.lastDiagnostic).toEqual(
+          expect.objectContaining({
+            invocationId: expect.any(String),
+            event: expect.any(String),
+          }),
+        );
+      }
       expect(info.permissionHooks?.lastStartupRepair).toBeTruthy();
       expect(Array.isArray(info.permissionHooks?.lastStartupRepair?.hostResults)).toBe(true);
     });
@@ -233,6 +242,19 @@ describe('BuildInfoService', () => {
           currentHosts: [],
           repairedHosts: [],
           needsRepairHosts: [],
+          diagnosticsPath: '/Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl',
+          lastDiagnostic: {
+            timestamp: '2024-01-01T10:00:01.000Z',
+            invocationId: 'diag-1',
+            event: 'complete',
+            platform: 'codex',
+            stage: 'response_normalized',
+            outcome: 'success',
+            reason: 'Allowed by policy',
+            rawInputLength: 118,
+            normalizedResponseLength: 0,
+            emittedResponseLength: 0,
+          },
           lastStartupRepair: {
             startedAt: '2024-01-01T09:59:58.000Z',
             completedAt: '2024-01-01T10:00:00.000Z',
@@ -303,9 +325,16 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Installed Hosts**: None');
       expect(formatted).toContain('**Current Assets**: None');
       expect(formatted).toContain('**Needs Repair**: None');
+      expect(formatted).toContain('**Diagnostics Log**: /Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl');
       expect(formatted).toContain('**Last Startup Audit**: 2024-01-01T10:00:00.000Z (2000ms)');
       expect(formatted).toContain('**Startup Repairs Applied**: 1');
       expect(formatted).toContain('**Startup Repair Issues**: vscode (ENOENT: missing shared script)');
+      expect(formatted).toContain('**Last Diagnostic Event**: 2024-01-01T10:00:01.000Z (complete / success)');
+      expect(formatted).toContain('**Last Diagnostic Stage**: response_normalized');
+      expect(formatted).toContain('**Last Diagnostic Input Bytes**: 118');
+      expect(formatted).toContain('**Last Diagnostic Normalized Bytes**: 0');
+      expect(formatted).toContain('**Last Diagnostic Emitted Bytes**: 0');
+      expect(formatted).toContain('**Last Diagnostic Reason**: Allowed by policy');
     });
 
     it('should handle missing optional fields gracefully', () => {
