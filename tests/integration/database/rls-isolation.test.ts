@@ -414,11 +414,14 @@ describe('RLS visibility — public elements', () => {
       // is private; cast to any to peek. We look up the foreign element's
       // UUID from the storage layer's index rather than hard-coding.
       // (If the eviction block is reverted, this assertion fails.)
-      const cache = (skillManager as unknown as {
-        filePathToId: { values(): IterableIterator<string> };
-        elements: Map<string, unknown>;
+      // After BaseElementManager decomposition, caches live on _cache service.
+      const cacheService = (skillManager as unknown as {
+        _cache: {
+          filePathToId: { values(): IterableIterator<string> };
+          elements: Map<string, unknown>;
+        };
       });
-      const cachedIds = [...cache.filePathToId.values()];
+      const cachedIds = [...cacheService._cache.filePathToId.values()];
 
       // Find the foreign element's UUID by querying layer A (user A owns it).
       const layerAforId = new DatabaseStorageLayer(db, fixedUserId(userIdA), 'skills');
@@ -427,7 +430,7 @@ describe('RLS visibility — public elements', () => {
       expect(foreignUuid).toBeDefined();
 
       expect(cachedIds).not.toContain(foreignUuid);
-      expect(cache.elements.has(foreignUuid!)).toBe(false);
+      expect(cacheService._cache.elements.has(foreignUuid!)).toBe(false);
 
       // Second call with flag off: foreign element must not appear in results
       // (covered by the storage-layer test earlier, asserted here too to
