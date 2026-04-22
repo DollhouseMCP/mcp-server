@@ -1549,12 +1549,6 @@ body.modal-open { overflow: hidden; }
   }
 }
 
-@media (max-width: 31rem) {
-  .site-stats .stat:nth-child(2) {
-    display: none;
-  }
-}
-
 @media (max-width: 28rem) {
   .site-header {
     grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1932,8 +1926,6 @@ fieldset.topic-filters {
 
 @media (max-width: 52rem) {
   .header-brand .site-tagline { display: none; }
-  .stat { display: none; }
-  .stat:first-child { display: inline-flex; }
   .elements-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 11.5rem), 1fr)); }
   .elements-grid[data-view="detail"] { grid-template-columns: 1fr; }
   .modal-dialog { height: calc(100vh - 0.5rem); border-radius: 0; }
