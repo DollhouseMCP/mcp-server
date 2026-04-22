@@ -5,7 +5,7 @@
 
 ## Overview
 
-MCP-AQL (Model Context Protocol - Agent Query Language) is DollhouseMCP's unified interface for LLM-to-server communication. It consolidates 50+ discrete tools into 5 semantic endpoints, achieving ~96% token reduction while maintaining full functionality.
+MCP-AQL (Model Context Protocol - Agent Query Language) is a protocol layer on top of MCP, created by Dollhouse Research. In DollhouseMCP, it serves as the unified interface for LLM-to-server communication. It consolidates 50+ discrete tools into 5 semantic endpoints, achieving ~96% token reduction while maintaining full functionality.
 
 ## Design Principles
 

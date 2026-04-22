@@ -198,7 +198,7 @@ This activates a persona and supporting skills together, with combined permissio
 
 ## What's Happening Under the Hood
 
-When you interact with DollhouseMCP, you're using **MCP-AQL** — a query language that routes operations through 5 endpoints:
+When you interact with DollhouseMCP, you're using **MCP-AQL** — a protocol layer on top of MCP, created by Dollhouse Research, that routes operations through 5 endpoints:
 
 | Endpoint | Purpose | Example Operations |
 |----------|---------|-------------------|
@@ -376,7 +376,7 @@ For a detailed operation reference written for the AI itself, see the [LLM Quick
 | **Portfolio** | Your local collection of elements at `~/.dollhouse/portfolio/`. Optionally synced to GitHub for backup. |
 | **Collection** | The community-contributed library of shared elements, browsable and installable via MCP-AQL or at [dollhousemcp.github.io/collection](https://dollhousemcp.github.io/collection/). |
 | **MCP** | Model Context Protocol — the standard that lets AI clients communicate with tool servers. DollhouseMCP is an MCP server. |
-| **MCP-AQL** | DollhouseMCP's query language, routing operations through 5 CRUDE endpoints (Create, Read, Update, Delete, Execute). |
+| **MCP-AQL** | A protocol layer on top of MCP, created by Dollhouse Research, that routes Dollhouse operations through 5 CRUDE endpoints (Create, Read, Update, Delete, Execute). |
 | **CRUDE** | The 5 endpoint categories: **C**reate, **R**ead, **U**pdate, **D**elete, **E**xecute. Each has a default permission level. |
 | **Gatekeeper** | The three-layer permission system that checks every operation server-side. Enforces route policies, element policies, and session confirmations. |
 | **Activation** | Turning on an element for the current session. Changes the AI's behavior and may change the permission surface. |

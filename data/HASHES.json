@@ -1,5 +1,5 @@
 {
-  "generated": "2026-04-22T19:32:41.431Z",
+  "generated": "2026-04-22T20:16:52.903Z",
   "files": {
     "README.md": "545d52950dd98a66149c9ed0e370adc42392e34d9f896980a70248f16f3605aa",
     "agents/code-reviewer.md": "211cf981038183fc792ab1fb7dddf341c1733d96390699d3ccd066a8c201cb6c",
@@ -23,7 +23,7 @@
     "personas/business-consultant.md": "fc932237c124411d2e2a1eea14a525852f4ebf1927f1d7591ecad1b77283a622",
     "personas/creative-writer.md": "6f196943065ecd6c7f0617bf8ca3e060cafae909b26bf9c92192f38012b7e417",
     "personas/debug-detective.md": "0a8bdf2b09d2c65102bbea9344f6aa59ef8e9c3a9f23282d017269c79a54d98f",
-    "personas/dollhouse-expert.md": "9c210d92f400e28c9c79a9dc00e35089819b6e396e1c6264327eb552e682f013",
+    "personas/dollhouse-expert.md": "1a7fb0364b3e1754d2f5127ef1d427e7e28f8038a0ded419e82ce8bafea3d74f",
     "personas/eli5-explainer.md": "c610b934254e7922aa26e7c00ca6e237f2d0d5bcf86fc0b891a80f430fd6b425",
     "personas/security-analyst.md": "8ef140160e191d673b0b84c739d37550f164d9fbc25fc6fefbcc6faf5a2bc99e",
     "personas/technical-analyst.md": "6b830d706b39ee5a93225fcf85c7e006948c858e8f1e41357c832711dfdb23e2",

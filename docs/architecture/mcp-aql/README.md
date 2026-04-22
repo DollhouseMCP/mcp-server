@@ -9,14 +9,14 @@ version: 2.0.0
 
 ## What Is MCP-AQL?
 
-MCP-AQL is an open protocol specification for consolidating multiple MCP tools into semantic endpoints. It's both a spec and a toolkit:
+MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. It is an open protocol specification for consolidating multiple MCP tools into semantic endpoints. It's both a spec and a toolkit:
 
 - **Protocol spec** — the CRUDE endpoint pattern, introspection grammar, and batch operations
 - **Interrogator** — runtime introspection that lets LLMs discover operations on demand
 - **Compiler** — schema-driven dispatch that validates and routes operations
 - **Adapter generator** — code generation for creating MCP-AQL adapters across platforms and languages
 
-MCP-AQL is developed as an independent project at [MCPAQL](https://github.com/MCPAQL):
+The MCP-AQL project is stewarded by Dollhouse Research and published at [MCPAQL](https://github.com/MCPAQL):
 
 | Repository | Description |
 |-----------|-------------|
@@ -33,7 +33,7 @@ MCP-AQL is developed as an independent project at [MCPAQL](https://github.com/MC
 
 ## How DollhouseMCP Uses MCP-AQL
 
-DollhouseMCP is an implementation of MCP-AQL, aiming to track the growing spec as it develops more rigorously. It uses MCP-AQL as its default interface, exposing 50+ element management operations through 5 CRUDE endpoints:
+DollhouseMCP is an implementation of that protocol layer, and it uses MCP-AQL as its default interface for exposing 50+ element management operations through 5 CRUDE endpoints:
 
 | Endpoint | Tool Name | DollhouseMCP Operations |
 |----------|-----------|------------------------|

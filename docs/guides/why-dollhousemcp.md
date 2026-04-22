@@ -174,7 +174,7 @@ Users can inspect the permission profile before installing, and the server enfor
 
 ### [BLOG CANDIDATE] Why a Query Language Matters for Agent Security
 
-MCP-AQL (the GraphQL-inspired query language routed through CRUDE endpoints) isn't just an API design choice. It's a security architecture decision.
+MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. In DollhouseMCP, that GraphQL-inspired query layer routed through CRUDE endpoints isn't just an API design choice. It's a security architecture decision.
 
 By collapsing dozens of individual MCP tools into 5 typed endpoints (Create, Read, Update, Delete, Execute), MCP-AQL provides:
 
