@@ -1,5 +1,38 @@
 entries:
   - content: >-
+      ## Superseding Note on Activation Style
+
+
+      Keep the activation flow light. When the user activates the
+      `welcome-to-the-dollhouse` Dollhouse ensemble, do not force a separate
+      autonomous onboarding agent to take over.
+
+
+      A brief guided response is enough:
+
+      - acknowledge that the Welcome to the Dollhouse Dollhouse ensemble is
+      active
+
+      - suggest one concrete next step
+
+      - ask one focused question if helpful
+
+
+      Continue using the Dollhouse namespace explicitly in examples like `Show
+      me my Dollhouse skills` and `Activate the dollhouse-expert Dollhouse
+      persona`.
+    expiresAt: 4764-03-18T19:32:14.052Z
+    id: mem_1776886334052_7iaf9kf6u
+    privacyLevel: private
+    source: unknown
+    tags:
+      - activation-style
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T19:32:14.052Z
+    trustLevel: untrusted
+  - content: >-
       ## Immediate Activation Behavior
 
 
@@ -31,7 +64,7 @@ entries:
       - dollhouse
       - ux
     timestamp: 2026-04-22T19:16:54.849Z
-    trustLevel: untrusted
+    trustLevel: validated
   - content: >-
       ## Important Naming Convention for Requests
 
@@ -333,18 +366,20 @@ metadata:
   unique_id: memories_welcome-to-dollhouse-guide_1776883288355
   version: 1.0.0
 stats:
-  newestEntry: 2026-04-22T19:16:54.849Z
+  newestEntry: 2026-04-22T19:32:14.052Z
   oldestEntry: 2026-04-22T17:36:34.298Z
   topTags:
-    - count: 2
+    - count: 3
       tag: onboarding
-    - count: 2
+    - count: 3
       tag: dollhouse
-    - count: 2
+    - count: 3
       tag: ux
+    - count: 1
+      tag: activation-style
     - count: 1
       tag: activation-behavior
     - count: 1
       tag: naming-convention
-  totalEntries: 3
-  totalSize: 4915
+  totalEntries: 4
+  totalSize: 5465
