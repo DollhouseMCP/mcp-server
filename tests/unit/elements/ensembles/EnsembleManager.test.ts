@@ -26,6 +26,7 @@ import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
+import { logger } from '../../../../src/utils/logger.js';
 
 describe('EnsembleManager', () => {
   let ensembleManager: EnsembleManager;
@@ -157,6 +158,82 @@ describe('EnsembleManager', () => {
       // Verify migration happened - element should have element_name/element_type
       expect(ensemble.metadata.elements[0].element_name).toBe('legacy-skill');
       expect(ensemble.metadata.elements[0].element_type).toBe('skill');
+    });
+
+    it('should warn once for repeated legacy field parsing on the same ensemble', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const legacyMetadata = {
+        name: 'Legacy Parse Ensemble',
+        elements: [
+          {
+            name: 'legacy-skill',
+            type: 'skill',
+            role: 'primary',
+            priority: 80,
+            activation: 'always'
+          }
+        ]
+      };
+
+      await (ensembleManager as any).parseMetadata(legacyMetadata);
+      await (ensembleManager as any).parseMetadata(legacyMetadata);
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        1,
+        "Ensemble 'Legacy Parse Ensemble' element at index 0 uses deprecated 'name' field. Use 'element_name' instead."
+      );
+      expect(warnSpy).toHaveBeenNthCalledWith(
+        2,
+        "Ensemble 'Legacy Parse Ensemble' element at index 0 uses deprecated 'type' field. Use 'element_type' instead."
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('should not re-warn for the same legacy fields across create and parse paths', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const metadata: any = {
+        name: 'Legacy Shared Warning Ensemble',
+        description: 'Testing bounded legacy warnings',
+        elements: [
+          {
+            name: 'legacy-skill',
+            type: 'skill',
+            role: 'primary',
+            priority: 80,
+            activation: 'always'
+          }
+        ]
+      };
+
+      await ensembleManager.create(metadata);
+      await (ensembleManager as any).parseMetadata(metadata);
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      warnSpy.mockRestore();
+    });
+
+    it('should allow warning history to be cleared for long-running managers', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const metadata: any = {
+        name: 'Legacy Resettable Warning Ensemble',
+        elements: [
+          {
+            name: 'legacy-skill',
+            type: 'skill',
+            role: 'primary',
+            priority: 80,
+            activation: 'always'
+          }
+        ]
+      };
+
+      await (ensembleManager as any).parseMetadata(metadata);
+      ensembleManager.clearLegacyElementWarningHistory();
+      await (ensembleManager as any).parseMetadata(metadata);
+
+      expect(warnSpy).toHaveBeenCalledTimes(4);
+      warnSpy.mockRestore();
     });
 
     it('should reject duplicate metadata name even with different filename (Issue #613)', async () => {
@@ -344,6 +421,85 @@ Test instructions.
       expect(ensemble.metadata.activationStrategy).toBe('priority');
       expect(ensemble.metadata.elements.length).toBe(1);
       expect(ensemble.metadata.elements[0].element_name).toBe('loaded-element');
+    });
+
+    it('should warn once when the same legacy ensemble file is loaded repeatedly', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const fileContent = `---
+name: Repeated Legacy Load
+type: ensemble
+version: 1.0.0
+author: tester
+description: Test repeated legacy warning suppression
+elements:
+  - name: loaded-element
+    type: skill
+    role: primary
+    priority: 85
+    activation: always
+---
+`;
+
+      const filePath = 'repeated-legacy-load.md';
+      const fullPath = path.join(portfolioPath, 'ensembles', filePath);
+      await fs.writeFile(fullPath, fileContent, 'utf-8');
+      mockPortfolioManager.listElements.mockResolvedValue([filePath]);
+      (fileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (targetPath: string) =>
+        fs.readFile(targetPath, 'utf-8')
+      );
+
+      await ensembleManager.load(filePath);
+      await ensembleManager.load(filePath);
+
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+      warnSpy.mockRestore();
+    });
+
+    it('should repair legacy element fields by resaving canonical ensemble metadata', async () => {
+      const fileContent = `---
+name: Repair Legacy Ensemble
+type: ensemble
+version: 1.0.0
+author: tester
+description: Repair old nested field names
+elements:
+  - name: repair-skill
+    type: skill
+    role: primary
+    priority: 90
+    activation: always
+---
+`;
+
+      const filePath = 'repair-legacy-ensemble.md';
+      const fullPath = path.join(portfolioPath, 'ensembles', filePath);
+      await fs.writeFile(fullPath, fileContent, 'utf-8');
+      mockPortfolioManager.listElements.mockResolvedValue([filePath]);
+      (fileLockManager.atomicReadFile as jest.Mock).mockImplementation(async (targetPath: string) =>
+        fs.readFile(targetPath, 'utf-8')
+      );
+
+      const result = await ensembleManager.repairLegacyElementFields();
+
+      expect(result).toEqual({
+        scanned: 1,
+        repaired: 1,
+        errors: 0,
+        repairedEnsembles: [
+          {
+            name: 'Repair Legacy Ensemble',
+            path: filePath,
+          }
+        ]
+      });
+
+      const writes = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls;
+      expect(writes.length).toBeGreaterThan(0);
+      const [, content] = writes[writes.length - 1] as [string, string];
+      expect(content).toContain('element_name: repair-skill');
+      expect(content).toContain('element_type: skill');
+      expect(content).not.toMatch(/^\s*-\s+name:\s+repair-skill$/m);
+      expect(content).not.toMatch(/^\s+type:\s+skill$/m);
     });
   });
 
