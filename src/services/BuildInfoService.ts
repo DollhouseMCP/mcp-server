@@ -143,16 +143,20 @@ export class BuildInfoService {
       };
     const permissionHookHealth = summarizePermissionHookHealth(permissionHookInfo);
 
+    const formatSettledReason = (reason: unknown): string => (
+      reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
+    );
+
     // Log any failures for diagnostics
     const failures: string[] = [];
     if (results[0].status === 'rejected') {
-      failures.push(`git info: ${results[0].reason}`);
+      failures.push(`git info: ${formatSettledReason(results[0].reason)}`);
     }
     if (results[1].status === 'rejected') {
-      failures.push(`docker info: ${results[1].reason}`);
+      failures.push(`docker info: ${formatSettledReason(results[1].reason)}`);
     }
     if (results[2].status === 'rejected') {
-      failures.push(`permission hook audit: ${results[2].reason}`);
+      failures.push(`permission hook audit: ${formatSettledReason(results[2].reason)}`);
     }
 
     if (failures.length > 0) {
@@ -321,8 +325,11 @@ export class BuildInfoService {
 
       if (info.permissionHooks.lastDiagnostic) {
         const lastDiagnostic = info.permissionHooks.lastDiagnostic;
+        const diagnosticOutcome = lastDiagnostic.outcome
+          ? `${lastDiagnostic.event} / ${lastDiagnostic.outcome}`
+          : lastDiagnostic.event;
         lines.push(
-          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${lastDiagnostic.event}${lastDiagnostic.outcome ? ` / ${lastDiagnostic.outcome}` : ''})`,
+          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${diagnosticOutcome})`,
           `- **Last Diagnostic Stage**: ${lastDiagnostic.stage}`,
           `- **Last Diagnostic Input Bytes**: ${lastDiagnostic.rawInputLength ?? 0}`,
           `- **Last Diagnostic Normalized Bytes**: ${lastDiagnostic.normalizedResponseLength ?? 0}`,

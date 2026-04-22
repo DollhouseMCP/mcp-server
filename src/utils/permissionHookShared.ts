@@ -30,6 +30,7 @@ export interface PermissionHookStatus {
   additionalPaths?: string[];
 }
 
+/** Latest JSONL diagnostic event emitted by a local permission hook wrapper. */
 export interface PermissionHookDiagnosticRecord {
   timestamp: string;
   invocationId: string;
@@ -88,6 +89,7 @@ export interface ReconcilePermissionHookOptions {
   autoRepair?: boolean;
 }
 
+/** Aggregate health and repair state for all managed local hook hosts. */
 export interface PermissionHookAuditSummary {
   installedHosts: string[];
   currentHosts: string[];
@@ -98,6 +100,7 @@ export interface PermissionHookAuditSummary {
   lastStartupRepair: PermissionHookStartupRepairSummary | null;
 }
 
+/** Condensed health view surfaced in setup, permissions, and build info. */
 export interface PermissionHookHealthSummary {
   status: 'ok' | 'warning' | 'error';
   message: string;
@@ -111,6 +114,7 @@ export interface PermissionHookStartupRepairHostResult extends PermissionHookSta
   outcome: 'current' | 'repaired' | 'needs_repair' | 'not_installed' | 'error';
 }
 
+/** Result summary for the most recent startup-time hook asset repair pass. */
 export interface PermissionHookStartupRepairSummary {
   startedAt: string;
   completedAt: string;
@@ -283,8 +287,22 @@ export async function readLastPermissionHookDiagnostic(
       return null;
     }
 
-    const parsed = JSON.parse(lastLine) as unknown;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(lastLine) as unknown;
+    } catch (error) {
+      logger.warn(
+        `[PermissionHooks] Failed to parse hook diagnostics JSON from ${diagnosticsPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      logger.warn(
+        `[PermissionHooks] Ignoring malformed hook diagnostics entry from ${diagnosticsPath}: expected JSON object.`,
+      );
       return null;
     }
 

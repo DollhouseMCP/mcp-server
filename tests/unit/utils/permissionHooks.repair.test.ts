@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -10,6 +10,7 @@ import {
   getLastPermissionHookStartupRepairSummary,
   getPermissionHookScriptPath,
   installPermissionHook,
+  readLastPermissionHookDiagnostic,
   reconcilePermissionHookStatus,
   repairPermissionHooksOnStartup,
 } from '../../../src/utils/permissionHooks.js';
@@ -118,6 +119,20 @@ describe('permissionHooks repair flows', () => {
       }),
     );
     expect(summary.lastStartupRepair).toBeTruthy();
+  });
+
+  it('ignores malformed diagnostic JSON entries without throwing', async () => {
+    await mkdir(join(tempHome, '.dollhouse', 'run'), { recursive: true });
+    await writeFile(
+      getPermissionHookDiagnosticsPath(tempHome),
+      '{"timestamp":"2026-04-22T04:00:00.000Z","event":"complete"\n',
+      'utf-8',
+    );
+
+    await expect(readLastPermissionHookDiagnostic(tempHome)).resolves.toBeNull();
+
+    const summary = await getPermissionHookAuditSummary(tempHome);
+    expect(summary.lastDiagnostic).toBeNull();
   });
 
   it('records startup repair errors with per-host reasons', async () => {
