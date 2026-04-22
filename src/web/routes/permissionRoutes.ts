@@ -15,7 +15,9 @@ import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermiss
 import { ensureLatestPortFile } from '../portDiscovery.js';
 import {
   getLastPermissionHookStartupRepairSummary,
+  getPermissionHookDiagnosticsPath,
   getPermissionHookStatusAsync,
+  readLastPermissionHookDiagnostic,
   reconcilePermissionHookStatus,
   summarizePermissionHookHealth,
 } from '../../utils/permissionHooks.js';
@@ -500,12 +502,16 @@ export function registerPermissionRoutes(
       const confirmOperations = (data.combinedConfirmOperations as string[] | undefined) ?? [];
 
       const hookStartupRepair = getLastPermissionHookStartupRepairSummary();
+      const hookDiagnosticsPath = getPermissionHookDiagnosticsPath(authorityHomeDir);
+      const hookLastDiagnostic = await readLastPermissionHookDiagnostic(authorityHomeDir);
       const hookHealthHost = hookStatus.host ?? hookHost ?? 'managed-host';
       const hookHealth = summarizePermissionHookHealth({
         installedHosts: hookStatus.installed || hookStatus.assetsPrepared ? [hookHealthHost] : [],
         currentHosts: hookStatus.assetsCurrent ? [hookHealthHost] : [],
         repairedHosts: hookStatus.autoRepaired ? [hookHealthHost] : [],
         needsRepairHosts: hookStatus.needsRepair ? [hookHealthHost] : [],
+        diagnosticsPath: hookDiagnosticsPath,
+        lastDiagnostic: hookLastDiagnostic,
         lastStartupRepair: hookStartupRepair,
       });
 
@@ -534,6 +540,10 @@ export function registerPermissionRoutes(
         hookRepairError: hookStatus.repairError,
         hookHealth,
         hookStartupRepair,
+        hookDiagnostics: {
+          logPath: hookDiagnosticsPath,
+          lastEvent: hookLastDiagnostic,
+        },
         authority: authorityState,
         authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],

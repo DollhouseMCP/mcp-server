@@ -70,7 +70,7 @@ interface CursorHookResponse {
 interface CodexHookResponse {
   hookSpecificOutput?: {
     hookEventName: 'PreToolUse';
-    permissionDecision: 'allow' | 'deny';
+    permissionDecision: 'deny';
     permissionDecisionReason?: string;
   };
 }
@@ -168,16 +168,18 @@ function toCursorHook(result: CliToolPolicyResult): CursorHookResponse {
 
 /**
  * Translate a CliToolPolicyResult to Codex CLI PreToolUse hook format.
- * Codex uses hookSpecificOutput with permissionDecision.
- * No 'ask' — confirm maps to deny.
+ * Codex PreToolUse currently supports explicit deny only.
+ * Allow/evaluate returns empty stdout; confirm maps to deny.
  */
 function toCodexHook(result: CliToolPolicyResult): CodexHookResponse {
+  if (result.behavior === 'allow' || result.behavior === 'evaluate') {
+    return {};
+  }
+
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
-      permissionDecision: result.behavior === 'allow' || result.behavior === 'evaluate'
-        ? 'allow'
-        : 'deny',
+      permissionDecision: 'deny',
       permissionDecisionReason: result.message ?? '',
     },
   };
@@ -417,7 +419,7 @@ describe('Permission Flow Platform Adapters (Issue #1669)', () => {
         const response = toCodexHook(raw);
 
         if (scenario.expectedBehavior === 'allow') {
-          expect(response.hookSpecificOutput?.permissionDecision).toBe('allow');
+          expect(response).toEqual({});
         } else {
           // Both deny and confirm → deny in Codex (no ask)
           expect(response.hookSpecificOutput).toBeDefined();
@@ -535,7 +537,7 @@ describe('Permission Flow Platform Adapters (Issue #1669)', () => {
         expect(toClaudeCode(raw, scenario.toolName).behavior).toBe('allow');
         expect(toGeminiHook(raw).decision).toBe('allow');
         expect(toCursorHook(raw).permission).toBe('allow');
-        expect(toCodexHook(raw).hookSpecificOutput?.permissionDecision).toBe('allow');
+        expect(toCodexHook(raw)).toEqual({});
         expect(toWindsurfHook(raw).exitCode).toBe(0);
         expect(toVSCodeHook(raw).permission).toBe('allow');
       }
@@ -589,7 +591,7 @@ describe('Permission Flow Platform Adapters (Issue #1669)', () => {
       'Claude Code': { allow: true, deny: true, ask: false, confirm: true, modifyInput: true },
       'Gemini CLI': { allow: true, deny: true, ask: false, confirm: false, modifyInput: true },
       'Cursor': { allow: true, deny: true, ask: true, confirm: false, modifyInput: false },
-      'Codex CLI': { allow: true, deny: true, ask: false, confirm: false, modifyInput: false },
+      'Codex CLI': { allow: true, deny: true, ask: false, confirm: false, modifyInput: false, explicitAllow: false },
       'Windsurf': { allow: true, deny: true, ask: false, confirm: false, modifyInput: false },
       'VS Code': { allow: true, deny: true, ask: true, confirm: false, modifyInput: false },
       'JetBrains': { allow: true, deny: false, ask: false, confirm: false, modifyInput: false },

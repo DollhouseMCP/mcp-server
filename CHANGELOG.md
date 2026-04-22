@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.0.31] - 2026-04-22
+
+- Fix Codex PreToolUse silent allow handling and expand permission hook diagnostics.
+
 ## [2.0.30] - 2026-04-21
 
 - Improve hook reliability across Codex and other supported clients, including fail-open JSON behavior.
