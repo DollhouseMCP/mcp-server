@@ -2006,6 +2006,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
+    const headerNavRow = document.querySelector('.header-nav-row');
+    const consoleTabMenuToggle = document.getElementById('console-tab-menu-toggle');
+    const consoleTabMenu = document.getElementById('console-tab-menu');
     const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
@@ -2090,7 +2093,70 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         p.hidden = p.id !== 'tab-' + tabName;
         p.classList.toggle('active', p.id === 'tab-' + tabName);
       });
+      syncConsoleTabMenuSelection();
+      closeConsoleTabMenu();
+      scheduleConsoleTabOverflowCheck();
     };
+
+    function renderConsoleTabMenu() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      consoleTabMenu.innerHTML = '';
+      consoleTabs.querySelectorAll('.console-tab').forEach((btn) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'console-tab-menu-item';
+        item.dataset.tab = btn.dataset.tab || '';
+        item.setAttribute('role', 'menuitem');
+        item.textContent = btn.textContent || '';
+        if (btn.classList.contains('active')) item.classList.add('active');
+        consoleTabMenu.appendChild(item);
+      });
+    }
+
+    function syncConsoleTabMenuSelection() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      const activeTab = consoleTabs.querySelector('.console-tab.active')?.dataset.tab || '';
+      consoleTabMenu.querySelectorAll('.console-tab-menu-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.tab === activeTab);
+      });
+    }
+
+    function closeConsoleTabMenu() {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = true;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function tabsNeedOverflowMenu() {
+      if (!consoleTabs) return false;
+      const buttons = Array.from(consoleTabs.querySelectorAll('.console-tab'));
+      if (buttons.length < 2) return false;
+      const firstTop = buttons[0].offsetTop;
+      return buttons.some((btn) => btn.offsetTop !== firstTop);
+    }
+
+    let consoleTabOverflowFrame = 0;
+    function updateConsoleTabOverflow() {
+      if (!consoleTabs || !headerNavRow || !consoleTabMenuToggle) return;
+      headerNavRow.classList.remove('header-nav-row--collapsed');
+      consoleTabMenuToggle.hidden = true;
+      const shouldCollapse = tabsNeedOverflowMenu();
+      if (shouldCollapse) {
+        headerNavRow.classList.add('header-nav-row--collapsed');
+        consoleTabMenuToggle.hidden = false;
+      }
+      if (!shouldCollapse) {
+        closeConsoleTabMenu();
+      }
+    }
+
+    function scheduleConsoleTabOverflowCheck() {
+      if (consoleTabOverflowFrame) cancelAnimationFrame(consoleTabOverflowFrame);
+      consoleTabOverflowFrame = requestAnimationFrame(() => {
+        consoleTabOverflowFrame = 0;
+        updateConsoleTabOverflow();
+      });
+    }
 
     /**
      * Parse the URL hash into tab name and query parameters.
@@ -2226,6 +2292,15 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     // Handle hash changes for deep-linking (e.g., open_logs operation)
     globalThis.addEventListener('hashchange', () => applyHashTab());
 
+    renderConsoleTabMenu();
+    syncConsoleTabMenuSelection();
+    scheduleConsoleTabOverflowCheck();
+    globalThis.addEventListener('resize', scheduleConsoleTabOverflowCheck);
+    if (typeof ResizeObserver === 'function' && headerNavRow) {
+      const tabOverflowObserver = new ResizeObserver(() => scheduleConsoleTabOverflowCheck());
+      tabOverflowObserver.observe(headerNavRow);
+    }
+
     if (consoleTabs) {
       consoleTabs.addEventListener('click', (e) => {
         const btn = e.target.closest('.console-tab');
@@ -2239,6 +2314,31 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         lazyInitTab(tab, tabInits);
       });
     }
+
+    consoleTabMenuToggle?.addEventListener('click', () => {
+      if (!consoleTabMenu) return;
+      const willOpen = consoleTabMenu.hidden;
+      consoleTabMenu.hidden = !willOpen;
+      consoleTabMenuToggle.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+
+    consoleTabMenu?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.console-tab-menu-item');
+      if (!btn || !btn.dataset.tab) return;
+      const tab = btn.dataset.tab;
+      switchToTab(tab);
+      localStorage.setItem(TAB_KEY, tab);
+      lazyInitTab(tab, tabInits);
+    });
+
+    globalThis.addEventListener('click', (e) => {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      if (consoleTabMenu.hidden) return;
+      const target = e.target;
+      if (!(target instanceof Element)) return;
+      if (consoleTabMenu.contains(target) || consoleTabMenuToggle.contains(target)) return;
+      closeConsoleTabMenu();
+    });
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
