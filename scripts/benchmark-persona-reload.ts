@@ -95,6 +95,10 @@ async function main() {
     eventDispatcher: new ElementEventDispatcher(),
     personaImporter,
     notifier,
+    storageLayerFactory: new (await import('../src/storage/FileStorageLayerFactory.js')).FileStorageLayerFactory(
+      fileOperations,
+      { indexDebounceMs: 200, fileFilter: (f: string) => !f.includes('.backup-') },
+    ),
   });
 
   try {

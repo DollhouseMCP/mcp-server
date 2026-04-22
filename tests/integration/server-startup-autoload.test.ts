@@ -28,6 +28,7 @@ import { MetadataService } from '../../src/services/MetadataService.js';
 import { FileWatchService } from '../../src/services/FileWatchService.js';
 import { createRealMemoryManager } from '../helpers/di-mocks.js';
 import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../helpers/createTestStorageFactory.js';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -152,6 +153,7 @@ describe('Server Startup - Auto-Load Memories Integration', () => {
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
       fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
     });
 
     const operationalTelemetry = new OperationalTelemetry(configManager);

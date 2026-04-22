@@ -1,37 +1,19 @@
-import os from "os";
-import * as path from "path";
 import { PACKAGE_VERSION } from "../generated/version.js";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
 import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
-import { VerbTriggerManager } from "../portfolio/VerbTriggerManager.js";
-import { RelationshipManager } from "../portfolio/RelationshipManager.js";
-import { NLPScoringManager } from "../portfolio/NLPScoringManager.js";
+import { CollectionCache } from "../cache/index.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { loadIndicatorConfig } from "../config/indicator-config.js";
 import { env } from "../config/env.js";
-import { APICache, CollectionCache, CollectionIndexCache, CacheMemoryBudget } from "../cache/index.js";
-import { getValidatedGlobalCacheMemoryBytes, getValidatedMaxBackupsPerElement, getValidatedIndexDebounce, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
+import { getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
 import { BackupService } from "../services/BackupService.js";
-import {
-  GitHubClient,
-  CollectionBrowser,
-  CollectionIndexManager,
-  CollectionSearch,
-  PersonaDetails,
-  ElementInstaller,
-} from "../collection/index.js";
-import { GitHubAuthManager } from "../auth/GitHubAuthManager.js";
 import { PortfolioManager, ElementType } from "../portfolio/PortfolioManager.js";
 import { MigrationManager } from "../portfolio/MigrationManager.js";
-import { EnhancedIndexManager } from "../portfolio/EnhancedIndexManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
 import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import { SkillManager } from "../elements/skills/index.js";
-import { TemplateManager } from "../elements/templates/TemplateManager.js";
-import { TemplateRenderer } from "../utils/TemplateRenderer.js";
 import { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
 import { MemoryManager } from "../elements/memories/MemoryManager.js";
@@ -44,7 +26,6 @@ import { PersonaHandler } from "../handlers/PersonaHandler.js";
 import { ElementCRUDHandler } from "../handlers/ElementCRUDHandler.js";
 import { CollectionHandler } from "../handlers/CollectionHandler.js";
 import { PortfolioHandler } from "../handlers/PortfolioHandler.js";
-import { PortfolioPullHandler } from "../handlers/PortfolioPullHandler.js";
 import { GitHubAuthHandler } from "../handlers/GitHubAuthHandler.js";
 import { DisplayConfigHandler } from "../handlers/DisplayConfigHandler.js";
 import { IdentityHandler } from "../handlers/IdentityHandler.js";
@@ -52,45 +33,22 @@ import { ConfigHandler } from "../handlers/ConfigHandler.js";
 import { SyncHandler } from "../handlers/SyncHandlerV2.js";
 import { ToolRegistry } from "../handlers/ToolRegistry.js";
 import { ServerSetup } from "../server/index.js";
-import { ServerStartup } from "../server/startup.js";
 import { PathValidator } from "../security/pathValidator.js";
 import { logger } from "../utils/logger.js";
 import { ErrorHandler } from "../utils/ErrorHandler.js";
-import { UnifiedIndexManager } from "../portfolio/UnifiedIndexManager.js";
-import { PortfolioIndexManager } from "../portfolio/PortfolioIndexManager.js";
 import { SubmitToPortfolioTool } from "../tools/portfolio/submitToPortfolioTool.js";
 import { ConfigManager } from "../config/ConfigManager.js";
-import { PortfolioRepoManager } from "../portfolio/PortfolioRepoManager.js";
-import { PortfolioSyncManager } from "../portfolio/PortfolioSyncManager.js";
-import { getPortfolioRepositoryName } from "../config/portfolioConfig.js";
-import { GitHubPortfolioIndexer } from "../portfolio/GitHubPortfolioIndexer.js";
 import { IndexConfigManager } from "../portfolio/config/IndexConfig.js";
-import { PortfolioSyncComparer } from "../sync/PortfolioSyncComparer.js";
-import { PortfolioDownloader } from "../sync/PortfolioDownloader.js";
 import { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
 import { BuildInfoService } from "../services/BuildInfoService.js";
 import { InitializationService } from "../services/InitializationService.js";
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
-import { FileLockManager } from '../security/fileLockManager.js';
-import { StateChangeNotifier } from "../services/StateChangeNotifier.js";
-import { SerializationService } from "../services/SerializationService.js";
-import { FileWatchService } from "../services/FileWatchService.js";
-import { MetadataService } from "../services/MetadataService.js";
-import { FileOperationsService } from "../services/FileOperationsService.js";
-import { ValidationRegistry } from "../services/validation/ValidationRegistry.js";
-import { TriggerValidationService } from "../services/validation/TriggerValidationService.js";
-import { ValidationService } from "../services/validation/ValidationService.js";
-import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
-import { AnthropicToDollhouseConverter, DollhouseToAnthropicConverter } from "../converters/index.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import type { IActivationStateStore } from "../state/IActivationStateStore.js";
-import { VerificationNotifier } from "../services/VerificationNotifier.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
-import { InMemoryChallengeStore } from "../state/InMemoryChallengeStore.js";
 import type { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
 import type { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
-import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
@@ -98,47 +56,22 @@ import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 // SharedPoolServiceRegistrar is dynamically imported in preparePortfolio()
 // to keep the shared-pool module out of the static import graph. Deleting
 // src/collection/shared-pool/ does not break compilation.
-import { FileStorageLayerFactory, defaultMemoryFileFilter } from "../storage/FileStorageLayerFactory.js";
-import type { IStorageLayerFactory } from "../storage/IStorageLayerFactory.js";
 import { validateUserId } from "../paths/validateUserId.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
-import { PatternDecryptor } from "../security/encryption/PatternDecryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
 import { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver } from "../context/SessionContext.js";
-import { PatternExtractor } from "../security/validation/PatternExtractor.js";
-import { BackgroundValidator } from "../security/validation/BackgroundValidator.js";
-import { SecurityTelemetry } from "../security/telemetry/SecurityTelemetry.js";
-import { ContentValidator } from "../security/contentValidator.js";
-import { OperationalTelemetry } from "../telemetry/OperationalTelemetry.js";
 import { StartupTimer } from "../telemetry/StartupTimer.js";
-import { DefaultEnhancedIndexHelpers } from "../portfolio/enhanced-index/EnhancedIndexHelpers.js";
-import { ElementDefinitionBuilder } from "../portfolio/enhanced-index/ElementDefinitionBuilder.js";
-import { ActionTriggerExtractor } from "../portfolio/enhanced-index/ActionTriggerExtractor.js";
-import { TriggerMetricsTracker } from "../portfolio/enhanced-index/TriggerMetricsTracker.js";
-import { SemanticRelationshipService } from "../portfolio/enhanced-index/SemanticRelationshipService.js";
-import { ElementEventDispatcher } from '../events/ElementEventDispatcher.js';
 import { TokenManager } from "../security/tokenManager.js";
 import type { UnifiedConsoleResult } from "../web/console/UnifiedConsole.js";
-import {
-  PaginationService,
-  FilterService,
-  SortService,
-  ElementQueryService,
-} from '../services/query/index.js';
-import { RetentionPolicyService, MemoryRetentionStrategy } from '../services/RetentionPolicyService.js';
 import { PolicyExportService } from '../services/PolicyExportService.js';
-import { LogManager, buildLogManagerConfig } from '../logging/LogManager.js';
-import { FileLogSink } from '../logging/sinks/FileLogSink.js';
+import { LogManager } from '../logging/LogManager.js';
 import { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
-import { PlainTextFormatter } from '../logging/formatters/PlainTextFormatter.js';
-import { JsonlFormatter } from '../logging/formatters/JsonlFormatter.js';
-import { wireLogHooks, getTriggerMetricsLogListener } from '../logging/LogHooks.js';
+import { wireLogHooks } from '../logging/LogHooks.js';
 import { MetricsManager } from '../metrics/MetricsManager.js';
 import { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
-import { buildMetricsManagerConfig } from '../metrics/types.js';
 import {
   PerformanceMonitorCollector,
   LRUCacheCollector,
@@ -153,6 +86,13 @@ import {
 } from '../metrics/collectors/index.js';
 import { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
 import { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
+import { CoreInfraServiceRegistrar } from './registrars/CoreInfraServiceRegistrar.js';
+import { SecurityServiceRegistrar } from './registrars/SecurityServiceRegistrar.js';
+import { ObservabilityServiceRegistrar } from './registrars/ObservabilityServiceRegistrar.js';
+import { ElementManagerServiceRegistrar } from './registrars/ElementManagerServiceRegistrar.js';
+import { CollectionServiceRegistrar } from './registrars/CollectionServiceRegistrar.js';
+import { IndexingServiceRegistrar } from './registrars/IndexingServiceRegistrar.js';
+import { ServerServiceRegistrar } from './registrars/ServerServiceRegistrar.js';
 
 // State is owned by PersonaManager and services
 
@@ -295,607 +235,17 @@ export class DollhouseContainer {
   }
 
   private registerServices(): void {
+    new CoreInfraServiceRegistrar().register(this);
+    new SecurityServiceRegistrar().register(this);
+    new ObservabilityServiceRegistrar().register(this);
+    new ElementManagerServiceRegistrar().register(this);
+    new CollectionServiceRegistrar().register(this);
+    new IndexingServiceRegistrar().register(this);
+    new ServerServiceRegistrar().register(this);
 
-
-    // Issue #706: Startup timing instrumentation
-    this.register('StartupTimer', () => new StartupTimer());
-
-    // CORE & CACHING
-    this.register('CacheMemoryBudget', () => new CacheMemoryBudget({
-      globalLimitBytes: getValidatedGlobalCacheMemoryBytes(),
-    }));
-    this.register('APICache', () => new APICache());
-    this.register('CollectionCache', () => new CollectionCache(
-      this.resolve('FileOperationsService'),
-      this.hasRegistration('PathService')
-        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
-        : undefined,
-    ));
-    this.register('RateLimitTracker', () => new Map<string, number[]>());
-    this.register('FileLockManager', () => new FileLockManager());
-    this.register('FileOperationsService', () => new FileOperationsService(this.resolve('FileLockManager')));
-    this.register<IStorageLayerFactory>('StorageLayerFactory', () => new FileStorageLayerFactory(
-      this.resolve('FileOperationsService'),
-      { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },
-    ));
-    this.register('ConfigManager', () => new ConfigManager(
-      this.resolve('FileOperationsService'),
-      os,
-      this.hasRegistration('PathService')
-        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('config')
-        : undefined,
-    ));
-    // Issue #51: Generic retention policy service with strategy pattern
-    this.register('RetentionPolicyService', () => {
-      const service = new RetentionPolicyService(this.resolve('ConfigManager'));
-      // Register memory retention strategy (first of potentially 50+ element types)
-      service.registerStrategy(new MemoryRetentionStrategy());
-      return service;
-    });
-    this.register('IndexConfigManager', () => new IndexConfigManager());
-    this.register('IndicatorConfig', () => loadIndicatorConfig());
-    this.register('StateChangeNotifier', () => new StateChangeNotifier());
-    this.register('GitHubRateLimiter', () => new GitHubRateLimiter(
-      this.resolve('TokenManager')
-    ));
-    this.register('ElementEventDispatcher', () => new ElementEventDispatcher(
-      this.resolve('ContextTracker')
-    ));
-    this.register('MCPLogger', () => logger);
-    // SecurityMonitor: DI-managed instance wired into the static facade.
-    // Eagerly resolved to replace the fallback before handlers start logging.
-    this.register('SecurityMonitor', () => {
-      const instance = new SecurityMonitor();
-      SecurityMonitor.setInstance(instance);
-      return instance;
-    });
-    this.resolve('SecurityMonitor');
-    // Resilience: DI-managed instances (moved from module-level singletons)
-    this.register('CircuitBreakerState', () => new CircuitBreakerState());
-    this.register('ResilienceMetricsTracker', () => new ResilienceMetricsTracker());
-
-    this.register('PersonaImporter', () => {
-      const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
-      const personasDir = portfolioManager.getElementDir(ElementType.PERSONA);
-      // This is a bit of a hack to break the circular dependency. We resolve PersonaManager inside the provider function.
-      const currentUserProvider = () => this.resolve<PersonaManager>('PersonaManager').getCurrentUserForAttribution();
-      return new PersonaImporter(
-        personasDir,
-        currentUserProvider,
-        undefined,
-        this.resolve('FileOperationsService')
-      );
-    });
-
-    // GITHUB & COLLECTION
-    // GitHubClient's SSRF allowlist is extended by DOLLHOUSE_COLLECTION_ALLOWLIST
-    // when the shared pool is enabled. The default hosts (api.github.com,
-    // raw.githubusercontent.com) are always included.
-    this.register('GitHubClient', () => new GitHubClient(
-      this.resolve('APICache'),
-      this.resolve('RateLimitTracker'),
-      this.resolve('TokenManager'),
-      env.DOLLHOUSE_COLLECTION_ALLOWLIST ?? undefined,
-    ));
-    this.register('GitHubAuthManager', () => new GitHubAuthManager(
-      this.resolve('APICache'),
-      this.resolve('ConfigManager'),
-      this.resolve('TokenManager')
-    ));
-    // CollectionIndexManager's index URL is overridable via DOLLHOUSE_COLLECTION_URL.
-    this.register('CollectionIndexManager', () => new CollectionIndexManager({
-      fileOperations: this.resolve('FileOperationsService'),
-      indexUrl: env.DOLLHOUSE_COLLECTION_URL,
-    }));
-    this.register('CollectionBrowser', () => new CollectionBrowser(this.resolve('GitHubClient'), this.resolve('CollectionCache'), this.resolve('CollectionIndexManager')));
-    this.register('CollectionSearch', () => new CollectionSearch(
-      this.resolve('GitHubClient'),
-      this.resolve('CollectionCache'),
-      this.resolve('CollectionIndexCache')
-    ));
-    this.register('PersonaDetails', () => new PersonaDetails(this.resolve('GitHubClient')));
-
-    // PORTFOLIO & MANAGERS
-    this.register('PortfolioManager', () => {
-      const config = this.hasRegistration('PathService')
-        ? { baseDir: this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('portfolio-root') }
-        : undefined;
-      return new PortfolioManager(this.resolve('FileOperationsService'), config);
-    });
-    this.register('PersonaManager', () => new PersonaManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      indicatorConfig: this.resolve('IndicatorConfig'),
-      fileLockManager: this.resolve('FileLockManager'),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      personaImporter: this.resolve('PersonaImporter'),
-      notifier: this.resolve('StateChangeNotifier'),
-      contextTracker: this.resolve('ContextTracker'),
-      activationRegistry: this.resolve('SessionActivationRegistry'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    this.register('InitializationService', () => new InitializationService(
-      this.resolve('PersonaManager')
-    ));
-    this.register('PersonaIndicatorService', () => new PersonaIndicatorService(
-      this.resolve('PersonaManager'),
-      this.resolve('IndicatorConfig'),
-      this.resolve('StateChangeNotifier'),
-      this.resolve('ElementEventDispatcher')
-    ));
-    this.register('MigrationManager', () => new MigrationManager(this.resolve('PortfolioManager'), this.resolve('FileLockManager'), this.resolve('FileOperationsService')));
-    this.register('ElementInstaller', () => new ElementInstaller(this.resolve('GitHubClient'), {
-      portfolioManager: this.resolve('PortfolioManager'),
-      unifiedIndexManager: this.resolve('UnifiedIndexManager'),
-      fileOperations: this.resolve('FileOperationsService'),
-      sharedPoolInstaller: this.hasRegistration('SharedPoolInstaller')
-        ? this.resolve('SharedPoolInstaller')
-        : undefined,
-    }));
-    this.register('PortfolioRepoManager', () => new PortfolioRepoManager(
-      this.resolve('TokenManager'),
-      getPortfolioRepositoryName()
-    ));
-    this.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
-      this.resolve('PortfolioRepoManager')
-    ));
-    
-    // SERVICES
-    this.register('SerializationService', () => new SerializationService());
-    this.register('MetadataService', () => new MetadataService());
-    this.register('TriggerValidationService', () => new TriggerValidationService());
-    this.register('ValidationService', () => new ValidationService());
-    this.register('FileWatchService', () => new FileWatchService());
-    this.register('ValidationRegistry', () => new ValidationRegistry(
-      this.resolve('ValidationService'),
-      this.resolve('TriggerValidationService'),
-      this.resolve('MetadataService')
-    ));
-
-    // LOGGING
-    this.register('LogManager', () => {
-      const config = buildLogManagerConfig(env);
-      const manager = new LogManager(config);
-
-      // Phase 2: FileLogSink
-      const formatter = config.logFormat === 'jsonl'
-        ? new JsonlFormatter()
-        : new PlainTextFormatter();
-      const fileSink = new FileLogSink({
-        logDir: config.logDir,
-        formatter,
-        maxFileSize: config.fileMaxSize,
-        retentionDays: config.retentionDays,
-        securityRetentionDays: config.securityRetentionDays,
-        maxDirSizeBytes: config.maxDirSizeBytes,
-        maxFilesPerCategory: config.maxFilesPerCategory,
-      });
-      manager.registerSink(fileSink);
-      fileSink.startCleanupTimer();
-
-      // Phase 3: MemoryLogSink
-      const memorySink = new MemoryLogSink({
-        appCapacity: config.memoryAppCapacity,
-        securityCapacity: config.memorySecurityCapacity,
-        perfCapacity: config.memoryPerfCapacity,
-        telemetryCapacity: config.memoryTelemetryCapacity,
-      });
-      manager.registerSink(memorySink);
-
-      this.register('MemoryLogSink', () => memorySink);
-
-      // Startup marker — first entry in every server session
-      manager.log({
-        id: manager.generateId(),
-        timestamp: new Date().toISOString(),
-        category: 'application',
-        level: 'info',
-        source: 'DollhouseMCP',
-        message: `DollhouseMCP v${PACKAGE_VERSION} starting`,
-        data: {
-          version: PACKAGE_VERSION,
-          logLevel: config.logLevel,
-          logFormat: config.logFormat,
-          console: env.DOLLHOUSE_WEB_CONSOLE
-            ? `http://dollhouse.localhost:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`
-            : 'disabled',
-        },
-      });
-
-      return manager;
-    });
-
-    // METRICS COLLECTION
-    // MemoryMetricsSink is registered separately (not as a side effect inside
-    // MetricsManager's factory) so it's available in the container regardless
-    // of MetricsManager resolution order.
-    const metricsConfig = buildMetricsManagerConfig(env);
-    if (metricsConfig.enabled) {
-      const memoryMetricsSink = new MemoryMetricsSink(metricsConfig.memorySnapshotCapacity);
-      this.register('MemoryMetricsSink', () => memoryMetricsSink);
-
-      this.register('MetricsManager', () => {
-        const manager = new MetricsManager(metricsConfig, logger);
-        manager.registerSink(memoryMetricsSink);
-        return manager;
-      });
-    }
-
-    // TELEMETRY
-    this.register('OperationalTelemetry', () => new OperationalTelemetry(
-      this.resolve('FileOperationsService'),
-      this.hasRegistration('PathService')
-        ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('state')
-        : undefined,
-    ));
-
-    // BACKUP SERVICE (Issue #659: Universal backup for all element types)
-    this.register('BackupService', () => new BackupService(
-      this.resolve('FileOperationsService'),
-      {
-        backupRootDir: path.join(this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(), '.backups'),
-        maxBackupsPerElement: getValidatedMaxBackupsPerElement(),
-        enabled: STORAGE_LAYER_CONFIG.BACKUPS_ENABLED,
-      }
-    ));
-
-    // POLICY EXPORT SERVICE (Issue #762: Export policies to bridge)
-    this.register('PolicyExportService', () => new PolicyExportService({
-      getActiveElementsForPolicy: async () => {
-        try {
-          const handler = this.resolve<ElementCRUDHandler>('ElementCRUDHandler');
-          return handler.getActiveElementsForPolicy();
-        } catch {
-          return [];
-        }
-      },
-      getServerVersion: () => PACKAGE_VERSION,
-    }));
-
-    // ELEMENT MANAGERS
-    this.register('SkillManager', () => new SkillManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      fileLockManager: this.resolve('FileLockManager'),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      contextTracker: this.resolve('ContextTracker'),
-      activationRegistry: this.resolve('SessionActivationRegistry'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    this.register('TemplateManager', () => new TemplateManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      fileLockManager: this.resolve('FileLockManager'),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    this.register('TemplateRenderer', () => new TemplateRenderer(this.resolve('TemplateManager')));
-    this.register('AgentManager', () => new AgentManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      fileLockManager: this.resolve('FileLockManager'),
-      baseDir: this.resolve<PortfolioManager>('PortfolioManager').getBaseDir(),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      contextTracker: this.resolve('ContextTracker'),
-      activationRegistry: this.resolve('SessionActivationRegistry'),
-      // Issue #1948: Instance-injected dependencies (replaces static resolvers)
-      elementManagerResolver: (name: string) => this.resolve(name) as import('../elements/agents/AgentManager.js').ResolvedElementManager,
-      dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
-      verificationStore: this.resolve('ChallengeStore'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    this.register('MemoryManager', () => new MemoryManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      fileLockManager: this.resolve('FileLockManager'),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      contextTracker: this.resolve('ContextTracker'),
-      activationRegistry: this.resolve('SessionActivationRegistry'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    this.register('EnsembleManager', () => new EnsembleManager({
-      portfolioManager: this.resolve('PortfolioManager'),
-      fileLockManager: this.resolve('FileLockManager'),
-      fileOperationsService: this.resolve('FileOperationsService'),
-      validationRegistry: this.resolve('ValidationRegistry'),
-      serializationService: this.resolve('SerializationService'),
-      metadataService: this.resolve('MetadataService'),
-      fileWatchService: this.resolve('FileWatchService'),
-      memoryBudget: this.resolve('CacheMemoryBudget'),
-      backupService: this.resolve('BackupService'),
-      eventDispatcher: this.resolve('ElementEventDispatcher'),
-      contextTracker: this.resolve('ContextTracker'),
-      activationRegistry: this.resolve('SessionActivationRegistry'),
-      storageLayerFactory: this.resolve<IStorageLayerFactory>('StorageLayerFactory'),
-      getCurrentUserId: this.hasRegistration('UserIdResolver') ? this.resolve('UserIdResolver') : undefined,
-      publicElementDiscovery: this.hasRegistration('PublicElementDiscovery') ? this.resolve('PublicElementDiscovery') : undefined,
-    }));
-    // Issue #1948: Memory wiring deferred to preparePortfolio() / completeSinkSetup()
-    // to avoid eager resolution during constructor (breaks test containers).
-
-    // QUERY SERVICES (Issue #38: Pagination, filtering, sorting)
-    // These services are element-agnostic and can be used with any element type
-    this.register('PaginationService', () => new PaginationService());
-    this.register('FilterService', () => new FilterService());
-    this.register('SortService', () => new SortService());
-    this.register('ElementQueryService', () => new ElementQueryService(
-      this.resolve<PaginationService>('PaginationService'),
-      this.resolve<FilterService>('FilterService'),
-      this.resolve<SortService>('SortService')
-    ));
-
-    // CONVERTERS
-    this.register('AnthropicToDollhouseConverter', () => new AnthropicToDollhouseConverter());
-    this.register('DollhouseToAnthropicConverter', () => new DollhouseToAnthropicConverter());
-
-    // SECURITY SERVICES
-    // Issue #1948: PathValidator as DI-managed singleton (replaces static class state)
-    this.register('PathValidator', () => {
-      const personasDir = this.resolve<PortfolioManager>('PortfolioManager')
-        .getElementDir(ElementType.PERSONA);
-      const instance = new PathValidator(personasDir);
-      PathValidator.setRootInstance(instance);
-      return instance;
-    });
-    // Issue #402: DangerZoneEnforcer as DI-managed singleton (replaces module-level singleton)
-    this.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
-      this.resolve('FileOperationsService')
-    ));
-    // Shared stdio session — single source of truth for session identity.
-    // In file-mode and when no DB is bootstrapped, `createStdioSession()` uses
-    // DOLLHOUSE_USER / OS username. When database mode is active,
-    // `preparePortfolio()` re-registers this service with the bootstrapped DB
-    // UUID as userId so SessionContext carries an RLS-valid identity. That
-    // re-registration is the single source of truth for DB mode — do not add
-    // a BootstrappedUserId check here, which would duplicate the mechanism.
-    this.register('StdioSession', () => createStdioSession());
-    // Issue #1946: Session activation registry — maps sessionId → SessionActivationState
-    this.register('SessionActivationRegistry', () => {
-      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      return new SessionActivationRegistry(session.sessionId);
-    });
-    // Issue #598, #1945, #1886: Per-session state stores — database or file-backed.
-    // hasRegistration check is inside each lambda so it evaluates at resolution time,
-    // allowing DatabaseInstance to be registered after the container is constructed
-    // (e.g., by HTTP transport lazy bootstrap).
-    this.register('ActivationStore', () => {
-      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      if (this.hasRegistration('DatabaseInstance')) {
-        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
-        const userId = this.resolve<string>('CurrentUserId');
-        const DbStore = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
-        return new DbStore(db, userId, session.sessionId);
-      }
-      return new FileActivationStateStore(
-        this.resolve('FileOperationsService'),
-        undefined,
-        session.sessionId
-      );
-    });
-
-    this.register('ConfirmationStore', () => {
-      const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      if (this.hasRegistration('DatabaseInstance')) {
-        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
-        const userId = this.resolve<string>('CurrentUserId');
-        const DbStore = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
-        return new DbStore(db, userId, session.sessionId);
-      }
-      return new FileConfirmationStore(
-        this.resolve('FileOperationsService'),
-        undefined,
-        session.sessionId
-      );
-    });
-
-    // Issue #142: ChallengeStore for danger zone challenge codes (server-side)
-    // Issue #1945: Wrapped in IChallengeStore interface for backend swappability
-    this.register('ChallengeStore', () => {
-      if (this.hasRegistration('DatabaseInstance')) {
-        const session = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-        const db = this.resolve<DatabaseInstance>('DatabaseInstance');
-        const userId = this.resolve<string>('CurrentUserId');
-        const DbStore = this.resolve<typeof DatabaseChallengeStore>('DatabaseChallengeStoreClass');
-        return new DbStore(db, userId, session.sessionId);
-      }
-      return new InMemoryChallengeStore();
-    });
-    // Backward-compat alias — existing code resolves 'VerificationStore'
-    this.register('VerificationStore', () => this.resolve('ChallengeStore'));
-    // Issue #522: Non-blocking OS dialog notifier for verification codes
-    this.register('VerificationNotifier', () => new VerificationNotifier());
-    this.register('TokenManager', () => new TokenManager(
-      this.resolve('FileOperationsService')
-    ));
-    this.register('PatternEncryptor', () => new PatternEncryptor());
-    this.register('ContextTracker', () => new ContextTracker());
-    // Issue #1946: Make MetadataService session-aware for correct user attribution
-    this.resolve<MetadataService>('MetadataService').configureSessionAwareness(
-      this.resolve<ContextTracker>('ContextTracker'),
-      this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
-    );
-    this.register('PatternDecryptor', () => new PatternDecryptor(
-      this.resolve('PatternEncryptor'),
-      this.resolve('ContextTracker')
-    ));
-    this.register('PatternExtractor', () => new PatternExtractor(
-      this.resolve('PatternEncryptor')
-    ));
-    this.register('BackgroundValidator', () => new BackgroundValidator(
-      this.resolve('PatternExtractor'),
-      this.resolve('MemoryManager')
-    ));
-    this.register('SecurityTelemetry', () => new SecurityTelemetry());
-    ContentValidator.configureTelemetryResolver(() => this.resolve('SecurityTelemetry'));
-
-    // NLP & INDEXING
-    this.register('NLPScoringManager', () => {
-        const indexConfigManager = this.resolve<IndexConfigManager>('IndexConfigManager');
-        const config = indexConfigManager.getConfig();
-        return new NLPScoringManager({
-            cacheExpiry: config.nlp.cacheExpiryMinutes * 60 * 1000,
-            minTokenLength: config.nlp.minTokenLength,
-            entropyBands: config.nlp.entropyBands,
-            jaccardThresholds: config.nlp.jaccardThresholds
-        }, indexConfigManager);
-    });
-    this.register('VerbTriggerManager', () => {
-        const indexConfigManager = this.resolve<IndexConfigManager>('IndexConfigManager');
-        const config = indexConfigManager.getConfig();
-        return new VerbTriggerManager({
-            confidenceThreshold: config.verbs.confidenceThreshold,
-            maxElementsPerVerb: config.verbs.maxElementsPerVerb,
-            includeSynonyms: config.verbs.includeSynonyms
-        });
-    });
-    this.register('RelationshipManager', () => {
-        const indexConfigManager = this.resolve<IndexConfigManager>('IndexConfigManager');
-        const config = indexConfigManager.getConfig();
-        return new RelationshipManager({
-            config: {
-                minConfidence: config.performance.similarityThreshold,
-                enableAutoDiscovery: true
-            },
-            indexConfigManager,
-            verbTriggerManager: this.resolve('VerbTriggerManager'),
-            nlpScoring: this.resolve('NLPScoringManager'),
-        });
-    });
-    this.register('PortfolioIndexManager', () => new PortfolioIndexManager(this.resolve('IndexConfigManager'), this.resolve('PortfolioManager'), this.resolve('FileOperationsService')));
-    this.register('EnhancedIndexHelpers', () => new DefaultEnhancedIndexHelpers(
-      new ElementDefinitionBuilder(),
-      new SemanticRelationshipService({
-        nlpScoring: this.resolve('NLPScoringManager'),
-        relationshipManager: this.resolve('RelationshipManager')
-      }),
-      (context) => new ActionTriggerExtractor(context),
-      (options) => {
-        const tracker = new TriggerMetricsTracker(options);
-        try {
-          tracker.addLogListener(getTriggerMetricsLogListener(
-            this.resolve('LogManager'),
-            this.resolve('ContextTracker')
-          ));
-        } catch { /* LogManager not yet registered */ }
-        return tracker;
-      }
-    ));
-    this.register('EnhancedIndexManager', () => new EnhancedIndexManager(
-        this.resolve('IndexConfigManager'),
-        this.resolve('ConfigManager'),
-        this.resolve('PortfolioIndexManager'),
-        this.resolve('NLPScoringManager'),
-        this.resolve('VerbTriggerManager'),
-        this.resolve('RelationshipManager'),
-        this.resolve('EnhancedIndexHelpers'),
-        this.resolve('FileOperationsService')
-    ));
-    this.register('CollectionIndexCache', () => new CollectionIndexCache(
-        this.resolve('GitHubClient'),
-        process.cwd(),
-        this.resolve('PerformanceMonitor'),
-        this.resolve('FileOperationsService')
-    ));
-    this.register('UnifiedIndexManager', () => new UnifiedIndexManager({
-        portfolioIndexManager: this.resolve('PortfolioIndexManager'),
-        githubIndexer: this.resolve('GitHubPortfolioIndexer'),
-        collectionIndexCache: this.resolve('CollectionIndexCache'),
-        githubClient: this.resolve('GitHubClient'),
-        apiCache: this.resolve('APICache'),
-        rateLimitTracker: this.resolve('RateLimitTracker'),
-        performanceMonitor: this.resolve('PerformanceMonitor'),
-        fileOperations: this.resolve('FileOperationsService')
-    }));
-
-    this.register('PortfolioSyncComparer', () => new PortfolioSyncComparer());
-    this.register('PortfolioDownloader', () => new PortfolioDownloader());
-
-    // SYNC & TOOLS
-    this.register('PortfolioPullHandler', () => new PortfolioPullHandler({
-        portfolioManager: this.resolve('PortfolioManager'),
-        indexManager: this.resolve('PortfolioIndexManager'),
-        githubIndexer: this.resolve('GitHubPortfolioIndexer'),
-        portfolioRepoManager: this.resolve('PortfolioRepoManager'),
-        syncComparer: this.resolve('PortfolioSyncComparer'),
-        downloader: this.resolve('PortfolioDownloader'),
-        fileOperations: this.resolve('FileOperationsService'),
-        tokenManager: this.resolve('TokenManager'),
-    }));
-    this.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(this.resolve('APICache'), {
-        authManager: this.resolve('GitHubAuthManager'),
-        portfolioManager: this.resolve('PortfolioManager'),
-        portfolioIndexManager: this.resolve('PortfolioIndexManager'),
-        portfolioRepoManager: this.resolve('PortfolioRepoManager'),
-        rateLimiter: this.resolve('GitHubRateLimiter'),
-        fileOperations: this.resolve('FileOperationsService'),
-        tokenManager: this.resolve('TokenManager')
-    }));
-    this.register('PortfolioSyncManager', () => new PortfolioSyncManager({
-        configManager: this.resolve('ConfigManager'),
-        portfolioManager: this.resolve('PortfolioManager'),
-        portfolioRepoManager: this.resolve('PortfolioRepoManager'),
-        indexer: this.resolve('GitHubPortfolioIndexer'),
-        fileOperations: this.resolve('FileOperationsService'),
-        tokenManager: this.resolve('TokenManager')
-    }));
-
-    // SERVER
-    this.register('ServerSetup', () => {
-      const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      const sessionResolver: SessionResolver = () => stdioSession;
-      return new ServerSetup(
-        this.resolve<ContextTracker>('ContextTracker'),
-        sessionResolver,
-      );
-    });
-    this.register('ServerStartup', () => new ServerStartup(
-      this.resolve('PortfolioManager'),
-      this.resolve('FileLockManager'),
-      this.resolve('ConfigManager'),
-      this.resolve('MigrationManager'),
-      this.resolve('MemoryManager'),
-      this.resolve('OperationalTelemetry')
-    ));
+    // BuildInfoService is kept here because its factory captures
+    // `this.deferredSetupComplete` — a Container-internal property
+    // that cannot be passed through DiContainerFacade.
     this.register('BuildInfoService', () => {
       const service = new BuildInfoService(this.resolve('FileOperationsService'));
       // Issue #706: Wire startup instrumentation
@@ -903,14 +253,6 @@ export class DollhouseContainer {
       service.setDeferredSetupChecker(() => this.deferredSetupComplete);
       return service;
     });
-    this.register('PerformanceMonitor', () => {
-      const monitor = new PerformanceMonitor();
-      monitor.startMonitoring();
-      return monitor;
-    });
-
-    this.register('OperationMetricsTracker', () => new OperationMetricsTracker(), { singleton: true });
-    this.register('GatekeeperMetricsTracker', () => new GatekeeperMetricsTracker(), { singleton: true });
   }
 
   public getPersonasDir(): string | null {

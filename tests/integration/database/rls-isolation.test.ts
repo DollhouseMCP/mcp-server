@@ -388,6 +388,7 @@ describe('RLS visibility — public elements', () => {
       new TriggerValidationService(),
       metadataService,
     );
+    const { DatabaseStorageLayerFactory } = await import('../../../src/storage/DatabaseStorageLayerFactory.js');
     const skillManager = new SkillManager({
       portfolioManager,
       fileLockManager,
@@ -396,8 +397,8 @@ describe('RLS visibility — public elements', () => {
       serializationService: new SerializationService(),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
-      databaseInstance: db,
       getCurrentUserId: fixedUserId(userIdB),
+      storageLayerFactory: new DatabaseStorageLayerFactory(db, fixedUserId(userIdB)),
     });
 
     try {
