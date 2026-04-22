@@ -187,7 +187,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         const raw = await this.fileOperations.readElementFile(absolutePath, elementType, {
           source: `${this.constructor.name}.repairLegacyElementFields`,
         });
-        const parsed = SecureYamlParser.safeMatter(raw, undefined);
+        const parsed = SecureYamlParser.safeMatter(raw);
 
         if (!this.hasLegacyElementFields(parsed.data?.elements)) {
           continue;
