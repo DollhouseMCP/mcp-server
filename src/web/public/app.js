@@ -2006,6 +2006,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
+    const headerNavRow = document.querySelector('.header-nav-row');
+    const consoleTabMenuToggle = document.getElementById('console-tab-menu-toggle');
+    const consoleTabMenu = document.getElementById('console-tab-menu');
     const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
@@ -2090,7 +2093,156 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         p.hidden = p.id !== 'tab-' + tabName;
         p.classList.toggle('active', p.id === 'tab-' + tabName);
       });
+      syncConsoleTabMenuSelection();
+      closeConsoleTabMenu();
+      scheduleConsoleTabOverflowCheck();
     };
+
+    function renderConsoleTabMenu() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      consoleTabMenu.innerHTML = '';
+      consoleTabs.querySelectorAll('.console-tab').forEach((btn) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'console-tab-menu-item';
+        item.dataset.tab = btn.dataset.tab || '';
+        item.setAttribute('role', 'menuitem');
+        item.textContent = btn.textContent || '';
+        if (btn.classList.contains('active')) item.classList.add('active');
+        consoleTabMenu.appendChild(item);
+      });
+    }
+
+    function syncConsoleTabMenuSelection() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      const activeTab = consoleTabs.querySelector('.console-tab.active')?.dataset.tab || '';
+      consoleTabMenu.querySelectorAll('.console-tab-menu-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.tab === activeTab);
+      });
+    }
+
+    function closeConsoleTabMenu() {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = true;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function getConsoleTabMenuItems() {
+      if (!consoleTabMenu) return [];
+      return Array.from(consoleTabMenu.querySelectorAll('.console-tab-menu-item'));
+    }
+
+    function openConsoleTabMenu(focusTarget) {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = false;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'true');
+
+      if (!focusTarget) return;
+
+      const items = getConsoleTabMenuItems();
+      if (!items.length) return;
+      const focusItem = (index) => {
+        const boundedIndex = Math.max(0, Math.min(index, items.length - 1));
+        items[boundedIndex].focus();
+      };
+
+      if (focusTarget === 'first') {
+        focusItem(0);
+        return;
+      }
+
+      if (focusTarget === 'last') {
+        focusItem(items.length - 1);
+        return;
+      }
+
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      focusItem(activeIndex);
+    }
+
+    function moveConsoleTabMenuFocus(step, origin) {
+      const items = getConsoleTabMenuItems();
+      if (!items.length) return;
+
+      const currentIndex = origin instanceof Element
+        ? items.findIndex((item) => item === origin || item.contains(origin))
+        : -1;
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      const baseIndex = currentIndex >= 0 ? currentIndex : activeIndex;
+      const nextIndex = (baseIndex + step + items.length) % items.length;
+      items[nextIndex].focus();
+    }
+
+    function handleConsoleTabMenuToggleKeydown(event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        openConsoleTabMenu('first');
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        openConsoleTabMenu('last');
+      }
+    }
+
+    function handleConsoleTabMenuKeydown(event) {
+      switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        moveConsoleTabMenuFocus(1, event.target);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        moveConsoleTabMenuFocus(-1, event.target);
+        break;
+      case 'Home':
+        event.preventDefault();
+        getConsoleTabMenuItems()[0]?.focus();
+        break;
+      case 'End': {
+        event.preventDefault();
+        const items = getConsoleTabMenuItems();
+        items.at(-1)?.focus();
+        break;
+      }
+      case 'Escape':
+        event.preventDefault();
+        closeConsoleTabMenu();
+        consoleTabMenuToggle?.focus();
+        break;
+      default:
+        break;
+      }
+    }
+
+    function tabsNeedOverflowMenu() {
+      if (!consoleTabs) return false;
+      const buttons = Array.from(consoleTabs.querySelectorAll('.console-tab'));
+      if (buttons.length < 2) return false;
+      const firstTop = buttons[0].offsetTop;
+      return buttons.some((btn) => btn.offsetTop !== firstTop);
+    }
+
+    let consoleTabOverflowFrame = 0;
+    function updateConsoleTabOverflow() {
+      if (!consoleTabs || !headerNavRow || !consoleTabMenuToggle) return;
+      headerNavRow.classList.remove('header-nav-row--collapsed');
+      consoleTabMenuToggle.hidden = true;
+      const shouldCollapse = tabsNeedOverflowMenu();
+      if (shouldCollapse) {
+        headerNavRow.classList.add('header-nav-row--collapsed');
+        consoleTabMenuToggle.hidden = false;
+      }
+      if (!shouldCollapse) {
+        closeConsoleTabMenu();
+      }
+    }
+
+    function scheduleConsoleTabOverflowCheck() {
+      if (consoleTabOverflowFrame) cancelAnimationFrame(consoleTabOverflowFrame);
+      consoleTabOverflowFrame = requestAnimationFrame(() => {
+        consoleTabOverflowFrame = 0;
+        updateConsoleTabOverflow();
+      });
+    }
 
     /**
      * Parse the URL hash into tab name and query parameters.
@@ -2208,26 +2360,41 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       return false;
     }
 
-    if (!applyHashTab()) {
+    function restoreInitialConsoleTab() {
       // Version check takes priority over saved tab — upgraders must see Setup
       // regardless of whether they have a saved tab from their previous session.
       if (localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion) {
         const savedTab = localStorage.getItem(TAB_KEY);
-        if (savedTab) {
-          switchToTab(savedTab);
-          lazyInitTab(savedTab, tabInits);
-        }
-      } else {
-        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
-        switchToTab('setup');
+        if (!savedTab) return;
+        switchToTab(savedTab);
+        lazyInitTab(savedTab, tabInits);
+        return;
       }
+
+      localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
+      switchToTab('setup');
     }
 
-    // Handle hash changes for deep-linking (e.g., open_logs operation)
-    globalThis.addEventListener('hashchange', () => applyHashTab());
+    function initializeConsoleTabs() {
+      if (applyHashTab()) return;
+      restoreInitialConsoleTab();
+    }
 
-    if (consoleTabs) {
-      consoleTabs.addEventListener('click', (e) => {
+    function registerConsoleTabObservers() {
+      globalThis.addEventListener('hashchange', () => applyHashTab());
+      renderConsoleTabMenu();
+      syncConsoleTabMenuSelection();
+      scheduleConsoleTabOverflowCheck();
+      globalThis.addEventListener('resize', scheduleConsoleTabOverflowCheck);
+
+      if (typeof ResizeObserver !== 'function' || !headerNavRow) return;
+
+      const tabOverflowObserver = new ResizeObserver(() => scheduleConsoleTabOverflowCheck());
+      tabOverflowObserver.observe(headerNavRow);
+    }
+
+    function registerConsoleTabInteractions() {
+      consoleTabs?.addEventListener('click', (e) => {
         const btn = e.target.closest('.console-tab');
         if (!btn) return;
         const tab = btn.dataset.tab;
@@ -2238,7 +2405,41 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
         lazyInitTab(tab, tabInits);
       });
+
+      consoleTabMenuToggle?.addEventListener('click', () => {
+        if (!consoleTabMenu) return;
+        if (consoleTabMenu.hidden) {
+          openConsoleTabMenu();
+          return;
+        }
+
+        closeConsoleTabMenu();
+      });
+
+      consoleTabMenuToggle?.addEventListener('keydown', handleConsoleTabMenuToggleKeydown);
+      consoleTabMenu?.addEventListener('keydown', handleConsoleTabMenuKeydown);
+      consoleTabMenu?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.console-tab-menu-item');
+        const tab = btn?.dataset.tab;
+        if (!tab) return;
+        switchToTab(tab);
+        localStorage.setItem(TAB_KEY, tab);
+        lazyInitTab(tab, tabInits);
+      });
+
+      globalThis.addEventListener('click', (e) => {
+        if (!consoleTabMenu || !consoleTabMenuToggle) return;
+        if (consoleTabMenu.hidden) return;
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        if (consoleTabMenu.contains(target) || consoleTabMenuToggle.contains(target)) return;
+        closeConsoleTabMenu();
+      });
     }
+
+    initializeConsoleTabs();
+    registerConsoleTabObservers();
+    registerConsoleTabInteractions();
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
