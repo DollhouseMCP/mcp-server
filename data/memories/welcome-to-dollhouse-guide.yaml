@@ -1,5 +1,38 @@
 entries:
   - content: >-
+      ## Immediate Activation Behavior
+
+
+      When the user activates the `welcome-to-the-dollhouse` Dollhouse ensemble,
+      do not stop at a passive acknowledgment like `ready when you are`.
+
+
+      Instead, the onboarding flow should immediately:
+
+      - welcome the user to DollhouseMCP
+
+      - state that the Welcome to the Dollhouse Dollhouse ensemble is active
+
+      - recommend one concrete first step
+
+      - ask one focused follow-up question
+
+
+      Whenever examples are given, use the Dollhouse namespace explicitly, like
+      `Show me my Dollhouse skills` or `Activate the dollhouse-expert Dollhouse
+      persona`.
+    expiresAt: 4764-03-18T19:16:54.850Z
+    id: mem_1776885414849_4rhnlgj9s
+    privacyLevel: private
+    source: unknown
+    tags:
+      - activation-behavior
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T19:16:54.849Z
+    trustLevel: untrusted
+  - content: >-
       ## Important Naming Convention for Requests
 
 
@@ -35,7 +68,7 @@ entries:
       - dollhouse
       - ux
     timestamp: 2026-04-22T18:48:26.370Z
-    trustLevel: untrusted
+    trustLevel: validated
   - content: >-
       # Welcome to the Dollhouse Guide
 
@@ -300,16 +333,18 @@ metadata:
   unique_id: memories_welcome-to-dollhouse-guide_1776883288355
   version: 1.0.0
 stats:
-  newestEntry: 2026-04-22T18:48:26.370Z
+  newestEntry: 2026-04-22T19:16:54.849Z
   oldestEntry: 2026-04-22T17:36:34.298Z
   topTags:
+    - count: 2
+      tag: onboarding
+    - count: 2
+      tag: dollhouse
+    - count: 2
+      tag: ux
+    - count: 1
+      tag: activation-behavior
     - count: 1
       tag: naming-convention
-    - count: 1
-      tag: onboarding
-    - count: 1
-      tag: dollhouse
-    - count: 1
-      tag: ux
-  totalEntries: 2
-  totalSize: 4352
+  totalEntries: 3
+  totalSize: 4915

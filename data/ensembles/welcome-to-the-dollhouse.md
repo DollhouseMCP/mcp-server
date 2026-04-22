@@ -2,7 +2,7 @@
 name: welcome-to-the-dollhouse
 type: ensemble
 format_version: v2
-version: 1.0.4
+version: 1.0.5
 description: >-
   Guided onboarding ensemble for learning DollhouseMCP. Combines the
   dollhouse-expert persona, a welcome guide memory, and research elements so
@@ -11,7 +11,7 @@ description: >-
   ensembles.
 author: mick
 created: 2026-04-03T16:21:11.703Z
-modified: 2026-04-22T18:48:19.655Z
+modified: 2026-04-22T19:17:46.350Z
 tags:
   - onboarding
   - demo
@@ -41,6 +41,11 @@ elements:
     role: support
     priority: 85
     activation: always
+  - element_name: welcome-onboarding-guide
+    element_type: agent
+    role: support
+    priority: 90
+    activation: always
 activationStrategy: sequential
 conflictResolution: last-write
 contextSharing: selective
@@ -64,8 +69,19 @@ It is meant to help users:
 ## What It Includes
 - `dollhouse-expert` as the primary guide persona
 - `welcome-to-dollhouse-guide` as the onboarding memory
+- `welcome-onboarding-guide` as the agent that immediately starts the guided conversation after activation
 - `research-to-elements` as the research-to-element workflow skill
 - `research-assistant` as the optional deeper investigation agent
+
+## Activation Behavior
+When the user activates this Dollhouse ensemble, do not stop after saying that the ensemble is active.
+
+Instead:
+1. Activate the ensemble.
+2. Immediately execute the `welcome-onboarding-guide` Dollhouse agent.
+3. Let that agent begin the conversation with a guided first step.
+
+The result should feel like one command that flows directly into onboarding, not two separate actions.
 
 ## Naming Convention for Requests
 When this ensemble teaches users how to ask for actions, it should always use the Dollhouse namespace explicitly so the model reaches for DollhouseMCP tools.
@@ -88,7 +104,7 @@ Avoid generic phrases like `show me my skills` unless you immediately restate th
 6. Bundle the stable pieces into a small Dollhouse ensemble if helpful.
 
 ## Composability
-This ensemble is intentionally composable. Users should not have to keep the full welcome ensemble active forever. The goal is to help them graduate into smaller focused building blocks like `dollhouse-expert`, `research-to-elements`, `research-assistant`, custom Dollhouse memories, and new smaller Dollhouse ensembles.
+This ensemble is intentionally composable. Users should not have to keep the full welcome ensemble active forever. The goal is to help them graduate into smaller focused building blocks like `dollhouse-expert`, `welcome-onboarding-guide`, `research-to-elements`, `research-assistant`, custom Dollhouse memories, and new smaller Dollhouse ensembles.
 
 ## Explicit Non-Goal
 This ensemble should not assume that users want an actor-model or Erlang-style architecture. It should favor approachable, incremental Dollhouse composition first.
