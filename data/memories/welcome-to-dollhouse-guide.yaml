@@ -1,5 +1,42 @@
 entries:
   - content: >-
+      ## Important Naming Convention for Requests
+
+
+      When you ask the assistant to work with elements, use the Dollhouse
+      namespace explicitly so the model reaches for DollhouseMCP tools instead
+      of generic client, editor, or agent features.
+
+
+      Prefer requests like:
+
+      - `Show me my Dollhouse skills`
+
+      - `List my Dollhouse personas`
+
+      - `Activate the dollhouse-expert Dollhouse persona`
+
+      - `Activate the welcome-to-the-dollhouse Dollhouse ensemble`
+
+      - `Show me my Dollhouse memories`
+
+      - `Create a Dollhouse skill for writing code review checklists`
+
+
+      If you start with a generic request like `show me my skills`, the guide
+      should restate it in Dollhouse terms before continuing.
+    expiresAt: 4764-03-18T18:48:26.370Z
+    id: mem_1776883706370_37824blqo
+    privacyLevel: private
+    source: unknown
+    tags:
+      - naming-convention
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T18:48:26.370Z
+    trustLevel: untrusted
+  - content: >-
       # Welcome to the Dollhouse Guide
 
 
@@ -236,7 +273,6 @@ extensions:
 metadata:
   author: mick
   autoLoad: true
-  category: onboarding
   created: 2026-04-22
   description: >-
     Guided onboarding memory for learning DollhouseMCP element types, research
@@ -261,11 +297,19 @@ metadata:
     - guided-tour
   triggers: []
   type: memory
-  unique_id: memories_welcome-to-dollhouse-guide_1776879394297
+  unique_id: memories_welcome-to-dollhouse-guide_1776883288355
   version: 1.0.0
 stats:
-  newestEntry: 2026-04-22T17:36:34.298Z
+  newestEntry: 2026-04-22T18:48:26.370Z
   oldestEntry: 2026-04-22T17:36:34.298Z
-  topTags: []
-  totalEntries: 1
-  totalSize: 3695
+  topTags:
+    - count: 1
+      tag: naming-convention
+    - count: 1
+      tag: onboarding
+    - count: 1
+      tag: dollhouse
+    - count: 1
+      tag: ux
+  totalEntries: 2
+  totalSize: 4352

@@ -2,13 +2,13 @@
 name: research-to-elements
 type: skill
 format_version: v2
-version: 1.0.0
+version: 1.0.1
 description: >-
   Guided workflow for researching a topic, storing the useful findings, and
   converting them into reusable Dollhouse elements
 author: mick
 created: '2026-04-22'
-modified: '2026-04-22T17:38:46.126Z'
+modified: '2026-04-22T18:48:19.610Z'
 category: knowledge
 instructions: >-
   You ARE a research-to-elements workflow skill. When active, help the user move
@@ -23,27 +23,33 @@ instructions: >-
 
   3. Distill only the durable findings worth keeping.
 
-  4. Decide which findings belong in a memory, markdown note, persona, skill,
-  template, or agent.
+  4. Decide which findings belong in a Dollhouse memory, markdown note,
+  Dollhouse persona, Dollhouse skill, Dollhouse template, or Dollhouse agent.
 
-  5. Prefer small composable elements over giant one-off prompts.
+  5. Prefer small composable Dollhouse elements over giant one-off prompts.
 
-  6. Suggest an ensemble only after the component elements feel stable.
+  6. Suggest a Dollhouse ensemble only after the component elements feel stable.
 
 
   When advising on element choice:
 
-  - persona = how the AI should behave
+  - Dollhouse persona = how the AI should behave
 
-  - skill = repeatable capability or method
+  - Dollhouse skill = repeatable capability or method
 
-  - template = repeatable deliverable shape
+  - Dollhouse template = repeatable deliverable shape
 
-  - agent = multi-step goal pursuit
+  - Dollhouse agent = multi-step goal pursuit
 
-  - memory = persistent knowledge or context
+  - Dollhouse memory = persistent knowledge or context
 
-  - ensemble = coordinated package of stable elements
+  - Dollhouse ensemble = coordinated package of stable elements
+
+
+  When you suggest actions or example prompts, always use the Dollhouse
+  namespace explicitly. Prefer examples like "Show me my Dollhouse skills",
+  "List my Dollhouse personas", and "Activate the security-analyst Dollhouse
+  persona" rather than generic phrases like "show me my skills".
 
 
   Do not push users toward an actor-model or Erlang-style architecture unless
@@ -59,7 +65,7 @@ triggers:
   - element-design
   - onboarding
   - dollhouse
-unique_id: skills_research-to-elements_1776879526126
+unique_id: skills_research-to-elements_1776883568390
 complexity: beginner
 domains: []
 examples: []
@@ -71,6 +77,16 @@ proficiency_level: 0
 # Research to Elements
 
 This skill helps users turn researched knowledge into reusable Dollhouse elements.
+
+## Naming Convention for Requests
+When you teach users how to ask for element-related actions, use the Dollhouse namespace explicitly so the model reaches for DollhouseMCP tools instead of generic platform features.
+
+Prefer examples like:
+- `Show me my Dollhouse skills`
+- `List my Dollhouse personas`
+- `Activate the dollhouse-expert Dollhouse persona`
+- `Activate the welcome-to-the-dollhouse Dollhouse ensemble`
+- `Create a Dollhouse skill for API review`
 
 ## Workflow
 
@@ -99,22 +115,22 @@ Good candidates:
 - structured output expectations
 
 ### 4. Choose the right Dollhouse element type
-- If it changes behavior, create a persona.
-- If it adds a repeatable capability, create a skill.
-- If it defines output shape, create a template.
-- If it coordinates multi-step work, create an agent.
-- If it should persist as reference knowledge, create a memory.
-- If several elements now work together well, create an ensemble.
+- If it changes behavior, create a Dollhouse persona.
+- If it adds a repeatable capability, create a Dollhouse skill.
+- If it defines output shape, create a Dollhouse template.
+- If it coordinates multi-step work, create a Dollhouse agent.
+- If it should persist as reference knowledge, create a Dollhouse memory.
+- If several elements now work together well, create a Dollhouse ensemble.
 
 ### 5. Store intermediate findings
-Use memories or markdown notes to capture distilled research before converting it into final elements.
+Use Dollhouse memories or markdown notes to capture distilled research before converting it into final elements.
 
 ### 6. Productize the result
-Turn the strongest findings into one or more focused elements. Prefer several small reusable pieces over one giant element.
+Turn the strongest findings into one or more focused Dollhouse elements. Prefer several small reusable pieces over one giant element.
 
 ## Output pattern
 A good outcome from this skill is:
 - a short research summary
-- a recommendation for which element type(s) to create
+- a recommendation for which Dollhouse element type(s) to create
 - draft structure for those elements
-- a small ensemble recommendation only if the pieces are ready
+- a small Dollhouse ensemble recommendation only if the pieces are ready

@@ -2,7 +2,7 @@
 name: welcome-to-the-dollhouse
 type: ensemble
 format_version: v2
-version: 1.0.3
+version: 1.0.4
 description: >-
   Guided onboarding ensemble for learning DollhouseMCP. Combines the
   dollhouse-expert persona, a welcome guide memory, and research elements so
@@ -11,7 +11,7 @@ description: >-
   ensembles.
 author: mick
 created: 2026-04-03T16:21:11.703Z
-modified: 2026-04-22T17:41:22.117Z
+modified: 2026-04-22T18:48:19.655Z
 tags:
   - onboarding
   - demo
@@ -46,7 +46,7 @@ conflictResolution: last-write
 contextSharing: selective
 allowNested: true
 maxNestingDepth: 5
-unique_id: ensembles_welcome-to-the-dollhouse_1776879276715
+unique_id: ensembles_welcome-to-the-dollhouse_1776883568451
 ---
 
 # welcome-to-the-dollhouse
@@ -57,7 +57,7 @@ It is meant to help users:
 - understand what each element type is for
 - decide what to create first
 - use research intentionally
-- store useful findings in memories or markdown files
+- store useful findings in Dollhouse memories or markdown files
 - turn those findings into reusable Dollhouse elements
 - compose small systems instead of one giant monolith
 
@@ -67,16 +67,28 @@ It is meant to help users:
 - `research-to-elements` as the research-to-element workflow skill
 - `research-assistant` as the optional deeper investigation agent
 
+## Naming Convention for Requests
+When this ensemble teaches users how to ask for actions, it should always use the Dollhouse namespace explicitly so the model reaches for DollhouseMCP tools.
+
+Prefer examples like:
+- `Show me my Dollhouse skills`
+- `List my Dollhouse personas`
+- `Activate the dollhouse-expert Dollhouse persona`
+- `Activate the welcome-to-the-dollhouse Dollhouse ensemble`
+- `Show me my Dollhouse memories`
+
+Avoid generic phrases like `show me my skills` unless you immediately restate them in Dollhouse terms.
+
 ## Guided Workflow
 1. Help the user choose a topic or workflow.
-2. Explain which element type fits the goal.
+2. Explain which Dollhouse element type fits the goal.
 3. Research missing domain knowledge.
-4. Store the best findings in a memory or markdown file.
-5. Convert the findings into one or more reusable elements.
-6. Bundle the stable pieces into a small ensemble if helpful.
+4. Store the best findings in a Dollhouse memory or markdown file.
+5. Convert the findings into one or more reusable Dollhouse elements.
+6. Bundle the stable pieces into a small Dollhouse ensemble if helpful.
 
 ## Composability
-This ensemble is intentionally composable. Users should not have to keep the full welcome ensemble active forever. The goal is to help them graduate into smaller focused building blocks like `dollhouse-expert`, `research-to-elements`, `research-assistant`, custom memories, and new smaller ensembles.
+This ensemble is intentionally composable. Users should not have to keep the full welcome ensemble active forever. The goal is to help them graduate into smaller focused building blocks like `dollhouse-expert`, `research-to-elements`, `research-assistant`, custom Dollhouse memories, and new smaller Dollhouse ensembles.
 
 ## Explicit Non-Goal
 This ensemble should not assume that users want an actor-model or Erlang-style architecture. It should favor approachable, incremental Dollhouse composition first.
