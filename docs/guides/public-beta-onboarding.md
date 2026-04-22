@@ -198,7 +198,7 @@ This activates a persona and supporting skills together, with combined permissio
 
 ## What's Happening Under the Hood
 
-When you interact with DollhouseMCP, you're using **MCP-AQL** — a protocol layer on top of MCP, created by Dollhouse Research, that routes operations through 5 endpoints:
+When you interact with DollhouseMCP, you're using **MCP-AQL** — a protocol layer on top of MCP, created by Dollhouse Research, that routes operations through 5 semantic endpoints:
 
 | Endpoint | Purpose | Example Operations |
 |----------|---------|-------------------|
@@ -208,7 +208,7 @@ When you interact with DollhouseMCP, you're using **MCP-AQL** — a protocol lay
 | **Delete** | Remove things | `delete_element` |
 | **Execute** | Run agents and workflows | `execute_agent`, `confirm_operation` |
 
-You don't need to memorize these — the AI discovers available operations automatically via introspection. But understanding the model helps when things don't work as expected: operations that create or delete require confirmation, while read operations work immediately.
+You don't need to memorize these — the AI discovers available operations automatically via introspection. The important design idea is that these are semantic endpoints, not tool-by-tool functional endpoints, so the model can reason about intent first and parameters second. But understanding the model helps when things don't work as expected: operations that create or delete require confirmation, while read operations work immediately.
 
 ### The Gatekeeper
 

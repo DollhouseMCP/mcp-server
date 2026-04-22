@@ -9,7 +9,7 @@ version: 2.0.0
 
 ## What Is MCP-AQL?
 
-MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. It is an open protocol specification for consolidating multiple MCP tools into semantic endpoints. It's both a spec and a toolkit:
+MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. It is an open protocol specification for consolidating multiple MCP tools into semantic endpoints. Those endpoints are semantic rather than tool-by-tool functional endpoints, which lets an LLM choose the action family first and then the specific operation and parameters. It's both a spec and a toolkit:
 
 - **Protocol spec** — the CRUDE endpoint pattern, introspection grammar, and batch operations
 - **Interrogator** — runtime introspection that lets LLMs discover operations on demand

@@ -1,5 +1,50 @@
 entries:
   - content: >-
+      ## MCP-AQL as Semantic Endpoints
+
+
+      MCP-AQL should be explained as a protocol layer on top of MCP, created by
+      Dollhouse Research.
+
+
+      It is important to emphasize that MCP-AQL uses **semantic endpoints**
+      rather than tool-by-tool functional endpoints.
+
+
+      That means the model reasons first about the kind of action it wants to
+      take:
+
+      - create
+
+      - read
+
+      - update
+
+      - delete
+
+      - execute
+
+
+      This maps better to how LLMs choose operations. Instead of sorting through
+      a long flat list of narrowly functional tools, the model can pick the
+      semantic endpoint family first and then fill in the specific Dollhouse
+      operation and parameters.
+
+
+      When teaching users or models, describe MCP-AQL as a semantic protocol
+      layer that helps LLMs make better tool choices.
+    expiresAt: 4764-03-18T20:25:14.699Z
+    id: mem_1776889514699_u0k2grb3r
+    privacyLevel: private
+    source: unknown
+    tags:
+      - mcpaql
+      - semantic-endpoints
+      - protocol-layer
+      - onboarding
+    timestamp: 2026-04-22T20:25:14.699Z
+    trustLevel: untrusted
+  - content: >-
       ## Superseding Note on Activation Style
 
 
@@ -31,7 +76,7 @@ entries:
       - dollhouse
       - ux
     timestamp: 2026-04-22T19:32:14.052Z
-    trustLevel: untrusted
+    trustLevel: validated
   - content: >-
       ## Immediate Activation Behavior
 
@@ -366,20 +411,26 @@ metadata:
   unique_id: memories_welcome-to-dollhouse-guide_1776883288355
   version: 1.0.0
 stats:
-  newestEntry: 2026-04-22T19:32:14.052Z
+  newestEntry: 2026-04-22T20:25:14.699Z
   oldestEntry: 2026-04-22T17:36:34.298Z
   topTags:
-    - count: 3
+    - count: 4
       tag: onboarding
     - count: 3
       tag: dollhouse
     - count: 3
       tag: ux
     - count: 1
+      tag: mcpaql
+    - count: 1
+      tag: semantic-endpoints
+    - count: 1
+      tag: protocol-layer
+    - count: 1
       tag: activation-style
     - count: 1
       tag: activation-behavior
     - count: 1
       tag: naming-convention
-  totalEntries: 4
-  totalSize: 5465
+  totalEntries: 5
+  totalSize: 6196

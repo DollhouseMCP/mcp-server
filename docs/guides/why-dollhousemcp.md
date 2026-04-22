@@ -178,6 +178,7 @@ MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. In Dol
 
 By collapsing dozens of individual MCP tools into 5 typed endpoints (Create, Read, Update, Delete, Execute), MCP-AQL provides:
 
+- **Semantic endpoint selection**: The model chooses an action family based on intent first, rather than hunting through a long list of narrowly functional tools. That better matches how LLMs reason about tasks.
 - **Endpoint-level permission defaults**: All READ operations auto-approve. All DELETE operations require single-use confirmation. This is enforced by the routing layer before any handler runs.
 - **Schema-driven validation**: Every operation has a typed schema. The server validates parameters before dispatch — malformed requests never reach handler code.
 - **Introspection as capability discovery**: The LLM doesn't need to know every operation at startup. It discovers available operations via `introspect`, reducing token overhead and eliminating stale tool definitions.
