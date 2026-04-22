@@ -2200,7 +2200,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       case 'End': {
         event.preventDefault();
         const items = getConsoleTabMenuItems();
-        items[items.length - 1]?.focus();
+        items.at(-1)?.focus();
         break;
       }
       case 'Escape':
