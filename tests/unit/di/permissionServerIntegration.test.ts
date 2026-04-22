@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import * as http from 'node:http';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 
 const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
 const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
@@ -1068,7 +1069,7 @@ function runHookScript(
         DOLLHOUSE_SESSION_ID: 'session-hook-test',
         DOLLHOUSE_HOOK_DIAGNOSTICS_LOG: path.join(
           os.tmpdir(),
-          `permission-hook-test-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.jsonl`,
+          `permission-hook-test-${process.pid}-${Date.now()}-${randomUUID()}.jsonl`,
         ),
         ...envOverrides,
       },

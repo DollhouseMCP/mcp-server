@@ -4,6 +4,8 @@ import { describe, expect, it } from '@jest/globals';
 
 import { createHealthRoutes } from '../../../src/web/routes/healthRoutes.js';
 
+const TEST_DIAGNOSTICS_PATH = '/Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl';
+
 describe('healthRoutes', () => {
   it('surfaces permission hook health in /api/health', async () => {
     const app = express();
@@ -17,7 +19,7 @@ describe('healthRoutes', () => {
         currentHosts: ['codex'],
         repairedHosts: [],
         needsRepairHosts: [],
-        diagnosticsPath: '/tmp/permission-hook-diagnostics.jsonl',
+        diagnosticsPath: TEST_DIAGNOSTICS_PATH,
         lastDiagnostic: {
           timestamp: '2026-04-22T04:00:00.000Z',
           invocationId: 'diag-1',
@@ -48,7 +50,7 @@ describe('healthRoutes', () => {
         installedHosts: ['codex'],
         currentHosts: ['codex'],
         needsRepairHosts: [],
-        diagnosticsPath: '/tmp/permission-hook-diagnostics.jsonl',
+        diagnosticsPath: TEST_DIAGNOSTICS_PATH,
         lastDiagnostic: expect.objectContaining({
           invocationId: 'diag-1',
           outcome: 'success',
