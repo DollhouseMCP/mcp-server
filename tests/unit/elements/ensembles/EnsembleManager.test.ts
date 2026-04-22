@@ -496,10 +496,11 @@ elements:
       const writes = (fileLockManager.atomicWriteFile as jest.Mock).mock.calls;
       expect(writes.length).toBeGreaterThan(0);
       const [, content] = writes[writes.length - 1] as [string, string];
+      const contentLines = content.split('\n').map((line) => line.trim());
       expect(content).toContain('element_name: repair-skill');
       expect(content).toContain('element_type: skill');
-      expect(content).not.toMatch(/^\s*-\s+name:\s+repair-skill$/m);
-      expect(content).not.toMatch(/^\s+type:\s+skill$/m);
+      expect(contentLines).not.toContain('- name: repair-skill');
+      expect(contentLines).not.toContain('type: skill');
     });
   });
 
