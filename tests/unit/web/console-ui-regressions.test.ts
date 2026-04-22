@@ -189,8 +189,8 @@ describe('Web console cleanup regressions', () => {
           <button class="console-tab" data-tab="permissions">Permissions</button>
         </div>
         <div id="console-tab-menu-shell">
-          <button id="console-tab-menu-toggle" hidden aria-expanded="false"></button>
-          <div id="console-tab-menu" hidden></div>
+          <button id="console-tab-menu-toggle" hidden aria-expanded="false" aria-haspopup="menu"></button>
+          <div id="console-tab-menu" role="menu" hidden></div>
         </div>
       </div>
       <div id="tab-portfolio" class="tab-panel active"></div>
@@ -244,8 +244,91 @@ describe('Web console cleanup regressions', () => {
     menuButton?.click();
     await wait(DEFAULT_WAIT_MS);
 
-    expect(win.document.querySelector('#console-tabs .console-tab.active')?.getAttribute('data-tab')).toBe('permissions');
+    expect((win.document.querySelector('#console-tabs .console-tab.active') as HTMLElement | null)?.dataset.tab).toBe('permissions');
     expect(win.document.getElementById('tab-permissions')?.classList.contains('active')).toBe(true);
+
+    cleanup();
+  });
+
+  it('supports keyboard navigation in the collapsed console tab menu', async () => {
+    const { window: win, cleanup } = createDom(`
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div class="header-nav-row">
+        <div id="console-tabs">
+          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+          <button class="console-tab" data-tab="permissions">Permissions</button>
+        </div>
+        <div id="console-tab-menu-shell">
+          <button id="console-tab-menu-toggle" hidden aria-expanded="false" aria-haspopup="menu"></button>
+          <div id="console-tab-menu" role="menu" hidden></div>
+        </div>
+      </div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="tab-permissions" class="tab-panel"></div>
+      <div id="session-indicator"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const tabButtons = Array.from(win.document.querySelectorAll('#console-tabs .console-tab')) as HTMLElement[];
+    Object.defineProperty(tabButtons[0], 'offsetTop', { configurable: true, get: () => 0 });
+    Object.defineProperty(tabButtons[1], 'offsetTop', { configurable: true, get: () => 24 });
+    win.dispatchEvent(new win.Event('resize'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const menuToggle = win.document.getElementById('console-tab-menu-toggle') as HTMLButtonElement | null;
+    const menu = win.document.getElementById('console-tab-menu');
+    menuToggle?.focus();
+    menuToggle?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+
+    const menuItems = Array.from(win.document.querySelectorAll('.console-tab-menu-item')) as HTMLButtonElement[];
+    expect(menu?.hidden).toBe(false);
+    expect(win.document.activeElement).toBe(menuItems[0]);
+
+    menuItems[0]?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+    expect(win.document.activeElement).toBe(menuItems[1]);
+
+    menuItems[1]?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+    expect(menu?.hidden).toBe(true);
+    expect(win.document.activeElement).toBe(menuToggle);
 
     cleanup();
   });
