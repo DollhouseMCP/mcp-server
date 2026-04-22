@@ -2132,12 +2132,6 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       return Array.from(consoleTabMenu.querySelectorAll('.console-tab-menu-item'));
     }
 
-    function focusConsoleTabMenuItem(items, index) {
-      if (!items.length) return;
-      const boundedIndex = Math.max(0, Math.min(index, items.length - 1));
-      items[boundedIndex].focus();
-    }
-
     function openConsoleTabMenu(focusTarget) {
       if (!consoleTabMenu || !consoleTabMenuToggle) return;
       consoleTabMenu.hidden = false;
@@ -2147,19 +2141,23 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
       const items = getConsoleTabMenuItems();
       if (!items.length) return;
+      const focusItem = (index) => {
+        const boundedIndex = Math.max(0, Math.min(index, items.length - 1));
+        items[boundedIndex].focus();
+      };
 
       if (focusTarget === 'first') {
-        focusConsoleTabMenuItem(items, 0);
+        focusItem(0);
         return;
       }
 
       if (focusTarget === 'last') {
-        focusConsoleTabMenuItem(items, items.length - 1);
+        focusItem(items.length - 1);
         return;
       }
 
-      const activeIndex = items.findIndex((item) => item.classList.contains('active'));
-      focusConsoleTabMenuItem(items, activeIndex >= 0 ? activeIndex : 0);
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      focusItem(activeIndex);
     }
 
     function moveConsoleTabMenuFocus(step, origin) {
@@ -2169,10 +2167,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       const currentIndex = origin instanceof Element
         ? items.findIndex((item) => item === origin || item.contains(origin))
         : -1;
-      const activeIndex = items.findIndex((item) => item.classList.contains('active'));
-      const baseIndex = currentIndex >= 0 ? currentIndex : (activeIndex >= 0 ? activeIndex : 0);
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      const baseIndex = currentIndex >= 0 ? currentIndex : activeIndex;
       const nextIndex = (baseIndex + step + items.length) % items.length;
-      focusConsoleTabMenuItem(items, nextIndex);
+      items[nextIndex].focus();
     }
 
     function handleConsoleTabMenuToggleKeydown(event) {
@@ -2197,12 +2195,12 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         break;
       case 'Home':
         event.preventDefault();
-        focusConsoleTabMenuItem(getConsoleTabMenuItems(), 0);
+        getConsoleTabMenuItems()[0]?.focus();
         break;
       case 'End': {
         event.preventDefault();
         const items = getConsoleTabMenuItems();
-        focusConsoleTabMenuItem(items, items.length - 1);
+        items[items.length - 1]?.focus();
         break;
       }
       case 'Escape':
