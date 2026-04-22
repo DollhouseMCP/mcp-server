@@ -107,13 +107,7 @@ suite('Dockerized permission hook adapters', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(parseHookStdout(result, '/workspace/scripts/pretooluse-codex.sh')).toEqual({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'allow',
-        permissionDecisionReason: '',
-      },
-    });
+    expect(result.stdout).toBe('');
     expect(result.requestBody).toEqual({
       tool_name: 'Bash',
       input: { command: 'pwd' },

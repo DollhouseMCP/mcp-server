@@ -30,6 +30,39 @@ export interface PermissionHookStatus {
   additionalPaths?: string[];
 }
 
+/** Latest JSONL diagnostic event emitted by a local permission hook wrapper. */
+export interface PermissionHookDiagnosticRecord {
+  timestamp: string;
+  invocationId: string;
+  event: string;
+  platform: string;
+  stage: string;
+  outcome?: string;
+  reason?: string;
+  hookPath?: string;
+  diagnosticsLogPath?: string;
+  sessionId?: string;
+  toolName?: string;
+  toolInput?: string;
+  rawInput?: string;
+  authorityHost?: string;
+  authorityMode?: string;
+  endpoint?: string;
+  port?: string;
+  payload?: string;
+  response?: string;
+  normalizedResponse?: string;
+  emittedResponse?: string;
+  attempt?: string;
+  maxRetries?: string;
+  timeoutSeconds?: string;
+  curlExit?: string;
+  rawInputLength?: number;
+  normalizedResponseLength?: number;
+  emittedResponseLength?: number;
+  responseLength?: number;
+}
+
 export interface InstallPermissionHookResult {
   supported: boolean;
   installed: boolean;
@@ -56,14 +89,18 @@ export interface ReconcilePermissionHookOptions {
   autoRepair?: boolean;
 }
 
+/** Aggregate health and repair state for all managed local hook hosts. */
 export interface PermissionHookAuditSummary {
   installedHosts: string[];
   currentHosts: string[];
   repairedHosts: string[];
   needsRepairHosts: string[];
+  diagnosticsPath: string;
+  lastDiagnostic: PermissionHookDiagnosticRecord | null;
   lastStartupRepair: PermissionHookStartupRepairSummary | null;
 }
 
+/** Condensed health view surfaced in setup, permissions, and build info. */
 export interface PermissionHookHealthSummary {
   status: 'ok' | 'warning' | 'error';
   message: string;
@@ -77,6 +114,7 @@ export interface PermissionHookStartupRepairHostResult extends PermissionHookSta
   outcome: 'current' | 'repaired' | 'needs_repair' | 'not_installed' | 'error';
 }
 
+/** Result summary for the most recent startup-time hook asset repair pass. */
 export interface PermissionHookStartupRepairSummary {
   startedAt: string;
   completedAt: string;
@@ -142,6 +180,10 @@ export function getPermissionHookScriptPath(homeDir = homedir()): string {
 
 function getPermissionHookRunDir(homeDir = homedir()): string {
   return join(homeDir, '.dollhouse', 'run');
+}
+
+export function getPermissionHookDiagnosticsPath(homeDir = homedir()): string {
+  return join(getPermissionHookRunDir(homeDir), 'permission-hook-diagnostics.jsonl');
 }
 
 export function normalizeHookHost(host: string): string {
@@ -227,6 +269,56 @@ export function supportsManagedHookAssets(host: string): boolean {
 
 export function getPrimaryHookScriptPath(host: string, homeDir = homedir()): string {
   return getHookWrapperPath(host, homeDir) ?? getPermissionHookScriptPath(homeDir);
+}
+
+export async function readLastPermissionHookDiagnostic(
+  homeDir = homedir(),
+): Promise<PermissionHookDiagnosticRecord | null> {
+  const diagnosticsPath = getPermissionHookDiagnosticsPath(homeDir);
+
+  try {
+    const raw = await readFile(diagnosticsPath, 'utf-8');
+    const lines = raw
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    const lastLine = lines.at(-1);
+    if (!lastLine) {
+      return null;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(lastLine) as unknown;
+    } catch (error) {
+      logger.warn(
+        `[PermissionHooks] Failed to parse hook diagnostics JSON from ${diagnosticsPath}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return null;
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      logger.warn(
+        `[PermissionHooks] Ignoring malformed hook diagnostics entry from ${diagnosticsPath}: expected JSON object.`,
+      );
+      return null;
+    }
+
+    return parsed as PermissionHookDiagnosticRecord;
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return null;
+    }
+
+    logger.warn(
+      `[PermissionHooks] Failed to read hook diagnostics from ${diagnosticsPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return null;
+  }
 }
 
 export function getManagedHookAssets(
