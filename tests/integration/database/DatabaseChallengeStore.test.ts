@@ -123,10 +123,8 @@ describe('DatabaseChallengeStore', () => {
     const store1 = new DatabaseChallengeStore(getTestDb(), userId, TEST_SESSION_ID, 0);
     await store1.initialize();
     store1.set('persist-1', makeChallenge('PERSIST'));
+    await store1.awaitPendingWrites();
     store1.destroy();
-
-    // Wait for fire-and-forget persist (PersistQueue + RLS transaction overhead)
-    await new Promise(resolve => setTimeout(resolve, 1500));
 
     // Restore
     const store2 = new DatabaseChallengeStore(getTestDb(), userId, TEST_SESSION_ID, 0);

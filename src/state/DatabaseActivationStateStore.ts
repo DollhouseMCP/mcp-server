@@ -203,6 +203,11 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     return true;
   }
 
+  /** Wait for any in-flight fire-and-forget writes to complete. */
+  awaitPendingWrites(): Promise<void> {
+    return this.persistQueue.awaitPending();
+  }
+
   async listPersistedActivationStates(sessionId?: string): Promise<PersistedActivationStateSnapshot[]> {
     try {
       const normalizedSessionId = sessionId ? normalizeIdentifier(sessionId) : undefined;

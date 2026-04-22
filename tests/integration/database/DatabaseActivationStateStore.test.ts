@@ -94,8 +94,7 @@ describe('DatabaseActivationStateStore', () => {
     await store1.initialize();
     store1.recordActivation('skill', 'persisted-skill');
 
-    // Wait for fire-and-forget persist (PersistQueue + RLS transaction overhead)
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    await store1.awaitPendingWrites();
 
     // Read back with a new instance
     const store2 = new DatabaseActivationStateStore(getTestDb(), userId, TEST_SESSION_ID);

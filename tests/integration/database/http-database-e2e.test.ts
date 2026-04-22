@@ -108,6 +108,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
         const match = stderrBuf.join('').match(SERVER_READY_REGEX);
         if (match) {
           resolved = true;
+          clearTimeout(startupTimer);
           const baseUrl = match[1];
           const mcpUrl = baseUrl.endsWith('/mcp') ? baseUrl : `${baseUrl}/mcp`;
           resolve({ child, url: mcpUrl, stderrBuf });
@@ -118,6 +119,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
 
     child.once('exit', (code) => {
       if (!resolved) {
+        clearTimeout(startupTimer);
         reject(new Error(
           `Server exited before startup (code=${code})\n` +
           `stderr:\n${stderrBuf.join('')}\n` +
@@ -126,7 +128,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
       }
     });
 
-    setTimeout(() => {
+    const startupTimer = setTimeout(() => {
       if (!resolved) {
         resolved = true;
         child.kill('SIGKILL');
@@ -140,6 +142,8 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
 }
 
 async function killProcess(child: ChildProcessWithoutNullStreams): Promise<void> {
+  child.stdout.removeAllListeners();
+  child.stderr.removeAllListeners();
   if (child.exitCode !== null) return;
   child.kill('SIGTERM');
   await new Promise<void>(resolve => {

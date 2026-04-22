@@ -167,6 +167,11 @@ export class DatabaseChallengeStore implements IChallengeStore {
     return this.challenges.size;
   }
 
+  /** Wait for any in-flight fire-and-forget writes to complete. */
+  awaitPendingWrites(): Promise<void> {
+    return this.persistQueue.awaitPending();
+  }
+
   destroy(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);

@@ -8,7 +8,7 @@ import { eq } from 'drizzle-orm';
 import { bootstrapDatabase } from '../../../src/database/bootstrap.js';
 import { createDatabaseConnection } from '../../../src/database/connection.js';
 import { users } from '../../../src/database/schema/users.js';
-import { isDatabaseAvailable } from './test-db-helpers.js';
+import { isDatabaseAvailable, closeTestDb } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -51,6 +51,8 @@ afterAll(async () => {
       await adminConn.close();
     }
   }
+  // Close the connection opened by isDatabaseAvailable() → getTestDb()
+  await closeTestDb();
 });
 
 describe('bootstrapDatabase', () => {

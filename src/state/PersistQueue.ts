@@ -43,6 +43,9 @@ export class PersistQueue {
   /** True while a write is executing. */
   private flushing = false;
 
+  /** Resolvers waiting for the queue to drain (used by tests). */
+  private drainResolvers: Array<() => void> = [];
+
   constructor(options: PersistQueueOptions) {
     this.options = options;
   }
@@ -95,6 +98,17 @@ export class PersistQueue {
   }
 
   /**
+   * Wait for all in-flight and pending writes to complete.
+   * Returns immediately if the queue is idle.
+   */
+  awaitPending(): Promise<void> {
+    if (!this.flushing) return Promise.resolve();
+    return new Promise<void>(resolve => {
+      this.drainResolvers.push(resolve);
+    });
+  }
+
+  /**
    * Flush loop: runs pending writes one at a time until the queue
    * is drained. Each write is retried before being considered failed.
    */
@@ -118,5 +132,8 @@ export class PersistQueue {
     }
 
     this.flushing = false;
+
+    for (const resolve of this.drainResolvers) resolve();
+    this.drainResolvers = [];
   }
 }
