@@ -525,7 +525,6 @@ Quick start examples:
 { operation: "approve_cli_permission", params: { request_id: "req-123", decision: "allow" } }
 { operation: "prepare_handoff", params: { element_name: "code-reviewer" } }
 { operation: "resume_from_handoff", params: { element_name: "code-reviewer", handoff_block: "..." } }
-{ operation: "migrate_portfolio_layout", params: { mode: "status" } }
 
 Discover required parameters — use mcp_aql_read:
 { operation: "introspect", params: { query: "operations", name: "execute_agent" } }`,

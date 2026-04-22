@@ -110,12 +110,6 @@ export const OPERATION_POLICY_OVERRIDES: Record<string, OperationPolicy> = {
     canBeElevated: false,
   },
 
-  migrate_portfolio_layout: {
-    defaultLevel: PermissionLevel.CONFIRM_SINGLE_USE,
-    rationale: 'Destructive infrastructure operation, restructures the entire portfolio filesystem layout',
-    canBeElevated: false,
-  },
-
   // ===== EXECUTE endpoint overrides =====
   // These are on EXECUTE (default CONFIRM_SINGLE_USE) but need different levels
 

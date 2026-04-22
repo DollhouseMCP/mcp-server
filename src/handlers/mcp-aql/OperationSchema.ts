@@ -1867,24 +1867,6 @@ export const ALL_OPERATION_SCHEMAS: OperationSchemaMap = {
   ...SCHEMA_DRIVEN_OPERATIONS,
   ...INTROSPECTION_ONLY_SCHEMAS,
 
-  // SYSTEM operations (not introspection-only — real operations)
-  migrate_portfolio_layout: {
-    endpoint: 'EXECUTE',
-    handler: 'mcpAqlHandler',
-    method: 'dispatchSystem',
-    category: 'System',
-    description: 'Migrate flat single-user layout to per-user multi-user layout, or check migration status',
-    params: {
-      mode: { type: 'string', description: 'Operation mode: "status" (detect layout), "preview" (dry-run), or "execute" (perform migration). Default: "status".' },
-      userId: { type: 'string', description: 'Target userId for migration. Default: "local-user".' },
-    },
-    returns: { name: 'MigrationResult', kind: 'object', description: 'Layout status, preview of moves, or migration result with success/error details' },
-    examples: [
-      '{ operation: "migrate_portfolio_layout", params: { mode: "status" } }',
-      '{ operation: "migrate_portfolio_layout", params: { mode: "preview" } }',
-      '{ operation: "migrate_portfolio_layout", params: { mode: "execute", userId: "alice" } }',
-    ],
-  },
 } as const;
 
 /**

@@ -134,8 +134,7 @@ describe('AgentToolPolicyTranslator', () => {
         });
 
         // Lifecycle operations (execute_agent, complete_execution, etc.) are
-        // exempt from EXECUTE denial. Non-lifecycle EXECUTE operations (like
-        // migrate_portfolio_layout) ARE denied.
+        // exempt from EXECUTE denial.
         if (policy) {
           expect(policy.deny).not.toContain('execute_agent');
           expect(policy.deny).not.toContain('complete_execution');

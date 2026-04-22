@@ -1358,10 +1358,7 @@ export class MCPAQLHandler {
       return this.dispatchPersona(method, params as Record<string, unknown>);
     }
 
-    // System operations (infrastructure management)
-    if (module === 'System') {
-      return this.dispatchSystem(method, params as Record<string, unknown>);
-    }
+    // System operations — removed; migrations are CLI-only (scripts/)
 
     // Execute operations (Issue #244 - CRUDE)
     if (module === 'Execute') {
@@ -2494,44 +2491,6 @@ export class MCPAQLHandler {
    * 3. This method records the confirmation in the session
    * 4. LLM retries the original operation, which now passes via Layer 3
    */
-  private async dispatchSystem(
-    method: string,
-    params: Record<string, unknown>
-  ): Promise<unknown> {
-    switch (method) {
-      case 'migratePortfolioLayout': {
-        const { FlatToPerUserMigration } = await import('../../storage/migrations/flat-to-per-user/FlatToPerUserMigration.js');
-        const { validateUserId } = await import('../../paths/validateUserId.js');
-        const os = await import('node:os');
-        const nodePath = await import('node:path');
-
-        const mode = (params.mode as string) ?? 'status';
-        const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-        const legacyRoot = nodePath.join(homeDir, '.dollhouse');
-
-        // Validate userId — prevents path traversal via crafted MCP input.
-        // Falls back to 'local-user' for stdio single-user mode.
-        const rawUserId = (params.userId as string) ?? 'local-user';
-        const userId = validateUserId(rawUserId);
-
-        const migration = new FlatToPerUserMigration(legacyRoot, userId);
-
-        switch (mode) {
-          case 'status':
-            return migration.status();
-          case 'preview':
-            return migration.preview();
-          case 'execute':
-            return migration.execute();
-          default:
-            throw new Error(`Unknown migrate_portfolio_layout mode: ${mode}. Use status, preview, or execute.`);
-        }
-      }
-      default:
-        throw new Error(`Unknown system operation: ${method}`);
-    }
-  }
-
   private async dispatchGatekeeper(
     method: string,
     params: Record<string, unknown>

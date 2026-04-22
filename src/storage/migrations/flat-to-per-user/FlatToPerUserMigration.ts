@@ -24,7 +24,7 @@
  *   └── .dollhouse-per-user-migrated   ← marker file
  *
  * The migration is:
- * - Invoked explicitly via the migrate_portfolio_layout MCP tool
+ * - Invoked explicitly via scripts/migrate-to-per-user-layout.ts
  * - Never automatic at startup
  * - Idempotent (safe to re-run — already-moved dirs are skipped)
  * - Partial runs are safe to retry (moves that succeeded stay; remaining retry)

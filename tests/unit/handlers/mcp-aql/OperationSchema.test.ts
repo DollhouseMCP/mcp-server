@@ -814,8 +814,7 @@ describe('OperationSchema', () => {
       it('should be union of dispatch-driven, introspection-only, and system operations', () => {
         const baseCount = Object.keys(SCHEMA_DRIVEN_OPERATIONS).length +
           Object.keys(INTROSPECTION_ONLY_SCHEMAS).length;
-        // System operations (like migrate_portfolio_layout) are in
-        // ALL_OPERATION_SCHEMAS but not in either sub-group.
+        // ALL_OPERATION_SCHEMAS may contain entries beyond the two sub-groups.
         expect(Object.keys(ALL_OPERATION_SCHEMAS).length).toBeGreaterThanOrEqual(baseCount);
       });
 
