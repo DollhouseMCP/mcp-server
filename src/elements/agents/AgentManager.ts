@@ -909,7 +909,10 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async executeAgent(
     name: string,
-    parameters: Record<string, unknown>
+    parameters: Record<string, unknown>,
+    context: {
+      operationName?: 'execute_agent' | 'continue_execution';
+    } = {}
   ): Promise<ExecuteAgentResult> {
     try {
       // 1. Load agent by name
@@ -964,7 +967,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       this.validateParameterSecurity(clonedParameters);
 
       // 3. Validate parameters against goal.parameters schema
-      this.validateParameters(metadata.goal, clonedParameters);
+      this.validateParameters(metadata.goal, clonedParameters, {
+        agentName: name,
+        operationName: context.operationName ?? 'execute_agent',
+      });
 
       // 4. Render goal template by replacing {parameter} placeholders
       const renderedGoal = this.renderGoalTemplate(metadata.goal.template, clonedParameters);
@@ -1206,15 +1212,27 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private validateParameters(
     goalConfig: AgentGoalConfig,
-    parameters: Record<string, unknown>
+    parameters: Record<string, unknown>,
+    context: {
+      agentName?: string;
+      operationName?: 'execute_agent' | 'continue_execution';
+    } = {}
   ): void {
     const paramDefs = goalConfig.parameters || [];
+    const requiredParamNames = paramDefs
+      .filter(paramDef => paramDef.required)
+      .map(paramDef => paramDef.name);
 
     // Check all required parameters are present
-    for (const paramDef of paramDefs) {
-      if (paramDef.required && !(paramDef.name in parameters)) {
-        throw new Error(`Missing required parameter: ${paramDef.name}`);
-      }
+    const missingRequired = requiredParamNames.filter(paramName => !(paramName in parameters));
+    if (missingRequired.length > 0) {
+      throw new Error(
+        this.formatMissingRequiredParametersError(
+          missingRequired,
+          requiredParamNames,
+          context
+        )
+      );
     }
 
     // Type check provided parameters
@@ -1259,6 +1277,39 @@ export class AgentManager extends BaseElementManager<Agent> {
         parameters[paramDef.name] = paramDef.default;
       }
     }
+  }
+
+  /**
+   * Build an actionable missing-parameter error for execute/continue calls.
+   * @private
+   */
+  private formatMissingRequiredParametersError(
+    missingRequired: string[],
+    requiredParamNames: string[],
+    context: {
+      agentName?: string;
+      operationName?: 'execute_agent' | 'continue_execution';
+    }
+  ): string {
+    const agentSuffix = context.agentName ? ` for agent '${context.agentName}'` : '';
+    let message =
+      `Missing required parameters${agentSuffix}: ${missingRequired.join(', ')}.`;
+
+    if (requiredParamNames.length > 0) {
+      message += ` Required goal parameters: ${requiredParamNames.join(', ')}.`;
+    }
+
+    message += ' Discover the full execution contract via mcp_aql_read introspect: ' +
+      '{ operation: "introspect", params: { query: "operations", name: "execute_agent" } }.';
+
+    if (context.operationName === 'continue_execution') {
+      message += ' If you are reporting progress after execute_agent, use ' +
+        'mcp_aql_create record_execution_step instead. continue_execution is only ' +
+        'for resuming a previously paused execution and still requires the same ' +
+        'goal parameters as execute_agent.';
+    }
+
+    return message;
   }
 
   /**
@@ -2979,6 +3030,24 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 2. Get current state
     const state = agent.getState();
+    const activeGoal = state.goals.find(goal => goal.status === 'in_progress');
+
+    if (!activeGoal) {
+      throw new Error(
+        `continue_execution requires an in-progress goal for agent '${params.agentName}'. ` +
+        `Use execute_agent to start a new goal. If you are reporting progress for ` +
+        `the current goal, use mcp_aql_create record_execution_step.`
+      );
+    }
+
+    const activeGoalDecisions = state.decisions.filter(decision => decision.goalId === activeGoal.id);
+    if (activeGoalDecisions.length === 0) {
+      throw new Error(
+        `continue_execution is only for resuming a paused execution after at least ` +
+        `one recorded step for agent '${params.agentName}'. After execute_agent, the ` +
+        `next lifecycle call is mcp_aql_create record_execution_step.`
+      );
+    }
 
     // 3. Check if agent has been executed before
     const isResuming = state.sessionCount > 0 || state.decisions.length > 0;
@@ -2988,7 +3057,8 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     const executionResult = await this.executeAgent(
       params.agentName,
-      executionParams
+      executionParams,
+      { operationName: 'continue_execution' }
     );
 
     // 5. Build previous state summary
