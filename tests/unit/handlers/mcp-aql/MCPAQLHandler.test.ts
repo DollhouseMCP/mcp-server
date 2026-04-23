@@ -1367,6 +1367,23 @@ describe('MCPAQLHandler', () => {
           includeContext: undefined,
         });
       });
+
+      it('should explain how to recover when element_name is missing', async () => {
+        const input: OperationInput = {
+          operation: 'get_execution_state',
+          params: {},
+        };
+
+        const result = await handler.handleRead(input);
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain("Missing required parameter 'element_name'");
+          expect(result.error).toContain('Use the same element_name you passed to execute_agent');
+          expect(result.error).toContain('{ operation: "get_execution_state", params: { element_name: "code-reviewer", includeDecisionHistory: true } }');
+          expect(result.error).toContain('list active agents first');
+        }
+      });
     });
 
     describe('Permission violations', () => {

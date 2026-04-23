@@ -587,6 +587,14 @@ describe('OperationSchema', () => {
         expect(desc).toContain('automatically activated');
       });
 
+      it('should document the canonical execution loop in execute_agent description', () => {
+        const desc = EXECUTION_SCHEMAS.execute_agent.description;
+        expect(desc).toContain('record_execution_step');
+        expect(desc).toContain('mcp_aql_create');
+        expect(desc).toContain('complete_execution');
+        expect(desc).toContain('not the normal next call after execute_agent');
+      });
+
       it('should document resilience interaction in maxAutonomousSteps param (issue #736)', () => {
         const paramDesc = EXECUTION_SCHEMAS.execute_agent.params?.maxAutonomousSteps?.description;
         expect(paramDesc).toContain('resilience');
@@ -602,11 +610,24 @@ describe('OperationSchema', () => {
         expect(EXECUTION_SCHEMAS.record_execution_step.params?.riskScore?.required).toBeUndefined();
       });
 
+      it('should document get_execution_state name reuse guidance', () => {
+        const schema = EXECUTION_SCHEMAS.get_execution_state;
+        expect(schema.description).toContain('same element_name you passed to execute_agent');
+        expect(schema.params?.element_name?.description).toContain('Reuse the same element_name from execute_agent');
+      });
+
       it('should define required params for complete_execution', () => {
         expect(EXECUTION_SCHEMAS.complete_execution.params?.element_name?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.outcome?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.summary?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.goalId?.required).toBeUndefined();
+      });
+
+      it('should document paused-only semantics and full-parameter resume for continue_execution', () => {
+        expect(EXECUTION_SCHEMAS.continue_execution.description).toContain('paused');
+        expect(EXECUTION_SCHEMAS.continue_execution.description).toContain('same goal parameters');
+        expect(EXECUTION_SCHEMAS.continue_execution.examples?.[0]).toContain('run_dir');
+        expect(EXECUTION_SCHEMAS.continue_execution.examples?.[0]).toContain('deliverable_path');
       });
 
       it('should define required params for handoff operations', () => {
