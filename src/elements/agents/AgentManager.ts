@@ -910,6 +910,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   async executeAgent(
     name: string,
     parameters: Record<string, unknown>,
+    // Thread the triggering MCP lifecycle op through validation so error messages
+    // can distinguish a fresh execute_agent call from a misused continue_execution.
     context: {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
