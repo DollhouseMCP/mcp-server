@@ -356,6 +356,7 @@ Memory-specific search (filter by tags):
 Execution lifecycle — read-only queries:
 { operation: "get_execution_state", params: { element_name: "code-reviewer" } }
 { operation: "get_gathered_data", params: { element_name: "code-reviewer", goalId: "goal-id" } }
+For execution-state reads, reuse the same element_name you passed to execute_agent. If element_name is missing, retry with the same agent name rather than inventing a new one.
 
 Collection:
 { operation: "browse_collection", params: { section: "personas" } }

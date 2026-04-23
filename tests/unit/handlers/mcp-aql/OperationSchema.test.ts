@@ -610,6 +610,12 @@ describe('OperationSchema', () => {
         expect(EXECUTION_SCHEMAS.record_execution_step.params?.riskScore?.required).toBeUndefined();
       });
 
+      it('should document get_execution_state name reuse guidance', () => {
+        const schema = EXECUTION_SCHEMAS.get_execution_state;
+        expect(schema.description).toContain('same element_name you passed to execute_agent');
+        expect(schema.params?.element_name?.description).toContain('Reuse the same element_name from execute_agent');
+      });
+
       it('should define required params for complete_execution', () => {
         expect(EXECUTION_SCHEMAS.complete_execution.params?.element_name?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.outcome?.required).toBe(true);

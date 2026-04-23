@@ -283,4 +283,12 @@ describe('Tool Description ↔ Operation Route Integrity (Issue #535)', () => {
       ]);
     });
   });
+
+  it('mcp_aql_read documents get_execution_state name reuse guidance', async () => {
+    const descriptions = await getToolDescriptions();
+    const description = descriptions.mcp_aql_read;
+
+    expect(description).toContain('{ operation: "get_execution_state", params: { element_name: "code-reviewer" } }');
+    expect(description).toContain('reuse the same element_name you passed to execute_agent');
+  });
 });
