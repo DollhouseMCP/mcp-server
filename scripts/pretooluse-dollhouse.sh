@@ -300,6 +300,12 @@ append_diagnostic_record "received_input" "received_input"
 # Extract tool_name and tool_input from the hook payload
 TOOL_NAME=$(echo "$INPUT" | jq -r '.tool_name // .toolName // .tool // .name // empty' 2>/dev/null)
 TOOL_INPUT=$(echo "$INPUT" | jq -c '.tool_input // .toolInput // .input // {}' 2>/dev/null)
+HOOK_SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // .sessionId // empty' 2>/dev/null)
+TURN_ID=$(echo "$INPUT" | jq -r '.turn_id // .turnId // empty' 2>/dev/null)
+TOOL_USE_ID=$(echo "$INPUT" | jq -r '.tool_use_id // .toolUseId // empty' 2>/dev/null)
+TRANSCRIPT_PATH=$(echo "$INPUT" | jq -r '.transcript_path // .transcriptPath // empty' 2>/dev/null)
+CWD=$(echo "$INPUT" | jq -r '.cwd // empty' 2>/dev/null)
+MODEL=$(echo "$INPUT" | jq -r '.model // empty' 2>/dev/null)
 
 # If we can't parse the input, fail open
 if [[ -z "$TOOL_NAME" ]]; then
@@ -328,20 +334,33 @@ if [[ "$AUTHORITY_MODE" == "off" ]]; then
   exit 0
 fi
 
-if [[ -n "${DOLLHOUSE_SESSION_ID:-}" ]]; then
-  debug "Using DOLLHOUSE_SESSION_ID=${DOLLHOUSE_SESSION_ID}"
+SESSION_ID="${DOLLHOUSE_SESSION_ID:-$HOOK_SESSION_ID}"
+
+if [[ -n "$SESSION_ID" ]]; then
+  debug "Using DOLLHOUSE_SESSION_ID=$SESSION_ID"
 fi
 
 PAYLOAD=$(jq -cn \
   --arg tool_name "$TOOL_NAME" \
   --arg platform "$HOOK_PLATFORM" \
-  --arg session_id "${DOLLHOUSE_SESSION_ID:-}" \
+  --arg session_id "$SESSION_ID" \
+  --arg turn_id "$TURN_ID" \
+  --arg tool_use_id "$TOOL_USE_ID" \
+  --arg transcript_path "$TRANSCRIPT_PATH" \
+  --arg cwd "$CWD" \
+  --arg model "$MODEL" \
   --argjson input "$TOOL_INPUT" \
   '{
     tool_name: $tool_name,
     input: $input,
     platform: $platform
-  } + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)')
+  }
+  + (if ($session_id | length) > 0 then { session_id: $session_id } else {} end)
+  + (if ($turn_id | length) > 0 then { turn_id: $turn_id } else {} end)
+  + (if ($tool_use_id | length) > 0 then { tool_use_id: $tool_use_id } else {} end)
+  + (if ($transcript_path | length) > 0 then { transcript_path: $transcript_path } else {} end)
+  + (if ($cwd | length) > 0 then { cwd: $cwd } else {} end)
+  + (if ($model | length) > 0 then { model: $model } else {} end)')
 
 # Call the DollhouseMCP permission evaluation endpoint with exponential backoff.
 # Retry on transient failures (connection refused, timeout) but not on HTTP errors.
