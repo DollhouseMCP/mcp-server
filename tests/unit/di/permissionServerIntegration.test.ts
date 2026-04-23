@@ -308,6 +308,74 @@ describe('Permission Server Integration', () => {
       }
     });
 
+    itBash('hook script should forward Codex session metadata from the raw hook payload', async () => {
+      let testPort = 0;
+      let capturedBody: Record<string, unknown> | null = null;
+      const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
+      const tempRunDir = path.join(tempHome, '.dollhouse', 'run');
+      const tempPortFile = path.join(tempRunDir, 'permission-server.port');
+      const mockServer = http.createServer((req, res) => {
+        if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
+          let body = '';
+          req.on('data', chunk => { body += chunk; });
+          req.on('end', () => {
+            capturedBody = JSON.parse(body);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({}));
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      testPort = await listenOnLoopback(mockServer);
+      await fs.mkdir(tempRunDir, { recursive: true });
+      await fs.writeFile(tempPortFile, String(testPort), 'utf-8');
+
+      const { code, stdout } = await new Promise<{ code: number; stdout: string }>((resolve) => {
+        const hookProc = spawn(BASH_BINARY, [HOOK_SCRIPT], {
+          env: {
+            HOME: tempHome,
+            PATH: SAFE_TEST_PATH,
+            DOLLHOUSE_HOOK_PLATFORM: 'codex',
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let out = '';
+        hookProc.stdout.on('data', (data: Buffer) => { out += data.toString(); });
+        hookProc.on('close', (c: number) => resolve({ code: c, stdout: out }));
+        hookProc.stdin.write(JSON.stringify({
+          tool_name: 'Bash',
+          tool_input: { command: 'pwd' },
+          session_id: 'session-codex-raw',
+          turn_id: 'turn-88',
+          tool_use_id: 'tooluse-77',
+          transcript_path: '/tmp/codex/transcript.jsonl',
+          cwd: '/workspace/codex',
+          model: 'gpt-5.4',
+        }));
+        hookProc.stdin.end();
+      });
+
+      await new Promise<void>(resolve => mockServer.close(() => resolve()));
+      await fs.rm(tempHome, { recursive: true, force: true });
+
+      expect(code).toBe(0);
+      expect(stdout).toBe('');
+      expect(capturedBody).toEqual({
+        tool_name: 'Bash',
+        input: { command: 'pwd' },
+        platform: 'codex',
+        session_id: 'session-codex-raw',
+        turn_id: 'turn-88',
+        tool_use_id: 'tooluse-77',
+        transcript_path: '/tmp/codex/transcript.jsonl',
+        cwd: '/workspace/codex',
+        model: 'gpt-5.4',
+      });
+    });
+
     itBash('hook script should translate legacy flat Claude responses', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'dollhouse-hook-home-'));
       const tempRunDir = path.join(tempHome, '.dollhouse', 'run');

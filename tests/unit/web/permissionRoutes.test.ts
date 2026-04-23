@@ -731,6 +731,63 @@ describe('permissionRoutes', () => {
       ]);
     });
 
+    it('should track Codex allow responses as allow and preserve hook metadata', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{ success: true, data: {} }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler);
+
+      await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'pwd' },
+          platform: 'codex',
+          session_id: 'session-codex-1',
+          turn_id: 'turn-42',
+          tool_use_id: 'tooluse-9',
+          transcript_path: '/tmp/codex/transcript.jsonl',
+          cwd: '/workspace/demo',
+          model: 'gpt-5.4',
+        });
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
+        session_id: 'session-codex-1',
+        turn_id: 'turn-42',
+        tool_use_id: 'tooluse-9',
+        transcript_path: '/tmp/codex/transcript.jsonl',
+        cwd: '/workspace/demo',
+        model: 'gpt-5.4',
+        decision: 'allow',
+        platform: 'codex',
+      }));
+      expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
+        { label: 'Platform', value: 'codex', monospace: true },
+        { label: 'Session', value: 'session-codex-1', monospace: true },
+        { label: 'Turn', value: 'turn-42', monospace: true },
+        { label: 'Tool Use', value: 'tooluse-9', monospace: true },
+        { label: 'Transcript', value: '/tmp/codex/transcript.jsonl', monospace: true },
+        { label: 'Working Dir', value: '/workspace/demo', monospace: true },
+        { label: 'Model', value: 'gpt-5.4', monospace: true },
+        { label: 'Command', value: 'pwd', monospace: true },
+      ]));
+    });
+
     it('should include useful audit detail fields for tracked decisions', async () => {
       const handler = {
         handleRead: jest

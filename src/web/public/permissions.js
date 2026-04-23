@@ -518,12 +518,16 @@
     const toolDisplay = decision.tool_name === 'Bash'
       ? `Bash: ${esc(truncate(decision.command || '', 60))}`
       : esc(decision.tool_name);
+    const sourceSummary = getDecisionSourceSummary(decision);
 
     return `
       <div class="perm-feed-row">
         <span class="perm-feed-time">${esc(formatShortTime(decision.timestamp))}</span>
         <span class="perm-feed-decision perm-feed-decision--${decision.decision}">${esc(getDecisionLabel(decision.decision))}</span>
-        <span class="perm-feed-tool" title="${esc(decision.command || decision.tool_name)}">${toolDisplay}</span>
+        <span class="perm-feed-tool-group">
+          <span class="perm-feed-tool" title="${esc(decision.command || decision.tool_name)}">${toolDisplay}</span>
+          ${sourceSummary ? `<span class="perm-feed-meta">${esc(sourceSummary)}</span>` : ''}
+        </span>
         <span class="perm-feed-reason" title="${esc(decision.reason || '')}">${esc(decision.reason || '')}</span>
       </div>
     `;
@@ -623,7 +627,48 @@
     return String(decision || '').toUpperCase();
   }
 
+  function formatPermissionPlatform(platform) {
+    const labelMap = {
+      claude_code: 'Claude Code',
+      codex: 'Codex',
+      cursor: 'Cursor',
+      gemini: 'Gemini CLI',
+      vscode: 'VS Code',
+      windsurf: 'Windsurf',
+    };
+
+    return labelMap[platform] || platform || '';
+  }
+
+  function getDecisionSourceSummary(decision) {
+    const parts = [];
+
+    if (decision.platform) {
+      parts.push(formatPermissionPlatform(decision.platform));
+    }
+
+    if (decision.session_id) {
+      parts.push(`session ${truncate(decision.session_id, 18)}`);
+    }
+
+    if (decision.turn_id) {
+      parts.push(`turn ${truncate(decision.turn_id, 14)}`);
+    }
+
+    return parts.join(' · ');
+  }
+
   function getCompactContext(decision) {
+    const sourceSummary = getDecisionSourceSummary(decision);
+    if (sourceSummary && decision.targetLabel && decision.target) {
+      return `${sourceSummary} · ${decision.targetLabel}: ${truncate(decision.target, 96)}`;
+    }
+    if (sourceSummary && decision.command) {
+      return `${sourceSummary} · ${truncate(decision.command, 96)}`;
+    }
+    if (sourceSummary) {
+      return sourceSummary;
+    }
     if (decision.targetLabel && decision.target) {
       return `${decision.targetLabel}: ${truncate(decision.target, 96)}`;
     }

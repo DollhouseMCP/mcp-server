@@ -1132,11 +1132,15 @@ describe('Web console cleanup regressions', () => {
                 tool_name: 'Edit',
                 decision: 'ask',
                 reason: 'Needs confirmation before editing a protected file.',
-                platform: 'cursor',
+                platform: 'codex',
+                session_id: 'session-audit-1',
+                turn_id: 'turn-audit-1',
                 target: '/opt/dollhouse/important.txt',
                 targetLabel: 'File',
                 details: [
-                  { label: 'Platform', value: 'cursor', monospace: true },
+                  { label: 'Platform', value: 'codex', monospace: true },
+                  { label: 'Session', value: 'session-audit-1', monospace: true },
+                  { label: 'Turn', value: 'turn-audit-1', monospace: true },
                   { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
                   { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
                 ],
@@ -1170,10 +1174,15 @@ describe('Web console cleanup regressions', () => {
 
     const modal = win.document.getElementById('perm-audit-modal');
     const modalFeed = win.document.getElementById('perm-audit-modal-feed');
+    const compactFeed = win.document.getElementById('perm-feed');
     expect(modal?.hasAttribute('open')).toBe(true);
     expect(win.document.getElementById('perm-audit-modal-title')?.textContent).toContain('All Sessions Audit View');
+    expect(compactFeed?.textContent).toContain('Codex');
+    expect(compactFeed?.textContent).toContain('session session-audit-1');
     expect(modalFeed?.textContent).toContain('Needs confirmation before editing a protected file.');
     expect(modalFeed?.textContent).toContain('/opt/dollhouse/important.txt');
+    expect(modalFeed?.textContent).toContain('session-audit-1');
+    expect(modalFeed?.textContent).toContain('turn-audit-1');
     expect(modalFeed?.textContent).toContain('Matched Pattern');
     expect(modalFeed?.textContent).toContain('Exact Time');
     expect(modalFeed?.querySelector('.perm-audit-entry')).not.toBeNull();
