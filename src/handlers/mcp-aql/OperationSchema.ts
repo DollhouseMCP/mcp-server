@@ -1234,9 +1234,9 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
     category: 'Agent Execution',
-    description: 'Query current execution state including progress and findings',
+    description: 'Query current execution state including progress and findings. Use the same element_name you passed to execute_agent for this execution.',
     params: {
-      element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
+      element_name: { type: 'string', required: true, description: 'Agent or executable element name. Reuse the same element_name from execute_agent.' },
       includeDecisionHistory: { type: 'boolean', description: 'Include decision history in response' },
       includeContext: { type: 'boolean', description: 'Include execution context in response' },
     },

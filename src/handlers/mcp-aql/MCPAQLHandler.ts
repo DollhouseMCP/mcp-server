@@ -126,6 +126,47 @@ function validateRequiredString(
   return value;
 }
 
+const EXECUTION_OPERATION_NAMES: Record<string, string> = {
+  execute: 'execute_agent',
+  getState: 'get_execution_state',
+  updateState: 'record_execution_step',
+  complete: 'complete_execution',
+  continue: 'continue_execution',
+  abort: 'abort_execution',
+  getGatheredData: 'get_gathered_data',
+  prepareHandoff: 'prepare_handoff',
+  resumeFromHandoff: 'resume_from_handoff',
+};
+
+function validateExecutionElementName(
+  method: string,
+  params: Record<string, unknown>
+): string {
+  const value = params.element_name;
+  if (value !== undefined && value !== null && typeof value === 'string' && value.trim() !== '') {
+    return value;
+  }
+
+  const operationName = EXECUTION_OPERATION_NAMES[method] || 'execution lifecycle operation';
+
+  if (method === 'getState') {
+    throw new Error(
+      `Missing required parameter 'element_name'. Expected: string ` +
+      `(the name of the agent/executable element whose execution state you want to inspect). ` +
+      `Use the same element_name you passed to execute_agent. ` +
+      `Retry with: { operation: "get_execution_state", params: { element_name: "code-reviewer", includeDecisionHistory: true } }. ` +
+      `If you're unsure which name to use, call introspect for "get_execution_state" or list active agents first.`
+    );
+  }
+
+  throw new Error(
+    `Missing required parameter 'element_name'. Expected: string ` +
+    `(the name of the agent/executable element for ${operationName}). ` +
+    `If this is part of an existing execution lifecycle, reuse the same element_name you passed to execute_agent. ` +
+    `If you're unsure which name to use, call introspect for "${operationName}" or list active agents first.`
+  );
+}
+
 /**
  * Normalize flat pagination params into a { page, pageSize } object.
  *
@@ -3575,11 +3616,7 @@ export class MCPAQLHandler {
 
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
-    const elementName = validateRequiredString(
-      params,
-      'element_name',
-      'the name of the agent/element to execute'
-    );
+    const elementName = validateExecutionElementName(method, params);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton
