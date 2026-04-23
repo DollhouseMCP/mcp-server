@@ -51,7 +51,7 @@
     const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : '';
     const res = await DollhouseAuth.apiFetch(`/api/permissions/status${query}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.json();
+    return readJsonResponse(res, 'permission status');
   }
 
   async function updatePermissionAuthority(payload) {
@@ -60,9 +60,29 @@
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
     });
-    const data = await res.json().catch(function () { return {}; });
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    let data = {};
+    try {
+      data = await readJsonResponse(res, 'permission authority update');
+    } catch (err) {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      throw err;
+    }
+
+    if (!res.ok) {
+      const errorMessage = data && typeof data.error === 'string' ? data.error : `HTTP ${res.status}`;
+      throw new Error(errorMessage);
+    }
     return data;
+  }
+
+  async function readJsonResponse(res, context) {
+    try {
+      return await res.json();
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(`[Permissions Dashboard] Invalid ${context} JSON:`, reason);
+      throw new Error(`Invalid ${context} response`);
+    }
   }
 
   // ── Public API ─────────────────────────────────────────────
@@ -546,7 +566,7 @@
     const detailRows = Array.isArray(decision.details) ? decision.details : [];
     const reasonBlock = decision.reason
       ? `
-        <div class="perm-audit-reason-block">
+        <div class="perm-audit-reason-block" role="group" aria-label="${esc(`Reason: ${decision.reason}`)}">
           <div class="perm-audit-meta-label">Reason</div>
           <p class="perm-audit-reason-text">${esc(decision.reason)}</p>
         </div>
@@ -555,24 +575,13 @@
     const detailList = detailRows.length > 0
       ? `
         <dl class="perm-audit-detail-list">
-          ${detailRows.map(detail => `
-            <div class="perm-audit-detail-row">
-              <dt class="perm-audit-meta-label">${esc(detail.label)}</dt>
-              <dd class="perm-audit-meta-value${detail.monospace ? ' perm-audit-detail-value--mono' : ''}">${esc(detail.value)}</dd>
-            </div>
-          `).join('')}
-          <div class="perm-audit-detail-row">
-            <dt class="perm-audit-meta-label">Exact Time</dt>
-            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
-          </div>
+          ${detailRows.map(detail => renderAuditDetailRow(detail.label, detail.value, detail.monospace)).join('')}
+          ${renderAuditDetailRow('Exact Time', formatExactTimestamp(decision.timestamp), true)}
         </dl>
       `
       : `
         <dl class="perm-audit-detail-list">
-          <div class="perm-audit-detail-row">
-            <dt class="perm-audit-meta-label">Exact Time</dt>
-            <dd class="perm-audit-meta-value perm-audit-detail-value--mono">${esc(formatExactTimestamp(decision.timestamp))}</dd>
-          </div>
+          ${renderAuditDetailRow('Exact Time', formatExactTimestamp(decision.timestamp), true)}
         </dl>
       `;
 
@@ -592,6 +601,17 @@
           ${detailList}
         </div>
       </details>
+    `;
+  }
+
+  function renderAuditDetailRow(label, value, monospace) {
+    const safeLabel = String(label || 'Detail');
+    const safeValue = String(value || '');
+    return `
+      <div class="perm-audit-detail-row" role="group" aria-label="${esc(`${safeLabel}: ${safeValue}`)}">
+        <dt class="perm-audit-meta-label">${esc(safeLabel)}</dt>
+        <dd class="perm-audit-meta-value${monospace ? ' perm-audit-detail-value--mono' : ''}">${esc(safeValue)}</dd>
+      </div>
     `;
   }
 

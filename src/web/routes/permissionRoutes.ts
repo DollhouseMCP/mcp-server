@@ -80,12 +80,26 @@ interface PermissionDecisionInput extends Record<string, unknown> {
   request_id?: string;
 }
 
+/**
+ * Optional host metadata forwarded by permission hooks for audit correlation.
+ *
+ * Codex supplies these fields with hook events so the dashboard can connect a
+ * permission decision back to the originating session, turn, tool use,
+ * transcript, workspace, and model. They are display-only metadata and are not
+ * used to decide whether a tool call is allowed.
+ */
 interface PermissionDecisionRequestMetadata {
+  /** Codex session identifier for grouping decisions by conversation. */
   session_id?: string;
+  /** Codex turn identifier for locating the user/model exchange. */
   turn_id?: string;
+  /** Codex tool-use identifier for the exact hook invocation. */
   tool_use_id?: string;
+  /** Local transcript path emitted by Codex for human troubleshooting. */
   transcript_path?: string;
+  /** Working directory where the host attempted the tool call. */
   cwd?: string;
+  /** Model name reported by the host for audit context. */
   model?: string;
 }
 
@@ -192,6 +206,13 @@ function normalizePermissionResponseForPlatform(
   return formatPermissionResponse('allow', platform, input);
 }
 
+/**
+ * Builds the expanded audit details shown in the dashboard.
+ *
+ * Host metadata stays separate from permission inputs so the UI can explain
+ * where a decision came from without accidentally treating correlation fields
+ * as policy targets.
+ */
 function buildDecisionDetails(
   toolName: string,
   input: PermissionDecisionInput,
