@@ -110,7 +110,7 @@ To switch back:
 
 ## Step 4: Explore What's Available
 
-DollhouseMCP ships with 38 starter elements across all 6 types:
+DollhouseMCP ships with 41 starter elements across all 6 types:
 
 ### Personas (7)
 | Name | What It Does |
@@ -123,7 +123,7 @@ DollhouseMCP ships with 38 starter elements across all 6 types:
 | ELI5 Explainer | Simplifies complex topics for anyone |
 | Security Analyst | Security-focused expert perspective |
 
-### Skills (7)
+### Skills (8)
 | Name | What It Does |
 |------|-------------|
 | Code Review | Systematic code analysis for quality and security |
@@ -131,6 +131,7 @@ DollhouseMCP ships with 38 starter elements across all 6 types:
 | Data Analysis | Statistical and data insights |
 | Penetration Testing | Security testing methodologies |
 | Research | Research and investigation methodology |
+| research-to-elements | Guided workflow for turning research into reusable Dollhouse elements |
 | Threat Modeling | Security threat assessment |
 | Translation | Language translation |
 
@@ -157,17 +158,18 @@ DollhouseMCP ships with 38 starter elements across all 6 types:
 | Test Generator | Automated test creation |
 | Task Manager | Task orchestration |
 
-### Memories (4)
+### Memories (5)
 | Name | What It Does |
 |------|-------------|
 | Conversation History | Session conversation tracking |
 | GitHub Label Correction | Repository labeling patterns |
 | Learning Progress | Learning state tracking |
 | Project Context | Project-specific context storage |
+| welcome-to-dollhouse-guide | Onboarding guide memory for learning Dollhouse elements and workflows |
 
 Memories use YAML format and are created as you work. The bundled memories provide starter examples of the format.
 
-### Ensembles (5)
+### Ensembles (6)
 | Name | What It Does |
 |------|-------------|
 | Business Advisor | Combined business analysis ensemble |
@@ -175,6 +177,7 @@ Memories use YAML format and are created as you work. The bundled memories provi
 | Development Team | Coordinates developer persona + code review skill |
 | dollhouse-expert-suite | DollhouseMCP expert persona + knowledge base memory |
 | Security Analysis Team | Combined security expert workflow |
+| welcome-to-the-dollhouse | Guided onboarding ensemble for learning DollhouseMCP by building with it |
 
 To see everything available:
 
