@@ -1,0 +1,436 @@
+entries:
+  - content: >-
+      ## MCP-AQL as Semantic Endpoints
+
+
+      MCP-AQL should be explained as a protocol layer on top of MCP, created by
+      Dollhouse Research.
+
+
+      It is important to emphasize that MCP-AQL uses **semantic endpoints**
+      rather than tool-by-tool functional endpoints.
+
+
+      That means the model reasons first about the kind of action it wants to
+      take:
+
+      - create
+
+      - read
+
+      - update
+
+      - delete
+
+      - execute
+
+
+      This maps better to how LLMs choose operations. Instead of sorting through
+      a long flat list of narrowly functional tools, the model can pick the
+      semantic endpoint family first and then fill in the specific Dollhouse
+      operation and parameters.
+
+
+      When teaching users or models, describe MCP-AQL as a semantic protocol
+      layer that helps LLMs make better tool choices.
+    expiresAt: 4764-03-18T20:25:14.699Z
+    id: mem_1776889514699_u0k2grb3r
+    privacyLevel: private
+    source: unknown
+    tags:
+      - mcpaql
+      - semantic-endpoints
+      - protocol-layer
+      - onboarding
+    timestamp: 2026-04-22T20:25:14.699Z
+    trustLevel: untrusted
+  - content: >-
+      ## Superseding Note on Activation Style
+
+
+      Keep the activation flow light. When the user activates the
+      `welcome-to-the-dollhouse` Dollhouse ensemble, do not force a separate
+      autonomous onboarding agent to take over.
+
+
+      A brief guided response is enough:
+
+      - acknowledge that the Welcome to the Dollhouse Dollhouse ensemble is
+      active
+
+      - suggest one concrete next step
+
+      - ask one focused question if helpful
+
+
+      Continue using the Dollhouse namespace explicitly in examples like `Show
+      me my Dollhouse skills` and `Activate the dollhouse-expert Dollhouse
+      persona`.
+    expiresAt: 4764-03-18T19:32:14.052Z
+    id: mem_1776886334052_7iaf9kf6u
+    privacyLevel: private
+    source: unknown
+    tags:
+      - activation-style
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T19:32:14.052Z
+    trustLevel: validated
+  - content: >-
+      ## Immediate Activation Behavior
+
+
+      When the user activates the `welcome-to-the-dollhouse` Dollhouse ensemble,
+      do not stop at a passive acknowledgment like `ready when you are`.
+
+
+      Instead, the onboarding flow should immediately:
+
+      - welcome the user to DollhouseMCP
+
+      - state that the Welcome to the Dollhouse Dollhouse ensemble is active
+
+      - recommend one concrete first step
+
+      - ask one focused follow-up question
+
+
+      Whenever examples are given, use the Dollhouse namespace explicitly, like
+      `Show me my Dollhouse skills` or `Activate the dollhouse-expert Dollhouse
+      persona`.
+    expiresAt: 4764-03-18T19:16:54.850Z
+    id: mem_1776885414849_4rhnlgj9s
+    privacyLevel: private
+    source: unknown
+    tags:
+      - activation-behavior
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T19:16:54.849Z
+    trustLevel: validated
+  - content: >-
+      ## Important Naming Convention for Requests
+
+
+      When you ask the assistant to work with elements, use the Dollhouse
+      namespace explicitly so the model reaches for DollhouseMCP tools instead
+      of generic client, editor, or agent features.
+
+
+      Prefer requests like:
+
+      - `Show me my Dollhouse skills`
+
+      - `List my Dollhouse personas`
+
+      - `Activate the dollhouse-expert Dollhouse persona`
+
+      - `Activate the welcome-to-the-dollhouse Dollhouse ensemble`
+
+      - `Show me my Dollhouse memories`
+
+      - `Create a Dollhouse skill for writing code review checklists`
+
+
+      If you start with a generic request like `show me my skills`, the guide
+      should restate it in Dollhouse terms before continuing.
+    expiresAt: 4764-03-18T18:48:26.370Z
+    id: mem_1776883706370_37824blqo
+    privacyLevel: private
+    source: unknown
+    tags:
+      - naming-convention
+      - onboarding
+      - dollhouse
+      - ux
+    timestamp: 2026-04-22T18:48:26.370Z
+    trustLevel: validated
+  - content: >-
+      # Welcome to the Dollhouse Guide
+
+
+      This memory is a guided tour for people who are new to DollhouseMCP or who
+      want a more intentional path for building reusable AI configurations.
+
+
+      Its job is to help the user:
+
+      - understand what each element type is for
+
+      - decide which element type to create next
+
+      - use research intentionally instead of improvising from memory
+
+      - turn research into reusable Dollhouse elements
+
+      - build small composable systems instead of one giant all-in-one setup
+
+
+      ## Start Simple
+
+
+      The recommended learning path is:
+
+
+      1. Learn the six element types.
+
+      2. Create one simple element of a single type.
+
+      3. Use research to gather domain expertise.
+
+      4. Store that expertise in a memory or markdown file.
+
+      5. Turn the expertise into a reusable persona, skill, template, agent, or
+      ensemble.
+
+      6. Bundle the pieces into an ensemble when the workflow feels stable.
+
+
+      This guide is intentionally friendly to users who do not want a
+      distributed actor model or Erlang-style orchestration. You can build very
+      capable systems with plain elements plus one simple ensemble.
+
+
+      ## What Each Element Type Does
+
+
+      ### Personas
+
+      Use a persona when you want to change how the AI behaves.
+
+
+      Good for:
+
+      - tone
+
+      - methodology
+
+      - domain posture
+
+      - decision style
+
+
+      ### Skills
+
+      Use a skill when you want to add a repeatable capability.
+
+
+      Good for:
+
+      - research methodology
+
+      - code review checklists
+
+      - writing systems
+
+      - analysis procedures
+
+
+      ### Templates
+
+      Use a template when you want a repeatable output shape.
+
+
+      Good for:
+
+      - reports
+
+      - briefs
+
+      - playbooks
+
+      - onboarding docs
+
+
+      ### Agents
+
+      Use an agent when you want the system to pursue a goal across steps.
+
+
+      Good for:
+
+      - running a research plan
+
+      - producing a structured deliverable
+
+      - coordinating a bounded workflow
+
+
+      ### Memories
+
+      Use a memory when you want to preserve knowledge or context.
+
+
+      Good for:
+
+      - distilled research findings
+
+      - domain notes
+
+      - team conventions
+
+      - project context
+
+
+      ### Ensembles
+
+      Use an ensemble when you want multiple elements to work together as a
+      guided package.
+
+
+      Good for:
+
+      - onboarding kits
+
+      - expert bundles
+
+      - repeatable team-style workflows
+
+      - a guided starter system for a topic
+
+
+      ## Recommended Beginner Workflow
+
+
+      ### Phase 1: Pick a Topic
+
+      Choose a domain you want the AI to become better at.
+
+
+      ### Phase 2: Research the Topic
+
+      Use the research skill and research assistant to gather outside knowledge.
+
+
+      The goal is not to keep everything. The goal is to bring back only the
+      parts that should become reusable expertise.
+
+
+      ### Phase 3: Save What Matters
+
+      Save useful findings into:
+
+      - a Dollhouse memory for persistent structured knowledge
+
+      - a markdown file when the content is still being shaped
+
+
+      ### Phase 4: Convert Research into Elements
+
+      Ask:
+
+      - should this become a persona because it changes behavior?
+
+      - should this become a skill because it is a repeatable method?
+
+      - should this become a template because it is a repeatable deliverable?
+
+      - should this become an agent because it is a multi-step goal?
+
+      - should it stay a memory because it is supporting knowledge?
+
+
+      ### Phase 5: Bundle What Works
+
+      When a set of elements starts working together reliably, make an ensemble.
+
+
+      That ensemble can stay small. It does not need to do everything.
+
+
+      ## Composable Patterns
+
+      Prefer small combinations like these:
+
+      - guide + knowledge
+
+      - guide + research
+
+      - research + memory + template
+
+      - guide + memory + research + agent
+
+
+      ## How to Help the User
+
+      When this memory is active, guide the user by:
+
+      - starting with the smallest useful next step
+
+      - explaining trade-offs between element types
+
+      - suggesting when to stop researching and start codifying
+
+      - encouraging small reusable pieces over giant one-off prompts
+
+      - showing how to move from external knowledge to reusable Dollhouse
+      elements
+    expiresAt: 4764-03-18T17:36:34.298Z
+    id: mem_1776879394298_jtp9yyrd8
+    privacyLevel: private
+    source: unknown
+    tags: []
+    timestamp: 2026-04-22T17:36:34.298Z
+    trustLevel: validated
+extensions:
+  encryptionEnabled: false
+  maxEntries: 1000
+  privacyLevel: private
+  retentionDays: 999999
+  searchable: true
+  storageBackend: memory
+metadata:
+  author: mick
+  autoLoad: true
+  created: 2026-04-22
+  description: >-
+    Guided onboarding memory for learning DollhouseMCP element types, research
+    workflows, and composable ensemble-building patterns
+  encryptionEnabled: false
+  format_version: v2
+  maxEntries: 1000
+  memoryType: user
+  modified: 2026-04-22T17:36:34.297Z
+  name: welcome-to-dollhouse-guide
+  priority: 25
+  privacyLevel: private
+  retentionDays: 999999
+  searchable: true
+  storageBackend: memory
+  tags:
+    - welcome
+    - onboarding
+    - elements
+    - research
+    - ensembles
+    - guided-tour
+  triggers: []
+  type: memory
+  unique_id: memories_welcome-to-dollhouse-guide_1776883288355
+  version: 1.0.0
+stats:
+  newestEntry: 2026-04-22T20:25:14.699Z
+  oldestEntry: 2026-04-22T17:36:34.298Z
+  topTags:
+    - count: 4
+      tag: onboarding
+    - count: 3
+      tag: dollhouse
+    - count: 3
+      tag: ux
+    - count: 1
+      tag: mcpaql
+    - count: 1
+      tag: semantic-endpoints
+    - count: 1
+      tag: protocol-layer
+    - count: 1
+      tag: activation-style
+    - count: 1
+      tag: activation-behavior
+    - count: 1
+      tag: naming-convention
+  totalEntries: 5
+  totalSize: 6196

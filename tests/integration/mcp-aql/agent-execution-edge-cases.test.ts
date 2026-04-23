@@ -174,6 +174,19 @@ describe('Agent execution lifecycle edge cases', () => {
         expect(data.agentName).toBe('edge-noexec-4');
       }
     });
+
+    it('should fail continue_execution before any recorded step with record_execution_step guidance', async () => {
+      await createAgent('edge-noexec-5');
+      await executeAgent('edge-noexec-5');
+
+      const result = await continueAgent('edge-noexec-5');
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('edge-noexec-5');
+        expect(result.error).toContain('record_execution_step');
+        expect(result.error).toContain('After execute_agent');
+      }
+    });
   });
 
   // ===========================================================================
@@ -221,24 +234,18 @@ describe('Agent execution lifecycle edge cases', () => {
       }
     });
 
-    it('should succeed continue_execution after complete (creates new execution)', async () => {
+    it('should fail continue_execution after complete with execute_agent guidance', async () => {
       await createAgent('edge-postcomplete-4');
       await executeAgent('edge-postcomplete-4');
       await completeAgent('edge-postcomplete-4');
 
-      // continue_execution calls executeAgent internally, creating a fresh goal
       const result = await continueAgent('edge-postcomplete-4');
-      expect(result.success).toBe(true);
-      if (result.success) {
-        const data = result.data as any;
-        expect(data._type).toBe('ContinueResult');
-        expect(data.goalId).toBeDefined();
-        expect(data.continuation).toBeDefined();
-        expect(data.continuation.isResuming).toBe(true);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('edge-postcomplete-4');
+        expect(result.error).toContain('execute_agent');
+        expect(result.error).toContain('record_execution_step');
       }
-
-      // Clean up: complete the new execution
-      await completeAgent('edge-postcomplete-4');
     });
 
     it('should succeed execute_agent after complete (creates new execution)', async () => {
@@ -289,22 +296,16 @@ describe('Agent execution lifecycle edge cases', () => {
       }
     });
 
-    it('should handle continue_execution after abort', async () => {
+    it('should fail continue_execution after abort with execute_agent guidance', async () => {
       await createAgent('edge-postabort-3');
       await executeAgent('edge-postabort-3');
       await abortAgent('edge-postabort-3');
 
-      // continue_execution is NOT exempt from abort check, but after a successful
-      // abort the goal is marked 'failed' and getActiveGoalIds returns empty,
-      // so the abort check may not fire. The result depends on internal state:
-      // either succeeds (creates new execution) or fails (abort check).
       const result = await continueAgent('edge-postabort-3');
-      if (result.success) {
-        const data = result.data as any;
-        expect(data._type).toBe('ContinueResult');
-        await completeAgent('edge-postabort-3');
-      } else {
+      expect(result.success).toBe(false);
+      if (!result.success) {
         expect(result.error).toContain('edge-postabort-3');
+        expect(result.error).toContain('execute_agent');
       }
     });
 
@@ -398,6 +399,60 @@ describe('Agent execution lifecycle edge cases', () => {
         expect(data.entries.length).toBeGreaterThanOrEqual(2);
         expect(data.summary).toBeDefined();
         expect(data.summary.totalSteps).toBeGreaterThanOrEqual(1);
+      }
+    });
+  });
+
+  describe('Evaluation regression coverage (#2165)', () => {
+    it('should enumerate all missing continue_execution parameters for rubric-style agents', async () => {
+      await createAgent('rubric-regression-agent', {
+        goal: {
+          template: 'Verify {deliverable_path} against {run_dir}',
+          parameters: [
+            { name: 'run_dir', type: 'string', required: true },
+            { name: 'deliverable_path', type: 'string', required: true },
+          ],
+          successCriteria: ['Produce a verified attestation'],
+        },
+      });
+
+      const executeResult = await mcpAqlHandler.handleExecute({
+        operation: 'execute_agent',
+        params: {
+          element_name: 'rubric-regression-agent',
+          parameters: {
+            run_dir: '/app/run',
+            deliverable_path: '/app/run/output.docx',
+          },
+        },
+      });
+      expect(executeResult.success).toBe(true);
+
+      const recordResult = await mcpAqlHandler.handleCreate({
+        operation: 'record_execution_step',
+        params: {
+          element_name: 'rubric-regression-agent',
+          stepDescription: 'Loaded rubric checklist',
+          outcome: 'success',
+          findings: 'Checklist parsed',
+        },
+      });
+      expect(recordResult.success).toBe(true);
+
+      const continueResult = await mcpAqlHandler.handleExecute({
+        operation: 'continue_execution',
+        params: {
+          element_name: 'rubric-regression-agent',
+          previousStepResult: 'Checklist parsed',
+          parameters: {},
+        },
+      });
+      expect(continueResult.success).toBe(false);
+      if (!continueResult.success) {
+        expect(continueResult.error).toContain('run_dir');
+        expect(continueResult.error).toContain('deliverable_path');
+        expect(continueResult.error).toContain('introspect');
+        expect(continueResult.error).toContain('record_execution_step');
       }
     });
   });
