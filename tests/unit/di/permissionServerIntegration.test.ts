@@ -351,7 +351,7 @@ describe('Permission Server Integration', () => {
           session_id: 'session-codex-raw',
           turn_id: 'turn-88',
           tool_use_id: 'tooluse-77',
-          transcript_path: '/tmp/codex/transcript.jsonl',
+          transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
           cwd: '/workspace/codex',
           model: 'gpt-5.4',
         }));
@@ -370,7 +370,7 @@ describe('Permission Server Integration', () => {
         session_id: 'session-codex-raw',
         turn_id: 'turn-88',
         tool_use_id: 'tooluse-77',
-        transcript_path: '/tmp/codex/transcript.jsonl',
+        transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
         cwd: '/workspace/codex',
         model: 'gpt-5.4',
       });
