@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.32] - 2026-04-23
+
+- Restore the management console's stronger responsive header behavior, including cleaner tab overflow handling and keyboard-accessible menu navigation.
+- Fix MCP-AQL agent execution loop guidance and recovery messaging so smaller models get clearer lifecycle instructions, stronger parameter errors, and better `get_execution_state` correction hints.
+
 ## [2.0.31] - 2026-04-22
 
 - Fix Codex PreToolUse silent allow handling and expand permission hook diagnostics.
