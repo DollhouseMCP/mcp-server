@@ -55,6 +55,23 @@ async function confirm(client: Client, operation: string): Promise<string> {
   return aql.execute(client, { operation: 'confirm_operation', params: { operation } });
 }
 
+// ── Cleanup helpers ────────────────────────────────────────────────
+
+async function safeClose(c: Client | undefined): Promise<void> {
+  if (c) { try { await c.close(); } catch { /* ignore */ } }
+}
+
+async function killTransport(t: StdioClientTransport | undefined): Promise<void> {
+  if (!t) return;
+  const pid = t.pid;
+  try { await t.close(); } catch { /* ignore */ }
+  if (pid) {
+    try { process.kill(pid, 'SIGTERM'); } catch { /* ignore */ }
+    await new Promise<void>(r => setTimeout(r, 500));
+    try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
+  }
+}
+
 // ── Test Suite ──────────────────────────────────────────────────────
 
 describe('MCP Database E2E Tests', () => {
@@ -129,18 +146,10 @@ describe('MCP Database E2E Tests', () => {
   }, STARTUP_TIMEOUT);
 
   afterAll(async () => {
-    if (client) { try { await client.close(); } catch { /* ignore */ } }
-    if (transport) {
-      const pid = transport.pid;
-      try { await transport.close(); } catch { /* ignore */ }
-      if (pid) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* ignore */ }
-        await new Promise<void>(r => setTimeout(r, 500));
-        try { process.kill(pid, 'SIGKILL'); } catch { /* ignore */ }
-      }
-    }
-    if (dbConnection) { await dbConnection.close(); }
-    if (testDir) { await fs.rm(testDir, { recursive: true, force: true }).catch(() => {}); }
+    await safeClose(client);
+    await killTransport(transport);
+    if (dbConnection) await dbConnection.close();
+    if (testDir) await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
   });
 
   // ── Server Startup ────────────────────────────────────────────────

@@ -26,12 +26,14 @@ const reset = args.includes('--reset');
 const COMPOSE_FILE = path.join(process.cwd(), 'docker', 'docker-compose.db.yml');
 const CONTAINER_NAME = 'dollhousemcp-postgres';
 const DB_NAME = 'dollhousemcp';
-const ADMIN_URL = `postgres://dollhouse:dollhouse@localhost:5432/${DB_NAME}`;
-const APP_URL = `postgres://dollhouse_app:dollhouse_app@localhost:5432/${DB_NAME}`;
+const ADMIN_URL = process.env.DOLLHOUSE_DATABASE_ADMIN_URL
+  ?? `postgres://dollhouse:dollhouse@localhost:5432/${DB_NAME}`;
+const APP_URL = process.env.DOLLHOUSE_DATABASE_URL
+  ?? `postgres://dollhouse_app:dollhouse_app@localhost:5432/${DB_NAME}`;
 
 function run(cmd: string, opts?: { silent?: boolean }): string {
   try {
-    return execSync(cmd, {
+    return execSync(cmd, { // NOSONAR — CLI setup script, commands are hardcoded constants
       encoding: 'utf-8',
       stdio: opts?.silent ? 'pipe' : ['pipe', 'pipe', 'pipe'],
       timeout: 30000,
@@ -157,7 +159,7 @@ function runInitSql(label: string): void {
 function runMigrations(): void {
   console.log('\nRunning migrations...');
   try {
-    const result = spawnSync('npx', ['drizzle-kit', 'migrate'], {
+    const result = spawnSync('npx', ['drizzle-kit', 'migrate'], { // NOSONAR — runs npx with fixed args
       env: { ...process.env, DOLLHOUSE_DATABASE_ADMIN_URL: ADMIN_URL },
       encoding: 'utf-8',
       stdio: 'pipe',

@@ -411,34 +411,44 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     }
   }
 
+  private static parseTimestamp(value: unknown): Date {
+    if (value instanceof Date) return value;
+    return new Date(typeof value === 'string' ? value : Date.now());
+  }
+
+  private static parseExpiresAt(value: unknown): Date | null {
+    if (value instanceof Date) return value;
+    return typeof value === 'string' ? new Date(value) : null;
+  }
+
+  private static stringOrNull(value: unknown): string | null {
+    return typeof value === 'string' ? value : null;
+  }
+
+  private static objectOrEmpty(value: unknown): Record<string, unknown> {
+    return (value && typeof value === 'object' ? value : {}) as Record<string, unknown>;
+  }
+
   private buildEntryRow(
     e: Record<string, unknown>,
     idx: number,
     memoryElementId: string,
     content: string,
   ) {
-    const timestampValue = e.timestamp instanceof Date
-      ? e.timestamp
-      : new Date(typeof e.timestamp === 'string' ? e.timestamp : Date.now());
-
-    const expiresAtValue = e.expiresAt instanceof Date
-      ? e.expiresAt
-      : (typeof e.expiresAt === 'string' ? new Date(e.expiresAt) : null);
-
     return {
       userId: this.userId,
       memoryId: memoryElementId,
       entryId: typeof e.id === 'string' ? e.id : `entry-${idx}`,
-      timestamp: timestampValue,
+      timestamp: DatabaseMemoryStorageLayer.parseTimestamp(e.timestamp),
       content,
-      sanitizedContent: typeof e.sanitizedContent === 'string' ? e.sanitizedContent : null,
-      sanitizedPatterns: (e.sanitizedPatterns && typeof e.sanitizedPatterns === 'object' ? e.sanitizedPatterns : {}) as Record<string, unknown>,
+      sanitizedContent: DatabaseMemoryStorageLayer.stringOrNull(e.sanitizedContent),
+      sanitizedPatterns: DatabaseMemoryStorageLayer.objectOrEmpty(e.sanitizedPatterns),
       tags: (Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string') : []) as string[],
-      entryMetadata: (e.metadata && typeof e.metadata === 'object' ? e.metadata : {}) as Record<string, unknown>,
-      privacyLevel: typeof e.privacyLevel === 'string' ? e.privacyLevel : null,
-      trustLevel: typeof e.trustLevel === 'string' ? e.trustLevel : null,
+      entryMetadata: DatabaseMemoryStorageLayer.objectOrEmpty(e.metadata),
+      privacyLevel: DatabaseMemoryStorageLayer.stringOrNull(e.privacyLevel),
+      trustLevel: DatabaseMemoryStorageLayer.stringOrNull(e.trustLevel),
       source: typeof e.source === 'string' ? e.source : null,
-      expiresAt: expiresAtValue,
+      expiresAt: DatabaseMemoryStorageLayer.parseExpiresAt(e.expiresAt),
     };
   }
 

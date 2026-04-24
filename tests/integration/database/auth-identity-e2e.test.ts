@@ -50,11 +50,9 @@ async function confirm(client: Client, operation: string): Promise<string> {
 
 function spawnAuthServer(
   env: Record<string, string>,
-  portfolioDir: string,
-  keyFilePath: string,
 ): Promise<{ child: ChildProcessWithoutNullStreams; url: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('node', ['dist/index.js', '--http', '--port=0'], {
+    const child = spawn('node', ['dist/index.js', '--http', '--port=0'], { // NOSONAR — E2E test spawns server
       env: { ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -173,7 +171,7 @@ describe('Auth Identity E2E Tests', () => {
       GITHUB_TEST_TOKEN: '',
     };
 
-    const spawned = await spawnAuthServer(serverEnv, testDir, keyFilePath);
+    const spawned = await spawnAuthServer(serverEnv);
     child = spawned.child;
     serverUrl = spawned.url;
   }, STARTUP_TIMEOUT);

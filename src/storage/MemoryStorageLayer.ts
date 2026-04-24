@@ -438,33 +438,7 @@ export class MemoryStorageLayer implements IStorageLayer {
       const subdirs = await this.discoverSubdirectoriesForDir(dir);
 
       // 2. Enumerate all .yaml files across subdirectories
-      const allRelativePaths: string[] = [];
-
-      for (const subdir of subdirs) {
-        const absDir = subdir ? path.join(dir, subdir) : dir;
-
-        try {
-          const files = await this.backend.listFiles(absDir, '.yaml');
-
-          for (const file of files) {
-            // Apply file filter (e.g., exclude backup files)
-            if (this.fileFilter && !this.fileFilter(file)) {
-              continue;
-            }
-
-            // Prefix with subdir for relative path
-            const relPath = subdir ? `${subdir}/${file}` : file;
-            allRelativePaths.push(relPath);
-          }
-        } catch (error) {
-          // Directory might not exist (e.g., no system/ folder yet)
-          if ((error as any).code !== 'ENOENT') {
-            logger.debug(`MemoryStorageLayer: failed to list ${absDir}`, {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      }
+      const allRelativePaths = await this.enumerateYamlFiles(dir, subdirs);
 
       // 3. Stat all files
       const stats = await this.backend.statMany(dir, allRelativePaths);
@@ -496,5 +470,27 @@ export class MemoryStorageLayer implements IStorageLayer {
       state.lastScanTimestamp = Date.now(); // Prevent retry storms
       return EMPTY_DIFF;
     }
+  }
+
+  private async enumerateYamlFiles(dir: string, subdirs: string[]): Promise<string[]> {
+    const allRelativePaths: string[] = [];
+    for (const subdir of subdirs) {
+      const absDir = subdir ? path.join(dir, subdir) : dir;
+      try {
+        const files = await this.backend.listFiles(absDir, '.yaml');
+        for (const file of files) {
+          if (this.fileFilter && !this.fileFilter(file)) continue;
+          const relPath = subdir ? `${subdir}/${file}` : file;
+          allRelativePaths.push(relPath);
+        }
+      } catch (error) {
+        if ((error as any).code !== 'ENOENT') {
+          logger.debug(`MemoryStorageLayer: failed to list ${absDir}`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
+    return allRelativePaths;
   }
 }

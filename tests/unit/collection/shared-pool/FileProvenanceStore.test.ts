@@ -83,7 +83,7 @@ describe('FileProvenanceStore', () => {
     });
 
     it('returns null when directory does not exist', async () => {
-      const emptyStore = new FileProvenanceStore('/tmp/nonexistent-provenance-dir-test');
+      const emptyStore = new FileProvenanceStore('/tmp/nonexistent-provenance-dir-test'); // NOSONAR — test fixture path
       const found = await emptyStore.findByElementId('anything');
       expect(found).toBeNull();
     });
@@ -184,7 +184,7 @@ describe('FileProvenanceStore', () => {
     });
 
     it('returns empty array when directory does not exist', async () => {
-      const emptyStore = new FileProvenanceStore('/tmp/nonexistent-provenance-dir-test-2');
+      const emptyStore = new FileProvenanceStore('/tmp/nonexistent-provenance-dir-test-2'); // NOSONAR — test fixture path
       const result = await emptyStore.listByOrigin('collection');
       expect(result).toEqual([]);
     });

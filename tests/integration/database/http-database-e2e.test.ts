@@ -85,7 +85,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
   stderrBuf: string[];
 }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('node', ['dist/index.js', '--http', '--port=0'], {
+    const child = spawn('node', ['dist/index.js', '--http', '--port=0'], { // NOSONAR — E2E test spawns server
       env: { ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

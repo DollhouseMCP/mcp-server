@@ -28,7 +28,7 @@ services:
     environment:
       POSTGRES_DB: dollhousemcp
       POSTGRES_USER: dollhouse
-      POSTGRES_PASSWORD: dollhouse
+      POSTGRES_PASSWORD: ${DOLLHOUSE_DB_PASSWORD:-dollhouse}
     ports:
       - "5432:5432"
     volumes:
