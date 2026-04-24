@@ -58,7 +58,7 @@ These combine into four deployment configurations:
 Choose based on your use case:
 
 **Solo developer using Claude Code or Claude Desktop locally**
-Use `stdio + file` — this is the default. No configuration required. Install and run. Your portfolio lives at `~/.dollhouse/portfolio/`.
+Use `stdio + file` — this is the default. No configuration required. Install and run. Your portfolio lives at `~/.dollhouse/portfolio/` on existing installs, or `~/DollhouseMCP/` on new installs.
 
 **Developer who wants durable storage or needs database queries**
 Use `stdio + database`. You get the simplicity of stdio (one client, no network exposure) with PostgreSQL-backed storage that persists independently of the filesystem and supports structured queries.
@@ -117,7 +117,7 @@ HTTP mode runs a persistent server that multiple clients can connect to independ
 > **Default behavior (zero configuration needed):**
 > - Transport: `stdio`
 > - Storage: filesystem
-> - Portfolio: `~/.dollhouse/portfolio/` (macOS/Linux) or `%USERPROFILE%\.dollhouse\portfolio\` (Windows)
+> - Portfolio: `~/.dollhouse/portfolio/` on existing installs (legacy layout); `~/DollhouseMCP/` on new installs without an existing `~/.dollhouse/` directory
 > - Web console: enabled on port 41715 (when running in HTTP mode)
 
 The following features require explicit opt-in — they are **not active** unless you configure them:
@@ -278,50 +278,91 @@ docker inspect --format='{{.State.Health.Status}}' dollhousemcp-http
 
 No configuration needed. DollhouseMCP reads and writes elements as YAML/Markdown files in your local portfolio directory.
 
-#### Default locations
+#### Directory layout
 
-**macOS/Linux (existing `~/.dollhouse/` install — legacy layout):**
+DollhouseMCP uses one of two filesystem layouts depending on your install history. The layout is detected automatically on startup — you do not need to configure it.
+
+**Legacy layout (existing `~/.dollhouse/` install — stdio and single-user HTTP):**
+
+```
+~/.dollhouse/
+  portfolio/
+    personas/
+    skills/
+    templates/
+    agents/
+    memories/
+    ensembles/
+    .backups/
+  state/
+  logs/
+  run/
+  shared/
+  .auth/
+  security/
+```
+
+This layout applies when `~/.dollhouse/` exists on disk and the per-user migration has not been run. All element files live directly under `portfolio/`; there is no per-user subdirectory. User identity is effectively single — all sessions read from and write to the same portfolio.
+
+**Per-user layout (HTTP multi-user, or migrated legacy install):**
+
+```
+~/.dollhouse/
+  users/
+    <userId>/
+      portfolio/
+        personas/
+        skills/
+        templates/
+        agents/
+        memories/
+        ensembles/
+        .backups/
+      state/
+      auth/
+      backups/
+      security/
+  shared/
+```
+
+This layout applies after running `npm run migrate:per-user` on a legacy install, or automatically on a fresh install that uses HTTP mode. Each user's data is sandboxed under their own `users/<userId>/` subtree. Cross-user filesystem access is blocked at the `PathValidator` level.
+
+**New installs (no existing `~/.dollhouse/` directory):**
+
+On a fresh machine with no prior DollhouseMCP installation, the portfolio root moves to a platform-visible location and internal directories follow platform conventions. The per-user layout is used from the start.
+
+*macOS:*
 
 | Directory | Purpose |
 |-----------|---------|
-| `~/.dollhouse/portfolio/` | Element files (personas, skills, templates, etc.) |
-| `~/.dollhouse/portfolio/personas/` | Persona elements |
-| `~/.dollhouse/portfolio/skills/` | Skill elements |
-| `~/.dollhouse/portfolio/templates/` | Template elements |
-| `~/.dollhouse/portfolio/agents/` | Agent elements |
-| `~/.dollhouse/portfolio/memories/` | Memory elements |
-| `~/.dollhouse/portfolio/ensembles/` | Ensemble elements |
-| `~/.dollhouse/portfolio/.backups/` | Automatic backups |
-| `~/.dollhouse/state/` | Activation state and session data |
-| `~/.dollhouse/logs/` | Server logs |
-| `~/.dollhouse/run/` | Runtime files (port files, lock files) |
-
-**macOS (new install, no existing `~/.dollhouse/`):**
-
-| Directory | Purpose |
-|-----------|---------|
-| `~/DollhouseMCP/` | Portfolio root |
+| `~/DollhouseMCP/` | Portfolio root (contains `users/` subtree) |
 | `~/Library/Preferences/DollhouseMCP/` | Config |
 | `~/Library/Caches/DollhouseMCP/` | Cache |
+| `~/Library/Application Support/DollhouseMCP/` | State |
 | `~/Library/Logs/DollhouseMCP/` | Logs |
+| `~/Library/Application Support/DollhouseMCP/run/` | Runtime files |
 
-**Linux (new install, XDG layout):**
+*Linux (XDG layout):*
 
 | Directory | Purpose |
 |-----------|---------|
-| `~/DollhouseMCP/` | Portfolio root |
+| `~/DollhouseMCP/` | Portfolio root (contains `users/` subtree) |
 | `~/.config/dollhousemcp/` | Config |
 | `~/.cache/dollhousemcp/` | Cache |
+| `~/.local/state/dollhousemcp/` | State |
 | `~/.local/state/dollhousemcp/logs/` | Logs |
+| `~/.local/state/dollhousemcp/run/` | Runtime files |
 
-**Windows:**
+*Windows:*
 
 | Directory | Purpose |
 |-----------|---------|
-| `%USERPROFILE%\DollhouseMCP\` | Portfolio root |
+| `%USERPROFILE%\DollhouseMCP\` | Portfolio root (contains `users\` subtree) |
 | `%APPDATA%\DollhouseMCP\Config\` | Config |
 | `%LOCALAPPDATA%\DollhouseMCP\Cache\` | Cache |
+| `%LOCALAPPDATA%\DollhouseMCP\Data\` | State |
 | `%LOCALAPPDATA%\DollhouseMCP\Log\` | Logs |
+| `%LOCALAPPDATA%\DollhouseMCP\Run\` | Runtime files |
 
 DollhouseMCP creates all required directories on startup. You do not need to create them manually.
 
@@ -499,11 +540,13 @@ DOLLHOUSE_DATABASE_POOL_SIZE=25
 
 ## Per-User Data Isolation
 
-### Filesystem: flat layout (default)
+DollhouseMCP supports two mechanisms for user data isolation: filesystem layout and database Row-Level Security. They are independent and can be combined.
 
-By default, all data belongs to a single local user. The portfolio is flat — there is no per-user subdirectory. This is correct for personal use and stdio mode.
+### Filesystem: legacy flat layout (stdio, single user)
 
-Layout:
+By default, existing `~/.dollhouse/` installs use the flat layout. There is no per-user subdirectory — all data belongs to a single local user. This is correct for personal use and stdio mode.
+
+**Legacy layout (stdio, single user):**
 
 ```
 ~/.dollhouse/
@@ -514,30 +557,46 @@ Layout:
     agents/
     memories/
     ensembles/
+    .backups/
   state/
   logs/
   run/
+  shared/
+  .auth/
+  security/
 ```
 
 ### Filesystem: per-user layout (HTTP multi-user)
 
-In HTTP deployments with multiple users, the filesystem can use a per-user subdirectory layout under the portfolio root:
+In HTTP deployments with multiple users, the filesystem uses a per-user subdirectory layout. This layout is selected automatically when:
+
+- The server is a fresh install with no pre-existing `~/.dollhouse/` directory, **or**
+- You have run `npm run migrate:per-user` on a legacy install (which writes a marker file that triggers per-user layout on the next startup).
+
+**Per-user layout (HTTP multi-user, or migrated legacy install):**
 
 ```
-~/.dollhouse/
+~/.dollhouse/           (or ~/DollhouseMCP/ on new installs)
   users/
-    <user-uuid>/
+    <userId>/
       portfolio/
         personas/
         skills/
-        ...
+        templates/
+        agents/
+        memories/
+        ensembles/
+        .backups/
       state/
       auth/
       backups/
       security/
+  shared/
 ```
 
-This layout is selected automatically when `DOLLHOUSE_STORAGE_BACKEND=database` is combined with HTTP mode. Each user's data is sandboxed to their own subtree; path traversal outside the user's directory is blocked at the `PathValidator` level.
+Each user's data is sandboxed under their own `users/<userId>/` subtree. Path traversal outside a user's directory is blocked at the `PathValidator` level.
+
+> **Note:** The filesystem layout is detected from disk at startup, not controlled by a configuration variable. To migrate a flat install to per-user layout, see [Migrating Existing Setups](#migrating-existing-setups).
 
 ### Database: Row-Level Security (automatic)
 
@@ -802,7 +861,7 @@ Keycloak's JWKS endpoint is derived automatically as `https://keycloak.example.c
 
 ### Authentication environment variables
 
-> **Boolean env var behavior:** Boolean variables like `DOLLHOUSE_AUTH_ENABLED` correctly treat the string `'false'` as false. Only `'true'` and `'1'` are treated as true. This was a bug in earlier versions (any non-empty string was treated as true) and is now fixed.
+> **Boolean env var behavior:** Boolean variables use strict parsing. Only `'true'` and `'1'` are treated as true. Any other non-empty value — including `'false'` — is treated as false. Earlier versions treated any non-empty string as true; this has been corrected.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -859,7 +918,49 @@ DOLLHOUSE_COLLECTION_ALLOWLIST=your-collection.example.com
 
 If you have an existing single-user `~/.dollhouse/` installation and want to move to the per-user layout (required for HTTP multi-user deployments on the filesystem backend), use the `migrate:per-user` CLI tool.
 
-The migration moves your portfolio, state, auth, and security directories from the flat layout into a per-user subtree under `~/.dollhouse/users/<userId>/`. It does not delete your original files until each move succeeds, and it writes a marker file (`~/.dollhouse/.dollhouse-per-user-migrated`) when complete. Partial runs are safe to retry — moves that already succeeded are skipped.
+**Before migration — legacy flat layout:**
+
+```
+~/.dollhouse/
+  portfolio/
+    personas/
+    skills/
+    templates/
+    agents/
+    memories/
+    ensembles/
+    .backups/
+  state/
+  logs/
+  run/
+  shared/
+  .auth/
+  security/
+```
+
+**After migration — per-user layout:**
+
+```
+~/.dollhouse/
+  users/
+    <userId>/
+      portfolio/
+        personas/
+        skills/
+        templates/
+        agents/
+        memories/
+        ensembles/
+        .backups/
+      state/
+      auth/
+      backups/
+      security/
+  shared/
+  .dollhouse-per-user-migrated   ← marker file; triggers per-user layout on next startup
+```
+
+The migration moves your portfolio, state, auth, and security directories from the flat layout into a per-user subtree under `~/.dollhouse/users/<userId>/`. It does not delete your original files until each move succeeds, and it writes the marker file (`.dollhouse-per-user-migrated`) when complete. Partial runs are safe to retry — moves that already succeeded are skipped.
 
 **The migration is not automatic.** It is triggered explicitly from the command line:
 
@@ -977,6 +1078,8 @@ There are no data format differences between the two transports. Your portfolio 
 
 All variables are optional unless marked **required**. Variables with no default shown require explicit configuration before the feature they control will work.
 
+> **Boolean env var behavior:** Variables documented with `true` or `false` defaults use strict parsing — only `'true'` and `'1'` are treated as true. Setting `DOLLHOUSE_AUTH_ENABLED=false` correctly disables auth; setting it to any other non-`'true'` value also disables it.
+
 ### General
 
 | Variable | Default | Description |
@@ -1023,7 +1126,7 @@ All variables are optional unless marked **required**. Variables with no default
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DOLLHOUSE_PORTFOLIO_DIR` | *(platform default)* | Portfolio root directory. Must be an absolute path. |
+| `DOLLHOUSE_PORTFOLIO_DIR` | *(platform default — see [Directory layout](#directory-layout))* | Portfolio root directory. Must be an absolute path. |
 | `DOLLHOUSE_CONFIG_DIR` | *(platform default)* | Config directory. Must be an absolute path. |
 | `DOLLHOUSE_CACHE_DIR` | *(platform default)* | Cache directory. Must be an absolute path. |
 | `DOLLHOUSE_STATE_DIR` | *(platform default)* | State directory. Must be an absolute path. |
@@ -1150,7 +1253,29 @@ Add to Claude Code:
 claude mcp add -s user dollhousemcp -- npx -y @dollhousemcp/mcp-server
 ```
 
-Portfolio lives at `~/.dollhouse/portfolio/` by default. No environment variables required.
+**Legacy layout (existing `~/.dollhouse/` install):**
+
+```
+~/.dollhouse/
+  portfolio/
+    personas/
+    skills/
+    ...
+```
+
+**New install (no existing `~/.dollhouse/`):**
+
+```
+~/DollhouseMCP/
+  users/
+    <userId>/
+      portfolio/
+        personas/
+        skills/
+        ...
+```
+
+No environment variables required.
 
 ---
 
@@ -1173,6 +1298,28 @@ Start:
 
 ```bash
 npm run start:http
+```
+
+**Legacy layout (existing `~/.dollhouse/` install):**
+
+```
+~/.dollhouse/
+  portfolio/
+    personas/
+    skills/
+    ...
+```
+
+**Per-user layout (new install or after migration):**
+
+```
+~/.dollhouse/           (or ~/DollhouseMCP/ on new installs)
+  users/
+    <userId>/
+      portfolio/
+        personas/
+        skills/
+        ...
 ```
 
 > **Note:** All HTTP sessions share a single user identity in filesystem mode. This configuration is appropriate for personal use only.
@@ -1247,6 +1394,8 @@ Start:
 npm run start:http
 ```
 
+Each user's data is isolated by database Row-Level Security. The filesystem is not used for element storage in this configuration.
+
 ---
 
 ### Multi-user HTTP with per-user identity (local tokens)
@@ -1283,6 +1432,15 @@ npm run auth:token -- --sub bob --ttl 604800
 ```
 
 Each user copies their token into their MCP client's `Authorization: Bearer <token>` header. The first time each token reaches the server, a new user row is created and an empty portfolio is initialized. Their data is isolated from all other users via Row-Level Security.
+
+**Per-user layout (database mode — user data in PostgreSQL, not filesystem):**
+
+```
+~/.dollhouse/           (or ~/DollhouseMCP/ on new installs)
+  run/
+    auth-keypair.json   ← shared key pair used to sign all user tokens
+  logs/
+```
 
 > **Key management note:** All tokens for a given server instance are signed with the same key pair at `~/.dollhouse/run/auth-keypair.json`. If you rotate or delete that file, all existing tokens are immediately invalidated. Generate new tokens for all users after a key rotation.
 
