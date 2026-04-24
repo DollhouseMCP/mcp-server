@@ -92,14 +92,21 @@ async function fileExists(p: string): Promise<boolean> {
   }
 }
 
-// ── Main ───────────────────────────────────────────────────────────
+// ── Extracted steps ────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+interface ParsedArgs {
+  outputDir: string;
+  typeFilters: string[];
+  nameFilters: string[];
+  targetTypes: string[];
+  username: string;
+}
+
+function parseAndValidateArgs(): ParsedArgs {
   const outputDir = getArgValue('--output-dir') || resolveDefaultOutputDir();
   const typeFilters = getArgValues('--type');
   const nameFilters = getArgValues('--name');
 
-  // Validate type filters
   for (const t of typeFilters) {
     if (!ALL_TYPES.includes(t)) {
       console.error(`Error: Unknown element type "${t}".`);
@@ -110,15 +117,6 @@ async function main(): Promise<void> {
 
   const targetTypes = typeFilters.length > 0 ? typeFilters : ALL_TYPES;
 
-  console.log('=== DollhouseMCP: Export Portfolio from Database ===\n');
-  console.log(`Output directory: ${outputDir}`);
-  if (typeFilters.length > 0) console.log(`Type filter:      ${typeFilters.join(', ')}`);
-  if (nameFilters.length > 0) console.log(`Name filter:      ${nameFilters.join(', ')}`);
-  if (overwrite) console.log(`Overwrite:        yes`);
-  if (dryRun) console.log(`Mode:             DRY RUN (no files will be written)\n`);
-  else console.log(`Mode:             LIVE EXPORT\n`);
-
-  // Require --user
   const username = getArgValue('--user');
   if (!username) {
     console.error('Error: --user <username> is required.');
@@ -127,15 +125,23 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Verify database configuration
   const dbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   if (!dbUrl) {
     console.error('Error: DOLLHOUSE_DATABASE_URL is not set.');
     process.exit(1);
   }
 
-  // Connect to database and resolve user
-  console.log('Connecting to database...');
+  return { outputDir, typeFilters, nameFilters, targetTypes, username: username! };
+}
+
+interface DatabaseConnection {
+  db: ReturnType<typeof import('../src/database/connection.js').createDatabaseConnection>['db'];
+  userId: string;
+  close: () => Promise<void>;
+}
+
+async function connectDatabase(username: string): Promise<DatabaseConnection> {
+  const dbUrl = process.env.DOLLHOUSE_DATABASE_URL!;
   const adminUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
   const ssl = (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer';
   const connection = createDatabaseConnection({ connectionUrl: dbUrl, poolSize: 5, ssl });
@@ -150,10 +156,19 @@ async function main(): Promise<void> {
   const userId = await identityService.resolveOrCreateUser(username);
   console.log(`Connected. Exporting as user '${username}' (${userId})\n`);
 
-  // Query elements
-  const rows = await withUserRead(db, userId, async (tx) => {
+  return { db, userId, close: () => connection.close() };
+}
+
+type ElementRow = { name: string; elementType: string; rawContent: string };
+
+async function queryElements(
+  conn: DatabaseConnection,
+  targetTypes: string[],
+  nameFilters: string[],
+): Promise<ElementRow[]> {
+  return withUserRead(conn.db, conn.userId, async (tx) => {
     const conditions = [
-      eq(elements.userId, userId),
+      eq(elements.userId, conn.userId),
       inArray(elements.elementType, targetTypes),
     ];
     if (nameFilters.length > 0) {
@@ -168,40 +183,12 @@ async function main(): Promise<void> {
       .from(elements)
       .where(and(...conditions));
   });
+}
 
-  if (rows.length === 0) {
-    console.log('No elements found matching the filters. Nothing to export.');
-    await connection.close();
-    process.exit(0);
-  }
-
-  // Summary
-  const byType: Record<string, number> = {};
-  for (const row of rows) {
-    byType[row.elementType] = (byType[row.elementType] || 0) + 1;
-  }
-  console.log('Elements found:');
-  for (const [type, count] of Object.entries(byType)) {
-    console.log(`  ${type}: ${count}`);
-  }
-  console.log(`  Total: ${rows.length}\n`);
-
-  if (dryRun) {
-    if (verbose) {
-      for (const row of rows) {
-        const ext = fileExtension(row.elementType);
-        const filePath = path.join(outputDir, row.elementType, `${row.name}${ext}`);
-        console.log(`  [dry-run] ${filePath}`);
-      }
-      console.log();
-    }
-    console.log('Dry run complete. No files were written.');
-    console.log('Run without --dry-run to perform the export.');
-    await connection.close();
-    process.exit(0);
-  }
-
-  // Export
+async function exportElements(
+  rows: ElementRow[],
+  outputDir: string,
+): Promise<{ exported: number; skipped: number; failed: number }> {
   let exported = 0;
   let skipped = 0;
   let failed = 0;
@@ -229,10 +216,15 @@ async function main(): Promise<void> {
     }
   }
 
-  // Close connection
-  await connection.close();
+  return { exported, skipped, failed };
+}
 
-  // Report
+function printReport(
+  exported: number,
+  skipped: number,
+  failed: number,
+  outputDir: string,
+): void {
   console.log(`\n=== Export Complete ===`);
   console.log(`  Exported: ${exported}`);
   if (skipped > 0) console.log(`  Skipped:  ${skipped} (use --overwrite to replace)`);
@@ -250,7 +242,62 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(err => {
+// ── Main ───────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const { outputDir, typeFilters, nameFilters, targetTypes, username } = parseAndValidateArgs();
+
+  console.log('=== DollhouseMCP: Export Portfolio from Database ===\n');
+  console.log(`Output directory: ${outputDir}`);
+  if (typeFilters.length > 0) console.log(`Type filter:      ${typeFilters.join(', ')}`);
+  if (nameFilters.length > 0) console.log(`Name filter:      ${nameFilters.join(', ')}`);
+  if (overwrite) console.log(`Overwrite:        yes`);
+  if (dryRun) console.log(`Mode:             DRY RUN (no files will be written)\n`);
+  else console.log(`Mode:             LIVE EXPORT\n`);
+
+  console.log('Connecting to database...');
+  const conn = await connectDatabase(username);
+  const rows = await queryElements(conn, targetTypes, nameFilters);
+
+  if (rows.length === 0) {
+    console.log('No elements found matching the filters. Nothing to export.');
+    await conn.close();
+    process.exit(0);
+  }
+
+  const byType: Record<string, number> = {};
+  for (const row of rows) {
+    byType[row.elementType] = (byType[row.elementType] || 0) + 1;
+  }
+  console.log('Elements found:');
+  for (const [type, count] of Object.entries(byType)) {
+    console.log(`  ${type}: ${count}`);
+  }
+  console.log(`  Total: ${rows.length}\n`);
+
+  if (dryRun) {
+    if (verbose) {
+      for (const row of rows) {
+        const ext = fileExtension(row.elementType);
+        const filePath = path.join(outputDir, row.elementType, `${row.name}${ext}`);
+        console.log(`  [dry-run] ${filePath}`);
+      }
+      console.log();
+    }
+    console.log('Dry run complete. No files were written.');
+    console.log('Run without --dry-run to perform the export.');
+    await conn.close();
+    process.exit(0);
+  }
+
+  const { exported, skipped, failed } = await exportElements(rows, outputDir);
+  await conn.close();
+  printReport(exported, skipped, failed, outputDir);
+}
+
+try {
+  await main();
+} catch (err) {
   console.error('Fatal error:', err);
   process.exit(1);
-});
+}

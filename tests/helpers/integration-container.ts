@@ -106,22 +106,22 @@ export async function createIsolatedContainer(
     dispose: async () => {
       await container.dispose();
 
-      if (previousPortfolioDir !== undefined) {
-        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
-      } else {
+      if (previousPortfolioDir === undefined) {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      } else {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
       }
 
-      if (previousHome !== undefined) {
-        process.env.HOME = previousHome;
-      } else {
+      if (previousHome === undefined) {
         delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
       }
 
-      if (previousHomeDirEnv !== undefined) {
-        process.env.DOLLHOUSE_HOME_DIR = previousHomeDirEnv;
-      } else {
+      if (previousHomeDirEnv === undefined) {
         delete process.env.DOLLHOUSE_HOME_DIR;
+      } else {
+        process.env.DOLLHOUSE_HOME_DIR = previousHomeDirEnv;
       }
 
       await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -167,22 +167,22 @@ export async function createIntegrationContainer(
     portfolioDir,
     dispose: async () => {
       await container.dispose();
-      if (previousPortfolioDir !== undefined) {
-        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
-      } else {
+      if (previousPortfolioDir === undefined) {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      } else {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
       }
 
-      if (previousHome !== undefined) {
-        process.env.HOME = previousHome;
-      } else {
+      if (previousHome === undefined) {
         delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
       }
 
-      if (previousDollhouseHomeDir !== undefined) {
-        process.env.DOLLHOUSE_HOME_DIR = previousDollhouseHomeDir;
-      } else {
+      if (previousDollhouseHomeDir === undefined) {
         delete process.env.DOLLHOUSE_HOME_DIR;
+      } else {
+        process.env.DOLLHOUSE_HOME_DIR = previousDollhouseHomeDir;
       }
 
       if (tempRoot) {

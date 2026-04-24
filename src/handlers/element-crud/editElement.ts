@@ -565,7 +565,7 @@ export async function editElement(
     const forkResult = await context.forkOnEditStrategy.evaluateAndFork({
       element: element as { metadata: { name: string }; id?: string; getFilePath?: () => string; rawContent?: string },
       elementType: normalizedType,
-      userElementDir: context.portfolioManager.getElementDir(normalizedType as import('../../portfolio/types.js').ElementType),
+      userElementDir: context.portfolioManager.getElementDir(normalizedType),
     });
     if (forkResult.forked) {
       // Re-resolve the element from the user's portfolio (the fork)

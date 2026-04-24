@@ -53,10 +53,7 @@ function check(label: string, fn: () => boolean): boolean {
   }
 }
 
-async function main(): Promise<void> {
-  console.log('=== DollhouseMCP Database Setup ===\n');
-
-  // Step 1: Check Docker
+function checkPrerequisites(): void {
   console.log('Checking prerequisites...');
   const hasDocker = check('Docker available', () => {
     run('docker info', { silent: true });
@@ -75,8 +72,9 @@ async function main(): Promise<void> {
     console.error('\nDocker Compose is required (included with Docker Desktop).');
     process.exit(1);
   }
+}
 
-  // Step 2: Check/start container
+async function ensureContainer(): Promise<void> {
   console.log('\nPostgreSQL container...');
   const isRunning = (() => {
     try {
@@ -100,7 +98,6 @@ async function main(): Promise<void> {
     }
   }
 
-  // Step 3: Wait for healthy
   console.log('\n  Waiting for PostgreSQL to be ready...');
   for (let i = 0; i < 30; i++) {
     try {
@@ -116,8 +113,9 @@ async function main(): Promise<void> {
     }
     await new Promise(r => setTimeout(r, 1000));
   }
+}
 
-  // Step 4: Reset if requested
+function ensureDatabase(): void {
   if (reset) {
     console.log('\n  Resetting database...');
     try {
@@ -128,9 +126,9 @@ async function main(): Promise<void> {
       console.error(`  ✗ Reset failed: ${err instanceof Error ? err.message : String(err)}`);
       process.exit(1);
     }
+    return;
   }
 
-  // Step 5: Check if database exists
   try {
     run(`docker exec ${CONTAINER_NAME} psql -U dollhouse -d ${DB_NAME} -c "SELECT 1"`, { silent: true });
     console.log(`  ✓ Database '${DB_NAME}' exists`);
@@ -144,20 +142,19 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   }
+}
 
-  // Step 6: Run init-db.sql (idempotent role/grant setup)
-  console.log('\nConfiguring roles and permissions...');
+function runInitSql(label: string): void {
   try {
     const initSql = path.join(process.cwd(), 'docker', 'init-db.sql');
     run(`docker exec -i ${CONTAINER_NAME} psql -U dollhouse -d ${DB_NAME} < ${initSql}`, { silent: true });
-    console.log('  ✓ Roles and permissions configured');
+    console.log(`  ✓ ${label}`);
   } catch {
-    // init-db.sql has "REVOKE ... ON TABLE users" which fails before migrations.
-    // That's fine — we'll re-run after migrations.
-    console.log('  → Partial (will complete after migrations)');
+    // Best effort
   }
+}
 
-  // Step 7: Run migrations
+function runMigrations(): void {
   console.log('\nRunning migrations...');
   try {
     const result = spawnSync('npx', ['drizzle-kit', 'migrate'], {
@@ -175,17 +172,9 @@ async function main(): Promise<void> {
     console.error(`  ✗ Migration failed: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
+}
 
-  // Step 8: Re-run init-db.sql (tables now exist for REVOKE)
-  try {
-    const initSql = path.join(process.cwd(), 'docker', 'init-db.sql');
-    run(`docker exec -i ${CONTAINER_NAME} psql -U dollhouse -d ${DB_NAME} < ${initSql}`, { silent: true });
-    console.log('  ✓ Post-migration permissions applied');
-  } catch {
-    // Best effort
-  }
-
-  // Done — print configuration
+function printConfig(): void {
   console.log('\n=== Setup Complete ===\n');
   console.log('Add these to your environment or .env.local:\n');
   console.log(`  DOLLHOUSE_STORAGE_BACKEND=database`);
@@ -207,7 +196,21 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(err => {
+async function main(): Promise<void> {
+  console.log('=== DollhouseMCP Database Setup ===\n');
+  checkPrerequisites();
+  await ensureContainer();
+  ensureDatabase();
+  console.log('\nConfiguring roles and permissions...');
+  runInitSql('Partial (will complete after migrations)');
+  runMigrations();
+  runInitSql('Post-migration permissions applied');
+  printConfig();
+}
+
+try {
+  await main();
+} catch (err) {
   console.error('Fatal error:', err);
   process.exit(1);
-});
+}

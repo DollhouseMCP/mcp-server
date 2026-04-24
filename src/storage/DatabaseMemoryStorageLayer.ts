@@ -403,27 +403,43 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       const e = entry as Record<string, unknown>;
       const content = typeof e.content === 'string' ? e.content : '';
       if (!content) return [];
-
-      return [{
-        userId: this.userId,
-        memoryId: memoryElementId,
-        entryId: typeof e.id === 'string' ? e.id : `entry-${idx}`,
-        timestamp: e.timestamp instanceof Date ? e.timestamp : new Date(typeof e.timestamp === 'string' ? e.timestamp : Date.now()),
-        content,
-        sanitizedContent: typeof e.sanitizedContent === 'string' ? e.sanitizedContent : null,
-        sanitizedPatterns: (e.sanitizedPatterns && typeof e.sanitizedPatterns === 'object' ? e.sanitizedPatterns : {}) as Record<string, unknown>,
-        tags: (Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string') : []) as string[],
-        entryMetadata: (e.metadata && typeof e.metadata === 'object' ? e.metadata : {}) as Record<string, unknown>,
-        privacyLevel: typeof e.privacyLevel === 'string' ? e.privacyLevel : null,
-        trustLevel: typeof e.trustLevel === 'string' ? e.trustLevel : null,
-        source: typeof e.source === 'string' ? e.source : null,
-        expiresAt: e.expiresAt instanceof Date ? e.expiresAt : (typeof e.expiresAt === 'string' ? new Date(e.expiresAt) : null),
-      }];
+      return [this.buildEntryRow(e, idx, memoryElementId, content)];
     });
 
     if (rows.length > 0) {
       await tx.insert(memoryEntries).values(rows);
     }
+  }
+
+  private buildEntryRow(
+    e: Record<string, unknown>,
+    idx: number,
+    memoryElementId: string,
+    content: string,
+  ) {
+    const timestampValue = e.timestamp instanceof Date
+      ? e.timestamp
+      : new Date(typeof e.timestamp === 'string' ? e.timestamp : Date.now());
+
+    const expiresAtValue = e.expiresAt instanceof Date
+      ? e.expiresAt
+      : (typeof e.expiresAt === 'string' ? new Date(e.expiresAt) : null);
+
+    return {
+      userId: this.userId,
+      memoryId: memoryElementId,
+      entryId: typeof e.id === 'string' ? e.id : `entry-${idx}`,
+      timestamp: timestampValue,
+      content,
+      sanitizedContent: typeof e.sanitizedContent === 'string' ? e.sanitizedContent : null,
+      sanitizedPatterns: (e.sanitizedPatterns && typeof e.sanitizedPatterns === 'object' ? e.sanitizedPatterns : {}) as Record<string, unknown>,
+      tags: (Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string') : []) as string[],
+      entryMetadata: (e.metadata && typeof e.metadata === 'object' ? e.metadata : {}) as Record<string, unknown>,
+      privacyLevel: typeof e.privacyLevel === 'string' ? e.privacyLevel : null,
+      trustLevel: typeof e.trustLevel === 'string' ? e.trustLevel : null,
+      source: typeof e.source === 'string' ? e.source : null,
+      expiresAt: expiresAtValue,
+    };
   }
 
   private extractMemoryMetadata(content: string): Record<string, unknown> {

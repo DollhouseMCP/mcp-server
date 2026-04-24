@@ -191,16 +191,14 @@ export class PathValidator {
   }
 
   private async validatePathIsWritable(realPath: string): Promise<void> {
-    if (!this.resolvedWritableDirs) {
-      this.resolvedWritableDirs = (async () => {
-        return Promise.all(
-          this.writableDirectories.map(async (dir) => {
-            try { return await fs.realpath(dir); }
-            catch { return dir; }
-          })
-        );
-      })();
-    }
+    this.resolvedWritableDirs ??= (async () => {
+      return Promise.all(
+        this.writableDirectories.map(async (dir) => {
+          try { return await fs.realpath(dir); }
+          catch { return dir; }
+        })
+      );
+    })();
     const writableDirs = await this.resolvedWritableDirs;
     const isWritable = writableDirs.some(dir =>
       realPath.startsWith(dir + path.sep) || realPath === dir

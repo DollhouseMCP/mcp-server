@@ -17,7 +17,7 @@
  * @module di/registrars/CoreInfraServiceRegistrar
  */
 
-import os from 'os';
+import os from 'node:os';
 
 import { loadIndicatorConfig } from '../../config/indicator-config.js';
 import {

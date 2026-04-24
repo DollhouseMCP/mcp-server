@@ -9,7 +9,7 @@
  * Extracted from BaseElementManager; no behaviour changed.
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -165,17 +165,21 @@ export class ElementListOperations<T extends IElement> {
       );
 
       if (options?.includePublic && currentUserId) {
-        for (const summary of summaries) {
-          if (summary.userId && summary.userId !== currentUserId) {
-            this.cache.uncacheByPath(summary.filePath);
-          }
-        }
+        this.evictForeignRowsFromCache(summaries, currentUserId);
       }
 
       return elements.filter((e): e is Awaited<T> => e !== null) as T[];
     } catch (error) {
       logger.error(`Failed to list ${this.host.elementType}s from database:`, error);
       return [];
+    }
+  }
+
+  private evictForeignRowsFromCache(summaries: ElementIndexEntry[], currentUserId: string): void {
+    for (const summary of summaries) {
+      if (summary.userId && summary.userId !== currentUserId) {
+        this.cache.uncacheByPath(summary.filePath);
+      }
     }
   }
 

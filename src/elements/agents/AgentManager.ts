@@ -697,9 +697,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : (filePath.endsWith(AGENT_FILE_EXTENSION)
-          ? sanitizeInput(filePath, 255)
-          : this.getFilename(sanitizeInput(filePath, 100)));
+      : this.normalizeAgentFilePath(filePath);
 
     await this.ensureStateDirectory();
     await super.save(agent, sanitizedPath, options);
@@ -754,9 +752,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : (filePath.endsWith(AGENT_FILE_EXTENSION)
-          ? sanitizeInput(filePath, 255)
-          : this.getFilename(sanitizeInput(filePath, 100)));
+      : this.normalizeAgentFilePath(filePath);
     // State-file name derives from the agent's logical name in DB mode, or
     // from the stripped filename in file mode.
     const name = isDb
@@ -788,6 +784,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
     // FIX: Use normalized name as cache key for consistent cache cleanup
     this.stateCache.delete(normalizedName);
+  }
+
+  private normalizeAgentFilePath(filePath: string): string {
+    return filePath.endsWith(AGENT_FILE_EXTENSION)
+      ? sanitizeInput(filePath, 255)
+      : this.getFilename(sanitizeInput(filePath, 100));
   }
 
   override async exists(filePath: string): Promise<boolean> {

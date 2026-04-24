@@ -18,7 +18,7 @@
  * @module di/registrars/ElementManagerServiceRegistrar
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
 
 import { PACKAGE_VERSION } from '../../generated/version.js';
 import { getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';

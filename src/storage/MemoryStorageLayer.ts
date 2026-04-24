@@ -367,6 +367,54 @@ export class MemoryStorageLayer implements IStorageLayer {
     return subdirs;
   }
 
+  private async indexChangedFiles(
+    dir: string,
+    toIndex: string[],
+    removed: string[],
+    stats: Map<string, { mtimeMs: number; sizeBytes: number }>,
+    state: MemoryDirScanState,
+  ): Promise<boolean> {
+    let indexUpdated = false;
+
+    await Promise.all(
+      toIndex.map(async (relPath) => {
+        try {
+          const absPath = path.join(dir, relPath);
+          const content = await this.backend.readFile(absPath);
+          const extracted = MemoryMetadataExtractor.extractMetadata(content, relPath);
+          const meta = stats.get(relPath);
+
+          state.index.set({
+            filePath: relPath,
+            name: extracted.name ?? 'unnamed',
+            description: extracted.description ?? '',
+            version: extracted.version ?? '1.0.0',
+            author: extracted.author ?? '',
+            tags: extracted.tags ?? [],
+            mtimeMs: meta?.mtimeMs ?? 0,
+            sizeBytes: meta?.sizeBytes ?? 0,
+            autoLoad: extracted.autoLoad,
+            priority: extracted.priority,
+            memoryType: extracted.memoryType,
+            totalEntries: extracted.totalEntries,
+          });
+          indexUpdated = true;
+        } catch (error) {
+          logger.debug(`MemoryStorageLayer: failed to index ${relPath}`, {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      })
+    );
+
+    for (const relPath of removed) {
+      state.index.remove(relPath);
+      indexUpdated = true;
+    }
+
+    return indexUpdated;
+  }
+
   /**
    * Perform a full incremental scan across all subdirectories.
    */
@@ -431,44 +479,7 @@ export class MemoryStorageLayer implements IStorageLayer {
 
       // 5. For added/modified: read file, extract metadata, update index
       const toIndex = [...diff.added, ...diff.modified];
-      let indexUpdated = false;
-
-      await Promise.all(
-        toIndex.map(async (relPath) => {
-          try {
-            const absPath = path.join(dir, relPath);
-            const content = await this.backend.readFile(absPath);
-            const extracted = MemoryMetadataExtractor.extractMetadata(content, relPath);
-            const meta = stats.get(relPath);
-
-            state.index.set({
-              filePath: relPath,
-              name: extracted.name ?? 'unnamed',
-              description: extracted.description ?? '',
-              version: extracted.version ?? '1.0.0',
-              author: extracted.author ?? '',
-              tags: extracted.tags ?? [],
-              mtimeMs: meta?.mtimeMs ?? 0,
-              sizeBytes: meta?.sizeBytes ?? 0,
-              autoLoad: extracted.autoLoad,
-              priority: extracted.priority,
-              memoryType: extracted.memoryType,
-              totalEntries: extracted.totalEntries,
-            });
-            indexUpdated = true;
-          } catch (error) {
-            logger.debug(`MemoryStorageLayer: failed to index ${relPath}`, {
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        })
-      );
-
-      // 6. For removed: remove from index
-      for (const relPath of diff.removed) {
-        state.index.remove(relPath);
-        indexUpdated = true;
-      }
+      const indexUpdated = await this.indexChangedFiles(dir, toIndex, diff.removed, stats, state);
 
       // 7. Update manifest and timestamp
       state.manifest.update(stats);

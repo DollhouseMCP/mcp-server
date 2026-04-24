@@ -13,6 +13,18 @@ import { FileSharedPoolWriteStrategy } from '../../../../src/collection/shared-p
 import { FileProvenanceStore } from '../../../../src/collection/shared-pool/FileProvenanceStore.js';
 import type { SharedPoolInstallRequest } from '../../../../src/collection/shared-pool/types.js';
 
+function makeRequest(overrides?: Partial<SharedPoolInstallRequest>): SharedPoolInstallRequest {
+  return {
+    content: '---\nname: test\ndescription: test\n---\nContent',
+    elementType: 'personas',
+    name: 'safe-name',
+    origin: 'collection',
+    sourceUrl: null,
+    sourceVersion: null,
+    ...overrides,
+  };
+}
+
 describe('Security Guards', () => {
   let tmpDir: string;
 
@@ -23,18 +35,6 @@ describe('Security Guards', () => {
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
-
-  function makeRequest(overrides?: Partial<SharedPoolInstallRequest>): SharedPoolInstallRequest {
-    return {
-      content: '---\nname: test\ndescription: test\n---\nContent',
-      elementType: 'personas',
-      name: 'safe-name',
-      origin: 'collection',
-      sourceUrl: null,
-      sourceVersion: null,
-      ...overrides,
-    };
-  }
 
   describe('FileSharedPoolWriteStrategy — path traversal prevention', () => {
     let strategy: FileSharedPoolWriteStrategy;
@@ -52,8 +52,8 @@ describe('Security Guards', () => {
       expect(written).toContain('Content');
     });
 
-    it('strips backslash traversal (..\\..\\windows\\system32)', async () => {
-      const request = makeRequest({ name: '..\\..\\windows\\system32' });
+    it(String.raw`strips backslash traversal (..\..\windows\system32)`, async () => {
+      const request = makeRequest({ name: String.raw`..\..\windows\system32` });
       const elementId = await strategy.writeElement(request, 'a'.repeat(64));
 
       expect(elementId).toBe('personas/system32.md');

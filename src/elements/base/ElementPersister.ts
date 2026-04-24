@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import * as path from 'path';
+import * as path from 'node:path';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -28,8 +28,7 @@ import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer 
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
-import type { ElementLoader } from './ElementLoader.js';
-import type { ElementTypeToContext } from './ElementLoader.js';
+import type { ElementLoader, ElementTypeToContext } from './ElementLoader.js';
 
 /**
  * Host interface: the persister calls back into BaseElementManager for

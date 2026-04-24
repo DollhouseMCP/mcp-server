@@ -64,7 +64,6 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       unchanged: [],
     };
 
-    // Determine whether to do a full or incremental scan
     const isFullScan = !this.lastScanTimestamp;
 
     // Explicit userId in all queries for defense-in-depth (alongside RLS)
@@ -89,41 +88,53 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         ));
     });
 
-    if (!this.scanCompleted) {
-      // First scan: everything is "added"
-      for (const row of rows) {
-        this.setIndex(row.name, row.id);
-        result.added.push(row.id);
-      }
+    if (this.scanCompleted) {
+      this.processSubsequentScanRows(rows, result, isFullScan);
     } else {
-      // Subsequent scans
-      const seenIds = new Set<string>();
-
-      for (const row of rows) {
-        seenIds.add(row.id);
-        if (this.nameToIdMap.has(row.name)) {
-          result.modified.push(row.id);
-        } else {
-          result.added.push(row.id);
-        }
-        this.setIndex(row.name, row.id);
-      }
-
-      // Detect removals on full scans (no timestamp filter)
-      if (isFullScan) {
-        for (const [name, id] of this.nameToIdMap.entries()) {
-          if (!seenIds.has(id)) {
-            result.removed.push(id);
-            this.removeIndex(name);
-          }
-        }
-      }
+      this.processFirstScanRows(rows, result);
     }
 
     this.lastScanTimestamp = new Date();
     this.scanCompleted = true;
 
     return result;
+  }
+
+  private processSubsequentScanRows(
+    rows: Array<{ id: string; name: string; updatedAt: Date }>,
+    result: ManifestDiffResult,
+    isFullScan: boolean,
+  ): void {
+    const seenIds = new Set<string>();
+
+    for (const row of rows) {
+      seenIds.add(row.id);
+      if (this.nameToIdMap.has(row.name)) {
+        result.modified.push(row.id);
+      } else {
+        result.added.push(row.id);
+      }
+      this.setIndex(row.name, row.id);
+    }
+
+    if (isFullScan) {
+      for (const [name, id] of this.nameToIdMap.entries()) {
+        if (!seenIds.has(id)) {
+          result.removed.push(id);
+          this.removeIndex(name);
+        }
+      }
+    }
+  }
+
+  private processFirstScanRows(
+    rows: Array<{ id: string; name: string; updatedAt: Date }>,
+    result: ManifestDiffResult,
+  ): void {
+    for (const row of rows) {
+      this.setIndex(row.name, row.id);
+      result.added.push(row.id);
+    }
   }
 
   async listSummaries(options?: { includePublic?: boolean }): Promise<ElementIndexEntry[]> {

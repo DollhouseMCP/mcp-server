@@ -62,7 +62,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
     const entries = await layer.getEntries(elementId);
     expect(entries).toHaveLength(2);
-    expect(entries.map(e => e.entryId).sort()).toEqual(['entry-1', 'entry-2']);
+    expect(entries.map(e => e.entryId).sort((a, b) => a.localeCompare(b))).toEqual(['entry-1', 'entry-2']);
     expect(entries[0].content).toBeTruthy();
   });
 
@@ -89,7 +89,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
     const entries = await layer.getEntries(elementId);
     expect(entries).toHaveLength(2);
-    expect(entries.map(e => e.entryId).sort()).toEqual(['e1', 'e3']);
+    expect(entries.map(e => e.entryId).sort((a, b) => a.localeCompare(b))).toEqual(['e1', 'e3']);
   });
 
   // ── Entry-level operations ────────────────────────────────────────

@@ -10,7 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { accessSync } from 'node:fs';
-import * as path from 'path';
+import * as path from 'node:path';
 import { ElementEventDispatcher, ElementEventPayload } from '../../events/ElementEventDispatcher.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { IElement } from '../../types/elements/IElement.js';

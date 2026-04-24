@@ -78,7 +78,7 @@ export default async function globalSetup() {
     await testSql.end();
 
     // Run Drizzle migrations on the test database
-    const { execSync } = await import('child_process');
+    const { execSync } = await import('node:child_process');
     execSync(
       `DOLLHOUSE_DATABASE_ADMIN_URL="${TEST_DB_ADMIN_URL}" npx drizzle-kit migrate`,
       { stdio: 'pipe', cwd: process.cwd(), timeout: 30000 },

@@ -6,7 +6,7 @@
 import { ConfigManager } from './ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import { readFileSync } from 'fs';
-import { join } from 'path';
+import { join } from 'node:path';
 import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 
 export class ConfigWizardCheck {

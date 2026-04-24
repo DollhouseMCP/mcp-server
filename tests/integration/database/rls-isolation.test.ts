@@ -489,7 +489,7 @@ describe('RLS visibility — public elements', () => {
       const withFlag = await layer.listSummaries({ includePublic: true });
 
       // Both should be empty on a fresh tempdir; key assertion is identity.
-      expect(withFlag.map(s => s.name).sort()).toEqual(withoutFlag.map(s => s.name).sort());
+      expect(withFlag.map(s => s.name).sort((a, b) => a.localeCompare(b))).toEqual(withoutFlag.map(s => s.name).sort((a, b) => a.localeCompare(b)));
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

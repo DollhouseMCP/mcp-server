@@ -104,7 +104,7 @@ function spawnHttpServer(env: Record<string, string>, portfolioDir: string): Pro
         process.stderr.write(`[server] ${text}`);
       }
       if (!resolved) {
-        const match = stderrBuf.join('').match(SERVER_READY_REGEX);
+        const match = SERVER_READY_REGEX.exec(stderrBuf.join(''));
         if (match) {
           resolved = true;
           clearTimeout(startupTimer);

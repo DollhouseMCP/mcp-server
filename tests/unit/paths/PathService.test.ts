@@ -16,7 +16,7 @@ const USER_A = '00000000-0000-4000-8000-00000000000a';
 const USER_B = '00000000-0000-4000-8000-00000000000b';
 
 function build(opts: {
-  userResolver?: ReturnType<typeof buildUserResolver>;
+  userResolver?: FlatPathResolver | PerUserPathResolver;
   userIdResolver?: () => string;
   dataDirectoryOptions?: Parameters<PathService['resolveDataDir']>[1];
 } = {}): PathService {
@@ -33,10 +33,8 @@ function build(opts: {
   });
 }
 
-function buildUserResolver(flat: boolean) {
-  return flat
-    ? new FlatPathResolver('/home/u/.dollhouse')
-    : new PerUserPathResolver('/home/u/DollhouseMCP');
+function buildFlatResolver() {
+  return new FlatPathResolver('/home/u/.dollhouse');
 }
 
 describe('PathService', () => {
@@ -125,7 +123,7 @@ describe('PathService', () => {
   describe('per-user paths with FlatPathResolver', () => {
     it('ignores userId (same paths regardless of which user)', () => {
       const svc = build({
-        userResolver: buildUserResolver(true),
+        userResolver: buildFlatResolver(),
         userIdResolver: () => USER_A,
       });
       const aPortfolio = svc.getUserPortfolioDir();

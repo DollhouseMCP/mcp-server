@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import * as path from 'path';
+import * as path from 'node:path';
 import { IElement } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
@@ -113,12 +113,7 @@ export class ElementLoader<T extends IElement> {
     );
 
     try {
-      const content = isWritableStorageLayer(this.storageLayer)
-        ? await (this.storageLayer as IWritableStorageLayer).readContent(relativePath)
-        : await this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
-            source: `${this.host.constructor?.name ?? 'ElementLoader'}.load`,
-          });
-
+      const content = await this.readContent(relativePath, absolutePath);
       const parsed = this.host.parseContent(content);
       this.host.migrateMetadataDefaults(parsed.data, relativePath);
       const metadata = await this.host.parseMetadata(parsed.data);
@@ -142,40 +137,58 @@ export class ElementLoader<T extends IElement> {
 
       return element;
     } catch (error) {
-      const isFileNotFound = (error as NodeJS.ErrnoException).code === 'ENOENT';
-      let isRepeatError = false;
+      this.handleLoadError(error, relativePath, absolutePath, correlationId);
+      throw error;
+    }
+  }
 
-      if (!isFileNotFound) {
-        const reason = error instanceof Error ? error.message : String(error);
-        const existing = this.invalidElements.get(relativePath);
-        isRepeatError = existing?.reason === reason;
+  private async readContent(relativePath: string, absolutePath: string): Promise<string> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
+    }
+    return this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
+      source: `${this.host.constructor?.name ?? 'ElementLoader'}.load`,
+    });
+  }
 
-        this.invalidElements.set(relativePath, {
-          filePath: relativePath,
-          reason,
-          failedAt: isRepeatError ? existing!.failedAt : new Date().toISOString(),
-        });
-      }
+  private handleLoadError(
+    error: unknown,
+    relativePath: string,
+    absolutePath: string,
+    correlationId: string,
+  ): void {
+    const isFileNotFound = (error as NodeJS.ErrnoException).code === 'ENOENT';
+    let isRepeatError = false;
 
-      if (isRepeatError) {
-        this.suppressedLoadPaths.add(relativePath);
-        logger.debug(`Suppressed repeated load error for ${this.host.getElementLabel()} ${relativePath}`);
-      } else {
-        this.suppressedLoadPaths.delete(relativePath);
-        this.events.eventDispatcher.emitAsync(
-          'element:load:error',
-          this.events.createEventPayload({ correlationId, filePath: relativePath, error }),
-        );
-        logger.error(`Failed to load ${this.host.getElementLabel()} from ${absolutePath}:`, error);
-        if (this.host.onLoadError) {
-          try {
-            this.host.onLoadError(relativePath, error);
-          } catch (hookErr) {
-            logger.warn(`onLoadError hook threw (swallowed): ${String(hookErr)}`);
-          }
+    if (!isFileNotFound) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const existing = this.invalidElements.get(relativePath);
+      isRepeatError = existing?.reason === reason;
+
+      this.invalidElements.set(relativePath, {
+        filePath: relativePath,
+        reason,
+        failedAt: isRepeatError ? existing!.failedAt : new Date().toISOString(),
+      });
+    }
+
+    if (isRepeatError) {
+      this.suppressedLoadPaths.add(relativePath);
+      logger.debug(`Suppressed repeated load error for ${this.host.getElementLabel()} ${relativePath}`);
+    } else {
+      this.suppressedLoadPaths.delete(relativePath);
+      this.events.eventDispatcher.emitAsync(
+        'element:load:error',
+        this.events.createEventPayload({ correlationId, filePath: relativePath, error }),
+      );
+      logger.error(`Failed to load ${this.host.getElementLabel()} from ${absolutePath}:`, error);
+      if (this.host.onLoadError) {
+        try {
+          this.host.onLoadError(relativePath, error);
+        } catch (hookErr) {
+          logger.warn(`onLoadError hook threw (swallowed): ${String(hookErr)}`);
         }
       }
-      throw error;
     }
   }
 

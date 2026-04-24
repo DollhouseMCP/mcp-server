@@ -18,8 +18,8 @@ import { PackageResourceLocator } from '../../../../src/paths/PackageResourceLoc
 import { MIGRATION_MARKER_FILENAME } from '../../../../src/paths/LegacyDetectingPathResolver.js';
 
 class FakeContainer implements DiContainerFacade {
-  private services = new Map<string, () => unknown>();
-  private cache = new Map<string, unknown>();
+  private readonly services = new Map<string, () => unknown>();
+  private readonly cache = new Map<string, unknown>();
 
   register<T>(name: string, factory: () => T): void {
     this.services.set(name, factory);

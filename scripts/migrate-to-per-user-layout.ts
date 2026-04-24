@@ -39,9 +39,14 @@ function getArgValue(flag: string): string | undefined {
   return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
 }
 
-// ── Main ───────────────────────────────────────────────────────────
+// ── Extracted steps ────────────────────────────────────────────────
 
-async function main(): Promise<void> {
+interface ParsedArgs {
+  userId: string;
+  legacyRoot: string;
+}
+
+function parseArgs(): ParsedArgs {
   if (!mode || !['status', 'preview', 'execute'].includes(mode)) {
     console.log('Usage: npx tsx scripts/migrate-to-per-user-layout.ts <status|preview|execute> [options]');
     console.log();
@@ -68,6 +73,71 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  return { userId: userId!, legacyRoot };
+}
+
+async function runStatus(migration: FlatToPerUserMigration): Promise<void> {
+  const result = await migration.status();
+  console.log(`Current layout: ${result.layout}`);
+  if (result.layout === 'flat') {
+    console.log('\nThis portfolio uses the flat single-user layout.');
+    console.log('Run with "preview" to see what would be moved, or "execute" to migrate.');
+  } else if (result.layout === 'per-user') {
+    console.log('\nThis portfolio already uses the per-user layout. No migration needed.');
+  } else {
+    console.log('\nNo legacy portfolio found at this path. Nothing to migrate.');
+  }
+}
+
+async function runPreview(migration: FlatToPerUserMigration): Promise<void> {
+  const status = await migration.status();
+  if (status.layout !== 'flat') {
+    console.log(`Layout is "${status.layout}" — nothing to migrate.`);
+    return;
+  }
+
+  const preview = await migration.preview();
+  console.log(`Directories to create (${preview.dirsToCreate.length}):`);
+  for (const dir of preview.dirsToCreate) {
+    console.log(`  [create] ${dir}`);
+  }
+  console.log();
+  console.log(`Items to move (${preview.moves.length}):`);
+  for (const move of preview.moves) {
+    console.log(`  ${move.from}`);
+    console.log(`    -> ${move.to}`);
+  }
+  console.log();
+  console.log(`Marker file: ${preview.markerFile}`);
+  console.log('\nRun with "execute" to perform this migration.');
+}
+
+async function runExecute(migration: FlatToPerUserMigration): Promise<void> {
+  const status = await migration.status();
+  if (status.layout !== 'flat') {
+    console.log(`Layout is "${status.layout}" — nothing to migrate.`);
+    return;
+  }
+
+  console.log('Executing migration...\n');
+  const result = await migration.execute();
+
+  if (result.success) {
+    console.log(`Migration complete. ${result.movedCount} item(s) moved.`);
+  } else {
+    console.error(`Migration failed. ${result.movedCount} item(s) moved before failure.`);
+    for (const err of result.errors) {
+      console.error(`  Error: ${err}`);
+    }
+    process.exit(1);
+  }
+}
+
+// ── Main ───────────────────────────────────────────────────────────
+
+async function main(): Promise<void> {
+  const { userId, legacyRoot } = parseArgs();
+
   console.log('=== DollhouseMCP: Portfolio Layout Migration ===\n');
   console.log(`Legacy root: ${legacyRoot}`);
   console.log(`User ID:     ${userId}`);
@@ -76,69 +146,21 @@ async function main(): Promise<void> {
   const migration = new FlatToPerUserMigration(legacyRoot, userId);
 
   switch (mode) {
-    case 'status': {
-      const result = await migration.status();
-      console.log(`Current layout: ${result.layout}`);
-      if (result.layout === 'flat') {
-        console.log('\nThis portfolio uses the flat single-user layout.');
-        console.log('Run with "preview" to see what would be moved, or "execute" to migrate.');
-      } else if (result.layout === 'per-user') {
-        console.log('\nThis portfolio already uses the per-user layout. No migration needed.');
-      } else {
-        console.log('\nNo legacy portfolio found at this path. Nothing to migrate.');
-      }
+    case 'status':
+      await runStatus(migration);
       break;
-    }
-
-    case 'preview': {
-      const status = await migration.status();
-      if (status.layout !== 'flat') {
-        console.log(`Layout is "${status.layout}" — nothing to migrate.`);
-        break;
-      }
-
-      const preview = await migration.preview();
-      console.log(`Directories to create (${preview.dirsToCreate.length}):`);
-      for (const dir of preview.dirsToCreate) {
-        console.log(`  [create] ${dir}`);
-      }
-      console.log();
-      console.log(`Items to move (${preview.moves.length}):`);
-      for (const move of preview.moves) {
-        console.log(`  ${move.from}`);
-        console.log(`    -> ${move.to}`);
-      }
-      console.log();
-      console.log(`Marker file: ${preview.markerFile}`);
-      console.log('\nRun with "execute" to perform this migration.');
+    case 'preview':
+      await runPreview(migration);
       break;
-    }
-
-    case 'execute': {
-      const status = await migration.status();
-      if (status.layout !== 'flat') {
-        console.log(`Layout is "${status.layout}" — nothing to migrate.`);
-        break;
-      }
-
-      console.log('Executing migration...\n');
-      const result = await migration.execute();
-
-      if (result.success) {
-        console.log(`Migration complete. ${result.movedCount} item(s) moved.`);
-      } else {
-        console.error(`Migration failed. ${result.movedCount} item(s) moved before failure.`);
-        for (const err of result.errors) {
-          console.error(`  Error: ${err}`);
-        }
-        process.exit(1);
-      }
+    case 'execute':
+      await runExecute(migration);
       break;
-    }
   }
 }
 
-main().catch(err => {
+try {
+  await main();
+} catch (err) {
   console.error('Fatal error:', err);
   process.exit(1);
-});
+}

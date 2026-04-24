@@ -16,8 +16,7 @@
  * @module di/registrars/IndexingServiceRegistrar
  */
 
-import { APICache } from '../../cache/index.js';
-import { CollectionIndexCache } from '../../cache/index.js';
+import { APICache, CollectionIndexCache } from '../../cache/index.js';
 import { NLPScoringManager } from '../../portfolio/NLPScoringManager.js';
 import { VerbTriggerManager } from '../../portfolio/VerbTriggerManager.js';
 import { RelationshipManager } from '../../portfolio/RelationshipManager.js';

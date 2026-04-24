@@ -13,7 +13,7 @@ import {
 
 const LINUX_HOME = '/home/user';
 const MAC_HOME = '/Users/user';
-const WIN_HOME = 'C:\\Users\\user';
+const WIN_HOME = String.raw`C:\Users\user`;
 
 /** Build an options object with an empty env to prevent host env leakage. */
 function opts(overrides: Partial<ResolveOptions>): ResolveOptions {
@@ -89,17 +89,17 @@ describe('resolveDataDirectory', () => {
       platform: 'win32',
       homeDir: WIN_HOME,
       env: {
-        LOCALAPPDATA: 'C:\\Users\\user\\AppData\\Local',
-        APPDATA: 'C:\\Users\\user\\AppData\\Roaming',
+        LOCALAPPDATA: String.raw`C:\Users\user\AppData\Local`,
+        APPDATA: String.raw`C:\Users\user\AppData\Roaming`,
       },
     });
 
     it.each([
-      ['config', 'C:\\Users\\user\\AppData\\Roaming\\DollhouseMCP\\Config'],
-      ['cache',  'C:\\Users\\user\\AppData\\Local\\DollhouseMCP\\Cache'],
-      ['state',  'C:\\Users\\user\\AppData\\Local\\DollhouseMCP\\Data'],
-      ['logs',   'C:\\Users\\user\\AppData\\Local\\DollhouseMCP\\Log'],
-      ['run',    'C:\\Users\\user\\AppData\\Local\\DollhouseMCP\\Run'],
+      ['config', String.raw`C:\Users\user\AppData\Roaming\DollhouseMCP\Config`],
+      ['cache',  String.raw`C:\Users\user\AppData\Local\DollhouseMCP\Cache`],
+      ['state',  String.raw`C:\Users\user\AppData\Local\DollhouseMCP\Data`],
+      ['logs',   String.raw`C:\Users\user\AppData\Local\DollhouseMCP\Log`],
+      ['run',    String.raw`C:\Users\user\AppData\Local\DollhouseMCP\Run`],
     ] as [DataDirKey, string][])(
       'resolves %s to %s',
       (key, expected) => {
@@ -116,7 +116,7 @@ describe('resolveDataDirectory', () => {
         homeDir: WIN_HOME,
         env: {},
       }));
-      expect(normalize(result)).toBe(normalize('C:\\Users\\user\\AppData\\Roaming\\DollhouseMCP\\Config'));
+      expect(normalize(result)).toBe(normalize(String.raw`C:\Users\user\AppData\Roaming\DollhouseMCP\Config`));
     });
   });
 
@@ -135,11 +135,11 @@ describe('resolveDataDirectory', () => {
       expect(result).toBe('/Users/user/DollhouseMCP');
     });
 
-    it('returns %USERPROFILE%\\DollhouseMCP on Windows', () => {
+    it(String.raw`returns %USERPROFILE%\DollhouseMCP on Windows`, () => {
       const result = resolveDataDirectory('portfolio-root', opts({
         platform: 'win32', homeDir: WIN_HOME,
       }));
-      expect(normalize(result)).toBe(normalize('C:\\Users\\user\\DollhouseMCP'));
+      expect(normalize(result)).toBe(normalize(String.raw`C:\Users\user\DollhouseMCP`));
     });
 
     it('shared-pool lives under portfolio-root', () => {
@@ -313,5 +313,5 @@ describe('resolveDataDirectory', () => {
  * host so we compare on a canonical form.
  */
 function normalize(p: string): string {
-  return p.replace(/[\\/]+/g, '/');
+  return p.replaceAll(/[\\/]+/g, '/');
 }

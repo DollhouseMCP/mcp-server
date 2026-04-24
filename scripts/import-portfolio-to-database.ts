@@ -99,6 +99,107 @@ function extractWriteMetadata(content: string, elementType: string, fileName: st
   };
 }
 
+// ── Extracted steps ────────────────────────────────────────────────
+
+type PlanItem = { type: string; name: string; file: string; dir: string };
+
+async function scanPortfolio(portfolioDir: string): Promise<PlanItem[]> {
+  try {
+    await fs.access(portfolioDir);
+  } catch {
+    console.error(`Error: Portfolio directory not found: ${portfolioDir}`);
+    console.error('Use --portfolio-dir to specify the correct path.');
+    process.exit(1);
+  }
+
+  const plan: PlanItem[] = [];
+  for (const elementType of Object.values(ElementType)) {
+    const typeDir = path.join(portfolioDir, elementType);
+    const files = await listElementFiles(typeDir);
+    for (const file of files) {
+      plan.push({ type: elementType, name: fileNameToElementName(file), file, dir: typeDir });
+    }
+  }
+  return plan;
+}
+
+interface DatabaseConnection {
+  storageLayers: Map<string, DatabaseStorageLayer | DatabaseMemoryStorageLayer>;
+  close: () => Promise<void>;
+}
+
+async function connectDatabase(username: string): Promise<DatabaseConnection> {
+  const dbUrl = process.env.DOLLHOUSE_DATABASE_URL!;
+  const adminUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
+  const ssl = (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer';
+  const connection = createDatabaseConnection({ connectionUrl: dbUrl, poolSize: 5, ssl });
+  const db = connection.db;
+
+  const identityService = new UserIdentityService({
+    db,
+    adminConnectionUrl: adminUrl,
+    appConnectionUrl: dbUrl,
+    ssl,
+  });
+  const userId = await identityService.resolveOrCreateUser(username);
+  const userIdResolver = () => userId;
+  console.log(`Connected. Importing as user '${username}' (${userId})\n`);
+
+  const storageLayers = new Map<string, DatabaseStorageLayer | DatabaseMemoryStorageLayer>();
+  for (const elementType of Object.values(ElementType)) {
+    if (elementType === ElementType.MEMORY) {
+      storageLayers.set(elementType, new DatabaseMemoryStorageLayer(db, userIdResolver));
+    } else {
+      storageLayers.set(elementType, new DatabaseStorageLayer(db, userIdResolver, elementType));
+    }
+  }
+
+  return { storageLayers, close: () => connection.close() };
+}
+
+async function importElements(
+  plan: PlanItem[],
+  storageLayers: Map<string, DatabaseStorageLayer | DatabaseMemoryStorageLayer>,
+): Promise<{ imported: number; skipped: number; failed: number }> {
+  let imported = 0;
+  let skipped = 0;
+  let failed = 0;
+
+  for (const item of plan) {
+    const filePath = path.join(item.dir, item.file);
+    try {
+      const content = await fs.readFile(filePath, 'utf-8');
+      const layer = storageLayers.get(item.type)!;
+      const metadata = extractWriteMetadata(content, item.type, item.file);
+      await layer.writeContent(item.type, item.name, content, metadata);
+      imported++;
+      if (verbose) console.log(`  [imported] ${item.type}/${item.name}`);
+    } catch (err) {
+      failed++;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  [FAILED] ${item.type}/${item.name}: ${msg}`);
+    }
+  }
+
+  return { imported, skipped, failed };
+}
+
+function printReport(imported: number, skipped: number, failed: number): void {
+  console.log(`\n=== Import Complete ===`);
+  console.log(`  Imported: ${imported}`);
+  if (skipped > 0) console.log(`  Skipped:  ${skipped}`);
+  if (failed > 0) console.log(`  Failed:   ${failed}`);
+  console.log();
+
+  if (failed > 0) {
+    console.error('Some elements failed to import. Check the errors above.');
+    process.exit(1);
+  }
+
+  console.log('All elements imported successfully.');
+  console.log('Your filesystem files are unchanged — you can switch back to file mode at any time.');
+}
+
 // ── Main ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -109,36 +210,13 @@ async function main(): Promise<void> {
   if (dryRun) console.log('Mode: DRY RUN (no changes will be made)\n');
   else console.log('Mode: LIVE IMPORT\n');
 
-  // Verify portfolio directory exists
-  try {
-    await fs.access(portfolioDir);
-  } catch {
-    console.error(`Error: Portfolio directory not found: ${portfolioDir}`);
-    console.error('Use --portfolio-dir to specify the correct path.');
-    process.exit(1);
-  }
-
-  // Scan for elements
-  const plan: Array<{ type: string; name: string; file: string; dir: string }> = [];
-  for (const elementType of Object.values(ElementType)) {
-    const typeDir = path.join(portfolioDir, elementType);
-    const files = await listElementFiles(typeDir);
-    for (const file of files) {
-      plan.push({
-        type: elementType,
-        name: fileNameToElementName(file),
-        file,
-        dir: typeDir,
-      });
-    }
-  }
+  const plan = await scanPortfolio(portfolioDir);
 
   if (plan.length === 0) {
     console.log('No element files found in portfolio directory. Nothing to import.');
     process.exit(0);
   }
 
-  // Summary
   const byType: Record<string, number> = {};
   for (const item of plan) {
     byType[item.type] = (byType[item.type] || 0) + 1;
@@ -161,7 +239,6 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  // Require --user
   const username = getArgValue('--user');
   if (!username) {
     console.error('Error: --user <username> is required.');
@@ -170,7 +247,6 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Verify database configuration
   const dbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   if (!dbUrl) {
     console.error('Error: DOLLHOUSE_DATABASE_URL is not set.');
@@ -178,74 +254,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Connect to database and resolve user
   console.log('Connecting to database...');
-  const adminUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
-  const ssl = (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer';
-  const connection = createDatabaseConnection({ connectionUrl: dbUrl, poolSize: 5, ssl });
-  const db = connection.db;
-
-  const identityService = new UserIdentityService({
-    db,
-    adminConnectionUrl: adminUrl,
-    appConnectionUrl: dbUrl,
-    ssl,
-  });
-  const userId = await identityService.resolveOrCreateUser(username);
-  const userIdResolver = () => userId;
-  console.log(`Connected. Importing as user '${username}' (${userId})\n`);
-
-  // Create storage layers
-  const storageLayers = new Map<string, DatabaseStorageLayer | DatabaseMemoryStorageLayer>();
-  for (const elementType of Object.values(ElementType)) {
-    if (elementType === ElementType.MEMORY) {
-      storageLayers.set(elementType, new DatabaseMemoryStorageLayer(db, userIdResolver));
-    } else {
-      storageLayers.set(elementType, new DatabaseStorageLayer(db, userIdResolver, elementType));
-    }
-  }
-
-  // Import
-  let imported = 0;
-  let skipped = 0;
-  let failed = 0;
-
-  for (const item of plan) {
-    const filePath = path.join(item.dir, item.file);
-    try {
-      const content = await fs.readFile(filePath, 'utf-8');
-      const layer = storageLayers.get(item.type)!;
-      const metadata = extractWriteMetadata(content, item.type, item.file);
-      await layer.writeContent(item.type, item.name, content, metadata);
-      imported++;
-      if (verbose) console.log(`  [imported] ${item.type}/${item.name}`);
-    } catch (err) {
-      failed++;
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`  [FAILED] ${item.type}/${item.name}: ${msg}`);
-    }
-  }
-
-  // Close connection
-  await connection.close();
-
-  // Report
-  console.log(`\n=== Import Complete ===`);
-  console.log(`  Imported: ${imported}`);
-  if (skipped > 0) console.log(`  Skipped:  ${skipped}`);
-  if (failed > 0) console.log(`  Failed:   ${failed}`);
-  console.log();
-
-  if (failed > 0) {
-    console.error('Some elements failed to import. Check the errors above.');
-    process.exit(1);
-  }
-
-  console.log('All elements imported successfully.');
-  console.log('Your filesystem files are unchanged — you can switch back to file mode at any time.');
+  const conn = await connectDatabase(username);
+  const { imported, skipped, failed } = await importElements(plan, conn.storageLayers);
+  await conn.close();
+  printReport(imported, skipped, failed);
 }
 
-main().catch(err => {
+try {
+  await main();
+} catch (err) {
   console.error('Fatal error:', err);
   process.exit(1);
-});
+}

@@ -37,8 +37,7 @@ import type { UserIdResolver } from '../../database/UserContext.js';
 import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 
-// Re-export for callers that import from this module.
-export type { DiContainerFacade };
+export type { DiContainerFacade } from '../DiContainerFacade.js';
 
 
 export class DatabaseServiceRegistrar {

@@ -266,18 +266,18 @@ describe('LegacyDetectingPathResolver — detection', () => {
   });
 });
 
+async function detectPerUser(): Promise<LegacyDetectingPathResolver> {
+  return LegacyDetectingPathResolver.detect({
+    legacyRoot: '/home/user/.dollhouse',
+    portfolioRoot: '/home/user/DollhouseMCP',
+    probe: async () => 'missing', // forces per-user on portfolioRoot
+  });
+}
+
 describe('LegacyDetectingPathResolver — delegation forwarding', () => {
   // Verifies that every IUserPathResolver method forwards to the chosen
   // delegate. A regression here (wrong method delegated, or a method
   // missed when the interface grows) would otherwise be invisible.
-
-  async function detectPerUser(): Promise<LegacyDetectingPathResolver> {
-    return LegacyDetectingPathResolver.detect({
-      legacyRoot: '/home/user/.dollhouse',
-      portfolioRoot: '/home/user/DollhouseMCP',
-      probe: async () => 'missing', // forces per-user on portfolioRoot
-    });
-  }
 
   it('forwards getUserPortfolioDir', async () => {
     const r = await detectPerUser();

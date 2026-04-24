@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   const displayName = getArgValue('--display-name');
   const email = getArgValue('--email');
   const ttlStr = getArgValue('--ttl');
-  const ttlSeconds = ttlStr ? parseInt(ttlStr, 10) : 86400;
+  const ttlSeconds = ttlStr ? Number.parseInt(ttlStr, 10) : 86400;
 
   const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
   const keyFilePath = getArgValue('--key-file')
@@ -68,7 +68,9 @@ async function main(): Promise<void> {
   process.stderr.write(`  "headers": { "Authorization": "Bearer ${token}" }\n\n`);
 }
 
-main().catch(err => {
+try {
+  await main();
+} catch (err) {
   console.error('Fatal error:', err);
   process.exit(1);
-});
+}

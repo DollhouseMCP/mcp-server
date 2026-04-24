@@ -36,7 +36,7 @@
  */
 
 /** Strict allow-list regex. */
-const VALID_USERID = /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/;
+const VALID_USERID = /^\w[\w-]{0,63}$/;
 
 /**
  * Windows reserved device names (case-insensitive). Creating a

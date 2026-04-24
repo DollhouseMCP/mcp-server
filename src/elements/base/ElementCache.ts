@@ -11,7 +11,7 @@ import { LRUCache } from '../../cache/LRUCache.js';
 import { logger } from '../../utils/logger.js';
 import { ElementType } from '../../portfolio/types.js';
 import { IElement } from '../../types/elements/IElement.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 
 /**

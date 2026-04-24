@@ -81,82 +81,97 @@ describe('Markdown Element Round-Trip', () => {
     {
       type: 'personas',
       name: 'test-persona',
-      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => [
-        '---',
-        `name: ${name}`,
-        `description: ${desc}`,
-        'author: test-author',
-        `version: ${version}`,
-        'type: persona',
-        tags.length ? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
-        '---',
-        '',
-        `Identity and behavioral profile for ${name}.`,
-      ].join('\n'),
+      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => {
+        const tagLines = tags.map(t => `  - ${t}`).join('\n');
+        return [
+          '---',
+          `name: ${name}`,
+          `description: ${desc}`,
+          'author: test-author',
+          `version: ${version}`,
+          'type: persona',
+          tags.length ? `tags:\n${tagLines}` : 'tags: []',
+          '---',
+          '',
+          `Identity and behavioral profile for ${name}.`,
+        ].join('\n');
+      },
     },
     {
       type: 'skills',
       name: 'test-skill',
-      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => [
-        '---',
-        `name: ${name}`,
-        `description: ${desc}`,
-        'author: test-author',
-        `version: ${version}`,
-        'type: skill',
-        tags.length ? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
-        '---',
-        '',
-        `Skill instructions for ${name}.`,
-      ].join('\n'),
+      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => {
+        const tagLines = tags.map(t => `  - ${t}`).join('\n');
+        return [
+          '---',
+          `name: ${name}`,
+          `description: ${desc}`,
+          'author: test-author',
+          `version: ${version}`,
+          'type: skill',
+          tags.length ? `tags:\n${tagLines}` : 'tags: []',
+          '---',
+          '',
+          `Skill instructions for ${name}.`,
+        ].join('\n');
+      },
     },
     {
       type: 'templates',
       name: 'test-template',
-      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => [
-        '---',
-        `name: ${name}`,
-        `description: ${desc}`,
-        'author: test-author',
-        `version: ${version}`,
-        'type: template',
-        tags.length ? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
-        '---',
-        '',
-        `Template content for ${name}.`,
-      ].join('\n'),
+      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => {
+        const tagLines = tags.map(t => `  - ${t}`).join('\n');
+        return [
+          '---',
+          `name: ${name}`,
+          `description: ${desc}`,
+          'author: test-author',
+          `version: ${version}`,
+          'type: template',
+          tags.length ? `tags:\n${tagLines}` : 'tags: []',
+          '---',
+          '',
+          `Template content for ${name}.`,
+        ].join('\n');
+      },
     },
     {
       type: 'agents',
       name: 'test-agent',
-      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => [
-        '---',
-        `name: ${name}`,
-        `description: ${desc}`,
-        'author: test-author',
-        `version: ${version}`,
-        'type: agent',
-        tags.length ? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
-        '---',
-        '',
-        `Agent workflow instructions for ${name}.`,
-      ].join('\n'),
+      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => {
+        const tagLines = tags.map(t => `  - ${t}`).join('\n');
+        return [
+          '---',
+          `name: ${name}`,
+          `description: ${desc}`,
+          'author: test-author',
+          `version: ${version}`,
+          'type: agent',
+          tags.length ? `tags:\n${tagLines}` : 'tags: []',
+          '---',
+          '',
+          `Agent workflow instructions for ${name}.`,
+        ].join('\n');
+      },
     },
     {
       type: 'ensembles',
       name: 'test-ensemble',
-      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => [
-        '---',
-        `name: ${name}`,
-        `description: ${desc}`,
-        'author: test-author',
-        `version: ${version}`,
-        'type: ensemble',
-        tags.length ? `tags:\n${tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
-        '---',
-        '',
-        `Ensemble configuration for ${name}.`,
-      ].join('\n'),
+      buildContent: (name: string, desc: string, tags: string[], version = '1.0.0') => {
+        const tagLines = tags.map(t => `  - ${t}`).join('\n');
+        return [
+          '---',
+          `name: ${name}`,
+          `description: ${desc}`,
+          'author: test-author',
+          `version: ${version}`,
+          'type: ensemble',
+          tags.length ? `tags:\n${tagLines}` : 'tags: []',
+          '---',
+          '',
+          `Ensemble configuration for ${name}.`,
+        ].join('\n');
+      },
     },
   ];
 
@@ -327,25 +342,25 @@ describe('Markdown Element Round-Trip', () => {
 
 // ── Memory Elements (YAML format with entries) ──────────────────────
 
+function buildMemoryYaml(name: string, desc: string, entries: Array<{ id: string; content: string }>) {
+  const entryBlock = entries.length
+    ? ['entries:', ...entries.map(e => `  - id: "${e.id}"\n    content: "${e.content}"\n    timestamp: "${new Date().toISOString()}"`)]
+    : [];
+
+  return [
+    `name: ${name}`,
+    `description: ${desc}`,
+    'author: test-author',
+    'version: 1.0.0',
+    'memoryType: user',
+    'autoLoad: false',
+    'tags:',
+    '  - memory-test',
+    ...entryBlock,
+  ].join('\n');
+}
+
 describe('Memory Element Round-Trip', () => {
-  function buildMemoryYaml(name: string, desc: string, entries: Array<{ id: string; content: string }>) {
-    const entryBlock = entries.length
-      ? ['entries:', ...entries.map(e => `  - id: "${e.id}"\n    content: "${e.content}"\n    timestamp: "${new Date().toISOString()}"`)]
-      : [];
-
-    return [
-      `name: ${name}`,
-      `description: ${desc}`,
-      'author: test-author',
-      'version: 1.0.0',
-      'memoryType: user',
-      'autoLoad: false',
-      'tags:',
-      '  - memory-test',
-      ...entryBlock,
-    ].join('\n');
-  }
-
   it('should create a memory and store raw_content + extracted metadata + entries', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();
@@ -517,7 +532,7 @@ describe('Memory Element Round-Trip', () => {
     // Should now have 2 entries
     const entries = await layer.getEntries(elementId);
     expect(entries).toHaveLength(2);
-    expect(entries.map(e => e.entryId).sort()).toEqual(['manual-entry', 'yaml-entry']);
+    expect(entries.map(e => e.entryId).sort((a, b) => a.localeCompare(b))).toEqual(['manual-entry', 'yaml-entry']);
 
     // Remove one
     await layer.removeEntry(elementId, 'yaml-entry');

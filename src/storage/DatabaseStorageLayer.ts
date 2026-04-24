@@ -175,7 +175,7 @@ function capitalize(s: string): string {
  * Returns null for files without frontmatter.
  */
 function extractBodyContent(rawContent: string): string | null {
-  const match = rawContent.match(FRONTMATTER_REGEX);
+  const match = FRONTMATTER_REGEX.exec(rawContent);
   if (!match) return null;
   const body = rawContent.slice(match[0].length).trim();
   return body.length > 0 ? body : null;

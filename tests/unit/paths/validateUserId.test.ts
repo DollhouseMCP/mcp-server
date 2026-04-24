@@ -28,7 +28,7 @@ describe('validateUserId', () => {
       ['../alice'],
       ['alice/../bob'],
       ['alice/bob'],
-      ['alice\\bob'],
+      [String.raw`alice\bob`],
       ['/alice'],
       ['.'],
       ['..'],

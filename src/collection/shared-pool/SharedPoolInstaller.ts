@@ -194,7 +194,7 @@ export class FileSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
     const typeDir = path.join(this.sharedPoolDir, request.elementType);
     await fs.mkdir(typeDir, { recursive: true });
 
-    const safeName = path.basename(request.name.replace(/\\/g, '/').replace(/\0/g, ''));
+    const safeName = path.basename(request.name.replaceAll('\\', '/').replaceAll('\0', ''));
     const filename = safeName.endsWith('.md') ? safeName : `${safeName}.md`;
     const filePath = path.join(typeDir, filename);
 
@@ -281,7 +281,7 @@ export class DatabaseSharedPoolWriteStrategy implements SharedPoolWriteStrategy 
   }
 
   private extractBody(rawContent: string): string | null {
-    const match = rawContent.match(/^---\n[\s\S]*?\n---\n([\s\S]*)$/);
+    const match = /^---\n[\s\S]*?\n---\n([\s\S]*)$/.exec(rawContent);
     return match?.[1]?.trim() || null;
   }
 

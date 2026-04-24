@@ -347,7 +347,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // If markdown content exists after frontmatter, add it as a memory entry.
     // Preserves content from seed memories and memory files with markdown sections.
-    if (parsedData.content && parsedData.content.trim()) {
+    if (parsedData.content?.trim()) {
       await memory.addEntry(
         parsedData.content.trim(),
         [],  // tags
@@ -783,74 +783,71 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Base class list → scan → listSummaries → load (with our parseContent override).
     if (isWritableStorageLayer(this.storageLayer)) {
       const memories = await super.list(options);
-      // Apply activation status
-      for (const memory of memories) {
-        if (this.getActivationSet().has(memory.metadata.name)) {
-          await memory.activate();
-        }
-      }
+      await this.applyActivationStatus(memories);
       return memories;
     }
 
     // File mode: custom multi-directory listing with deduplication.
     // MemoryStorageLayer scans system/, adapters/, date folders — portfolioManager.listElements()
     // only does flat directory listing which misses the subdirectory structure.
-    const failedLoads: Array<{ file: string; error: string }> = [];
-
     try {
       await this.fileOperations.createDirectory(this.memoriesDir);
-
-      // Storage layer handles multi-directory scan + cooldown
       const indexedPaths = await this.storageLayer.getIndexedPaths();
-
-      // Load through LRU cache
-      const memories: Memory[] = [];
-      for (const relativePath of indexedPaths) {
-        try {
-          const memory = await this.load(relativePath);
-          // Ensure memoryType is set based on location
-          const memoryMeta = memory.metadata as MemoryMetadata;
-          if (!memoryMeta.memoryType) {
-            memoryMeta.memoryType = MemoryMetadataExtractor.inferMemoryType(relativePath) as MemoryType;
-          }
-          memories.push(memory);
-        } catch (error) {
-          this.handleLoadFailure(relativePath, error, failedLoads);
-        }
-      }
-
-      if (failedLoads.length > 0) {
-        logger.warn(`[MemoryManager] Failed to load ${failedLoads.length} memories:`,
-          failedLoads.map(f => `  - ${f.file}: ${f.error}`).join('\n'));
-      }
-
-      // Deduplicate by file path (preserves existing behavior)
-      const uniqueMemories = new Map<string, Memory>();
-      for (const memory of memories) {
-        const filePath = memory.getFilePath();
-        if (filePath && !uniqueMemories.has(filePath)) {
-          uniqueMemories.set(filePath, memory);
-        } else if (!filePath) {
-          uniqueMemories.set(`no-path-${memory.metadata.name}-${Date.now()}`, memory);
-        }
-      }
-
-      const resultMemories = Array.from(uniqueMemories.values());
-
-      // Issue #18 Phase 4: Apply active status to memories in the active set
-      for (const memory of resultMemories) {
-        if (this.getActivationSet().has(memory.metadata.name)) {
-          await memory.activate();
-        }
-      }
-
+      const memories = await this.loadMemoriesFromPaths(indexedPaths);
+      const resultMemories = this.deduplicateMemoriesByPath(memories);
+      await this.applyActivationStatus(resultMemories);
       return resultMemories;
-
     } catch (error) {
       if ((error as any).code === 'ENOENT') {
         return [];
       }
       throw error;
+    }
+  }
+
+  private async loadMemoriesFromPaths(indexedPaths: string[]): Promise<Memory[]> {
+    const failedLoads: Array<{ file: string; error: string }> = [];
+    const memories: Memory[] = [];
+
+    for (const relativePath of indexedPaths) {
+      try {
+        const memory = await this.load(relativePath);
+        const memoryMeta = memory.metadata as MemoryMetadata;
+        if (!memoryMeta.memoryType) {
+          memoryMeta.memoryType = MemoryMetadataExtractor.inferMemoryType(relativePath) as MemoryType;
+        }
+        memories.push(memory);
+      } catch (error) {
+        this.handleLoadFailure(relativePath, error, failedLoads);
+      }
+    }
+
+    if (failedLoads.length > 0) {
+      logger.warn(`[MemoryManager] Failed to load ${failedLoads.length} memories:`,
+        failedLoads.map(f => `  - ${f.file}: ${f.error}`).join('\n'));
+    }
+
+    return memories;
+  }
+
+  private deduplicateMemoriesByPath(memories: Memory[]): Memory[] {
+    const uniqueMemories = new Map<string, Memory>();
+    for (const memory of memories) {
+      const filePath = memory.getFilePath();
+      if (filePath && !uniqueMemories.has(filePath)) {
+        uniqueMemories.set(filePath, memory);
+      } else if (!filePath) {
+        uniqueMemories.set(`no-path-${memory.metadata.name}-${Date.now()}`, memory);
+      }
+    }
+    return Array.from(uniqueMemories.values());
+  }
+
+  private async applyActivationStatus(memories: Memory[]): Promise<void> {
+    for (const memory of memories) {
+      if (this.getActivationSet().has(memory.metadata.name)) {
+        await memory.activate();
+      }
     }
   }
 

@@ -51,12 +51,10 @@ export class PackageResourceLocator {
 
   /** Lazy realpath of the tree root. Cached for the locator's lifetime. */
   private async realTreeRoot(): Promise<string | null> {
-    if (this.realTreeRootCache === null) {
-      this.realTreeRootCache = (async () => {
-        try { return await fs.realpath(this.treeRoot); }
-        catch { return null; }
-      })();
-    }
+    this.realTreeRootCache ??= (async () => {
+      try { return await fs.realpath(this.treeRoot); }
+      catch { return null; }
+    })();
     return this.realTreeRootCache;
   }
 

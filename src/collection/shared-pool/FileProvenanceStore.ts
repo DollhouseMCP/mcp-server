@@ -100,9 +100,9 @@ export class FileProvenanceStore implements IProvenanceStore {
    * (e.g. `personas/code-reviewer.md` → `.provenance/personas--code-reviewer.json`).
    */
   private recordPath(elementId: string): string {
-    const sanitized = elementId.replace(/\0/g, '').replace(/\\/g, '/');
+    const sanitized = elementId.replaceAll('\0', '').replaceAll('\\', '/');
     const withoutExt = sanitized.replace(/\.[^.]+$/, '');
-    const safeKey = withoutExt.replace(/\//g, '--');
+    const safeKey = withoutExt.replaceAll('/', '--');
     return path.join(this.provenanceDir, `${safeKey}.json`);
   }
 

@@ -62,7 +62,7 @@ export class OperationalTelemetry {
     return () => { this.logListener = undefined; };
   }
 
-  constructor(private fileOperations: IFileOperationsService, private stateDir?: string) {}
+  constructor(private readonly fileOperations: IFileOperationsService, private readonly stateDir?: string) {}
 
   /**
    * Check if telemetry is enabled

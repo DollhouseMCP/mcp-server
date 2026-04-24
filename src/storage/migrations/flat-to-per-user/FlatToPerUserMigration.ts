@@ -163,7 +163,6 @@ export class FlatToPerUserMigration {
     const preview = await this.preview();
     const result: MigrationResult = { success: true, movedCount: 0, errors: [] };
 
-    // Create target directories
     for (const dir of preview.dirsToCreate) {
       try {
         await fs.mkdir(dir, { recursive: true });
@@ -176,36 +175,12 @@ export class FlatToPerUserMigration {
       }
     }
 
-    // Move content
     for (const move of preview.moves) {
-      try {
-        await this.moveDir(move.from, move.to);
-        result.movedCount++;
-        logger.info(`[FlatToPerUserMigration] Moved ${move.from} → ${move.to}`);
-      } catch (err) {
-        const msg = `Failed to move ${move.from} → ${move.to}: ${err instanceof Error ? err.message : String(err)}`;
-        result.errors.push(msg);
-        result.success = false;
-        logger.error(`[FlatToPerUserMigration] ${msg}`);
-      }
+      await this.executeSingleMove(move, result);
     }
 
-    // Write migration marker
     if (result.success) {
-      try {
-        const markerPath = path.join(this.legacyRoot, MIGRATION_MARKER_FILENAME);
-        await fs.writeFile(markerPath, JSON.stringify({
-          version: 1,
-          migratedAt: new Date().toISOString(),
-          userId: this.userId,
-          movedCount: result.movedCount,
-        }, null, 2));
-        logger.info(`[FlatToPerUserMigration] Migration complete — marker written`);
-      } catch (err) {
-        const msg = `Failed to write marker: ${err instanceof Error ? err.message : String(err)}`;
-        result.errors.push(msg);
-        result.success = false;
-      }
+      await this.writeMigrationMarker(result);
     }
 
     SecurityMonitor.logSecurityEvent({
@@ -218,6 +193,39 @@ export class FlatToPerUserMigration {
     });
 
     return result;
+  }
+
+  private async executeSingleMove(
+    move: { from: string; to: string },
+    result: MigrationResult,
+  ): Promise<void> {
+    try {
+      await this.moveDir(move.from, move.to);
+      result.movedCount++;
+      logger.info(`[FlatToPerUserMigration] Moved ${move.from} → ${move.to}`);
+    } catch (err) {
+      const msg = `Failed to move ${move.from} → ${move.to}: ${err instanceof Error ? err.message : String(err)}`;
+      result.errors.push(msg);
+      result.success = false;
+      logger.error(`[FlatToPerUserMigration] ${msg}`);
+    }
+  }
+
+  private async writeMigrationMarker(result: MigrationResult): Promise<void> {
+    try {
+      const markerPath = path.join(this.legacyRoot, MIGRATION_MARKER_FILENAME);
+      await fs.writeFile(markerPath, JSON.stringify({
+        version: 1,
+        migratedAt: new Date().toISOString(),
+        userId: this.userId,
+        movedCount: result.movedCount,
+      }, null, 2));
+      logger.info(`[FlatToPerUserMigration] Migration complete — marker written`);
+    } catch (err) {
+      const msg = `Failed to write marker: ${err instanceof Error ? err.message : String(err)}`;
+      result.errors.push(msg);
+      result.success = false;
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────
