@@ -17,6 +17,9 @@ This guide covers everything you need to deploy and configure DollhouseMCP. It i
   - [Filesystem (default)](#filesystem-default)
   - [Database backend](#database-backend)
 - [PostgreSQL Setup](#postgresql-setup)
+  - [Automated setup (Docker — recommended)](#automated-setup-docker--recommended)
+  - [Running migrations manually](#running-migrations-manually)
+  - [Manual setup (managed PostgreSQL)](#manual-setup-managed-postgresql--rds-cloud-sql-and-so-on)
 - [Per-User Data Isolation](#per-user-data-isolation)
 - [Authentication](#authentication)
   - [How it works](#how-it-works)
@@ -401,6 +404,68 @@ See [PostgreSQL Setup](#postgresql-setup) for complete setup instructions.
 
 ## PostgreSQL Setup
 
+### Automated setup (Docker — recommended)
+
+`npm run db:setup` is the fastest way to get PostgreSQL running locally. It handles everything in one command:
+
+1. Checks that Docker and Docker Compose are available
+2. Starts the `dollhousemcp-postgres` container if it is not already running (uses `docker/docker-compose.db.yml`)
+3. Waits for the container to reach healthy status
+4. Creates the `dollhousemcp` database if it does not exist
+5. Runs `docker/init-db.sql` to configure roles and permissions
+6. Runs all Drizzle migrations
+7. Re-applies grants after migrations (so permissions cover all newly created tables)
+8. Prints the environment variables you need to configure
+
+```bash
+npm run db:setup
+```
+
+When complete, the script prints your environment variables:
+
+```
+=== Setup Complete ===
+
+Add these to your environment or .env.local:
+
+  DOLLHOUSE_STORAGE_BACKEND=database
+  DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp
+  DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp
+```
+
+Copy those into your `.env.local` or shell environment, then you are ready to use the database backend.
+
+The script is idempotent — running it a second time checks the current state and skips steps that are already complete.
+
+#### Starting fresh with `--reset`
+
+If you need to wipe the database and start over — for example, after a migration conflict or corrupted state — pass the `--reset` flag:
+
+```bash
+npm run db:setup -- --reset
+```
+
+This drops the `dollhousemcp` database, recreates it, and runs the full setup sequence again. Your Docker container is not affected; only the database contents are cleared.
+
+> **Warning:** `--reset` is irreversible. Any data in the database is permanently deleted. Re-import your portfolio afterward if needed.
+
+#### Quickstart: database backend end-to-end
+
+```bash
+# 1. Start PostgreSQL, run migrations, print env vars
+npm run db:setup
+
+# 2. Copy the printed env vars into your environment, then import your portfolio
+npm run db:import -- --user <your-username>
+
+# 3. Start the server
+npm run start:http
+```
+
+That is the complete path from zero to a running database-backed server.
+
+---
+
 ### Why two connection URLs?
 
 DollhouseMCP uses two separate PostgreSQL roles:
@@ -412,34 +477,9 @@ DollhouseMCP uses two separate PostgreSQL roles:
 
 This separation follows the principle of least privilege. Runtime application code never holds superuser credentials. If `DOLLHOUSE_DATABASE_ADMIN_URL` is not set, bootstrap falls back to using `DOLLHOUSE_DATABASE_URL` — this only works before Row-Level Security is applied to the `users` table.
 
-### Docker quickstart (development)
+### Running migrations manually
 
-The fastest way to get PostgreSQL running locally:
-
-```bash
-cd docker
-docker compose -f docker-compose.db.yml up -d
-```
-
-This starts PostgreSQL 17 on port 5432 and automatically creates both roles via the `init-db.sql` initialization script.
-
-Once the container is healthy, configure your environment:
-
-```bash
-DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp
-```
-
-Check container health:
-
-```bash
-docker compose -f docker-compose.db.yml ps
-```
-
-### Running migrations
-
-Migrations do not run automatically on server startup. Run them manually with:
+If you used `npm run db:setup`, migrations have already run. The following applies if you need to run migrations independently — for example, after pulling a new release that adds migration files:
 
 ```bash
 npm run db:migrate
@@ -451,10 +491,13 @@ This uses `drizzle-kit migrate` and applies all pending SQL migration files from
 
 ### Data management scripts
 
-Three additional CLI scripts are available for data migration and transfer. All three are operator tools — they are not accessible to LLMs via MCP.
+These CLI scripts are operator tools — they are not accessible to LLMs via MCP.
 
 | Script | Purpose |
 |--------|---------|
+| `npm run db:setup` | One-command setup: start container, run migrations, print env vars (Docker required) |
+| `npm run db:setup -- --reset` | Drop and recreate the database, then run full setup |
+| `npm run db:migrate` | Apply pending migrations only (no container management) |
 | `npm run db:import` | Import filesystem portfolio files into the database |
 | `npm run db:export` | Export database elements to filesystem files |
 | `npm run migrate:per-user` | Migrate a flat portfolio layout to the per-user directory layout |
@@ -497,9 +540,13 @@ Connection pool settings (not configurable via env, applied automatically):
 - Idle timeout: 20 seconds
 - Maximum connection lifetime: 30 minutes
 
-### Setting up roles manually (without Docker)
+### Manual setup (managed PostgreSQL — RDS, Cloud SQL, and so on)
 
-If you are using a managed PostgreSQL instance (RDS, Cloud SQL, and so on), create the roles manually:
+`npm run db:setup` requires Docker and is intended for local development. If you are using a managed PostgreSQL instance where Docker is not in the picture, set up the database manually.
+
+**Step 1: Create the roles and database**
+
+Connect to your PostgreSQL instance as a superuser and run:
 
 ```sql
 -- Create the superuser/admin role (used for migrations)
@@ -516,7 +563,18 @@ CREATE DATABASE dollhousemcp OWNER dollhouse;
 \c dollhousemcp
 ```
 
-Then run the contents of `docker/init-db.sql` to grant the app role its permissions. Then run `npm run db:migrate` to apply all migrations.
+**Step 2: Apply permissions**
+
+Run the contents of `docker/init-db.sql` against the `dollhousemcp` database to grant the app role its permissions.
+
+**Step 3: Run migrations**
+
+```bash
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:your-strong-password-here@your-host:5432/dollhousemcp \
+  npm run db:migrate
+```
+
+After migrations complete, re-apply `docker/init-db.sql` so that the grants cover the newly created tables.
 
 ### Production considerations
 
@@ -669,7 +727,7 @@ DOLLHOUSE_AUTH_ENABLED=true npm run start:http
 On startup, the server prints a ready-to-use token to stderr:
 
 ```
-[DollhouseMCP Auth] Token for 'todd' (24h TTL):
+[DollhouseMCP Auth] Token for 'bob' (24h TTL):
   eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0b2RkIi...
 
 Use in MCP client config:
@@ -693,7 +751,7 @@ That is the complete local dev setup. The server auto-generates the key pair; yo
 The startup token uses your OS username as the subject. For multi-user setups — or to create tokens with additional claims like a display name or email — use the `auth:token` script:
 
 ```bash
-npm run auth:token -- --sub todd
+npm run auth:token -- --sub bob
 ```
 
 This prints a token to stdout and a summary to stderr:
@@ -701,8 +759,8 @@ This prints a token to stdout and a summary to stderr:
 ```
 eyJhbGciOiJFUzI1NiJ9...
 
-Token generated for 'todd' (TTL: 86400s)
-Key file: /home/todd/.dollhouse/run/auth-keypair.json
+Token generated for 'bob' (TTL: 86400s)
+Key file: /home/bob/.dollhouse/run/auth-keypair.json
 ```
 
 **Available flags:**
@@ -1373,14 +1431,20 @@ npm run auth:token -- --sub alice --display-name "Alice K" --email alice@example
 npm run auth:token -- --sub bob --display-name "Bob M" --email bob@example.com
 ```
 
-Run migrations before starting the server:
+**Set up PostgreSQL.** For a local or Docker-based database, use `npm run db:setup`:
+
+```bash
+npm run db:setup
+```
+
+For a managed database (RDS, Cloud SQL, and so on), run migrations manually after creating the roles:
 
 ```bash
 DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp \
   npm run db:migrate
 ```
 
-If you have an existing filesystem portfolio to carry over, import it before starting the server:
+**Import an existing portfolio** (if you have one to carry over):
 
 ```bash
 DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:strong-password@db.internal:5432/dollhousemcp \
@@ -1473,16 +1537,11 @@ docker compose -f docker-compose.http.yml up -d
 **Using Docker Compose (HTTP + PostgreSQL):**
 
 ```bash
-cd docker
-
-# Start PostgreSQL first
-docker compose -f docker-compose.db.yml up -d
-
-# Wait for healthy status, then run migrations
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp \
-  npm run db:migrate
+# Set up PostgreSQL (starts container, runs migrations, prints env vars)
+npm run db:setup
 
 # Start the HTTP server
+cd docker
 docker compose -f docker-compose.http.yml up -d
 ```
 

@@ -36,8 +36,8 @@ import { users } from '../../../src/database/schema/users.js';
 
 const STARTUP_TIMEOUT = 60_000;
 const TEST_TIMEOUT = 30_000;
-const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp';
-const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp';
+const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
+const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
 
 // Matches the server's startup log line: "[DollhouseMCP] Streamable HTTP server listening on <url>"

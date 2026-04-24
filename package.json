@@ -21,6 +21,7 @@
     "dev:http": "tsx watch src/index.ts -- --streamable-http",
     "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
     "inspector:dev": "npx @modelcontextprotocol/inspector tsx src/index.ts",
+    "db:setup": "tsx scripts/setup-database.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:push": "drizzle-kit push",

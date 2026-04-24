@@ -28,16 +28,14 @@ export function fixedUserId(userId: string): UserIdResolver {
   return () => userId;
 }
 
-// Use the application role (non-superuser) so RLS policies are enforced.
-// The superuser 'dollhouse' bypasses RLS unconditionally.
-const TEST_DB_URL = process.env.DOLLHOUSE_DATABASE_URL
-  ?? 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp';
+// Test database — always use dollhousemcp_test, never the live database.
+// The globalSetup in tests/setup.ts creates and migrates this database
+// before any test runs, and globalTeardown drops it afterward.
+const TEST_DB_URL = process.env.DOLLHOUSE_TEST_DATABASE_URL
+  ?? 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
 
-// Admin URL used for identity writes (users table is RLS-protected and the
-// app role only has self-read access). Admin role bypasses RLS so test user
-// creation works before any user context can be set.
-const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_DATABASE_ADMIN_URL
-  ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp';
+const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
+  ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 
 let dbConnection: ReturnType<typeof createDatabaseConnection> | null = null;
 let adminConnection: ReturnType<typeof createDatabaseConnection> | null = null;

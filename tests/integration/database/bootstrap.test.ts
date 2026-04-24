@@ -12,10 +12,10 @@ import { isDatabaseAvailable, closeTestDb } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
-const TEST_DB_URL = process.env.DOLLHOUSE_DATABASE_URL
-  ?? 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp';
-const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_DATABASE_ADMIN_URL
-  ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp';
+const TEST_DB_URL = process.env.DOLLHOUSE_TEST_DATABASE_URL
+  ?? 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
+const TEST_DB_ADMIN_URL = process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
+  ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 
 const bootstrapConfig = {
   connectionUrl: TEST_DB_URL,
