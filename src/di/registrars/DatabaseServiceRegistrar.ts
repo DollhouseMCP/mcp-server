@@ -34,6 +34,7 @@ import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { UserIdResolver } from '../../database/UserContext.js';
 
+import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 
 // Re-export for callers that import from this module.
@@ -97,11 +98,15 @@ export class DatabaseServiceRegistrar {
     container.register('CurrentUserId', () => result.userId);
 
     // 'UserIdResolver' — the per-call resolver used by storage layers. Reads
-    // from ContextTracker's active session scope. Must be registered BEFORE
-    // the StorageLayerFactory override below resolves it.
+    // from ContextTracker's active session scope, with a per-session override
+    // from set_user_identity (dbUserId on SessionActivationState). Must be
+    // registered BEFORE the StorageLayerFactory override below resolves it.
     container.register('UserIdResolver', () => {
       const tracker = container.resolve<ContextTracker>('ContextTracker');
-      return createUserIdResolver(tracker);
+      const registry = container.hasRegistration('SessionActivationRegistry')
+        ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
+        : undefined;
+      return createUserIdResolver(tracker, registry);
     });
 
     // Override the file-mode StorageLayerFactory with the DB-backed variant.
@@ -111,6 +116,16 @@ export class DatabaseServiceRegistrar {
     container.register('StorageLayerFactory', () =>
       new DatabaseStorageLayerFactory(result.db, userIdResolver)
     );
+
+    // UserIdentityService — resolves usernames to DB UUIDs on demand.
+    // Used by IdentityHandler when set_user_identity is called in DB mode.
+    const { UserIdentityService } = await import('../../services/UserIdentityService.js');
+    container.register('UserIdentityService', () => new UserIdentityService({
+      db: result.db,
+      adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
+      appConnectionUrl: env.DOLLHOUSE_DATABASE_URL!,
+      ssl: env.DOLLHOUSE_DATABASE_SSL,
+    }));
 
     // Re-register StdioSession with the bootstrapped DB UUID. registerServices()
     // already set up a fallback factory that checks BootstrappedUserId, but by

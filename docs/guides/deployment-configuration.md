@@ -18,6 +18,14 @@ This guide covers everything you need to deploy and configure DollhouseMCP. It i
   - [Database backend](#database-backend)
 - [PostgreSQL Setup](#postgresql-setup)
 - [Per-User Data Isolation](#per-user-data-isolation)
+- [Authentication](#authentication)
+  - [How it works](#how-it-works)
+  - [Local dev setup (recommended starting point)](#local-dev-setup-recommended-starting-point)
+  - [Generating tokens for specific users](#generating-tokens-for-specific-users)
+  - [Configuring MCP clients to send tokens](#configuring-mcp-clients-to-send-tokens)
+  - [OIDC provider setup](#oidc-provider-setup)
+  - [What changes when auth is enabled](#what-changes-when-auth-is-enabled)
+  - [Authentication environment variables](#authentication-environment-variables)
 - [Shared Pool and Public Elements](#shared-pool-and-public-elements)
 - [Migrating Existing Setups](#migrating-existing-setups)
 - [Environment Variable Reference](#environment-variable-reference)
@@ -118,6 +126,7 @@ The following features require explicit opt-in — they are **not active** unles
 |---------|--------------|
 | HTTP Streaming transport | Set `DOLLHOUSE_TRANSPORT=streamable-http` |
 | Database storage backend | Set `DOLLHOUSE_STORAGE_BACKEND=database` |
+| Token authentication on HTTP endpoints | Set `DOLLHOUSE_AUTH_ENABLED=true` |
 | Shared public element pool | Set `DOLLHOUSE_SHARED_POOL_ENABLED=true` |
 | Web console authentication | Set `DOLLHOUSE_WEB_AUTH_ENABLED=true` |
 
@@ -557,6 +566,256 @@ Tables protected by RLS:
 
 ---
 
+## Authentication
+
+Authentication is **disabled by default**. The feature flag `DOLLHOUSE_AUTH_ENABLED` must be set to `true` to activate it. When disabled, the server behaves exactly as it always has — no tokens, no headers, no changes to existing setups.
+
+Auth applies only to **HTTP transport**. Stdio mode is unaffected regardless of this setting.
+
+> **When do you need this?** Enable auth when you run the HTTP server and want each connecting user to have their own isolated identity — their own database rows, their own portfolio data. Without auth, all HTTP sessions share a single anonymous identity.
+
+### How it works
+
+JWT (JSON Web Token) is an open standard for passing identity information as a cryptographically signed string. The client includes the token in every request using the `Authorization: Bearer <token>` HTTP header. The server validates the signature and, if valid, reads the `sub` (subject) claim as the user's identity. That `sub` maps to a row in the `users` table, which all Row-Level Security policies reference.
+
+DollhouseMCP supports two ways to issue and validate tokens:
+
+| Mode | Variable | Who issues tokens | When to use |
+|------|----------|-------------------|-------------|
+| `local` (default) | `DOLLHOUSE_AUTH_PROVIDER=local` | The server itself, using a self-signed key pair | Development, testing, single-operator deployments |
+| `oidc` | `DOLLHOUSE_AUTH_PROVIDER=oidc` | An external identity provider (Auth0, Keycloak, Google, and so on) | Production, enterprise, anywhere users already have accounts |
+
+---
+
+### Local dev setup (recommended starting point)
+
+The `local` provider is self-contained — no external service required. The server generates an ECDSA (ES256) key pair on first startup, saves it to `~/.dollhouse/run/auth-keypair.json`, and uses it to sign and verify tokens. The key pair is reused across restarts, so tokens you generate remain valid until they expire.
+
+**Step 1: Enable auth**
+
+Add one line to your environment:
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true
+```
+
+You can put this in a `.env` file alongside your other environment variables, or export it in your shell before starting the server.
+
+**Step 2: Start the server**
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true npm run start:http
+```
+
+On startup, the server prints a ready-to-use token to stderr:
+
+```
+[DollhouseMCP Auth] Token for 'todd' (24h TTL):
+  eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ0b2RkIi...
+
+Use in MCP client config:
+  "headers": { "Authorization": "Bearer eyJhbGciOiJFUzI1NiJ9..." }
+```
+
+The subject (`sub`) defaults to your OS username. Copy the token — you will use it in your MCP client configuration in the next step.
+
+> **Note:** The startup token is printed to stderr, not stdout. This keeps it visible in your terminal without interfering with MCP's stdio protocol.
+
+**Step 3: Add the token to your MCP client**
+
+See [Configuring MCP clients to send tokens](#configuring-mcp-clients-to-send-tokens) below.
+
+That is the complete local dev setup. The server auto-generates the key pair; you copy the printed token into your client config.
+
+---
+
+### Generating tokens for specific users
+
+The startup token uses your OS username as the subject. For multi-user setups — or to create tokens with additional claims like a display name or email — use the `auth:token` script:
+
+```bash
+npm run auth:token -- --sub todd
+```
+
+This prints a token to stdout and a summary to stderr:
+
+```
+eyJhbGciOiJFUzI1NiJ9...
+
+Token generated for 'todd' (TTL: 86400s)
+Key file: /home/todd/.dollhouse/run/auth-keypair.json
+```
+
+**Available flags:**
+
+| Flag | Required | Description |
+|------|----------|-------------|
+| `--sub <username>` | Yes | Subject — the user identity. Becomes the user's DB key. |
+| `--display-name <name>` | No | Human-readable name stored in the token. |
+| `--email <email>` | No | Email address stored in the token. |
+| `--ttl <seconds>` | No | Token lifetime. Default: `86400` (24 hours). |
+| `--key-file <path>` | No | Override the key pair file. Defaults to `~/.dollhouse/run/auth-keypair.json`. |
+
+Examples:
+
+```bash
+# Minimal: just a subject
+npm run auth:token -- --sub alice
+
+# With display name and email
+npm run auth:token -- --sub alice --display-name "Alice K" --email alice@example.com
+
+# Long-lived token (7 days) for a service account
+npm run auth:token -- --sub ci-runner --ttl 604800
+
+# Capture the token to a variable for scripting
+TOKEN=$(npm run auth:token -- --sub alice 2>/dev/null)
+```
+
+> **Important:** The `--sub` value is the permanent identity for that user. If you generate a new token for the same `--sub`, the user's existing data remains intact — the token is just a credential, not the identity itself. If you use a different `--sub`, you create a new user with an empty portfolio.
+
+The script uses the same key pair as the running server (`~/.dollhouse/run/auth-keypair.json`). Tokens generated here are valid for that server instance.
+
+---
+
+### Configuring MCP clients to send tokens
+
+Every HTTP request to the MCP endpoint must include the token in the `Authorization` header.
+
+#### Claude Code
+
+In your Claude Code MCP server configuration (`.claude/settings.json` or via `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "dollhousemcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer eyJhbGciOiJFUzI1NiJ9..."
+      }
+    }
+  }
+}
+```
+
+Replace the token value with the one printed by the server at startup or generated by `npm run auth:token`.
+
+#### Generic HTTP client or custom integration
+
+Add the header to every request:
+
+```
+Authorization: Bearer eyJhbGciOiJFUzI1NiJ9...
+```
+
+For SSE/EventSource clients that cannot set headers, the token can also be passed as a query parameter:
+
+```
+GET /mcp?token=eyJhbGciOiJFUzI1NiJ9...
+```
+
+#### Web console
+
+The web console accepts both JWT tokens (the same tokens used for MCP requests) and the legacy console token (`DOLLHOUSE_TOKEN_SECRET`-based auth). Both work simultaneously — you do not need to choose one.
+
+If the web console has auth enabled (`DOLLHOUSE_WEB_AUTH_ENABLED=true`), pass the JWT in the console's `Authorization` header the same way.
+
+---
+
+### OIDC provider setup
+
+OIDC (OpenID Connect) lets users authenticate through an external identity provider — Auth0, Keycloak, Google Workspace, Azure AD, Okta, and any other standards-compliant provider. The server validates tokens issued by the provider; it does not issue tokens itself.
+
+Set these variables:
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=oidc
+DOLLHOUSE_AUTH_ISSUER=https://your-tenant.auth0.com/
+DOLLHOUSE_AUTH_AUDIENCE=dollhousemcp
+```
+
+`DOLLHOUSE_AUTH_ISSUER` is the base URL of your identity provider. The server fetches public keys from `<issuer>/.well-known/jwks.json` automatically. If your provider uses a non-standard JWKS path, override it:
+
+```bash
+DOLLHOUSE_AUTH_JWKS_URI=https://your-tenant.example.com/custom/jwks
+```
+
+The token's `sub` claim becomes the user's identity in DollhouseMCP. Most providers use a stable, opaque ID (for example, `auth0|64abc123`) — this becomes the user's key in the database.
+
+#### Auth0 example
+
+1. In the Auth0 dashboard, create a new **API**:
+   - Identifier: `dollhousemcp` (this becomes your audience)
+   - Signing algorithm: RS256
+
+2. In your Auth0 application settings, note your tenant domain (for example, `your-tenant.auth0.com`).
+
+3. Configure the server:
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=oidc
+DOLLHOUSE_AUTH_ISSUER=https://your-tenant.auth0.com/
+DOLLHOUSE_AUTH_AUDIENCE=dollhousemcp
+```
+
+4. Obtain a token for a user via the Auth0 Management API or device authorization flow, then pass it to your MCP client as shown above.
+
+#### Keycloak example
+
+1. In Keycloak, create a new **Client** (for example, `dollhousemcp`) with "Service accounts" enabled.
+
+2. Note your realm name and Keycloak base URL.
+
+3. Configure the server:
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=oidc
+DOLLHOUSE_AUTH_ISSUER=https://keycloak.example.com/realms/your-realm
+DOLLHOUSE_AUTH_AUDIENCE=dollhousemcp
+```
+
+Keycloak's JWKS endpoint is derived automatically as `https://keycloak.example.com/realms/your-realm/.well-known/jwks.json`.
+
+---
+
+### What changes when auth is enabled
+
+| Endpoint | Auth required? |
+|----------|---------------|
+| `POST /mcp` | Yes — 401 without a valid Bearer token |
+| `GET /healthz` | No — always public |
+| `GET /readyz` | No — always public |
+| `GET /version` | No — always public |
+| Web console (`/`) | Depends on `DOLLHOUSE_WEB_AUTH_ENABLED` |
+
+- **Stdio mode is completely unaffected.** Auth has no effect on stdio connections regardless of how `DOLLHOUSE_AUTH_ENABLED` is set.
+- **User creation is automatic.** When a valid token reaches the server for the first time, the server creates a user row in the database (using the admin connection) and sets up that user's data space. No manual user provisioning is needed.
+- **The `sub` claim is permanent.** Changing the `sub` for a user effectively creates a new user. Existing data stays associated with the original `sub`.
+- **Tokens are validated on every request.** There is no session-level caching of auth state — each request validates its token independently.
+
+---
+
+### Authentication environment variables
+
+> **Boolean env var behavior:** Boolean variables like `DOLLHOUSE_AUTH_ENABLED` correctly treat the string `'false'` as false. Only `'true'` and `'1'` are treated as true. This was a bug in earlier versions (any non-empty string was treated as true) and is now fixed.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLLHOUSE_AUTH_ENABLED` | `false` | Master switch. Set to `true` to enable token authentication on HTTP endpoints. |
+| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs) or `oidc` (external identity provider). |
+| `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
+| `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
+| `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived)* | JWKS endpoint. Defaults to `<issuer>/.well-known/jwks.json`. Override only if your provider uses a non-standard path. |
+| `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
+| `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject for the startup convenience token printed to stderr. Defaults to your OS username. |
+
+---
+
 ## Shared Pool and Public Elements
 
 The shared pool is an opt-in feature that allows operators to seed a set of public elements discoverable by all users on a deployment.
@@ -772,6 +1031,18 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_RUN_DIR` | *(platform default)* | Runtime files directory. Must be an absolute path. |
 | `DOLLHOUSE_SHARED_POOL_DIR` | *(unset)* | Directory containing seed elements for the shared pool. |
 
+### Authentication
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLLHOUSE_AUTH_ENABLED` | `false` | Enable token authentication on HTTP endpoints. Has no effect on stdio mode. |
+| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs) or `oidc` (external identity provider). |
+| `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`. |
+| `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`. |
+| `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived from issuer)* | JWKS endpoint URL. Override only if your provider uses a non-standard path. |
+| `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
+| `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject used for the startup convenience token printed to stderr. |
+
 ### Web console
 
 | Variable | Default | Description |
@@ -930,9 +1201,29 @@ DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:543
 DOLLHOUSE_DATABASE_SSL=require
 DOLLHOUSE_DATABASE_POOL_SIZE=20
 
+# Authentication
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=oidc
+DOLLHOUSE_AUTH_ISSUER=https://your-tenant.auth0.com/
+DOLLHOUSE_AUTH_AUDIENCE=dollhousemcp
+
 # Security
 DOLLHOUSE_TOKEN_SECRET=at-least-32-characters-of-random-secret-here
 DOLLHOUSE_WEB_AUTH_ENABLED=true
+```
+
+For teams not yet using an external identity provider, substitute the auth block with local provider settings:
+
+```bash
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=local
+```
+
+Then issue tokens for each user individually:
+
+```bash
+npm run auth:token -- --sub alice --display-name "Alice K" --email alice@example.com
+npm run auth:token -- --sub bob --display-name "Bob M" --email bob@example.com
 ```
 
 Run migrations before starting the server:
@@ -955,6 +1246,45 @@ Start:
 ```bash
 npm run start:http
 ```
+
+---
+
+### Multi-user HTTP with per-user identity (local tokens)
+
+Use this configuration when you want multiple distinct users on a single HTTP deployment, but do not have an external identity provider. This is the simplest path to per-user data isolation.
+
+```bash
+# .env file
+DOLLHOUSE_TRANSPORT=streamable-http
+DOLLHOUSE_HTTP_HOST=127.0.0.1
+DOLLHOUSE_HTTP_PORT=3000
+
+# Storage
+DOLLHOUSE_STORAGE_BACKEND=database
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:password@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:password@localhost:5432/dollhousemcp
+
+# Authentication
+DOLLHOUSE_AUTH_ENABLED=true
+DOLLHOUSE_AUTH_PROVIDER=local
+```
+
+Start the server:
+
+```bash
+npm run start:http
+```
+
+The server prints a startup token for your OS user to stderr. For each additional user, generate a token using their identifier as the subject:
+
+```bash
+npm run auth:token -- --sub alice
+npm run auth:token -- --sub bob --ttl 604800
+```
+
+Each user copies their token into their MCP client's `Authorization: Bearer <token>` header. The first time each token reaches the server, a new user row is created and an empty portfolio is initialized. Their data is isolated from all other users via Row-Level Security.
+
+> **Key management note:** All tokens for a given server instance are signed with the same key pair at `~/.dollhouse/run/auth-keypair.json`. If you rotate or delete that file, all existing tokens are immediately invalidated. Generate new tokens for all users after a key rotation.
 
 ---
 

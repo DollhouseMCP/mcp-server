@@ -10,9 +10,13 @@
  * This is a CLI-only operator tool. It is NOT exposed via MCP-AQL.
  *
  * Usage:
- *   npx tsx scripts/import-portfolio-to-database.ts --dry-run
- *   npx tsx scripts/import-portfolio-to-database.ts
- *   npx tsx scripts/import-portfolio-to-database.ts --portfolio-dir /path/to/portfolio
+ *   npx tsx scripts/import-portfolio-to-database.ts --user dibble
+ *   npx tsx scripts/import-portfolio-to-database.ts --user dibble --dry-run
+ *   npx tsx scripts/import-portfolio-to-database.ts --user dibble --portfolio-dir /path/to/portfolio
+ *
+ * Required:
+ *   --user <username>  The database user to import elements under.
+ *                      Must match the 'sub' claim of the JWT token you use to connect.
  *
  * Required environment:
  *   DOLLHOUSE_DATABASE_URL      — app role connection (RLS enforced)
@@ -27,7 +31,8 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
-import { bootstrapDatabase } from '../src/database/bootstrap.js';
+import { createDatabaseConnection } from '../src/database/connection.js';
+import { UserIdentityService } from '../src/services/UserIdentityService.js';
 import { DatabaseStorageLayer } from '../src/storage/DatabaseStorageLayer.js';
 import { DatabaseMemoryStorageLayer } from '../src/storage/DatabaseMemoryStorageLayer.js';
 import { FrontmatterParser } from '../src/storage/FrontmatterParser.js';
@@ -156,6 +161,15 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // Require --user
+  const username = getArgValue('--user');
+  if (!username) {
+    console.error('Error: --user <username> is required.');
+    console.error('This must match the "sub" claim of the JWT token you use to connect.');
+    console.error('Example: npm run db:import -- --user dibble');
+    process.exit(1);
+  }
+
   // Verify database configuration
   const dbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   if (!dbUrl) {
@@ -164,20 +178,22 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Bootstrap database (creates user row if needed)
+  // Connect to database and resolve user
   console.log('Connecting to database...');
   const adminUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
-  const bootstrap = await bootstrapDatabase({
-    connectionUrl: dbUrl,
-    adminConnectionUrl: adminUrl,
-    poolSize: 5,
-    ssl: (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer',
-  });
+  const ssl = (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer';
+  const connection = createDatabaseConnection({ connectionUrl: dbUrl, poolSize: 5, ssl });
+  const db = connection.db;
 
-  const db = bootstrap.db;
-  const userId = bootstrap.userId;
+  const identityService = new UserIdentityService({
+    db,
+    adminConnectionUrl: adminUrl,
+    appConnectionUrl: dbUrl,
+    ssl,
+  });
+  const userId = await identityService.resolveOrCreateUser(username);
   const userIdResolver = () => userId;
-  console.log(`Connected. User: ${userId}\n`);
+  console.log(`Connected. Importing as user '${username}' (${userId})\n`);
 
   // Create storage layers
   const storageLayers = new Map<string, DatabaseStorageLayer | DatabaseMemoryStorageLayer>();
@@ -211,7 +227,7 @@ async function main(): Promise<void> {
   }
 
   // Close connection
-  await bootstrap.connection.close();
+  await connection.close();
 
   // Report
   console.log(`\n=== Import Complete ===`);

@@ -181,7 +181,8 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   getPathByName(name: string): string | undefined {
-    return this.nameToIdMap.get(name);
+    return this.nameToIdMap.get(name)
+      ?? this.nameToIdMap.get(name.toLowerCase());
   }
 
   /**

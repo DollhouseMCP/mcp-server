@@ -22,6 +22,7 @@
  */
 
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
 import { validateUserId } from '../state/db-persistence-utils.js';
 import { logger } from '../utils/logger.js';
 
@@ -52,18 +53,21 @@ export type UserIdResolver = () => string;
  * Build a UserIdResolver that reads the current userId from the given
  * ContextTracker's SessionContext.
  *
+ * Resolution priority:
+ *   1. Per-session dbUserId override (set by set_user_identity in DB mode)
+ *   2. SessionContext.userId (set at session creation — OS user or env var)
+ *
  * Throws when called outside any ContextTracker scope, or when the active
  * session has an empty/invalid userId. This is loud by design — a silent
  * fallback would break tenant isolation.
  */
-export function createUserIdResolver(contextTracker: ContextTracker): UserIdResolver {
+export function createUserIdResolver(
+  contextTracker: ContextTracker,
+  registry?: SessionActivationRegistry,
+): UserIdResolver {
   return () => {
     const session = contextTracker.getSessionContext();
     if (!session) {
-      // Log the full diagnostic for operators — includes the architectural
-      // reason and a hint for common root causes. The thrown error body is
-      // deliberately terse so MCP handlers that surface it to clients don't
-      // leak implementation details (OWASP A09:2021).
       logger.error(
         '[UserContext] No session context is active. Every database operation must run inside ' +
         'ContextTracker.runAsync() — the per-session scope that carries the user identity. ' +
@@ -73,6 +77,25 @@ export function createUserIdResolver(contextTracker: ContextTracker): UserIdReso
       );
       throw new UserContextMissingError('No active user context for database operation');
     }
+
+    // Check for per-session DB identity override (from set_user_identity)
+    if (registry) {
+      const activationState = registry.get(session.sessionId);
+      if (activationState?.dbUserId) {
+        return activationState.dbUserId;
+      }
+
+      // HTTP sessions without an explicit identity should not silently
+      // fall through to the OS process owner. DOLLHOUSE_USER means the
+      // operator chose the identity; its absence is the error case.
+      if (session.transport === 'http' && !process.env.DOLLHOUSE_USER?.trim()) {
+        throw new UserContextMissingError(
+          'No user identity set. Set the DOLLHOUSE_USER environment variable ' +
+          'when starting the server to establish your identity.',
+        );
+      }
+    }
+
     const userId = session.userId;
     validateUserId(userId);
     return userId;

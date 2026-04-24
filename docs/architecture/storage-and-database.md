@@ -18,8 +18,9 @@ For operator-facing configuration of storage backends and environment variables,
 8. [Migrations](#migrations)
 9. [State stores and the sessions table](#state-stores-and-the-sessions-table)
 10. [DI registration and backend selection](#di-registration-and-backend-selection)
-11. [Shared pool](#shared-pool)
-12. [Testing database code](#testing-database-code)
+11. [Authentication architecture](#authentication-architecture)
+12. [Shared pool](#shared-pool)
+13. [Testing database code](#testing-database-code)
 
 ---
 
@@ -979,6 +980,325 @@ createForElement(elementType: string, _fileOptions: FileStorageOptions): IStorag
 ```
 
 Memories get `DatabaseMemoryStorageLayer` because they sync `memory_entries`. Everything else gets `DatabaseStorageLayer`.
+
+---
+
+## Authentication architecture
+
+Authentication is an optional layer, off by default. When enabled (`DOLLHOUSE_AUTH_ENABLED=true`), it gates all HTTP traffic through a JWT validation pipeline that runs before any MCP or web console logic. The auth module is completely separate from the storage layer — auth concerns end at `res.locals.authClaims`, and storage concerns start with the `UserIdResolver`.
+
+### Auth module structure
+
+All auth code lives in `src/auth/`.
+
+#### `IAuthProvider.ts`
+
+The pluggable contract. Every concrete provider implements:
+
+```typescript
+export interface IAuthProvider {
+  readonly name: string;
+  validate(token: string): Promise<AuthResult>;
+  issue?(sub: string, options?: IssueOptions): Promise<string>;
+}
+```
+
+`issue()` is optional — only providers that control their own signing keys implement it. `validate()` returns a discriminated union:
+
+```typescript
+export type AuthResult =
+  | { ok: true; claims: AuthClaims }
+  | { ok: false; reason: string };
+```
+
+`AuthClaims` carries `sub` (required), `displayName`, `email`, `tenantId`, `scopes`, and `exp`. These fields flow downstream into `SessionContext` and, in database mode, into the `users` table.
+
+#### `LocalDevAuthProvider.ts`
+
+Generates and validates self-signed ES256 JWTs. Intended for local development — no external dependencies, no network calls.
+
+Key pair lifecycle:
+- On first `validate()` or `issue()` call, the provider attempts to read a key pair from `keyFilePath`.
+- If the file does not exist, `generateKeyPair('ES256')` produces a new pair, which is written as JWK JSON with mode `0600`.
+- On subsequent server restarts, the existing file is read and the pair is reused. Tokens issued before a restart remain valid.
+- Default key file path: `~/.dollhouse/run/auth-keypair.json`. Override with `DOLLHOUSE_AUTH_LOCAL_KEY_FILE`.
+
+Issued tokens include standard JWT claims (`iss`, `sub`, `aud`, `iat`, `exp`) plus the optional `display_name`, `email`, `tenant_id`, and `scopes` payload fields. `validate()` checks signature, issuer, audience, and expiry; specific error strings are mapped to human-readable `reason` values (`'token expired'`, `'invalid signature'`).
+
+#### `OidcAuthProvider.ts`
+
+Validates JWTs issued by an external OIDC identity provider. Does not implement `issue()`.
+
+Configuration:
+- `DOLLHOUSE_AUTH_ISSUER` — issuer URL (for example `https://tenant.auth0.com/`)
+- `DOLLHOUSE_AUTH_AUDIENCE` — expected audience claim
+- `DOLLHOUSE_AUTH_JWKS_URI` — JWKS endpoint; if omitted, derived as `{issuer}/.well-known/jwks.json`
+
+Keys are fetched and cached by `jose`'s `createRemoteJWKSet`. The cache is automatically refreshed when a token presents a key ID not in the current cache, so key rotation at the provider requires no server restart.
+
+Claim extraction handles provider-specific field names. `displayName` is tried from `name`, `display_name`, then `preferred_username`. `tenantId` is tried from `tenant_id` then `org_id`. `scopes` is read from either a `scopes` array or a space-separated `scope` string, whichever is present.
+
+#### `authMiddleware.ts`
+
+An Express middleware factory (`createUnifiedAuthMiddleware`) that wraps any `IAuthProvider`. Mounted on the MCP HTTP transport and the web console API — one middleware, two surfaces.
+
+Token extraction order:
+1. `Authorization: Bearer <token>` header (primary)
+2. `?token=<token>` query parameter (fallback for SSE/EventSource, which cannot set custom headers)
+
+On success, claims are attached to `res.locals.authClaims` and `next()` is called. On failure, the middleware responds with `401` and logs a `SecurityMonitor` event. Public paths (configured via `publicPaths`) bypass validation entirely.
+
+```typescript
+// Public paths receive no auth check:
+createUnifiedAuthMiddleware({
+  provider,
+  publicPaths: ['/healthz', '/readyz', '/version'],
+})
+```
+
+#### `AuthProviderFactory.ts`
+
+`createAuthProvider(config)` selects and instantiates the right provider based on `config.provider` (`'local'` or `'oidc'`). Both provider implementations are dynamically imported — file-mode or auth-disabled deployments never load `jose` or `node-fetch`.
+
+For the `local` provider, the factory also issues a startup token and writes it to `process.stderr` so it is visible in the terminal without contaminating MCP's stdio JSON stream:
+
+```
+[DollhouseMCP Auth] Token for 'alice' (24h TTL):
+  eyJhbGci...
+Use in MCP client config:
+  "headers": { "Authorization": "Bearer eyJhbGci..." }
+```
+
+The default subject is taken from `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB`, then `DOLLHOUSE_USER`, then the OS username.
+
+---
+
+### Token flow through the system
+
+The following sequence describes how a JWT becomes a database user UUID and reaches RLS.
+
+```
+Client
+  │
+  │  Authorization: Bearer <jwt>
+  ▼
+Express middleware (createUnifiedAuthMiddleware)
+  │  provider.validate(token) → AuthResult
+  │  on success: res.locals.authClaims = { sub, displayName, ... }
+  ▼
+StreamableHTTPServerTransport
+  │  passes res.locals.authClaims to createStreamableHttpRuntime callback
+  ▼
+createStreamableHttpRuntime callback (src/index.ts)
+  │  UserIdentityService.resolveOrCreateUser(authClaims.sub, authClaims.displayName)
+  │  → returns UUID (creates users row if needed, via admin connection)
+  │  createHttpSession({ userId: uuid, displayName, email, tenantId })
+  │  activationState.dbUserId = uuid
+  ▼
+ContextTracker.runAsync(sessionContext, handler)
+  │  AsyncLocalStorage holds the SessionContext for the request lifetime
+  ▼
+UserIdResolver (called inside database operations)
+  │  contextTracker.getSessionContext() → session
+  │  activationState.dbUserId takes priority over session.userId
+  ▼
+withUserContext(db, uuid, tx => ...)
+  │  SET LOCAL app.current_user_id = '<uuid>'
+  ▼
+PostgreSQL RLS
+  │  current_setting('app.current_user_id', true)::uuid
+  │  every policy predicate evaluates against this value
+  ▼
+Query result scoped to the authenticated user
+```
+
+Key design points:
+
+- `UserIdentityService.resolveOrCreateUser()` runs on the admin database connection (bypasses RLS) to INSERT if the user is new. Resolved UUIDs are cached in memory for the process lifetime — user rows are immutable once created.
+- The UUID is stored on `SessionActivationState.dbUserId` so it survives across calls within the same MCP session without re-resolving.
+- `UserIdResolver` checks `dbUserId` first, before falling back to `session.userId`. This means the UUID established at connection time (from the JWT `sub`) is what RLS sees — not the username literal.
+- If `resolveOrCreateUser` fails (network error, schema mismatch), the session falls back to `fallbackUserId`. In database mode this causes subsequent RLS queries to fail rather than silently reading wrong data.
+
+---
+
+### DI wiring
+
+`AuthServiceRegistrar` (`src/di/registrars/AuthServiceRegistrar.ts`) is called at startup. When `DOLLHOUSE_AUTH_ENABLED=false` (the default), it logs a single debug message and returns — no imports from `src/auth/` happen and the auth module never enters the import graph.
+
+When enabled:
+
+1. All imports from `src/auth/` are done dynamically inside `bootstrapAndRegister()`.
+2. `createAuthProvider(config)` is called with values from `env`. It returns an `IAuthProvider` instance.
+3. The provider is registered as `'AuthProvider'` in the DI container.
+4. `createUnifiedAuthMiddleware({ provider, publicPaths: ['/healthz', '/readyz', '/version'] })` produces a `RequestHandler`.
+5. The middleware is registered as `'AuthMiddleware'` in the container.
+
+Downstream consumers resolve `'AuthMiddleware'` by name:
+
+- The MCP HTTP transport (`src/index.ts`) passes it to `createStreamableHttpRuntime`, which mounts it on the Express app that serves the `/mcp` endpoint.
+- The web console (`src/web/server.ts`) receives it as `options.unifiedAuthMiddleware` and mounts it at `/api` before the console token auth middleware.
+
+Both surfaces use the same `RequestHandler` instance — one provider, one middleware, consistent validation across all HTTP surfaces.
+
+---
+
+### Web console coexistence
+
+The web console operates two auth systems in parallel when `DOLLHOUSE_AUTH_ENABLED=true`:
+
+| Layer | Middleware | Token type | Enforced when |
+|-------|-----------|------------|--------------|
+| Unified JWT auth | `createUnifiedAuthMiddleware` (from `src/auth/`) | ES256 JWT or OIDC JWT | `DOLLHOUSE_AUTH_ENABLED=true` |
+| Console token auth | `createAuthMiddleware` (from `src/web/middleware/`) | 64-char hex token | `DOLLHOUSE_WEB_AUTH_ENABLED=true` or when unified auth is active |
+
+Mounting order in `startWebServer` (`src/web/server.ts`):
+
+```
+app.use('/api', unifiedAuthMiddleware)       // 1. JWT validation
+app.use('/api', consoleAuthMiddleware)       // 2. console token fallback
+```
+
+The console token middleware is constructed with `skipIfAlreadyAuthenticated: true` when unified auth is active. The `skipIfAlreadyAuthenticated` option checks for a truthy `res.locals.authClaims` — if the JWT middleware already authenticated the request, the console token middleware calls `next()` immediately.
+
+This means a browser client holding a console hex token continues to work alongside an MCP client holding a JWT. Both tokens are accepted on all `/api` routes; neither is required to present both.
+
+The console token auth middleware is always enforced (`enabled: true`) when unified auth is active, regardless of `DOLLHOUSE_WEB_AUTH_ENABLED`. This prevents a configuration where unified auth gates the MCP transport but the web console remains open.
+
+---
+
+### Adding a new auth provider
+
+To add a provider beyond `local` and `oidc`:
+
+**Step 1 — implement `IAuthProvider`:**
+
+```typescript
+// src/auth/MyCustomAuthProvider.ts
+export class MyCustomAuthProvider implements IAuthProvider {
+  readonly name = 'my-custom';
+
+  async validate(token: string): Promise<AuthResult> {
+    // Validate token against your identity source.
+    // Return { ok: true, claims } or { ok: false, reason }.
+  }
+
+  // Implement issue() only if your provider controls its own signing keys.
+}
+```
+
+The `validate()` method must be side-effect-free — it is called on every request. If the provider needs network calls (JWKS fetch, introspection endpoint), handle caching inside the implementation.
+
+**Step 2 — register in `AuthProviderFactory.ts`:**
+
+Add a branch before the `local` default:
+
+```typescript
+if (config.provider === 'my-custom') {
+  const { MyCustomAuthProvider } = await import('./MyCustomAuthProvider.js');
+  return new MyCustomAuthProvider({ /* config fields */ });
+}
+```
+
+Use a dynamic import (`await import(...)`) so the module is excluded from the import graph when the provider is not selected.
+
+**Step 3 — add the env var:**
+
+In `src/config/env.ts`, extend the `DOLLHOUSE_AUTH_PROVIDER` enum:
+
+```typescript
+DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'oidc', 'my-custom']).default('local'),
+```
+
+Add any provider-specific configuration fields (for example, `DOLLHOUSE_AUTH_MY_CUSTOM_ENDPOINT`) following the pattern of the existing OIDC fields.
+
+**Step 4 — update `AuthConfig`:**
+
+Add the new field to `AuthConfig` in `AuthProviderFactory.ts` and thread it from `AuthServiceRegistrar` through to the factory call.
+
+No other changes are required — the middleware, DI wiring, and token flow are provider-agnostic.
+
+---
+
+### The `envBool` helper
+
+All boolean environment variables in `src/config/env.ts` use `envBool()` rather than `z.coerce.boolean()`. This is a correctness fix, not a style preference.
+
+The problem with `z.coerce.boolean()`:
+
+```typescript
+// z.coerce.boolean() delegates to JavaScript's Boolean():
+Boolean('false')  // → true  (non-empty string)
+Boolean('0')      // → true  (non-empty string)
+Boolean('')       // → false (empty string)
+```
+
+Any string value other than the empty string coerces to `true`. Setting `DOLLHOUSE_AUTH_ENABLED=false` in a `.env` file would be silently read as `true`.
+
+`envBool` treats only `'true'` and `'1'` as true:
+
+```typescript
+const envBool = (defaultValue: boolean) =>
+  z.string().default(String(defaultValue)).transform(v => v === 'true' || v === '1');
+```
+
+Every boolean feature flag (`DOLLHOUSE_AUTH_ENABLED`, `DOLLHOUSE_WEB_AUTH_ENABLED`, `DOLLHOUSE_GATEKEEPER_ENABLED`, `DOLLHOUSE_SHARED_POOL_ENABLED`, and others) uses this helper. Any new boolean env var must use `envBool(defaultValue)` — never `z.coerce.boolean()` or `z.boolean()`.
+
+---
+
+### Testing auth code
+
+Auth unit tests live in `tests/unit/auth/`.
+
+#### `LocalDevAuthProvider.test.ts` patterns
+
+**Temporary directory key pair isolation:**
+
+Each test run generates its key pair into a fresh `os.tmpdir()` subdirectory created with `fs.mkdtemp`. The `afterEach` block removes it with `fs.rm({ recursive: true, force: true })`. This means:
+
+- Tests are hermetic — no shared key state across test cases.
+- Key generation is tested by asserting the key file exists after the first `issue()` call.
+- Key reuse is tested by constructing two `LocalDevAuthProvider` instances pointing to the same file and asserting the file's `mtimeMs` is unchanged after the second provider issues a token.
+
+**Round-trip coverage:**
+
+`issue()` followed by `validate()` covers the happy path. Failure cases (tampered signature, expired token, wrong key) are tested by mutating the token string or constructing a second provider with a different key file before calling `validate()` on the original provider.
+
+#### `authMiddleware.test.ts` patterns
+
+**Mock provider factory:**
+
+```typescript
+function createMockProvider(validateFn: (token: string) => Promise<AuthResult>): IAuthProvider {
+  return {
+    name: 'mock',
+    validate: validateFn,
+  };
+}
+```
+
+Passing a custom `validateFn` lets each test control the exact `AuthResult` without needing a real key pair or network call. Tests cover:
+
+- Missing `Authorization` header → `401`
+- Present but invalid token → `401` with provider's `reason` string in the response
+- Valid token → `200` with `res.locals.authClaims` reflected in the response body
+- `?token=` query parameter fallback → same as valid header
+- Public path bypass → `validate()` never called; `200` returned
+- Non-`Bearer` prefix (`Basic ...`) → treated as missing token, `401`
+
+**Test app construction:**
+
+```typescript
+function createTestApp(provider: IAuthProvider, publicPaths?: string[]): express.Express {
+  const app = express();
+  app.use('/api', createUnifiedAuthMiddleware({ provider, publicPaths }));
+  app.get('/api/data', (_req, res) => {
+    res.json({ data: 'protected', claims: res.locals.authClaims });
+  });
+  return app;
+}
+```
+
+Reflecting `res.locals.authClaims` in the response body lets assertions verify that claims were correctly attached without reaching for internal state. Use `supertest` for all HTTP assertions against this app.
 
 ---
 

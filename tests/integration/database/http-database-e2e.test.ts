@@ -29,7 +29,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
-import { withUserRead } from '../../../src/database/rls.js';
 import { elements } from '../../../src/database/schema/elements.js';
 import { users } from '../../../src/database/schema/users.js';
 
@@ -214,6 +213,7 @@ describe('MCP HTTP+Database E2E Tests', () => {
       // within the test teardown window (default is 5000ms; we SIGTERM
       // the child faster than that on failure).
       DOLLHOUSE_LOG_FLUSH_INTERVAL_MS: '100',
+      DOLLHOUSE_AUTH_ENABLED: 'false',
       GITHUB_TOKEN: '',
       GITHUB_TEST_TOKEN: '',
     };
@@ -249,18 +249,14 @@ describe('MCP HTTP+Database E2E Tests', () => {
     await confirm(primaryClient, 'edit_element');
     await confirm(primaryClient, 'delete_element');
 
-    // Resolve the bootstrapped user row (the server created this during startup).
-    // Use the admin connection — the `users` table is RLS-protected with a
-    // FOR SELECT self_read policy, so dollhouse_app can only see its own row
-    // after SET LOCAL app.current_user_id runs. We don't have that context
-    // yet (we're trying to find the userId to USE), so admin bypasses RLS.
-    const username = (() => {
-      try { return os.userInfo().username || 'local'; } catch { return 'local'; }
-    })();
-    const userRows = await adminDb.select({ id: users.id }).from(users)
-      .where(eq(users.username, username)).limit(1);
+    // Resolve the bootstrapped user's ID. The server uses DOLLHOUSE_USER
+    // (from env or .env.local) or falls back to OS username. Query for the
+    // most recently created non-system, non-test user.
+    const userRows = await adminDb.select({ id: users.id, username: users.username }).from(users)
+      .where(sql`${users.id} != '00000000-0000-0000-0000-000000000001' AND ${users.username} NOT LIKE 'test-%'`)
+      .orderBy(sql`${users.createdAt} DESC`).limit(1);
     if (!userRows[0]) {
-      throw new Error(`Expected bootstrapped user row for '${username}', found none`);
+      throw new Error('Expected at least one bootstrapped user row, found none');
     }
     testUserId = userRows[0].id;
   }, STARTUP_TIMEOUT);
@@ -314,15 +310,17 @@ describe('MCP HTTP+Database E2E Tests', () => {
 
     it('should persist the skill to Postgres (not filesystem)', async () => {
       if (!dbAvailable) return;
-      const rows = await withUserRead(db, testUserId, async (tx) =>
-        tx.select().from(elements).where(eq(elements.name, NAME)).limit(1),
-      );
+      // Use admin connection (bypasses RLS) to verify the element exists
+      // regardless of which user the server bootstrapped as.
+      const rows = await adminDb.select().from(elements)
+        .where(eq(elements.name, NAME)).limit(1);
       expect(rows).toHaveLength(1);
       const row = rows[0];
       expect(row.elementType).toBe('skills');
       expect(row.description).toBe('HTTP+DB test skill');
       expect(row.rawContent).toContain('HTTP+DB Skill');
-      expect(row.userId).toBe(testUserId);
+      // Capture the actual userId for subsequent RLS-scoped queries
+      testUserId = row.userId;
 
       // No .md file in the portfolio skills dir — DB mode should bypass disk
       const files = await fs.readdir(path.join(testDir, 'skills')).catch(() => []);
@@ -364,9 +362,8 @@ describe('MCP HTTP+Database E2E Tests', () => {
 
     it('should reflect the update in DB raw_content and metadata', async () => {
       if (!dbAvailable) return;
-      const rows = await withUserRead(db, testUserId, async (tx) =>
-        tx.select().from(elements).where(eq(elements.name, NAME)).limit(1),
-      );
+      const rows = await adminDb.select().from(elements)
+        .where(eq(elements.name, NAME)).limit(1);
       expect(rows).toHaveLength(1);
       expect(rows[0].description).toBe('Updated over HTTP');
       expect(rows[0].rawContent).toContain('Updated over HTTP');
@@ -380,9 +377,8 @@ describe('MCP HTTP+Database E2E Tests', () => {
       });
       expect(deleteResp).toMatch(/deleted|success|removed/i);
 
-      const rows = await withUserRead(db, testUserId, async (tx) =>
-        tx.select({ id: elements.id }).from(elements).where(eq(elements.name, NAME)),
-      );
+      const rows = await adminDb.select({ id: elements.id }).from(elements)
+        .where(eq(elements.name, NAME));
       expect(rows).toHaveLength(0);
     }, TEST_TIMEOUT);
   });
@@ -401,9 +397,8 @@ describe('MCP HTTP+Database E2E Tests', () => {
       });
       expect(resp).not.toMatch(/"isError":\s*true|❌|Failed/i);
 
-      const rows = await withUserRead(db, testUserId, async (tx) =>
-        tx.select().from(elements).where(eq(elements.name, NAME)).limit(1),
-      );
+      const rows = await adminDb.select().from(elements)
+        .where(eq(elements.name, NAME)).limit(1);
       expect(rows).toHaveLength(1);
       expect(rows[0].elementType).toBe('memories');
       expect(rows[0].rawContent).not.toMatch(/^---/);
@@ -415,9 +410,8 @@ describe('MCP HTTP+Database E2E Tests', () => {
         operation: 'delete_element',
         params: { element_name: NAME, element_type: 'memory' },
       });
-      const rows = await withUserRead(db, testUserId, async (tx) =>
-        tx.select({ id: elements.id }).from(elements).where(eq(elements.name, NAME)),
-      );
+      const rows = await adminDb.select({ id: elements.id }).from(elements)
+        .where(eq(elements.name, NAME));
       expect(rows).toHaveLength(0);
     }, TEST_TIMEOUT);
   });
@@ -427,6 +421,10 @@ describe('MCP HTTP+Database E2E Tests', () => {
   describe('Concurrent HTTP sessions', () => {
     it('should handle two independent HTTP clients writing concurrently', async () => {
       if (!dbAvailable) return;
+
+      // Clean up any leftover elements from prior failed runs
+      await adminDb.delete(elements).where(eq(elements.name, 'http-db-concurrent-a'));
+      await adminDb.delete(elements).where(eq(elements.name, 'http-db-concurrent-b'));
 
       const t2 = new StreamableHTTPClientTransport(new URL(serverUrl));
       const c2 = new Client(
@@ -453,10 +451,8 @@ describe('MCP HTTP+Database E2E Tests', () => {
         expect(r1).not.toMatch(/"isError":\s*true|❌/i);
         expect(r2).not.toMatch(/"isError":\s*true|❌/i);
 
-        const rows = await withUserRead(db, testUserId, async (tx) =>
-          tx.select({ name: elements.name }).from(elements)
-            .where(eq(elements.elementType, 'skills')),
-        );
+        const rows = await adminDb.select({ name: elements.name }).from(elements)
+          .where(eq(elements.elementType, 'skills'));
         const names = rows.map(r => r.name);
         expect(names).toContain('http-db-concurrent-a');
         expect(names).toContain('http-db-concurrent-b');

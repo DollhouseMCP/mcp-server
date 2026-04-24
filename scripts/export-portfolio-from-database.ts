@@ -10,14 +10,16 @@
  * This is a CLI-only operator tool. It is NOT exposed via MCP-AQL.
  *
  * Usage:
- *   npx tsx scripts/export-portfolio-from-database.ts --dry-run
- *   npx tsx scripts/export-portfolio-from-database.ts
- *   npx tsx scripts/export-portfolio-from-database.ts --output-dir /tmp/dollhouse-export
- *   npx tsx scripts/export-portfolio-from-database.ts --type skills
- *   npx tsx scripts/export-portfolio-from-database.ts --type skills --type personas
- *   npx tsx scripts/export-portfolio-from-database.ts --name "code-reviewer"
- *   npx tsx scripts/export-portfolio-from-database.ts --name "code-reviewer" --name "architect"
- *   npx tsx scripts/export-portfolio-from-database.ts --type memories --output-dir /tmp/backup
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble --dry-run
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble --output-dir /tmp/export
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble --type skills
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble --type skills --type personas
+ *   npx tsx scripts/export-portfolio-from-database.ts --user dibble --name "code-reviewer"
+ *
+ * Required:
+ *   --user <username>  The database user whose elements to export.
+ *                      Must match the 'sub' claim of the JWT token used to connect.
  *
  * Required environment:
  *   DOLLHOUSE_DATABASE_URL       — app role connection (RLS enforced)
@@ -36,7 +38,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
 import { eq, and, inArray } from 'drizzle-orm';
-import { bootstrapDatabase } from '../src/database/bootstrap.js';
+import { createDatabaseConnection } from '../src/database/connection.js';
+import { UserIdentityService } from '../src/services/UserIdentityService.js';
 import { withUserRead } from '../src/database/rls.js';
 import { elements } from '../src/database/schema/elements.js';
 import { ElementType } from '../src/portfolio/types.js';
@@ -115,6 +118,15 @@ async function main(): Promise<void> {
   if (dryRun) console.log(`Mode:             DRY RUN (no files will be written)\n`);
   else console.log(`Mode:             LIVE EXPORT\n`);
 
+  // Require --user
+  const username = getArgValue('--user');
+  if (!username) {
+    console.error('Error: --user <username> is required.');
+    console.error('This must match the "sub" claim of the JWT token used to connect.');
+    console.error('Example: npm run db:export -- --user dibble');
+    process.exit(1);
+  }
+
   // Verify database configuration
   const dbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   if (!dbUrl) {
@@ -122,19 +134,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Bootstrap database
+  // Connect to database and resolve user
   console.log('Connecting to database...');
   const adminUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
-  const bootstrap = await bootstrapDatabase({
-    connectionUrl: dbUrl,
-    adminConnectionUrl: adminUrl,
-    poolSize: 5,
-    ssl: (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer',
-  });
+  const ssl = (process.env.DOLLHOUSE_DATABASE_SSL as 'disable' | 'prefer' | 'require') || 'prefer';
+  const connection = createDatabaseConnection({ connectionUrl: dbUrl, poolSize: 5, ssl });
+  const db = connection.db;
 
-  const db = bootstrap.db;
-  const userId = bootstrap.userId;
-  console.log(`Connected. User: ${userId}\n`);
+  const identityService = new UserIdentityService({
+    db,
+    adminConnectionUrl: adminUrl,
+    appConnectionUrl: dbUrl,
+    ssl,
+  });
+  const userId = await identityService.resolveOrCreateUser(username);
+  console.log(`Connected. Exporting as user '${username}' (${userId})\n`);
 
   // Query elements
   const rows = await withUserRead(db, userId, async (tx) => {
@@ -157,7 +171,7 @@ async function main(): Promise<void> {
 
   if (rows.length === 0) {
     console.log('No elements found matching the filters. Nothing to export.');
-    await bootstrap.connection.close();
+    await connection.close();
     process.exit(0);
   }
 
@@ -183,7 +197,7 @@ async function main(): Promise<void> {
     }
     console.log('Dry run complete. No files were written.');
     console.log('Run without --dry-run to perform the export.');
-    await bootstrap.connection.close();
+    await connection.close();
     process.exit(0);
   }
 
@@ -216,7 +230,7 @@ async function main(): Promise<void> {
   }
 
   // Close connection
-  await bootstrap.connection.close();
+  await connection.close();
 
   // Report
   console.log(`\n=== Export Complete ===`);

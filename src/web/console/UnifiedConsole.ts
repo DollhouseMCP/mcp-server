@@ -65,6 +65,8 @@ export interface UnifiedConsoleOptions {
   wireSSEBroadcasts: (webResult: { logBroadcast?: (entry: UnifiedLogEntry) => void; metricsOnSnapshot?: (snapshot: MetricSnapshot) => void }, metricsSink?: MemoryMetricsSink) => void;
   /** Console port override from config file. Falls back to env var if not provided. */
   port?: number;
+  /** Unified JWT auth middleware. When provided, mounted on the web console API routes. */
+  unifiedAuthMiddleware?: import('express').RequestHandler;
 }
 
 /**
@@ -220,6 +222,7 @@ async function startAsLeader(
     additionalRouters: [ingestResult.router],
     tokenStore,
     ...(options.mcpAqlHandler ? { mcpAqlHandler: options.mcpAqlHandler } : {}),
+    ...(options.unifiedAuthMiddleware ? { unifiedAuthMiddleware: options.unifiedAuthMiddleware } : {}),
   };
   // bindAndListen now handles EADDRINUSE by finding and killing the stale
   // process on the port, then retrying. No external retry loop needed.

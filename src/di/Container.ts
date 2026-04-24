@@ -280,6 +280,12 @@ export class DollhouseContainer {
       await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
     }
 
+    // Unified auth (JWT) — feature-flag gated (default: off).
+    // Must run after SecurityServiceRegistrar (ContextTracker) and
+    // DatabaseServiceRegistrar (UserIdentityService).
+    const { AuthServiceRegistrar } = await import('./registrars/AuthServiceRegistrar.js');
+    await new AuthServiceRegistrar().bootstrapAndRegister(this);
+
     // Shared pool services — feature-flag gated (default: off).
     // Must run after PathsServiceRegistrar and DatabaseServiceRegistrar
     // so PathService and (optionally) DatabaseInstance are available.
@@ -626,6 +632,9 @@ export class DollhouseContainer {
       const configPort = configManager.getSetting<number>('console.port');
 
       const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
+      const unifiedAuthMiddleware = this.hasRegistration('AuthMiddleware')
+        ? this.resolve<import('express').RequestHandler>('AuthMiddleware')
+        : undefined;
       const result = await startUnifiedConsole({
         sessionId,
         portfolioDir: portfolioManager.getBaseDir(),
@@ -635,6 +644,7 @@ export class DollhouseContainer {
         registerLogSink: (sink) => logManager.registerSink(sink),
         wireSSEBroadcasts: (webResult, mSink) => this.wireSSEBroadcasts(webResult, mSink),
         port: configPort,
+        unifiedAuthMiddleware,
       });
 
       logger.info(`[Container] Web console started as ${result.role}`);
@@ -922,6 +932,14 @@ export class DollhouseContainer {
       this.resolve('ContextTracker')
     );
 
+    // In DB mode, wire identity handler to create/resolve DB users on set_user_identity
+    if (this.hasRegistration('UserIdentityService')) {
+      identityHandler.setDatabaseIdentityServices(
+        this.resolve('UserIdentityService'),
+        this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      );
+    }
+
     const configHandler = new ConfigHandler(
       this.resolve('ConfigManager'),
       initService,
@@ -980,6 +998,8 @@ export class DollhouseContainer {
       gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
       circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
       resilienceMetrics: this.resolve<ResilienceMetricsTracker>('ResilienceMetricsTracker'),
+      activationRegistry: this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      isDbMode: this.hasRegistration('DatabaseInstance'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },

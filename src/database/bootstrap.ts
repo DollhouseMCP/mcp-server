@@ -95,13 +95,18 @@ export async function bootstrapDatabase(
  * user creation is handled by the authentication layer.
  */
 async function ensureCurrentUser(db: DatabaseInstance): Promise<string> {
-  // os.userInfo() throws on systems without a passwd entry (some containers).
-  // Fall back to 'local' so the stdio path still bootstraps.
+  // DOLLHOUSE_USER takes priority — it's the operator-chosen identity.
+  // Falls back to OS username for local/stdio mode.
   let username: string;
-  try {
-    username = os.userInfo().username || 'local';
-  } catch {
-    username = 'local';
+  const envUser = process.env.DOLLHOUSE_USER?.trim();
+  if (envUser) {
+    username = envUser;
+  } else {
+    try {
+      username = os.userInfo().username || 'local';
+    } catch {
+      username = 'local';
+    }
   }
 
   // Atomic upsert: insert if not exists, otherwise no-op

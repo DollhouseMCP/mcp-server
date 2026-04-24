@@ -29,6 +29,8 @@ export interface StreamableHttpRuntimeOptions {
   rateLimitMaxRequests?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  /** Express middleware for authentication. Mounted before MCP handlers when provided. */
+  authMiddleware?: import('express').RequestHandler;
   /** Called when a new HTTP session is initialized (after MCP handshake). */
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
@@ -202,7 +204,7 @@ async function closeHttpServer(httpServer: HttpServer): Promise<void> {
 }
 
 export async function createStreamableHttpRuntime(
-  createSessionAttachment: (transport: StreamableHTTPServerTransport) => Promise<StreamableHttpSessionAttachment>,
+  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: import('../auth/IAuthProvider.js').AuthClaims) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
   const host = normalizeUserInput(options.host ?? env.DOLLHOUSE_HTTP_HOST) ?? env.DOLLHOUSE_HTTP_HOST;
@@ -351,6 +353,7 @@ export async function createStreamableHttpRuntime(
     logger.error(`[StreamableHTTP] Failed to handle MCP ${methodName} request`, {
       sessionId,
       error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
 
     if (!res.headersSent) {
@@ -381,7 +384,7 @@ export async function createStreamableHttpRuntime(
     await replenishPoolPromise;
   };
 
-  const prepareSession = async (): Promise<PreparedSessionRecord> => {
+  const prepareSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
     let attachment: StreamableHttpSessionAttachment | null = null;
 
     const transport = new StreamableHTTPServerTransport({
@@ -420,7 +423,7 @@ export async function createStreamableHttpRuntime(
       }
     };
 
-    attachment = await createSessionAttachment(transport);
+    attachment = await createSessionAttachment(transport, authClaims);
 
     return {
       attachment,
@@ -434,16 +437,20 @@ export async function createStreamableHttpRuntime(
     };
   };
 
-  const getOrCreatePreparedSession = async (): Promise<PreparedSessionRecord> => {
-    const pooledSession = pooledSessions.pop();
-    if (pooledSession) {
-      sessionTelemetry.poolHits += 1;
-      void maintainSessionPool();
-      return pooledSession;
+  const getOrCreatePreparedSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
+    // Pooled sessions don't carry auth claims — they were pre-created without
+    // knowing who would connect. When auth is enabled, always create fresh.
+    if (!authClaims) {
+      const pooledSession = pooledSessions.pop();
+      if (pooledSession) {
+        sessionTelemetry.poolHits += 1;
+        void maintainSessionPool();
+        return pooledSession;
+      }
     }
 
     sessionTelemetry.poolMisses += 1;
-    return prepareSession();
+    return prepareSession(authClaims);
   };
 
   app.get('/', (_req, res) => {
@@ -491,6 +498,12 @@ export async function createStreamableHttpRuntime(
     });
   });
 
+  // Mount auth middleware on MCP path when provided
+  if (options.authMiddleware) {
+    app.use(mcpPath, options.authMiddleware);
+    logger.info('[StreamableHTTP] Auth middleware mounted on MCP path', { mcpPath });
+  }
+
   app.post(mcpPath, async (req, res) => {
     if (closingPromise) {
       respondWithJsonRpcError(res, 503, 'Server shutting down', getRequestId(req));
@@ -521,7 +534,7 @@ export async function createStreamableHttpRuntime(
         return;
       }
 
-      const preparedSession = await getOrCreatePreparedSession();
+      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims);
 
       try {
         await preparedSession.transport.handleRequest(req, res, req.body);

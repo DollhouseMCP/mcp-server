@@ -947,22 +947,60 @@ async function startStreamableHttpServer(
   // Activate HTTP mode error handling (no process.exit on uncaught exceptions)
   setHttpModeActive(true);
 
-  // Phase 4: when database mode is active, the session's userId must be the
-  // bootstrapped DB UUID so SessionContext carries a RLS-compatible identity.
-  // Multi-tenant auth (Phase 3+) will override this at the session edge with
-  // the authenticated user's UUID per request.
-  const httpSessionUserId = container.hasRegistration('BootstrappedUserId')
+  // Resolve auth middleware if enabled (unified JWT auth for HTTP transport)
+  const authMiddleware = container.hasRegistration('AuthMiddleware')
+    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    : undefined;
+
+  // Fallback userId for unauthenticated sessions (DB mode bootstrap user)
+  const fallbackUserId = container.hasRegistration('BootstrappedUserId')
     ? container.resolve<string>('BootstrappedUserId')
     : undefined;
 
-  return createStreamableHttpRuntime(async (transport) => {
-    const sessionContext = createHttpSession({ userId: httpSessionUserId });
+  // Resolve UserIdentityService for auth-driven DB user creation
+  const userIdentityService = container.hasRegistration('UserIdentityService')
+    ? container.resolve<import('./services/UserIdentityService.js').UserIdentityService>('UserIdentityService')
+    : undefined;
+
+  const activationRegistry = container.hasRegistration('SessionActivationRegistry')
+    ? container.resolve<import('./state/SessionActivationState.js').SessionActivationRegistry>('SessionActivationRegistry')
+    : undefined;
+
+  return createStreamableHttpRuntime(async (transport, authClaims) => {
+    // When auth is active, resolve the DB user UUID BEFORE creating the
+    // session — the session's userId must be a UUID, not a username string.
+    let sessionUserId = fallbackUserId;
+    if (authClaims?.sub && userIdentityService) {
+      try {
+        sessionUserId = await userIdentityService.resolveOrCreateUser(
+          authClaims.sub,
+          authClaims.displayName,
+        );
+      } catch (err) {
+        logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const sessionContext = createHttpSession({
+      userId: sessionUserId,
+      displayName: authClaims?.displayName,
+      email: authClaims?.email,
+      tenantId: authClaims?.tenantId,
+    });
     const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);
+
+    // Store the resolved DB UUID on the session activation state so
+    // UserIdResolver picks it up for RLS-scoped queries.
+    if (authClaims?.sub && activationRegistry && sessionUserId !== fallbackUserId) {
+      const state = activationRegistry.getOrCreate(sessionContext.sessionId);
+      state.dbUserId = sessionUserId;
+    }
 
     logger.info('[HTTP] Session connected', {
       sessionId: sessionContext.sessionId,
       userId: sessionContext.userId,
+      authenticated: !!authClaims,
     });
 
     return {
@@ -973,6 +1011,7 @@ async function startStreamableHttpServer(
     };
   }, {
     ...options,
+    authMiddleware,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());

@@ -38,7 +38,7 @@ import { FileWatchService } from '../../services/FileWatchService.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
-import { type IStorageLayer } from '../../storage/IStorageLayer.js';
+import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import {
@@ -686,6 +686,12 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Returns both the normalized relative path and its absolute counterpart.
    */
   protected async normalizeAndValidatePath(filePath: string): Promise<{ relativePath: string; absolutePath: string }> {
+    // In database mode, the "path" is a UUID — skip filesystem normalization
+    // and validation. The UUID is used directly as the key for readContent().
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return { relativePath: filePath, absolutePath: filePath };
+    }
+
     const sanitizedPath = sanitizeInput(filePath, 255);
 
     if (!sanitizedPath || sanitizedPath.trim().length === 0 || sanitizedPath === '.' || sanitizedPath === path.sep) {

@@ -9,7 +9,7 @@
  */
 
 import { IElement } from '../../types/elements/IElement.js';
-import { IStorageLayer } from '../../storage/IStorageLayer.js';
+import { IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { ElementCache } from './ElementCache.js';
 
 /**
@@ -41,7 +41,18 @@ export class ElementResolver<T extends IElement> {
     const cachedElement = await this.findInCache(identifier);
     if (cachedElement) return cachedElement;
 
-    const indexedPath = this.storageLayer.getPathByName(identifier);
+    const isDatabaseBacked = isWritableStorageLayer(this.storageLayer);
+
+    let indexedPath = this.storageLayer.getPathByName(identifier);
+
+    // In DB mode, if the index is empty (no scan yet), trigger a scan
+    // to populate the name→UUID map before falling back to filename-based
+    // lookup (which cannot work with UUIDs).
+    if (!indexedPath && isDatabaseBacked && !this.storageLayer.hasCompletedScan()) {
+      await this.storageLayer.scan();
+      indexedPath = this.storageLayer.getPathByName(identifier);
+    }
+
     if (indexedPath) {
       try {
         return await this.host.load(indexedPath);
@@ -50,8 +61,12 @@ export class ElementResolver<T extends IElement> {
       }
     }
 
-    const directLoadAttempt = await this.tryDirectLoad(identifier);
-    if (directLoadAttempt) return directLoadAttempt;
+    // File-mode fallback: try constructing filenames and loading directly.
+    // Skipped in DB mode — filenames are not valid database identifiers.
+    if (!isDatabaseBacked) {
+      const directLoadAttempt = await this.tryDirectLoad(identifier);
+      if (directLoadAttempt) return directLoadAttempt;
+    }
 
     if (this.storageLayer.hasCompletedScan()) {
       return undefined;
