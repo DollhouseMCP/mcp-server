@@ -182,13 +182,13 @@ describe('AgentManager v2 Metadata Persistence', () => {
     );
     (mockFileLockManager as any).atomicWriteFile = jest.fn(
       async (filePath: string, content: string, options?: any) => {
-        const fsImport = await import('fs/promises');
+        const fsImport = await import('node:fs/promises');
         await fsImport.writeFile(filePath, content, options);
       }
     );
     (mockFileLockManager as any).atomicReadFile = jest.fn(
       async (filePath: string, options?: any) => {
-        const fsImport = await import('fs/promises');
+        const fsImport = await import('node:fs/promises');
         return fsImport.readFile(filePath, options);
       }
     );

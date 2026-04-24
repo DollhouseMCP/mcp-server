@@ -64,7 +64,7 @@ export class ElementEventCoordinator<T extends IElement> {
     error?: unknown;
   }): ElementEventPayload {
     const elementId = params.element?.id;
-    const generation = elementId !== undefined ? this.cache.getGeneration(elementId) : undefined;
+    const generation = elementId === undefined ? undefined : this.cache.getGeneration(elementId);
     return {
       correlationId: params.correlationId,
       elementType: this.host.elementType,

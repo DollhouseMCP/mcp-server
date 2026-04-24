@@ -25,10 +25,8 @@ services:
     image: postgres:17-alpine
     container_name: dollhousemcp-postgres
     restart: unless-stopped
-    environment:
-      POSTGRES_DB: dollhousemcp
-      POSTGRES_USER: dollhouse
-      POSTGRES_PASSWORD: ${DOLLHOUSE_DB_PASSWORD:-dollhouse}
+    env_file:
+      - .env.docker
     ports:
       - "5432:5432"
     volumes:

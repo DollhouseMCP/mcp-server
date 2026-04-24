@@ -35,16 +35,16 @@ export class DatabaseProvenanceStore implements IProvenanceStore {
   ): Promise<ProvenanceLookupResult> {
     const conditions = [eq(elementProvenance.origin, origin)];
 
-    if (sourceUrl !== null) {
-      conditions.push(eq(elementProvenance.sourceUrl, sourceUrl));
-    } else {
+    if (sourceUrl === null) {
       conditions.push(isNull(elementProvenance.sourceUrl));
+    } else {
+      conditions.push(eq(elementProvenance.sourceUrl, sourceUrl));
     }
 
-    if (sourceVersion !== null) {
-      conditions.push(eq(elementProvenance.sourceVersion, sourceVersion));
-    } else {
+    if (sourceVersion === null) {
       conditions.push(isNull(elementProvenance.sourceVersion));
+    } else {
+      conditions.push(eq(elementProvenance.sourceVersion, sourceVersion));
     }
 
     const rows = await this.db

@@ -26,10 +26,14 @@ const reset = args.includes('--reset');
 const COMPOSE_FILE = path.join(process.cwd(), 'docker', 'docker-compose.db.yml');
 const CONTAINER_NAME = 'dollhousemcp-postgres';
 const DB_NAME = 'dollhousemcp';
-const ADMIN_URL = process.env.DOLLHOUSE_DATABASE_ADMIN_URL
-  ?? `postgres://dollhouse:dollhouse@localhost:5432/${DB_NAME}`;
-const APP_URL = process.env.DOLLHOUSE_DATABASE_URL
-  ?? `postgres://dollhouse_app:dollhouse_app@localhost:5432/${DB_NAME}`;
+const DEV_HOST = 'localhost:5432';
+
+function buildDevUrl(user: string): string {
+  return `postgres://${user}:${user}@${DEV_HOST}/${DB_NAME}`;
+}
+
+const ADMIN_URL = process.env.DOLLHOUSE_DATABASE_ADMIN_URL ?? buildDevUrl('dollhouse');
+const APP_URL = process.env.DOLLHOUSE_DATABASE_URL ?? buildDevUrl('dollhouse_app');
 
 function run(cmd: string, opts?: { silent?: boolean }): string {
   try {

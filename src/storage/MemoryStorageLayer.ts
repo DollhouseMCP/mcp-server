@@ -422,54 +422,46 @@ export class MemoryStorageLayer implements IStorageLayer {
     try {
       const exists = await this.backend.directoryExists(dir);
       if (!exists) {
-        const removedPaths = state.index.getPaths();
-        state.index.clear();
-        state.manifest.clear();
-        state.lastScanTimestamp = Date.now();
-        return {
-          added: [],
-          modified: [],
-          removed: removedPaths,
-          unchanged: [],
-        };
+        return this.handleMissingDirectory(state);
       }
-
-      // 1. Discover subdirectories
-      const subdirs = await this.discoverSubdirectoriesForDir(dir);
-
-      // 2. Enumerate all .yaml files across subdirectories
-      const allRelativePaths = await this.enumerateYamlFiles(dir, subdirs);
-
-      // 3. Stat all files
-      const stats = await this.backend.statMany(dir, allRelativePaths);
-
-      // 4. Diff against manifest
-      const diff = state.manifest.diff(stats);
-
-      const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
-      if (hasChanges) {
-        logger.debug(`MemoryStorageLayer.scan: DISK SCAN — ${allRelativePaths.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
-      }
-
-      // 5. For added/modified: read file, extract metadata, update index
-      const toIndex = [...diff.added, ...diff.modified];
-      const indexUpdated = await this.indexChangedFiles(dir, toIndex, diff.removed, stats, state);
-
-      // 7. Update manifest and timestamp
-      state.manifest.update(stats);
-      state.lastScanTimestamp = Date.now();
-
-      // 8. Schedule debounced _index.json write if index changed
-      if (indexUpdated) {
-        state.indexFile.scheduleWrite(state.index.getAll());
-      }
-
-      return diff;
+      return await this.scanExistingDirectory(dir, state);
     } catch (error) {
       logger.error('MemoryStorageLayer.performScan failed', error);
-      state.lastScanTimestamp = Date.now(); // Prevent retry storms
+      state.lastScanTimestamp = Date.now();
       return EMPTY_DIFF;
     }
+  }
+
+  private handleMissingDirectory(state: MemoryDirScanState): ManifestDiffResult {
+    const removedPaths = state.index.getPaths();
+    state.index.clear();
+    state.manifest.clear();
+    state.lastScanTimestamp = Date.now();
+    return { added: [], modified: [], removed: removedPaths, unchanged: [] };
+  }
+
+  private async scanExistingDirectory(dir: string, state: MemoryDirScanState): Promise<ManifestDiffResult> {
+    const subdirs = await this.discoverSubdirectoriesForDir(dir);
+    const allRelativePaths = await this.enumerateYamlFiles(dir, subdirs);
+    const stats = await this.backend.statMany(dir, allRelativePaths);
+    const diff = state.manifest.diff(stats);
+
+    const hasChanges = diff.added.length > 0 || diff.modified.length > 0 || diff.removed.length > 0;
+    if (hasChanges) {
+      logger.debug(`MemoryStorageLayer.scan: DISK SCAN — ${allRelativePaths.length} files, ${diff.added.length} added, ${diff.modified.length} modified, ${diff.removed.length} removed`);
+    }
+
+    const toIndex = [...diff.added, ...diff.modified];
+    const indexUpdated = await this.indexChangedFiles(dir, toIndex, diff.removed, stats, state);
+
+    state.manifest.update(stats);
+    state.lastScanTimestamp = Date.now();
+
+    if (indexUpdated) {
+      state.indexFile.scheduleWrite(state.index.getAll());
+    }
+
+    return diff;
   }
 
   private async enumerateYamlFiles(dir: string, subdirs: string[]): Promise<string[]> {

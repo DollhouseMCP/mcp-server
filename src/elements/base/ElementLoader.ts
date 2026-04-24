@@ -144,7 +144,7 @@ export class ElementLoader<T extends IElement> {
 
   private async readContent(relativePath: string, absolutePath: string): Promise<string> {
     if (isWritableStorageLayer(this.storageLayer)) {
-      return (this.storageLayer as IWritableStorageLayer).readContent(relativePath);
+      return this.storageLayer.readContent(relativePath);
     }
     return this.fileOperations.readElementFile(absolutePath, this.host.elementType, {
       source: `${this.host.constructor?.name ?? 'ElementLoader'}.load`,

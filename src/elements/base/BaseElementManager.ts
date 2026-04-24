@@ -282,9 +282,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       get elementDir() { return self.elementDir; },
     };
-    // `self` alias needed for the getter closure — `this` in class body is fine here:
     // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this;
+    const self = this; // NOSONAR — needed for object literal getters where `this` rebinds
 
     // ── Build ElementCache ────────────────────────────────────────────────
     this._cache = new ElementCache<T>(elementType, cacheHost, {

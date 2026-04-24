@@ -14,9 +14,9 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { eq } from 'drizzle-orm';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import * as os from 'os';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import * as os from 'node:os';
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import { createDatabaseConnection, type DatabaseInstance } from '../../../src/database/connection.js';
 import { withUserRead } from '../../../src/database/rls.js';

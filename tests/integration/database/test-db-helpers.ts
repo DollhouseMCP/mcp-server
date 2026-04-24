@@ -47,25 +47,21 @@ let testUserIdB: string | null = null;
  * Reuses a single connection across all tests in a suite.
  */
 export function getTestDb(): DatabaseInstance {
-  if (!dbConnection) {
-    dbConnection = createDatabaseConnection({
-      connectionUrl: TEST_DB_URL,
-      poolSize: 5,
-      ssl: 'disable',
-    });
-  }
+  dbConnection ??= createDatabaseConnection({
+    connectionUrl: TEST_DB_URL,
+    poolSize: 5,
+    ssl: 'disable',
+  });
   return dbConnection.db;
 }
 
 /** Get or create an admin connection for identity bootstrap. */
 function getAdminDb(): DatabaseInstance {
-  if (!adminConnection) {
-    adminConnection = createDatabaseConnection({
-      connectionUrl: TEST_DB_ADMIN_URL,
-      poolSize: 2,
-      ssl: 'disable',
-    });
-  }
+  adminConnection ??= createDatabaseConnection({
+    connectionUrl: TEST_DB_ADMIN_URL,
+    poolSize: 2,
+    ssl: 'disable',
+  });
   return adminConnection.db;
 }
 
@@ -212,10 +208,10 @@ export function buildSkillContent(name: string, opts?: {
   return [
     '---',
     `name: ${name}`,
-    `description: ${opts?.description ?? `Test skill ${name}`}`,
+    `description: ${opts?.description ?? 'Test skill ' + name}`,
     `author: ${opts?.author ?? 'test-author'}`,
     `version: ${opts?.version ?? '1.0.0'}`,
-    opts?.tags?.length ? `tags:\n${opts.tags.map(t => `  - ${t}`).join('\n')}` : 'tags: []',
+    opts?.tags?.length ? 'tags:\n' + opts.tags.map(t => '  - ' + t).join('\n') : 'tags: []',
     '---',
     '',
     `This is the body content for ${name}.`,
@@ -232,8 +228,8 @@ export function buildAgentContent(name: string, activates?: {
   const activatesBlock = activates
     ? [
         'activates:',
-        ...(activates.personas?.length ? [`  personas:\n${activates.personas.map(p => `    - ${p}`).join('\n')}`] : []),
-        ...(activates.skills?.length ? [`  skills:\n${activates.skills.map(s => `    - ${s}`).join('\n')}`] : []),
+        ...(activates.personas?.length ? ['  personas:\n' + activates.personas.map(p => '    - ' + p).join('\n')] : []),
+        ...(activates.skills?.length ? ['  skills:\n' + activates.skills.map(s => '    - ' + s).join('\n')] : []),
       ].join('\n')
     : '';
 

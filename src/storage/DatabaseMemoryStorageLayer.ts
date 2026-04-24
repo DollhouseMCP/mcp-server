@@ -443,7 +443,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       content,
       sanitizedContent: DatabaseMemoryStorageLayer.stringOrNull(e.sanitizedContent),
       sanitizedPatterns: DatabaseMemoryStorageLayer.objectOrEmpty(e.sanitizedPatterns),
-      tags: (Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string') : []) as string[],
+      tags: Array.isArray(e.tags) ? e.tags.filter((t): t is string => typeof t === 'string') : [],
       entryMetadata: DatabaseMemoryStorageLayer.objectOrEmpty(e.metadata),
       privacyLevel: DatabaseMemoryStorageLayer.stringOrNull(e.privacyLevel),
       trustLevel: DatabaseMemoryStorageLayer.stringOrNull(e.trustLevel),
