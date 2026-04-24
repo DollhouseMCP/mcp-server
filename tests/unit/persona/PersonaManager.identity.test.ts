@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 jest.mock('../../../src/utils/logger.js', () => ({
   logger: {
@@ -62,6 +63,7 @@ function createPersonaManager(contextTracker?: ContextTracker) {
     serializationService: new SerializationService(),
     metadataService: mockMetadataService,
     eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     contextTracker,
   });
 }

@@ -15,8 +15,10 @@
 #
 # Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
+# Set DOLLHOUSE_RUN_DIR to override the runtime-state directory (used by tests
+# to isolate port-file writes from the shared ~/.dollhouse/run/ location).
 
-PORT_FILE="$HOME/.dollhouse/run/permission-server.port"
+PORT_FILE="${DOLLHOUSE_RUN_DIR:-$HOME/.dollhouse/run}/permission-server.port"
 MAX_RETRIES=2
 INITIAL_TIMEOUT=5
 HOOK_PLATFORM="${DOLLHOUSE_HOOK_PLATFORM:-claude_code}"

@@ -18,6 +18,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -54,6 +55,7 @@ describe('MemoryManager', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     }));
 
     // Resolve instances from container

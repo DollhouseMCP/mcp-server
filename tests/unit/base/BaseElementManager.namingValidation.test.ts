@@ -20,6 +20,7 @@ import { FileOperationsService } from '../../../src/services/FileOperationsServi
 import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 import { logger } from '../../../src/utils/logger.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../src/security/fileLockManager.js');
@@ -161,7 +162,7 @@ describe('BaseElementManager load() without naming convention enforcement', () =
     manager = new TestableElementManager(
       portfolioManager,
       fileLockManager,
-      { elementDirOverride: tempDir, eventDispatcher: new ElementEventDispatcher() },
+      { elementDirOverride: tempDir, eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(fileOperationsService) },
       fileOperationsService,
       validationRegistry
     );

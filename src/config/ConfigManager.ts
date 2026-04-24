@@ -320,14 +320,14 @@ export class ConfigManager {
     }
   }
 
-  constructor(fileOperations: IFileOperationsService, osModule: typeof os) {
+  constructor(fileOperations: IFileOperationsService, osModule: typeof os, configDir?: string) {
     this.fileOperations = fileOperations;
     this.os = osModule;
 
-    // Initialize paths - use test directory if in test environment
-    // NOTE: Using process.env directly here (not cached env.TEST_CONFIG_DIR)
-    // to allow tests to dynamically override the config directory
-    if (env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
+    // Priority: explicit param (from DI/PathService) > test env > default
+    if (configDir) {
+      this.configDir = configDir;
+    } else if (env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
       this.configDir = process.env.TEST_CONFIG_DIR;
     } else {
       this.configDir = path.join(this.os.homedir(), '.dollhouse');

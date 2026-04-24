@@ -110,6 +110,8 @@ export interface AuthMiddlewareOptions {
    * the full pathname starting with `/` — e.g. `/api/health`, `/api/setup/version`.
    */
   publicPathPrefixes?: string[];
+  /** Skip this middleware if a prior middleware already authenticated the request. */
+  skipIfAlreadyAuthenticated?: boolean;
   /** Optional label for log messages (e.g. "api" or "sse"). */
   label?: string;
 }
@@ -134,9 +136,15 @@ export interface AuthMiddlewareOptions {
 export function createAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
   const { store, enabled, label = 'console' } = options;
   const publicPaths = options.publicPathPrefixes ?? [];
+  const skipIfAlreadyAuth = options.skipIfAlreadyAuthenticated ?? false;
 
   return (req: Request, res: Response, next: NextFunction) => {
     if (!enabled) {
+      return next();
+    }
+
+    // Skip if a prior middleware (e.g. unified JWT auth) already authenticated
+    if (skipIfAlreadyAuth && res.locals.authClaims) {
       return next();
     }
 

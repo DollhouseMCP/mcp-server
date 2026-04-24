@@ -33,12 +33,14 @@ export interface CollectionIndexManagerConfig {
   maxRetryDelayMs?: number;
   cacheDir?: string;
   fileOperations: IFileOperationsService;
+  /** Override the collection index URL. When set, fetches from this URL
+   *  instead of the default DollhouseMCP GitHub Pages index. */
+  indexUrl?: string;
 }
 
 export class CollectionIndexManager {
-  // Use GitHub Pages index which is automatically updated by workflow
-  // Old URL was stale: https://raw.githubusercontent.com/DollhouseMCP/collection/main/public/collection-index.json
-  private readonly INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
+  private static readonly DEFAULT_INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
+  private readonly INDEX_URL: string;
   private readonly TTL_MS: number;
   private readonly FETCH_TIMEOUT_MS: number;
   private readonly MAX_RETRIES: number;
@@ -72,6 +74,7 @@ export class CollectionIndexManager {
   private readonly JSON_INDENT = 2;
   
   constructor(config: CollectionIndexManagerConfig) {
+    this.INDEX_URL = config.indexUrl || CollectionIndexManager.DEFAULT_INDEX_URL;
     // Configuration with environment variable overrides
     this.TTL_MS = config.ttlMs || this.DEFAULT_TTL_MS;
     this.FETCH_TIMEOUT_MS = this.parseFetchTimeout(config.fetchTimeoutMs);

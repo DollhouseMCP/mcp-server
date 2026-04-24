@@ -51,7 +51,7 @@ describe('deleteElement helper', () => {
       },
       memoryManager: {
         list: jest.fn().mockResolvedValue([
-          { metadata: { name: 'test-memory' }, id: 'memory-1', filePath: '/mock/memories/2025-10-24/test-memory.yaml' },
+          { metadata: { name: 'test-memory' }, id: 'memory-1', filePath: '/mock/memories/2025-10-24/test-memory.yaml', getFilePath: () => '/mock/memories/2025-10-24/test-memory.yaml', getStatus: () => 'inactive' },
         ]),
         delete: jest.fn().mockResolvedValue(undefined),
         clearCache: jest.fn(),
@@ -110,19 +110,14 @@ describe('deleteElement helper', () => {
     });
 
     it('should accept valid element type: memories', async () => {
-      // Mock exists to make the file appear to exist (firstExisting needs this)
-      mockFileOperations.exists.mockResolvedValueOnce(true);
-
       const result = await deleteElement(mockContext, {
         name: 'test-memory',
         type: ElementType.MEMORY,
       });
 
-      // Memories use fileOperations.deleteFile
-      expect(mockFileOperations.deleteFile).toHaveBeenCalledWith(
-        '/mock/memories/2025-10-24/test-memory.yaml',
-        ElementType.MEMORY,
-        expect.objectContaining({ source: 'deleteElement.deleteMemory' })
+      // Handler delegates to memoryManager.delete()
+      expect(mockContext.memoryManager.delete).toHaveBeenCalledWith(
+        '/mock/memories/2025-10-24/test-memory.yaml'
       );
       expect(result.content[0].text).toContain('✅');
     });
@@ -236,19 +231,14 @@ describe('deleteElement helper', () => {
     });
 
     it('should delete memory successfully', async () => {
-      // Mock exists to make the file appear to exist
-      mockFileOperations.exists.mockResolvedValueOnce(true);
-
       const result = await deleteElement(mockContext, {
         name: 'test-memory',
         type: ElementType.MEMORY,
       });
 
-      // Memories use fileOperations.deleteFile
-      expect(mockFileOperations.deleteFile).toHaveBeenCalledWith(
-        '/mock/memories/2025-10-24/test-memory.yaml',
-        ElementType.MEMORY,
-        expect.objectContaining({ source: 'deleteElement.deleteMemory' })
+      // Handler delegates to memoryManager.delete()
+      expect(mockContext.memoryManager.delete).toHaveBeenCalledWith(
+        '/mock/memories/2025-10-24/test-memory.yaml'
       );
       expect(result.content[0].text).toContain('✅');
     });
@@ -387,10 +377,9 @@ describe('deleteElement helper', () => {
       expect(result.content[0].text).toContain('Unknown error');
     });
 
-    it('should handle fileOperations.deleteFile errors for memories', async () => {
-      // Mock exists to succeed (file exists), then deleteFile to fail
-      mockFileOperations.exists.mockResolvedValueOnce(true);
-      mockFileOperations.deleteFile.mockRejectedValueOnce(new Error('Permission denied'));
+    it('should handle memoryManager.delete errors for memories', async () => {
+      // Mock memoryManager.delete to fail
+      mockContext.memoryManager.delete.mockRejectedValueOnce(new Error('Permission denied'));
 
       const result = await deleteElement(mockContext, {
         name: 'test-memory',

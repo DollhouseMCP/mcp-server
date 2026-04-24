@@ -33,6 +33,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -70,6 +71,7 @@ describe('TemplateManager — element quality: markdown body (#713)', () => {
       serializationService,
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     });
   });
 

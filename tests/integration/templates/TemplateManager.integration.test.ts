@@ -18,6 +18,7 @@ import { createPortfolioTestEnvironment, type PortfolioTestEnvironment } from '.
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService: MetadataService = createTestMetadataService();
@@ -50,6 +51,7 @@ describe('TemplateManager (BaseElementManager integration)', () => {
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
       fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
     });
 
     templatesDir = env.portfolioManager.getElementDir(ElementType.TEMPLATE);

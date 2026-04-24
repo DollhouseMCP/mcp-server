@@ -13,6 +13,14 @@
  */
 
 import { z } from 'zod';
+
+/**
+ * Parse a boolean env var correctly. z.coerce.boolean() uses JavaScript's
+ * Boolean() which treats any non-empty string as true — so 'false' becomes
+ * true. This helper treats only 'true' and '1' as true.
+ */
+const envBool = (defaultValue: boolean) =>
+  z.string().default(String(defaultValue)).transform(v => v === 'true' || v === '1');
 import dotenv from 'dotenv';
 import { logger } from '../utils/logger.js';
 
@@ -115,7 +123,36 @@ const envSchema = z.object({
   /** Pre-warmed session pool size (0 = disabled). */
   DOLLHOUSE_HTTP_SESSION_POOL_SIZE: z.coerce.number().int().min(0).max(32).default(0),
   /** Start the web console alongside HTTP transport for session monitoring. */
-  DOLLHOUSE_HTTP_WEB_CONSOLE: z.coerce.boolean().default(true),
+  DOLLHOUSE_HTTP_WEB_CONSOLE: envBool(true),
+
+  // ============================================================================
+  // Database Configuration (Phase 4)
+  // ============================================================================
+  /** Storage backend: 'file' (default) or 'database' (PostgreSQL). */
+  DOLLHOUSE_STORAGE_BACKEND: z.enum(['file', 'database']).default('file'),
+  /** Application database URL (non-superuser role, RLS enforced). Required when DOLLHOUSE_STORAGE_BACKEND=database. */
+  DOLLHOUSE_DATABASE_URL: z.string().optional(),
+  /** Admin database URL (superuser role, for migrations only). Falls back to DOLLHOUSE_DATABASE_URL if not set. */
+  DOLLHOUSE_DATABASE_ADMIN_URL: z.string().optional(),
+  /** Maximum connection pool size. */
+  DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
+  /** SSL mode for database connection. */
+  DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+
+  // ============================================================================
+  // Shared Pool Configuration (Step 4.6)
+  // ============================================================================
+  /** Override the upstream collection base URL. When set, install_collection_content
+   *  fetches from this URL instead of the default DollhouseMCP GitHub collection. */
+  DOLLHOUSE_COLLECTION_URL: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Comma-separated additional hostnames to add to GitHubClient's SSRF allowlist.
+   *  Each entry must be a valid hostname (no scheme, no path, no wildcards). */
+  DOLLHOUSE_COLLECTION_ALLOWLIST: z.string().optional()
+    .transform(parseAllowedHosts),
+  /** Override the shared-pool seed directory for deployment-supplied elements. */
+  DOLLHOUSE_SHARED_POOL_DIR: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   // ============================================================================
   // Test Configuration
@@ -128,9 +165,11 @@ const envSchema = z.object({
   // ============================================================================
   // Feature Flags
   // ============================================================================
-  DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION: z.coerce.boolean().default(false),
-  ENABLE_DEBUG: z.coerce.boolean().default(false),
-  TEST_VERBOSE_LOGGING: z.coerce.boolean().default(false),
+  DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION: envBool(false),
+  /** Enable the shared public element pool (Step 4.6). Default: false (opt-in). */
+  DOLLHOUSE_SHARED_POOL_ENABLED: envBool(false),
+  ENABLE_DEBUG: envBool(false),
+  TEST_VERBOSE_LOGGING: envBool(false),
 
   // ============================================================================
   // MCP Interface Configuration (Issue #237)
@@ -186,12 +225,12 @@ const envSchema = z.object({
    * for hook script discovery. Required for autonomous agent permission
    * management via Claude Code hooks.
    */
-  DOLLHOUSE_PERMISSION_SERVER: z.coerce.boolean().default(true),
+  DOLLHOUSE_PERMISSION_SERVER: envBool(true),
 
   // Web Console Configuration
   // ============================================================================
   /** Enable the unified web console (logs + metrics tabs) */
-  DOLLHOUSE_WEB_CONSOLE: z.coerce.boolean().default(true),
+  DOLLHOUSE_WEB_CONSOLE: envBool(true),
 
   /**
    * Port the web console leader binds to (#1794, #1798).
@@ -226,7 +265,34 @@ const envSchema = z.object({
    * Will flip to default `true` in a follow-up PR once all consumers
    * (browser, followers, bridge) have been updated to attach tokens.
    */
-  DOLLHOUSE_WEB_AUTH_ENABLED: z.coerce.boolean().default(false),
+  DOLLHOUSE_WEB_AUTH_ENABLED: envBool(false),
+
+  /**
+   * Unified authentication (JWT-based) for HTTP transport and web console.
+   * When enabled, all HTTP requests must carry a valid Bearer token.
+   * When disabled (default), auth behavior depends on the surface:
+   * - MCP transport: no auth (loopback binding is the security boundary)
+   * - Web console: uses legacy console token auth if DOLLHOUSE_WEB_AUTH_ENABLED is set
+   */
+  DOLLHOUSE_AUTH_ENABLED: envBool(false),
+
+  /** Auth provider: 'local' (self-signed JWTs for dev) or 'oidc' (external IdP). */
+  DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'oidc']).default('local'),
+
+  /** OIDC issuer URL (required when provider=oidc). */
+  DOLLHOUSE_AUTH_ISSUER: z.string().optional(),
+
+  /** OIDC expected audience claim (required when provider=oidc). */
+  DOLLHOUSE_AUTH_AUDIENCE: z.string().optional(),
+
+  /** OIDC JWKS endpoint (auto-derived from issuer if omitted). */
+  DOLLHOUSE_AUTH_JWKS_URI: z.string().optional(),
+
+  /** Key pair file path for local dev provider. */
+  DOLLHOUSE_AUTH_LOCAL_KEY_FILE: z.string().optional(),
+
+  /** Default subject for auto-generated startup token (local dev). */
+  DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB: z.string().optional(),
 
   /**
    * Issue #1780: Optional override for the console token file location.
@@ -271,7 +337,7 @@ const envSchema = z.object({
    * set to false for headless CI and scripted deployments that need to rotate
    * without human interaction.
    */
-  DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION: z.coerce.boolean().default(true),
+  DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION: envBool(true),
 
   // ============================================================================
   // Security Configuration
@@ -282,7 +348,7 @@ const envSchema = z.object({
    * enforce() pipeline. When false, falls back to route validation only.
    * This is a user/operator setting — the LLM cannot bypass it.
    */
-  DOLLHOUSE_GATEKEEPER_ENABLED: z.coerce.boolean().default(true),
+  DOLLHOUSE_GATEKEEPER_ENABLED: envBool(true),
   /**
    * Issue #679: Element policy layer kill switch.
    * When true (default), active element gatekeeper policies (allow/confirm/deny/scopeRestrictions)
@@ -291,7 +357,7 @@ const envSchema = z.object({
    * Use for emergency lockdown, hardened deployments, or policy debugging.
    * This is an operator/infrastructure setting — the LLM cannot bypass it.
    */
-  DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES: z.coerce.boolean().default(true),
+  DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES: envBool(true),
   /**
    * Issue #799: Policy export opt-in flag.
    * When true (default), PolicyExportService writes the security policy blueprint to
@@ -299,7 +365,7 @@ const envSchema = z.object({
    * permission-prompt server watches this file to evaluate permissions locally.
    * Set to false to disable policy file export entirely.
    */
-  DOLLHOUSE_POLICY_EXPORT_ENABLED: z.coerce.boolean().default(true),
+  DOLLHOUSE_POLICY_EXPORT_ENABLED: envBool(true),
 
   // ============================================================================
   // Storage Layer Configuration
@@ -333,7 +399,7 @@ const envSchema = z.object({
   // ============================================================================
   // Metrics Collection Configuration
   // ============================================================================
-  DOLLHOUSE_METRICS_ENABLED: z.coerce.boolean().default(true),
+  DOLLHOUSE_METRICS_ENABLED: envBool(true),
   DOLLHOUSE_METRICS_COLLECTION_INTERVAL_MS: z.coerce.number().min(1000).max(300000).default(15000),
   DOLLHOUSE_METRICS_MAX_SNAPSHOT_SIZE: z.coerce.number().default(102400),
   DOLLHOUSE_METRICS_COLLECTOR_FAILURE_THRESHOLD: z.coerce.number().min(1).max(100).default(10),
@@ -341,7 +407,7 @@ const envSchema = z.object({
   DOLLHOUSE_METRICS_MEMORY_SNAPSHOT_CAPACITY: z.coerce.number().min(10).max(10000).default(240),
 
   // Pattern encryption settings for Memory Security (Issue #1321)
-  DOLLHOUSE_DISABLE_ENCRYPTION: z.coerce.boolean().default(false),
+  DOLLHOUSE_DISABLE_ENCRYPTION: envBool(false),
   DOLLHOUSE_ENCRYPTION_SECRET: z.string().optional(),
   DOLLHOUSE_ENCRYPTION_SALT: z.string().optional(),
 

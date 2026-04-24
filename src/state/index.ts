@@ -20,8 +20,16 @@ export { FileActivationStateStore } from './FileActivationStateStore.js';
 export { FileConfirmationStore } from './FileConfirmationStore.js';
 export { FileChallengeStore } from './FileChallengeStore.js';
 
+// Database-backed implementations
+export { DatabaseActivationStateStore } from './DatabaseActivationStateStore.js';
+export { DatabaseConfirmationStore } from './DatabaseConfirmationStore.js';
+export { DatabaseChallengeStore } from './DatabaseChallengeStore.js';
+
 // In-memory implementations
 export { InMemoryChallengeStore } from './InMemoryChallengeStore.js';
+
+// Persistence infrastructure
+export { PersistQueue, type PersistQueueOptions } from './PersistQueue.js';
 
 // Session activation state
 export type { SessionActivationState, SessionUserIdentity } from './SessionActivationState.js';

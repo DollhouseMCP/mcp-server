@@ -35,6 +35,7 @@ import * as path from 'path';
 import * as fs from 'fs/promises';
 import * as os from 'os';
 import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../src/security/securityMonitor.js');
@@ -114,6 +115,7 @@ describe('Ensemble Conditional Activation Integration', () => {
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
       fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperations),
     });
 
     // Reset mock managers

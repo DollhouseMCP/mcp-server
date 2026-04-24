@@ -923,6 +923,13 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       author: { type: 'string', description: 'Filter: by author username' },
       status: { type: 'string', description: "Filter: 'active', 'inactive', or 'all'" },
       category: { type: 'string', description: 'Filter: by category (case-insensitive)' },
+      include_public: {
+        type: 'boolean',
+        default: false,
+        mapTo: 'includePublic',
+        description: "When true, results include public-visibility elements owned by other users (database mode). File mode: no effect until shared pool lands. Default: false (caller's own elements only).",
+        sources: ['input.include_public', 'input.includePublic', 'params.include_public', 'params.includePublic'],
+      },
       aggregate: { type: 'object', description: "Aggregation: { count: true } returns count only (~50 tokens). { count: true, group_by: 'category' } returns grouped counts. Allowed group_by fields: author, category, status, tags, version." },
       fields: {
         type: 'string | string[]',
@@ -1859,6 +1866,7 @@ export const INTROSPECTION_ONLY_SCHEMAS: OperationSchemaMap = {
 export const ALL_OPERATION_SCHEMAS: OperationSchemaMap = {
   ...SCHEMA_DRIVEN_OPERATIONS,
   ...INTROSPECTION_ONLY_SCHEMAS,
+
 } as const;
 
 /**

@@ -94,12 +94,18 @@ export class ElementInstaller {
   // File operations service for secure file I/O
   private readonly fileOperations: IFileOperationsService;
 
+  // Step 4.6: Optional shared-pool installer for collection content.
+  // When set, installContent() routes through the shared pool instead
+  // of writing to the user's per-user portfolio.
+  private readonly sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
+
   constructor(
     githubClient: GitHubClient,
     options: {
       portfolioManager: PortfolioManager;
       unifiedIndexManager: UnifiedIndexManager;
       fileOperations?: IFileOperationsService;
+      sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
     }
   ) {
     this.githubClient = githubClient;
@@ -114,6 +120,7 @@ export class ElementInstaller {
     this.sourcePriorityConfig = getSourcePriorityConfig();
     // Initialize file operations service
     this.fileOperations = options.fileOperations!;
+    this.sharedPoolInstaller = options.sharedPoolInstaller;
   }
 
   /**
@@ -974,7 +981,60 @@ export class ElementInstaller {
     elementType?: ElementType;
     filename?: string;
   }> {
+    if (this.sharedPoolInstaller) {
+      return this.installViaSharedPool(inputPath);
+    }
     return await this.installFromCollection(inputPath);
+  }
+
+  /**
+   * Shared-pool install path — reuses the existing fetch+validate pipeline
+   * but writes to the shared pool instead of the user's portfolio.
+   */
+  private async installViaSharedPool(collectionPath: string): Promise<InstallResult> {
+    const sanitizedPath = validatePath(collectionPath);
+    const elementType = this.validateAndExtractElementType(sanitizedPath);
+    const content = await this.fetchCollectionContent(sanitizedPath);
+    const { sanitizedContent, metadata } = await this.validateCollectionContent(content);
+
+    const sourceUrl = `github://DollhouseMCP/collection/${sanitizedPath}`;
+    const result = await this.sharedPoolInstaller!.install({
+      content: sanitizedContent,
+      elementType,
+      name: metadata.name,
+      origin: 'collection',
+      sourceUrl,
+      sourceVersion: metadata.version ?? null,
+    });
+
+    switch (result.action) {
+      case 'installed':
+        return {
+          success: true,
+          message: 'AI customization element installed to shared pool!',
+          metadata,
+          filename: `${metadata.name}.md`,
+          elementType,
+        };
+
+      case 'skipped':
+        return {
+          success: true,
+          message: result.reason,
+          metadata,
+          filename: `${metadata.name}.md`,
+          elementType,
+          alreadyExists: true,
+        };
+
+      case 'rejected':
+        return {
+          success: false,
+          message: result.reason,
+          metadata,
+          elementType,
+        };
+    }
   }
 
   /**

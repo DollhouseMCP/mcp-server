@@ -13,12 +13,11 @@ import { execFile } from 'node:child_process';
 import { accessSync, constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { homedir, platform } from 'node:os';
 import { parse as parseToml } from 'smol-toml';
+import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const _locator = new PackageResourceLocator();
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
@@ -1260,7 +1259,7 @@ async function installLmStudioConfig(version?: string): Promise<string> {
  * falls back to npx if not found.
  */
 function resolveInstallMcpBin(): { cmd: string; prefixArgs: string[] } {
-  const localBin = join(dirname(dirname(dirname(__dirname))), 'node_modules', '.bin', 'install-mcp');
+  const localBin = join(_locator.getPackageRoot(), 'node_modules', '.bin', 'install-mcp');
   try {
     accessSync(localBin, fsConstants.X_OK);
     return { cmd: localBin, prefixArgs: [] };

@@ -80,6 +80,9 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -787,8 +790,8 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override list to apply active status based on activeEnsembleNames set
    */
-  override async list(): Promise<Ensemble[]> {
-    const ensembles = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Ensemble[]> {
+    const ensembles = await super.list(options);
 
     // Apply ACTIVE status to ensembles in the activeEnsembleNames set
     for (const ensemble of ensembles) {

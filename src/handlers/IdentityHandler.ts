@@ -18,14 +18,31 @@ import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { UserIdentityService } from '../services/UserIdentityService.js';
+import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
 
 export class IdentityHandler {
+  private userIdentityService?: UserIdentityService;
+  private sessionActivationRegistry?: SessionActivationRegistry;
+
   constructor(
     private readonly personaManager: PersonaManager,
     private readonly initService: InitializationService,
     private readonly indicatorService: PersonaIndicatorService,
     private readonly contextTracker?: ContextTracker
   ) {}
+
+  /**
+   * Enable database identity binding. When set, set_user_identity will
+   * create/resolve a DB user row and store the UUID in the session state.
+   */
+  setDatabaseIdentityServices(
+    service: UserIdentityService,
+    registry: SessionActivationRegistry,
+  ): void {
+    this.userIdentityService = service;
+    this.sessionActivationRegistry = registry;
+  }
 
   private async ensureInitialized(): Promise<void> {
     await this.initService.ensureInitialized();
@@ -68,9 +85,23 @@ export class IdentityHandler {
       }
 
       this.personaManager.setUserIdentity(validatedUsername, validatedEmail);
+
+      // In DB mode, resolve or create a database user row and bind the
+      // session's RLS context to that user's UUID.
+      if (this.userIdentityService && this.sessionActivationRegistry && this.contextTracker) {
+        const session = this.contextTracker.getSessionContext();
+        if (session) {
+          const dbUserId = await this.userIdentityService.resolveOrCreateUser(
+            validatedUsername,
+            validatedEmail,
+          );
+          const activationState = this.sessionActivationRegistry.getOrCreate(session.sessionId);
+          activationState.dbUserId = dbUserId;
+        }
+      }
+
       const { username: currentUsername, email: currentEmail } = this.personaManager.getUserIdentity();
 
-      // FIX: DMCP-SEC-006 - Add security audit logging for identity changes
       SecurityMonitor.logSecurityEvent({
         type: 'IDENTITY_CHANGED',
         severity: 'LOW',
@@ -175,6 +206,17 @@ export class IdentityHandler {
     const previousUser = currentUsername;
 
     this.personaManager.clearUserIdentity();
+
+    // Clear the DB identity override so the session falls back to default
+    if (this.sessionActivationRegistry && this.contextTracker) {
+      const session = this.contextTracker.getSessionContext();
+      if (session) {
+        const activationState = this.sessionActivationRegistry.get(session.sessionId);
+        if (activationState) {
+          activationState.dbUserId = undefined;
+        }
+      }
+    }
 
     // FIX: DMCP-SEC-006 - Add security audit logging for identity clearing
     if (wasSet) {

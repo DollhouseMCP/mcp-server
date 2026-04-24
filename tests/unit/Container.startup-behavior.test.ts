@@ -83,8 +83,11 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       // Start preparePortfolio (don't await yet)
       const preparePromise = container.preparePortfolio();
 
-      // Wait a tick for both starts to register
-      await new Promise(resolve => setImmediate(resolve));
+      // Wait for PathsServiceRegistrar bootstrap (disk detection) + both
+      // starts to register. Multiple ticks needed because preparePortfolio
+      // now awaits PathsServiceRegistrar.bootstrapAndRegister before the
+      // parallel config checks.
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       // VERIFY: Both checks should have started before either completed
       expect(callOrder).toContain('migration-start');

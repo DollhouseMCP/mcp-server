@@ -472,6 +472,10 @@ export interface HandlerRegistry {
   // Resilience: DI-managed instances (moved from module-level singletons)
   circuitBreaker?: CircuitBreakerState;
   resilienceMetrics?: ResilienceMetricsTracker;
+  // Identity: session activation registry for HTTP identity checks
+  activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
+  // Flag: database storage backend is active
+  isDbMode?: boolean;
 }
 
 /**
@@ -975,6 +979,13 @@ export class MCPAQLHandler {
 
       const { operation, elementType, params } = parsedInput;
 
+      // Step 1b: In HTTP+DB mode, require identity before data operations.
+      // Identity operations (set/get/clear) and gatekeeper infra are exempt.
+      if (this.requiresIdentityCheck(operation)) {
+        const identityError = this.checkHttpIdentity();
+        if (identityError) return this.failure(identityError, startTime);
+      }
+
       // Step 2: Enforce Gatekeeper policy (Issue #452)
       if (env.DOLLHOUSE_GATEKEEPER_ENABLED) {
         // Full 4-layer check: route validation → element policies → session confirmations → defaults
@@ -1357,6 +1368,8 @@ export class MCPAQLHandler {
     if (module === 'Persona') {
       return this.dispatchPersona(method, params as Record<string, unknown>);
     }
+
+    // System operations — removed; migrations are CLI-only (scripts/)
 
     // Execute operations (Issue #244 - CRUDE)
     if (module === 'Execute') {
@@ -4312,6 +4325,31 @@ export class MCPAQLHandler {
    * @param params - Original params containing optional `fields`
    * @returns Transformed result with field selection applied
    */
+  private static readonly IDENTITY_EXEMPT_OPS = new Set([
+    'set_user_identity', 'get_user_identity', 'clear_user_identity',
+    'confirm_operation', 'verify_challenge', 'approve_cli_permission',
+    'introspect', 'get_build_info', 'get_logs',
+  ]);
+
+  private requiresIdentityCheck(operation: string): boolean {
+    if (MCPAQLHandler.IDENTITY_EXEMPT_OPS.has(operation)) return false;
+    if (!this.handlers.isDbMode) return false;
+    // DOLLHOUSE_USER set = operator established identity at startup
+    if (process.env.DOLLHOUSE_USER?.trim()) return false;
+    const session = this.contextTracker?.getSessionContext?.();
+    if (!session) return false;
+    // Per-session DB override from future auth
+    const state = this.handlers.activationRegistry?.get(session.sessionId);
+    if (state?.dbUserId) return false;
+    return true;
+  }
+
+  private checkHttpIdentity(): string | null {
+    return 'No user identity set. Set the DOLLHOUSE_USER environment variable ' +
+      'when starting the server to establish your identity. ' +
+      'Example: DOLLHOUSE_USER=your-name node dist/index.js';
+  }
+
   private applyFieldSelection(
     result: unknown,
     params?: Record<string, unknown>

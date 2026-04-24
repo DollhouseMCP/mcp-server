@@ -51,6 +51,22 @@ export interface ElementIndexEntry {
   memoryType?: string;
   /** Number of entries in the memory */
   totalEntries?: number;
+  /**
+   * Owner user ID — populate whenever the storage layer knows it.
+   *
+   * Today: populated by database-backed storage layers (the row's `user_id`).
+   * Undefined in file mode because the current single-user file layout has
+   * no per-user axis, BUT consumers must NOT assume "undefined ⇔ file mode."
+   * Step 4.5 lands the per-user file layout (`users/<uuid>/portfolio/`) and
+   * file-mode storage will populate this field from the path segment at
+   * that point. Treat this as "owner identity if the storage layer can
+   * tell, otherwise undefined" — backend-agnostic semantically, even if
+   * only DB mode supplies it today.
+   *
+   * BaseElementManager uses this to avoid caching foreign elements in its
+   * per-manager LRU when `includePublic` surfaces cross-user public rows.
+   */
+  userId?: string;
 }
 
 /**

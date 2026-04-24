@@ -13,7 +13,7 @@
 
 import express from 'express';
 import { join, dirname, extname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 import { execFile } from 'node:child_process';
 import { platform } from 'node:os';
 import { mkdir, readdir, readFile as readFileFs } from 'node:fs/promises';
@@ -52,7 +52,7 @@ const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const _packageLocator = new PackageResourceLocator();
 /**
  * Default port for standalone `startWebServer` calls. Reads from the
  * `DOLLHOUSE_WEB_CONSOLE_PORT` env var so there is a single source of
@@ -141,6 +141,8 @@ export interface WebServerOptions {
    * middleware is a pass-through when the flag is false (the Phase 1 default).
    */
   tokenStore?: ConsoleTokenStore;
+  /** Unified JWT auth middleware (from src/auth). When provided, mounted on /api before console token auth. */
+  unifiedAuthMiddleware?: import('express').RequestHandler;
 }
 
 /**
@@ -261,20 +263,28 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     next();
   });
 
-  // Console token authentication middleware (#1780). Mounted before any /api
-  // routes so every protected endpoint goes through it. When the feature flag
-  // DOLLHOUSE_WEB_AUTH_ENABLED is false (Phase 1 default) this is a pass-through.
-  // Public endpoints in PUBLIC_PATH_PREFIXES always bypass auth regardless of flag.
+  // Authentication middleware (#1780). Supports two auth modes:
+  // 1. Unified JWT auth (DOLLHOUSE_AUTH_ENABLED=true) — validates JWTs from IAuthProvider
+  // 2. Console token auth (DOLLHOUSE_WEB_AUTH_ENABLED=true) — validates shared hex tokens
+  // Both can coexist: JWT tokens start with "eyJ", console tokens are 64 hex chars.
+  // When neither flag is set, the middleware is a pass-through.
+  if (options.unifiedAuthMiddleware) {
+    app.use('/api', options.unifiedAuthMiddleware);
+    logger.info('[WebUI] Unified JWT auth middleware mounted on /api');
+  }
   if (options.tokenStore) {
-    const authMiddleware = createAuthMiddleware({
+    // When unified auth is active, console token auth serves as fallback
+    // for the web UI (which injects the console token via meta tag).
+    const consoleAuthMiddleware = createAuthMiddleware({
       store: options.tokenStore,
-      enabled: env.DOLLHOUSE_WEB_AUTH_ENABLED,
+      enabled: env.DOLLHOUSE_WEB_AUTH_ENABLED || !!options.unifiedAuthMiddleware,
       publicPathPrefixes: PUBLIC_PATH_PREFIXES,
       label: 'api',
+      skipIfAlreadyAuthenticated: !!options.unifiedAuthMiddleware,
     });
-    app.use('/api', authMiddleware);
+    app.use('/api', consoleAuthMiddleware);
     logger.info(
-      `[WebUI] Console auth middleware mounted ${env.DOLLHOUSE_WEB_AUTH_ENABLED ? 'ENFORCING' : 'pass-through (flag off)'}`,
+      `[WebUI] Console auth middleware mounted ${(env.DOLLHOUSE_WEB_AUTH_ENABLED || !!options.unifiedAuthMiddleware) ? 'ENFORCING' : 'pass-through (flag off)'}`,
     );
 
     // TOTP enrollment routes (#1794). Mounted AFTER the /api auth middleware
@@ -363,7 +373,13 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   options.additionalRouters?.forEach(router => app.use(router));
 
   // Static frontend files
-  const publicDir = join(__dirname, 'public');
+  let publicDir: string;
+  try {
+    publicDir = _packageLocator.resolve('web/public');
+  } catch (err) {
+    logger.error('[WebServer] Failed to resolve web/public directory — static assets unavailable', { error: err });
+    throw new Error('Web console static assets directory not found. Ensure the package is built (npm run build).');
+  }
   // Serve static assets but skip index.html — the SPA fallback below
   // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
   // meta tag). Without this, express.static serves the raw template

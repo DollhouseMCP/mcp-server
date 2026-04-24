@@ -31,6 +31,7 @@ import { SerializationService } from '../../../../src/services/SerializationServ
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import type { ExecuteAgentResult } from '../../../../src/elements/agents/types.js';
 import { AGENT_LIMITS } from '../../../../src/elements/agents/constants.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -75,14 +76,15 @@ describe('AgentManager.executeAgent', () => {
     container.register<FileLockManager>('FileLockManager', () => fileLockManager);
 
     // Mock FileOperationsService with fileStore-backed read/write/exists
-    const mockFileOperations = {
+    const readFileImpl = jest.fn().mockImplementation(async (filePath: string) => {
+      const stored = fileStore.get(filePath);
+      if (stored !== undefined) return stored;
+      return '';
+    });
+    const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockImplementation(async (filePath: string) => fileStore.has(filePath)),
-      readFile: jest.fn().mockImplementation(async (filePath: string) => {
-        const stored = fileStore.get(filePath);
-        if (stored !== undefined) return stored;
-        return '';
-      }),
+      readFile: readFileImpl,
       writeFile: jest.fn().mockImplementation(async (filePath: string, content: string) => {
         fileStore.set(filePath, content);
       }),
@@ -92,6 +94,9 @@ describe('AgentManager.executeAgent', () => {
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
     };
+    // BaseElementManager.load uses readElementFile. Wire dynamically so tests
+    // that reassign readFile later propagate to the element-read path.
+    mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
     container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -190,6 +195,7 @@ describe('AgentManager.executeAgent', () => {
       serializationService: container.resolve('SerializationService'),
       metadataService: container.resolve('MetadataService'),
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
       elementManagerResolver,
     });
 

@@ -23,6 +23,7 @@ import os from 'os';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -77,6 +78,7 @@ describe('autoIncrementVersion in editElement', () => {
       serializationService,
       metadataService,
       eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
     });
 
     // Set up mocks

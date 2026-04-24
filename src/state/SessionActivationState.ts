@@ -45,6 +45,9 @@ export interface SessionActivationState {
   /** Per-session identity override from set_user_identity. */
   userIdentity?: SessionUserIdentity;
 
+  /** Per-session database user UUID, set when set_user_identity resolves a DB user. */
+  dbUserId?: string;
+
   /**
    * Per-session activation persistence store.
    * Set by the Container when the session is created.

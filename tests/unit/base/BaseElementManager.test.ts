@@ -33,6 +33,7 @@ jest.mock('../../../src/security/securityMonitor.js');
 jest.mock('../../../src/utils/logger.js');
 
 import { logger as _logger } from '../../../src/utils/logger.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Test element for concrete implementation
 interface TestElementMetadata {
@@ -164,7 +165,10 @@ describe('BaseElementManager - Requirements & Contract', () => {
     );
 
     createManager = (opts?: BaseElementManagerOptions) =>
-      new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, fileOperationsService, validationRegistry, opts);
+      new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, fileOperationsService, validationRegistry, {
+        storageLayerFactory: createTestStorageFactory(fileOperationsService),
+        ...opts,
+      });
 
     manager = createManager();
 
@@ -1025,7 +1029,8 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
       failingManager = new FailingTestManager(
         ElementType.SKILL, portfolioManager, fileLockManager,
-        fileOperationsService, validationRegistry
+        fileOperationsService, validationRegistry,
+        { storageLayerFactory: createTestStorageFactory(fileOperationsService) }
       );
       fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
         return fs.readFile(filePath, 'utf-8');
@@ -1082,7 +1087,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       const dispatchManager = new FailingDispatchManager(
         ElementType.SKILL, portfolioManager, fileLockManager,
         fileOperationsService, validationRegistry,
-        { eventDispatcher: dispatcher },
+        { eventDispatcher: dispatcher, storageLayerFactory: createTestStorageFactory(fileOperationsService) },
       );
 
       await fs.writeFile(

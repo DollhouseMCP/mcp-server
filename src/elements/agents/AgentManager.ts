@@ -44,6 +44,7 @@ import {
   createExecutionContext,
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 
 /**
  * Minimal interface for an element manager resolved by name.
@@ -103,11 +104,6 @@ interface ElementCreationResult {
   element?: Agent;
 }
 
-interface ParsedAgentFile {
-  metadata: AgentMetadata;
-  content: string;
-}
-
 type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
   content?: string;
 };
@@ -141,6 +137,9 @@ export class AgentManager extends BaseElementManager<Agent> {
         backupService: deps.backupService,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
       },
       deps.fileOperationsService,
       deps.validationRegistry,
@@ -350,28 +349,12 @@ export class AgentManager extends BaseElementManager<Agent> {
         };
       }
 
-      // Serialize the agent content first
-      const serializedContent = await this.serializeElement(agent);
-      const absolutePath = this.resolveAbsolutePath(filename);
-
-      // Use atomic file creation to prevent TOCTOU race conditions
-      // This replaces the previous check-then-write pattern with a single atomic operation
-      const created = await this.fileOperations.createFileExclusive(absolutePath, serializedContent, {
-        source: 'AgentManager.create'
-      });
-
-      if (!created) {
-        return {
-          success: false,
-          message: `Agent '${sanitizedName}' already exists`
-        };
-      }
-
-      // Cache the element after successful creation
-      this.cacheElement(agent, filename);
-      await this.storageLayer.notifySaved(filename, absolutePath);
-      // Note: No reload() here — cacheElement() stores the element correctly.
-      // See Issue #491 for why PersonaManager's reload-after-create was removed.
+      // Save through the standard pipeline with exclusive flag for atomic create-or-fail.
+      // In file mode, this uses createFileExclusive (wx flag) to prevent TOCTOU races.
+      // In DB mode, the storage layer does a plain INSERT and converts the 23505 unique-
+      // constraint violation into an "already exists" error. The duplicate check above via
+      // list() catches the common case; exclusive handles concurrent-create races.
+      await this.save(agent, filename, { exclusive: true });
 
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_CREATED',
@@ -404,11 +387,17 @@ export class AgentManager extends BaseElementManager<Agent> {
   async read(name: string): Promise<Agent | null> {
     try {
       const sanitizedName = sanitizeInput(name, 100);
-      const filename = this.getFilename(sanitizedName);
-      return await this.load(filename);
+      // Use findByName — consults the storage-layer index (name → UUID in DB
+      // mode, name → filename in file mode) instead of assuming a filename
+      // shape. Passing a filename straight to load() breaks in DB mode where
+      // load expects the element UUID, not a ".md" path.
+      const found = await this.findByName(sanitizedName);
+      if (found) return found;
+      // Fallback: flexible matching via list scan (#607) — for legacy files
+      // whose on-disk name diverges from their metadata name.
+      return this.readFlexibly(name);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        // Fallback: flexible matching via list scan (#607)
         return this.readFlexibly(name);
       }
       throw error;
@@ -617,14 +606,28 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Load an agent file, enforcing size and format checks.
+   * Load an agent, then hydrate its runtime state from the .state.yaml sidecar.
+   *
+   * Delegates the read/parse/cache pipeline to super.load() so we inherit the
+   * base class's DB/file branching, invalidElements tracking (Issue #708),
+   * load-error event emission, and suppressed-repeat-error dedup. Agent-specific
+   * work (path normalization, size guard, state hydration) runs around it.
    */
   override async load(filePath: string): Promise<Agent> {
     const sanitizedInput = sanitizeInput(filePath, 255);
+
+    // DB mode: the storage layer indexes by UUID, not filesystem path. Pass the
+    // input through unchanged — appending `.md` or running file-system path
+    // validation would yield `UUID.md` that the DB storage layer can't match.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.load(sanitizedInput);
+    }
+
     const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizedInput
       : this.getFilename(sanitizeInput(sanitizedInput, 100));
 
+    // Agent-specific path validation (defense-in-depth on top of base normalization).
     try {
       validatePath(relativePath, this.elementDir);
     } catch (error) {
@@ -632,55 +635,80 @@ export class AgentManager extends BaseElementManager<Agent> {
       throw new Error(`Invalid agent path: ${error instanceof Error ? error.message : 'Invalid path'}`);
     }
 
-    const fullPath = this.resolveAbsolutePath(relativePath);
+    return super.load(relativePath);
+  }
 
-    try {
-      const content = await this.fileOperations.readFile(fullPath, { encoding: 'utf-8' });
-
-      if (content.length > MAX_FILE_SIZE) {
-        throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
-      }
-
-      const parsed = this.parseAgentFile(content);
-      const metadata = await this.parseMetadata(parsed.metadata);
-      const agent = this.createElement(metadata, parsed.content);
-
-      this.cacheElement(agent, relativePath);
-      await this.hydrateAgentState(agent, this.stripExtension(relativePath));
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_LOADED',
-        severity: 'LOW',
-        source: `${this.constructor.name}.load`,
-        details: `${this.getElementLabelCapitalized()} loaded: ${agent.metadata.name} v${agent.metadata.version || 'unknown'}`,
-        additionalData: {
-          agentId: agent.id,
-          agentName: agent.metadata.name,
-          version: agent.metadata.version,
-          author: agent.metadata.author,
-        }
-      });
-
-      return agent;
-    } catch (error) {
-      logger.error(`Failed to load agent from ${fullPath}:`, error);
-      throw error;
+  /**
+   * Agent-specific content parser.
+   *
+   * Uses SerializationService.parseFrontmatter (strict) rather than the base
+   * class's SecureYamlParser.safeMatter (lenient). Agents require the file to
+   * contain a YAML object at the frontmatter position; SerializationService
+   * throws "YAML must contain an object" when the content is malformed — a
+   * diagnostic we want to preserve for operators and callers.
+   */
+  protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
+    if (content.length > MAX_FILE_SIZE) {
+      throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
     }
+    const result = this.serializationService.parseFrontmatter(content, {
+      maxYamlSize: MAX_YAML_SIZE,
+      validateContent: false,
+      source: 'AgentManager.parseContent',
+    });
+    return {
+      data: result.data as Record<string, unknown>,
+      content: result.content.trim(),
+    };
+  }
+
+  /**
+   * Post-load hook: hydrate runtime state from the .state.yaml sidecar
+   * (DB-mode state persistence lands in a later Phase 4 step). Size is
+   * enforced in parseContent, which runs before this hook.
+   */
+  protected override async afterLoad(
+    agent: Agent,
+    filePath: string,
+  ): Promise<void> {
+    await this.hydrateAgentState(agent, this.stripExtension(filePath));
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_LOADED',
+      severity: 'LOW',
+      source: `${this.constructor.name}.afterLoad`,
+      details: `${this.getElementLabelCapitalized()} loaded: ${agent.metadata.name} v${agent.metadata.version || 'unknown'}`,
+      additionalData: {
+        agentId: agent.id,
+        agentName: agent.metadata.name,
+        version: agent.metadata.version,
+        author: agent.metadata.author,
+      }
+    });
   }
 
   /**
    * Override BaseElementManager.save to persist state when required.
    */
-  override async save(agent: Agent, filePath: string): Promise<void> {
-    const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
+  override async save(agent: Agent, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+    // In DB mode, filePath is a UUID — pass it through unchanged. Appending
+    // `.md` would break storage-layer lookups which index by UUID, not path.
+    // In file mode, normalize to a `<name>.md` filename for on-disk storage.
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
+      : this.normalizeAgentFilePath(filePath);
 
     await this.ensureStateDirectory();
-    await super.save(agent, sanitizedPath);
+    await super.save(agent, sanitizedPath, options);
 
+    // State persistence uses the agent's logical name (not path/UUID) so that
+    // .state.yaml sidecar files stay stable across file/DB mode.
     if (agent.needsStatePersistence()) {
-      const newVersion = await this.saveAgentState(this.stripExtension(sanitizedPath), agent.getState());
+      const stateName = isDb
+        ? agent.metadata.name
+        : this.stripExtension(sanitizedPath);
+      const newVersion = await this.saveAgentState(stateName, agent.getState());
       agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
       agent.markStatePersisted();
     }
@@ -720,10 +748,16 @@ export class AgentManager extends BaseElementManager<Agent> {
    * the normalized filename used for state file creation/loading.
    */
   override async delete(filePath: string): Promise<void> {
-    const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
+    // DB mode: filePath is a UUID, don't force `.md` extension.
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
-    const name = this.stripExtension(sanitizedPath);
+      : this.normalizeAgentFilePath(filePath);
+    // State-file name derives from the agent's logical name in DB mode, or
+    // from the stripped filename in file mode.
+    const name = isDb
+      ? sanitizedPath // UUID — state file lookup below uses its own path anyway
+      : this.stripExtension(sanitizedPath);
     await super.delete(sanitizedPath);
 
     // FIX: Normalize name for consistent state file deletion
@@ -752,7 +786,18 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.stateCache.delete(normalizedName);
   }
 
+  private normalizeAgentFilePath(filePath: string): string {
+    return filePath.endsWith(AGENT_FILE_EXTENSION)
+      ? sanitizeInput(filePath, 255)
+      : this.getFilename(sanitizeInput(filePath, 100));
+  }
+
   override async exists(filePath: string): Promise<boolean> {
+    // DB mode: the storage layer looks up by UUID or name via its index, not by
+    // filename. Pass through unchanged.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.exists(sanitizeInput(filePath, 255));
+    }
     const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizeInput(filePath, 255)
       : this.getFilename(sanitizeInput(filePath, 100));
@@ -776,8 +821,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Override list to apply active status based on activeAgentNames set
    */
-  override async list(): Promise<Agent[]> {
-    const agents = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
+    const agents = await super.list(options);
 
     // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {
@@ -2396,21 +2441,6 @@ export class AgentManager extends BaseElementManager<Agent> {
     // Object without template - cannot convert
     logger.warn('Goal object missing template field, cannot convert to V2', { goal });
     return undefined;
-  }
-
-  private parseAgentFile(content: string): ParsedAgentFile {
-    // Use SerializationService for frontmatter parsing
-    const result = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MAX_YAML_SIZE,
-      validateContent: false,
-      source: 'AgentManager.parseAgentFile'
-    });
-
-    // SerializationService ensures frontmatter exists, or throws error
-    return {
-      metadata: result.data as AgentMetadata,
-      content: result.content.trim()
-    };
   }
 
 

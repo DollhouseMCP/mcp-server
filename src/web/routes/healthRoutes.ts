@@ -18,12 +18,15 @@ export interface HealthRoutesOptions {
 
 export function createHealthRoutes(options: HealthRoutesOptions): Router {
   const router = Router();
-  const startTime = Date.now();
 
   router.get('/health', (_req: Request, res: Response) => {
     const health: Record<string, unknown> = {
       status: 'ok',
-      uptime: Math.floor((Date.now() - startTime) / 1000),
+      // process.uptime() returns seconds-since-process-start as a float. Always
+      // > 0 by the time any handler runs, so no sub-second flake (the prior
+      // Math.floor(Date.now() - startTime) / 1000 would return 0 when a request
+      // arrived within 1s of route registration).
+      uptime: process.uptime(),
       logs: {
         stats: options.memorySink.getStats(),
         sseClients: options.logClientCount(),
