@@ -467,22 +467,25 @@ export class MemoryStorageLayer implements IStorageLayer {
   private async enumerateYamlFiles(dir: string, subdirs: string[]): Promise<string[]> {
     const allRelativePaths: string[] = [];
     for (const subdir of subdirs) {
-      const absDir = subdir ? path.join(dir, subdir) : dir;
-      try {
-        const files = await this.backend.listFiles(absDir, '.yaml');
-        for (const file of files) {
-          if (this.fileFilter && !this.fileFilter(file)) continue;
-          const relPath = subdir ? `${subdir}/${file}` : file;
-          allRelativePaths.push(relPath);
-        }
-      } catch (error) {
-        if ((error as any).code !== 'ENOENT') {
-          logger.debug(`MemoryStorageLayer: failed to list ${absDir}`, {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
+      await this.collectYamlFilesFromSubdir(dir, subdir, allRelativePaths);
     }
     return allRelativePaths;
+  }
+
+  private async collectYamlFilesFromSubdir(dir: string, subdir: string, out: string[]): Promise<void> {
+    const absDir = subdir ? path.join(dir, subdir) : dir;
+    try {
+      const files = await this.backend.listFiles(absDir, '.yaml');
+      for (const file of files) {
+        if (this.fileFilter && !this.fileFilter(file)) continue;
+        out.push(subdir ? `${subdir}/${file}` : file);
+      }
+    } catch (error) {
+      if ((error as any).code !== 'ENOENT') {
+        logger.debug(`MemoryStorageLayer: failed to list ${absDir}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 }

@@ -8,13 +8,11 @@
 #   dollhouse      — superuser, used for migrations only
 #   dollhouse_app  — application role, RLS enforced, used by the server
 #
-# Connection strings:
-#   Application (server):
-#     DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp
-#     DOLLHOUSE_STORAGE_BACKEND=database
+# Connection strings (passwords from docker/.env.docker):
+#   Application: DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<password>@localhost:5432/dollhousemcp
+#   Admin:       DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<password>@localhost:5432/dollhousemcp
 #
-#   Migrations (admin):
-#     DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp
+# Run npm run db:setup to configure automatically.
 #
 # For production, use a managed PostgreSQL instance (RDS, Cloud SQL, etc.)
 # with a dedicated application role that has NOSUPERUSER NOBYPASSRLS.

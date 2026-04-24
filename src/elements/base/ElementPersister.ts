@@ -136,7 +136,7 @@ export class ElementPersister<T extends IElement> {
         this.host.validateSerializedContent(content);
 
         if (isDbMode) {
-          const elementId = await (this.storageLayer as IWritableStorageLayer).writeContent(
+          const elementId = await (this.storageLayer as IWritableStorageLayer).writeContent( // NOSONAR — narrowing needed, boolean guard doesn't narrow
             this.host.elementType,
             element.metadata.name,
             content,
@@ -232,7 +232,7 @@ export class ElementPersister<T extends IElement> {
         if (isDbMode) {
           const elementName = this.storageLayer.getNameById?.(relativePath)
             ?? this.host.extractNameFromPath(relativePath);
-          await (this.storageLayer as IWritableStorageLayer).deleteContent(this.host.elementType, elementName);
+          await (this.storageLayer as IWritableStorageLayer).deleteContent(this.host.elementType, elementName); // NOSONAR — narrowing needed, boolean guard doesn't narrow
         } else {
           const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
           if (!movedToBackup) {
