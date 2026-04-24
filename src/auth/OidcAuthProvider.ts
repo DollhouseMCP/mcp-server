@@ -87,7 +87,7 @@ export class OidcAuthProvider implements IAuthProvider {
       if (message.includes('audience')) {
         return { ok: false, reason: 'audience mismatch' };
       }
-      return { ok: false, reason: message };
+      return { ok: false, reason: 'token validation failed' };
     }
   }
 }

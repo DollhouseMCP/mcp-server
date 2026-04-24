@@ -79,7 +79,7 @@ export class LocalDevAuthProvider implements IAuthProvider {
       if (message.includes('signature')) {
         return { ok: false, reason: 'invalid signature' };
       }
-      return { ok: false, reason: message };
+      return { ok: false, reason: 'token validation failed' };
     }
   }
 
