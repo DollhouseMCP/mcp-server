@@ -416,6 +416,39 @@ goal:
         agentManager.executeAgent('hello-world-agent', {})
       ).rejects.toThrow(/missing required parameter.*directory/i);
     });
+
+    it('should enumerate all missing goal parameters with introspect guidance', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('rubric-qa-agent.md')) {
+          return `---
+name: "Rubric QA Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Verify {deliverable_path} against {run_dir}"
+  parameters:
+    - name: run_dir
+      type: string
+      required: true
+    - name: deliverable_path
+      type: string
+      required: true
+---
+
+# Rubric QA Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      await expect(
+        agentManager.executeAgent('rubric-qa-agent', {})
+      ).rejects.toThrow(/missing required parameters.*run_dir.*deliverable_path/i);
+
+      await expect(
+        agentManager.executeAgent('rubric-qa-agent', {})
+      ).rejects.toThrow(/introspect/i);
+    });
   });
 
   /**

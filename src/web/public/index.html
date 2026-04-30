@@ -14,14 +14,20 @@
   <meta name="dollhouse-console-token" content="{{CONSOLE_TOKEN}}">
   <!-- Server version — injected at request time for version-aware UI behaviour (e.g. setup-seen per version). -->
   <meta name="dollhouse-server-version" content="{{DOLLHOUSE_VERSION}}">
-  <link rel="stylesheet" href="fonts.css">
-  <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="logs.css">
-  <link rel="stylesheet" href="metrics.css">
-  <link rel="stylesheet" href="permissions.css">
-  <link rel="stylesheet" href="sessions.css">
-  <link rel="stylesheet" href="setup.css">
-  <link rel="stylesheet" href="security.css">
+  <meta name="dollhouse-session-id" content="{{DOLLHOUSE_SESSION_ID}}">
+  <meta name="dollhouse-runtime-session-id" content="{{DOLLHOUSE_RUNTIME_SESSION_ID}}">
+  <!-- Asset version — injected at request time for cache-busting local CSS/JS/img files. -->
+  <meta name="dollhouse-console-asset-version" content="{{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="icon" type="image/png" href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="apple-touch-icon" href="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="fonts.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="styles.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="logs.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="metrics.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="permissions.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="sessions.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="setup.css?v={{DOLLHOUSE_ASSET_VERSION}}">
+  <link rel="stylesheet" href="security.css?v={{DOLLHOUSE_ASSET_VERSION}}">
   <!-- uPlot for metrics time-series charts -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.min.css" integrity="sha384-IfV0B7MIOYuO95kO9G5ySKPz/85zqFNOAs8iy4tkK5zd9izhJAB8b7lHrwYqqmYE" crossorigin="anonymous">
 </head>
@@ -31,13 +37,20 @@
 
   <header class="site-header">
     <div class="header-brand">
-      <img src="dollhouse-logo.png" alt="DollhouseMCP" class="header-logo" width="32" height="32">
+      <img src="dollhouse-logo.png?v={{DOLLHOUSE_ASSET_VERSION}}" alt="DollhouseMCP" class="header-logo" width="32" height="32">
       <div class="header-brand-text">
         <h1 class="site-title">DollhouseMCP</h1>
         <p class="site-tagline">Management Console</p>
       </div>
     </div>
-    <div class="header-right">
+    <div class="header-controls">
+      <div class="site-stats" id="stats" aria-live="polite"></div>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">&#9790;</span>
+        <span class="sr-only" id="theme-toggle-label">Switch to dark mode</span>
+      </button>
+    </div>
+    <div class="header-nav-row">
       <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
         <button class="console-tab" data-tab="setup">Setup</button>
         <button class="console-tab" data-tab="security">Auth</button>
@@ -46,12 +59,14 @@
         <button class="console-tab" data-tab="permissions">Permissions</button>
         <button class="console-tab active" data-tab="portfolio">Portfolio</button>
       </nav>
+      <div class="console-tab-menu-shell" id="console-tab-menu-shell">
+        <button class="console-tab-menu-toggle" id="console-tab-menu-toggle" type="button" hidden aria-haspopup="menu" aria-expanded="false" aria-controls="console-tab-menu">
+          <span class="console-tab-menu-icon" aria-hidden="true">&#9776;</span>
+          <span class="console-tab-menu-label">Menu</span>
+        </button>
+        <div class="console-tab-menu" id="console-tab-menu" role="menu" aria-orientation="vertical" hidden></div>
+      </div>
       <div class="session-indicator" id="session-indicator" title="Active sessions"></div>
-      <div class="site-stats" id="stats" aria-live="polite"></div>
-      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
-        <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">&#9790;</span>
-        <span class="sr-only" id="theme-toggle-label">Switch to dark mode</span>
-      </button>
     </div>
   </header>
 
@@ -566,6 +581,7 @@ npm install @dollhousemcp/mcp-server</code></pre>
       <a href="https://github.com/DollhouseMCP/mcp-server" class="footer-link">GitHub Repository</a>
       <a href="./collection-index.json" class="footer-link">JSON API</a>
       <a href="https://dollhousemcp.com" class="footer-link">DollhouseMCP</a>
+      <span class="footer-version" id="footer-version" aria-live="polite" aria-atomic="true"></span>
       <span class="footer-updated" id="footer-updated"></span>
       <span class="footer-copyright">&copy; 2026 DollhouseMCP</span>
     </div>
@@ -598,13 +614,13 @@ npm install @dollhousemcp/mcp-server</code></pre>
   <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.30/dist/uPlot.iife.min.js" integrity="sha384-1NEYi76CBpge3gahk4+X4M4JzdOV3WYq84RnByqYdAd5SdvJBTNCPFh/nsoHfN6i" crossorigin="anonymous"></script>
   <!-- Console auth helper must load first — it reads the token meta tag and
        exposes window.DollhouseAuth for all subsequent scripts (#1780). -->
-  <script src="consoleAuth.js"></script>
-  <script src="setup.js"></script>
-  <script src="app.js"></script>
-  <script src="logs.js"></script>
-  <script src="metrics.js"></script>
-  <script src="permissions.js"></script>
-  <script src="sessions.js"></script>
-  <script src="security.js"></script>
+  <script src="consoleAuth.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="logs.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="metrics.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="permissions.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="sessions.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
+  <script src="security.js?v={{DOLLHOUSE_ASSET_VERSION}}"></script>
 </body>
 </html>

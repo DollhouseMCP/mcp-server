@@ -268,6 +268,7 @@ describe('SchemaDispatcher', () => {
       expect(mockBuildInfoService.getBuildInfo).toHaveBeenCalled();
       expect(mockBuildInfoService.formatBuildInfo).toHaveBeenCalled();
       expect(result).toEqual({
+        structuredContent: { version: '1.0.0' },
         content: [{ type: 'text', text: 'Build Info: 1.0.0' }],
       });
     });

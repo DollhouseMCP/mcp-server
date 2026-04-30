@@ -260,6 +260,55 @@ Test project context for ensemble testing.`;
     await memoryManager.list();
   }
 
+  async function installWelcomeEnsembleFixtures() {
+    const fixtures = [
+      {
+        source: new URL('../../data/personas/dollhouse-expert.md', import.meta.url),
+        destinationDir: portfolioManager.getElementDir(ElementType.PERSONA),
+        filename: 'dollhouse-expert.md'
+      },
+      {
+        source: new URL('../../data/agents/research-assistant.md', import.meta.url),
+        destinationDir: portfolioManager.getElementDir(ElementType.AGENT),
+        filename: 'research-assistant.md'
+      },
+      {
+        source: new URL('../../data/skills/research-to-elements.md', import.meta.url),
+        destinationDir: portfolioManager.getElementDir(ElementType.SKILL),
+        filename: 'research-to-elements.md'
+      },
+      {
+        source: new URL('../../data/memories/welcome-to-dollhouse-guide.yaml', import.meta.url),
+        destinationDir: portfolioManager.getElementDir(ElementType.MEMORY),
+        filename: 'welcome-to-dollhouse-guide.yaml'
+      },
+      {
+        source: new URL('../../data/ensembles/welcome-to-the-dollhouse.md', import.meta.url),
+        destinationDir: portfolioManager.getElementDir(ElementType.ENSEMBLE),
+        filename: 'welcome-to-the-dollhouse.md'
+      }
+    ];
+
+    for (const fixture of fixtures) {
+      await fs.copyFile(
+        fixture.source,
+        path.join(fixture.destinationDir, fixture.filename)
+      );
+    }
+
+    await personaManager.reloadPersonas();
+    skillManager.clearCache();
+    templateManager.clearCache();
+    agentManager.clearCache();
+    memoryManager.clearCache();
+    ensembleManager.clearCache();
+
+    await skillManager.list();
+    await agentManager.list();
+    await memoryManager.list();
+    await ensembleManager.list();
+  }
+
   describe('Complete CRUD workflow via MCP tools', () => {
     it('should create, read, update, delete ensemble via MCP tools', async () => {
       await createTestElements();
@@ -438,6 +487,38 @@ Test project context for ensemble testing.`;
       // We don't need to additionally check if all referenced elements are loaded
       // into their respective managers, as that's an implementation detail.
       // The important part is that activation was attempted and reported results.
+    }, 30000);
+  });
+
+  describe('Welcome ensemble integration via MCP', () => {
+    it('should activate the shipped welcome ensemble and surface all active member types', async () => {
+      await installWelcomeEnsembleFixtures();
+
+      const activateResult = await elementCrudHandler.activateElement(
+        'welcome-to-the-dollhouse',
+        'ensembles'
+      );
+
+      const activateText = extractText(activateResult);
+      expect(activateText).toContain("✅ Ensemble 'welcome-to-the-dollhouse' activated");
+      expect(activateText).toContain('**Strategy**: sequential');
+      expect(activateText).toContain('**Activated**: 4 elements');
+      expect(activateText).toContain('dollhouse-expert');
+      expect(activateText).toContain('welcome-to-dollhouse-guide');
+      expect(activateText).toContain('research-assistant');
+      expect(activateText).toContain('research-to-elements');
+
+      const activeEnsemblesText = extractText(await elementCrudHandler.getActiveElements('ensembles'));
+      const activePersonasText = extractText(await elementCrudHandler.getActiveElements('personas'));
+      const activeSkillsText = extractText(await elementCrudHandler.getActiveElements('skills'));
+      const activeAgentsText = extractText(await elementCrudHandler.getActiveElements('agents'));
+      const activeMemoriesText = extractText(await elementCrudHandler.getActiveElements('memories'));
+
+      expect(activeEnsemblesText).toContain('welcome-to-the-dollhouse');
+      expect(activePersonasText).toContain('dollhouse-expert');
+      expect(activeSkillsText).toContain('research-to-elements');
+      expect(activeAgentsText).toContain('Research Assistant');
+      expect(activeMemoriesText).toContain('welcome-to-dollhouse-guide');
     }, 30000);
   });
 

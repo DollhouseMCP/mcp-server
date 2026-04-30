@@ -8,11 +8,29 @@
  */
 
 import express, { Router } from 'express';
+import { homedir } from 'node:os';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
+import { ensureLatestPortFile } from '../portDiscovery.js';
+import {
+  getLastPermissionHookStartupRepairSummary,
+  getPermissionHookDiagnosticsPath,
+  getPermissionHookStatusAsync,
+  readLastPermissionHookDiagnostic,
+  reconcilePermissionHookStatus,
+  summarizePermissionHookHealth,
+} from '../../utils/permissionHooks.js';
 
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
+import {
+  type PermissionAuthorityHost,
+  type PermissionAuthorityMode,
+  PERMISSION_AUTHORITY_HOSTS,
+  PERMISSION_AUTHORITY_MODES,
+  readPermissionAuthorityState,
+  setPermissionAuthorityMode,
+} from '../../utils/permissionAuthority.js';
 
 // ── Permission Decision Tracking ─────────────────────────────────────────────
 // Ring buffer of recent permission decisions for the live dashboard feed.
@@ -21,10 +39,74 @@ interface PermissionDecision {
   id: string;
   timestamp: string;
   session_id?: string;
+  turn_id?: string;
+  tool_use_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  model?: string;
   tool_name: string;
   command?: string;
   decision: string;
   reason?: string;
+  platform?: string;
+  target?: string;
+  targetLabel?: string;
+  details?: PermissionDecisionDetail[];
+}
+
+interface PermissionDecisionDetail {
+  label: string;
+  value: string;
+  monospace?: boolean;
+}
+
+type PermissionDecisionTargetKey =
+  | 'file_path'
+  | 'path'
+  | 'url'
+  | 'pattern'
+  | 'query'
+  | 'element_name'
+  | 'request_id';
+
+interface PermissionDecisionInput extends Record<string, unknown> {
+  command?: string;
+  file_path?: string;
+  path?: string;
+  url?: string;
+  pattern?: string;
+  query?: string;
+  element_name?: string;
+  request_id?: string;
+}
+
+/**
+ * Optional host metadata forwarded by permission hooks for audit correlation.
+ *
+ * Codex supplies these fields with hook events so the dashboard can connect a
+ * permission decision back to the originating session, turn, tool use,
+ * transcript, workspace, and model. They are display-only metadata and are not
+ * used to decide whether a tool call is allowed.
+ */
+interface PermissionDecisionRequestMetadata {
+  /** Codex session identifier for grouping decisions by conversation. */
+  session_id?: string;
+  /** Codex turn identifier for locating the user/model exchange. */
+  turn_id?: string;
+  /** Codex tool-use identifier for the exact hook invocation. */
+  tool_use_id?: string;
+  /** Local transcript path emitted by Codex for human troubleshooting. */
+  transcript_path?: string;
+  /** Working directory where the host attempted the tool call. */
+  cwd?: string;
+  /** Model name reported by the host for audit context. */
+  model?: string;
+}
+
+interface PermissionDecisionTargetDescriptor {
+  key: PermissionDecisionTargetKey;
+  label: string;
+  monospace?: boolean;
 }
 
 interface KnownPolicySession {
@@ -38,9 +120,19 @@ const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
-  trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void;
+  trackDecision(
+    metadata: PermissionDecisionRequestMetadata,
+    toolName: string,
+    input: PermissionDecisionInput,
+    result: Record<string, unknown>,
+    platform: string,
+  ): void;
   getRecentDecisions(): PermissionDecision[];
 }
+
+const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
+const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
+type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
 
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
@@ -51,7 +143,11 @@ function extractString(obj: Record<string, unknown>, keys: string[], fallback: s
   return fallback;
 }
 
-function extractDecision(result: Record<string, unknown>): string {
+function isEmptyObject(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function extractDecision(result: Record<string, unknown>, platform?: string): string {
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
@@ -62,6 +158,7 @@ function extractDecision(result: Record<string, unknown>): string {
   if (typeof result.decision === 'string') return result.decision;
   if (typeof result.behavior === 'string') return result.behavior;
   if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
+  if (platform === 'codex' && isEmptyObject(result)) return 'allow';
   return 'unknown';
 }
 
@@ -75,20 +172,156 @@ function extractReason(result: Record<string, unknown>): string {
   return extractString(result, ['reason', 'message'], '');
 }
 
+function shouldNormalizeClaudeHook(platform: string | undefined): boolean {
+  return platform !== undefined && CLAUDE_COMPATIBLE_HOOK_PLATFORMS.has(platform);
+}
+
+function normalizePermissionResponseForPlatform(
+  platform: string,
+  input: Record<string, unknown>,
+  result: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!shouldNormalizeClaudeHook(platform)) {
+    return result;
+  }
+
+  const nested = result.hookSpecificOutput;
+  if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+    const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
+    if (typeof nestedDecision === 'string') {
+      return result;
+    }
+  }
+
+  const decision = extractDecision(result);
+  if (NORMALIZABLE_PERMISSION_DECISIONS.has(decision)) {
+    return formatPermissionResponse(
+      decision as NormalizablePermissionDecision,
+      platform,
+      input,
+      extractReason(result),
+    );
+  }
+
+  return formatPermissionResponse('allow', platform, input);
+}
+
+/**
+ * Builds the expanded audit details shown in the dashboard.
+ *
+ * Host metadata stays separate from permission inputs so the UI can explain
+ * where a decision came from without accidentally treating correlation fields
+ * as policy targets.
+ */
+function buildDecisionDetails(
+  toolName: string,
+  input: PermissionDecisionInput,
+  result: Record<string, unknown>,
+  platform: string,
+  metadata: PermissionDecisionRequestMetadata,
+): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
+  const details: PermissionDecisionDetail[] = [];
+
+  if (platform) {
+    details.push({ label: 'Platform', value: platform, monospace: true });
+  }
+
+  if (metadata.session_id) {
+    details.push({ label: 'Session', value: metadata.session_id, monospace: true });
+  }
+
+  if (metadata.turn_id) {
+    details.push({ label: 'Turn', value: metadata.turn_id, monospace: true });
+  }
+
+  if (metadata.tool_use_id) {
+    details.push({ label: 'Tool Use', value: metadata.tool_use_id, monospace: true });
+  }
+
+  if (metadata.transcript_path) {
+    details.push({ label: 'Transcript', value: metadata.transcript_path, monospace: true });
+  }
+
+  if (metadata.cwd) {
+    details.push({ label: 'Working Dir', value: metadata.cwd, monospace: true });
+  }
+
+  if (metadata.model) {
+    details.push({ label: 'Model', value: metadata.model, monospace: true });
+  }
+
+  if (toolName === 'Bash' && typeof input.command === 'string' && input.command !== '') {
+    details.push({ label: 'Command', value: input.command, monospace: true });
+  }
+
+  const targetDescriptors: PermissionDecisionTargetDescriptor[] = [
+    { key: 'file_path', label: 'File', monospace: true },
+    { key: 'path', label: 'Path', monospace: true },
+    { key: 'url', label: 'URL' },
+    { key: 'pattern', label: 'Pattern', monospace: true },
+    { key: 'query', label: 'Query' },
+    { key: 'element_name', label: 'Element', monospace: true },
+    { key: 'request_id', label: 'Request', monospace: true },
+  ];
+
+  let target: string | undefined;
+  let targetLabel: string | undefined;
+
+  for (const descriptor of targetDescriptors) {
+    const value = input[descriptor.key];
+    if (typeof value !== 'string' || value === '') {
+      continue;
+    }
+
+    target = value;
+    targetLabel = descriptor.label;
+    details.push({ label: descriptor.label, value, monospace: descriptor.monospace });
+    break;
+  }
+
+  const matchedPattern = extractString(result, ['matched_pattern', 'matchedPattern'], '');
+  if (matchedPattern !== '') {
+    details.push({ label: 'Matched Pattern', value: matchedPattern, monospace: true });
+  }
+
+  const policySource = extractString(result, ['policy_source', 'policySource'], '');
+  if (policySource !== '') {
+    details.push({ label: 'Policy Source', value: policySource, monospace: true });
+  }
+
+  return { target, targetLabel, details };
+}
+
 function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): PermissionDecisionTracker {
   const recentDecisions: PermissionDecision[] = [];
   let decisionCounter = 0;
 
   return {
-    trackDecision(sessionId: string | undefined, toolName: string, input: Record<string, unknown>, result: Record<string, unknown>): void {
+    trackDecision(
+      metadata: PermissionDecisionRequestMetadata,
+      toolName: string,
+      input: PermissionDecisionInput,
+      result: Record<string, unknown>,
+      platform: string,
+    ): void {
+      const detailState = buildDecisionDetails(toolName, input, result, platform, metadata);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(metadata.session_id ? { session_id: metadata.session_id } : {}),
+        ...(metadata.turn_id ? { turn_id: metadata.turn_id } : {}),
+        ...(metadata.tool_use_id ? { tool_use_id: metadata.tool_use_id } : {}),
+        ...(metadata.transcript_path ? { transcript_path: metadata.transcript_path } : {}),
+        ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
+        ...(metadata.model ? { model: metadata.model } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-        decision: extractDecision(result),
+        decision: extractDecision(result, platform),
         reason: extractReason(result),
+        platform,
+        target: detailState.target,
+        targetLabel: detailState.targetLabel,
+        details: detailState.details,
       };
       recentDecisions.unshift(entry);
       if (recentDecisions.length > bufferSize) {
@@ -161,11 +394,60 @@ function extractKnownPolicySessions(elements: Array<Record<string, unknown>>): K
   return knownSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
+async function selfHealLatestPermissionPortFile(port: number | undefined): Promise<void> {
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0) {
+    return;
+  }
+
+  try {
+    await ensureLatestPortFile(port);
+  } catch (err) {
+    logger.debug('[WebUI/Gateway] Could not refresh permission-server.port', {
+      error: err instanceof Error ? err.message : String(err),
+      port,
+    });
+  }
+}
+
+async function resolveInstalledPermissionAuthorityHosts(
+  homeDir: string,
+  authorityState: Awaited<ReturnType<typeof readPermissionAuthorityState>>,
+  autoRepairHookAssets: boolean,
+): Promise<PermissionAuthorityHost[]> {
+  const installedStatuses = await Promise.all(
+    PERMISSION_AUTHORITY_HOSTS.map(async (host) => ({
+      host,
+      status: await reconcilePermissionHookStatus(host, { homeDir, autoRepair: autoRepairHookAssets }),
+    })),
+  );
+
+  const installedHosts = installedStatuses
+    .filter(({ status }) => status.installed)
+    .map(({ host }) => host);
+
+  const persistedHosts = Object.keys(authorityState.hosts || {}).filter((host): host is PermissionAuthorityHost =>
+    (PERMISSION_AUTHORITY_HOSTS as readonly string[]).includes(host),
+  );
+
+  return Array.from(new Set(installedHosts.concat(persistedHosts)));
+}
+
 /**
  * Register permission-related routes on a gateway router.
  * Must be called with the MCP-AQL handler for policy evaluation.
  */
-export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler): void {
+export interface RegisterPermissionRoutesOptions {
+  homeDir?: string;
+  autoRepairHookAssets?: boolean;
+}
+
+export function registerPermissionRoutes(
+  router: Router,
+  handler: MCPAQLHandler,
+  options: RegisterPermissionRoutesOptions = {},
+): void {
+  const authorityHomeDir = options.homeDir ?? homedir();
+  const autoRepairHookAssets = options.autoRepairHookAssets ?? process.env.NODE_ENV !== 'test';
   const decisionTracker = createPermissionDecisionTracker();
   /**
    * POST /api/evaluate_permission
@@ -178,11 +460,18 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
     PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS,
   );
   router.post('/evaluate_permission', express.json(), async (req, res) => {
+    await selfHealLatestPermissionPortFile(req.socket.localPort);
+
     const body = req.body as {
       tool_name?: string;
-      input?: Record<string, unknown>;
+      input?: PermissionDecisionInput;
       platform?: string;
       session_id?: string;
+      turn_id?: string;
+      tool_use_id?: string;
+      transcript_path?: string;
+      cwd?: string;
+      model?: string;
     };
     const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
 
@@ -193,7 +482,14 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
+    const requestMetadata: PermissionDecisionRequestMetadata = {
+      session_id: normalizeOptionalString(body.session_id),
+      turn_id: normalizeOptionalString(body.turn_id),
+      tool_use_id: normalizeOptionalString(body.tool_use_id),
+      transcript_path: normalizeOptionalString(body.transcript_path),
+      cwd: normalizeOptionalString(body.cwd),
+      model: normalizeOptionalString(body.model),
+    };
     const input = body.input;
 
     if (!tool_name) {
@@ -209,7 +505,7 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
           tool_name,
           input: input || {},
           platform,
-          ...(session_id ? { session_id } : {}),
+          ...(requestMetadata.session_id ? { session_id: requestMetadata.session_id } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;
@@ -220,13 +516,20 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         return;
       }
 
-      const decision = extractDecision(opResult.data as Record<string, unknown>);
+      const rawResult = opResult.data as Record<string, unknown>;
+      const responseData = normalizePermissionResponseForPlatform(
+        platform,
+        input || {},
+        rawResult,
+      );
+      const trackedResult = { ...rawResult, ...responseData };
+      const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(session_id, tool_name, input || {}, opResult.data as Record<string, unknown>);
+      decisionTracker.trackDecision(requestMetadata, tool_name, input || {}, trackedResult, platform);
 
-      res.json(opResult.data);
+      res.json(responseData);
     } catch (err) {
       const elapsedMs = Date.now() - startMs;
       logger.error(`[WebUI/Gateway] evaluate_permission error (${elapsedMs}ms):`, err);
@@ -241,6 +544,8 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
    */
   router.get('/permissions/status', async (req, res) => {
     try {
+      await selfHealLatestPermissionPortFile(req.socket.localPort);
+
       const sessionId = typeof req.query['sessionId'] === 'string' && req.query['sessionId']
         ? req.query['sessionId']
         : undefined;
@@ -259,6 +564,16 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       }
 
       const data = opResult.data as Record<string, unknown>;
+      const authorityState = await readPermissionAuthorityState(authorityHomeDir);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(
+        authorityHomeDir,
+        authorityState,
+        autoRepairHookAssets,
+      );
+      const hookHost = typeof data.hookHost === 'string' ? data.hookHost : undefined;
+      const hookStatus = hookHost
+        ? await reconcilePermissionHookStatus(hookHost, { homeDir: authorityHomeDir, autoRepair: autoRepairHookAssets })
+        : await getPermissionHookStatusAsync(authorityHomeDir);
       const elements = normalizePolicyElements((data.elements || []) as Array<Record<string, unknown>>);
 
       const denyPatterns = (data.combinedDenyPatterns as string[] | undefined) ?? [];
@@ -267,6 +582,20 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       const denyOperations = (data.combinedDenyOperations as string[] | undefined) ?? [];
       const allowOperations = (data.combinedAllowOperations as string[] | undefined) ?? [];
       const confirmOperations = (data.combinedConfirmOperations as string[] | undefined) ?? [];
+
+      const hookStartupRepair = getLastPermissionHookStartupRepairSummary();
+      const hookDiagnosticsPath = getPermissionHookDiagnosticsPath(authorityHomeDir);
+      const hookLastDiagnostic = await readLastPermissionHookDiagnostic(authorityHomeDir);
+      const hookHealthHost = hookStatus.host ?? hookHost ?? 'managed-host';
+      const hookHealth = summarizePermissionHookHealth({
+        installedHosts: hookStatus.installed || hookStatus.assetsPrepared ? [hookHealthHost] : [],
+        currentHosts: hookStatus.assetsCurrent ? [hookHealthHost] : [],
+        repairedHosts: hookStatus.autoRepaired ? [hookHealthHost] : [],
+        needsRepairHosts: hookStatus.needsRepair ? [hookHealthHost] : [],
+        diagnosticsPath: hookDiagnosticsPath,
+        lastDiagnostic: hookLastDiagnostic,
+        lastStartupRepair: hookStartupRepair,
+      });
 
       res.json({
         ...(sessionId ? { sessionId } : {}),
@@ -284,8 +613,23 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
         elements,
         knownSessions: extractKnownPolicySessions(elements),
         permissionPromptActive: data.permissionPromptActive,
-        hookInstalled: data.hookInstalled,
+        hookInstalled: hookStatus.installed,
         hookHost: data.hookHost,
+        hookAssetsPrepared: hookStatus.assetsPrepared,
+        hookAssetsCurrent: hookStatus.assetsCurrent,
+        hookAutoRepaired: hookStatus.autoRepaired,
+        hookNeedsRepair: hookStatus.needsRepair,
+        hookRepairError: hookStatus.repairError,
+        hookHealth,
+        hookStartupRepair,
+        hookDiagnostics: {
+          logPath: hookDiagnosticsPath,
+          lastEvent: hookLastDiagnostic,
+        },
+        authority: authorityState,
+        authoritySupportedHosts: installedAuthorityHosts,
+        authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
+        authorityAiMutable: false,
         enforcementReady: data.enforcementReady,
         invalidPolicyElementCount: data.invalidPolicyElementCount ?? 0,
         advisory: data.advisory,
@@ -296,4 +640,104 @@ export function registerPermissionRoutes(router: Router, handler: MCPAQLHandler)
       res.status(500).json({ error: 'Failed to get permission status' });
     }
   });
+
+  router.get('/permissions/authority', async (_req, res) => {
+    try {
+      const authorityState = await readPermissionAuthorityState(authorityHomeDir);
+      const installedAuthorityHosts = await resolveInstalledPermissionAuthorityHosts(
+        authorityHomeDir,
+        authorityState,
+        autoRepairHookAssets,
+      );
+      res.json({
+        ...authorityState,
+        supportedHosts: installedAuthorityHosts,
+        supportedModes: [...PERMISSION_AUTHORITY_MODES],
+        aiMutable: false,
+      });
+    } catch (err) {
+      logger.error('[WebUI/Gateway] permissions/authority error:', err);
+      res.status(500).json({ error: 'Failed to get permission authority' });
+    }
+  });
+
+  router.post('/permissions/authority', express.json(), async (req, res) => {
+    try {
+      const host = normalizeAuthorityHost(req.body?.host);
+      const mode = normalizeAuthorityMode(req.body?.mode);
+      const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() !== ''
+        ? req.body.reason.trim()
+        : undefined;
+
+      if (!host || !mode) {
+        res.status(400).json({
+          error: 'host and mode are required',
+          supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+          supportedModes: [...PERMISSION_AUTHORITY_MODES],
+        });
+        return;
+      }
+
+      let policies: Record<string, unknown> | undefined;
+      if (mode === 'authoritative') {
+        const policyResult = asSingleResult(await handler.handleRead({
+          operation: 'get_effective_cli_policies',
+          params: { reporting_scope: 'dashboard' },
+        }));
+
+        if (!policyResult.success) {
+          res.status(500).json({ error: policyResult.error || 'Failed to fetch effective policies' });
+          return;
+        }
+
+        policies = policyResult.data as Record<string, unknown>;
+      }
+
+      const authorityState = await setPermissionAuthorityMode({
+        host,
+        mode,
+        reason,
+        homeDir: authorityHomeDir,
+        policies: mode === 'authoritative'
+          ? {
+            combinedAllowPatterns: asStringArray(policies?.combinedAllowPatterns),
+            combinedConfirmPatterns: asStringArray(policies?.combinedConfirmPatterns),
+            combinedDenyPatterns: asStringArray(policies?.combinedDenyPatterns),
+          }
+          : undefined,
+      });
+
+      res.json({ success: true, authority: authorityState });
+    } catch (err) {
+      logger.error(
+        `[WebUI/Gateway] permissions/authority update error (host=${String(req.body?.host ?? '')}, mode=${String(req.body?.mode ?? '')}):`,
+        err,
+      );
+      res.status(500).json({
+        error: err instanceof Error ? err.message : 'Failed to update permission authority',
+      });
+    }
+  });
+}
+
+function normalizeAuthorityHost(value: unknown): PermissionAuthorityHost | null {
+  return typeof value === 'string' && PERMISSION_AUTHORITY_HOSTS.includes(value as PermissionAuthorityHost)
+    ? value as PermissionAuthorityHost
+    : null;
+}
+
+function normalizeAuthorityMode(value: unknown): PermissionAuthorityMode | null {
+  return typeof value === 'string' && PERMISSION_AUTHORITY_MODES.includes(value as PermissionAuthorityMode)
+    ? value as PermissionAuthorityMode
+    : null;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== ''
+    ? value.normalize('NFC')
+    : undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }

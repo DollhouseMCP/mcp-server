@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "2.0.17",
+  "version": "2.0.32",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -43,6 +43,7 @@
     "test:compiled": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config tests/jest.config.compiled.cjs",
     "test:compiled:ci": "npm run build:test && cross-env NODE_OPTIONS='--experimental-vm-modules' jest --config tests/jest.config.compiled.cjs --ci --watchAll=false",
     "test:integration": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs",
+    "test:integration:hooks:docker": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs tests/integration/hooks/permission-hook-docker.test.ts",
     "test:integration:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs --watch",
     "test:integration:coverage": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.integration.config.cjs --coverage",
     "test:integration:crud": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs tests/integration/crud/ --no-coverage",
@@ -54,6 +55,7 @@
     "test:all": "npm test && npm run test:performance && npm run test:integration",
     "test:all:coverage": "npm run test:coverage && npm run test:integration:coverage",
     "lint": "eslint --max-warnings=0 --ext .ts src tests scripts",
+    "lint:shell": "shellcheck -x scripts/pretooluse-dollhouse.sh scripts/pretooluse-codex.sh scripts/pretooluse-cursor.sh scripts/pretooluse-gemini.sh scripts/pretooluse-vscode.sh scripts/pretooluse-windsurf.sh scripts/permission-port-discovery.sh scripts/permission-hook-config.sh",
     "lint:fix": "eslint --ext .ts src tests scripts --fix",
     "security:critical": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs tests/security/tests --testNamePattern=\"(Command Injection|Path Traversal|YAML)\" --maxWorkers=4",
     "security:rapid": "npm run security:critical -- --testTimeout=30000",
@@ -87,6 +89,7 @@
     "update:version": "node scripts/update-version.mjs",
     "version:bump": "node scripts/update-version.mjs",
     "version:check": "node scripts/update-version.mjs --dry-run",
+    "verify:package-assets": "node scripts/verify-npm-package-assets.mjs",
     "tools:count": "node scripts/count-tools.js",
     "tools:list": "node scripts/count-tools.js --json",
     "memory:cleanup:duplicates": "tsx src/utils/cleanup-duplicate-memories.ts",
@@ -98,19 +101,26 @@
   },
   "keywords": [
     "mcp",
+    "mcp-server",
     "model-context-protocol",
-    "ai",
-    "persona",
+    "personas",
+    "skills",
+    "agents",
+    "memory",
+    "templates",
+    "ensembles",
     "prompt",
     "claude",
+    "cursor",
+    "vscode",
+    "codex",
+    "windsurf",
+    "ai",
     "ai-assistant",
-    "roleplay",
-    "character",
-    "behavioral-profiles",
-    "dynamic-prompting",
+    "llm",
+    "ai-tools",
     "typescript",
-    "dollhouse",
-    "marketplace"
+    "dollhousemcp"
   ],
   "author": {
     "name": "Mick Darling",
@@ -145,6 +155,8 @@
     "dist/web/public/**",
     "dist/seed-elements/**",
     "scripts/pretooluse-dollhouse.sh",
+    "scripts/permission-port-discovery.sh",
+    "scripts/permission-hook-config.sh",
     "scripts/pretooluse-vscode.sh",
     "scripts/pretooluse-cursor.sh",
     "scripts/pretooluse-windsurf.sh",
@@ -177,7 +189,7 @@
     "@dollhousemcp/safety": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.25.1",
     "chalk": "^5.6.2",
-    "dompurify": "^3.3.1",
+    "dompurify": "^3.4.0",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.2",
     "express": "^5.2.1",
@@ -242,7 +254,7 @@
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "3.14.2"
     },
-    "hono": "4.12.12",
+    "hono": "4.12.14",
     "@hono/node-server": "1.19.13"
   }
 }

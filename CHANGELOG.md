@@ -1,5 +1,75 @@
 # Changelog
 
+## [2.0.32] - 2026-04-23
+
+- Restore the management console's stronger responsive header behavior, including cleaner tab overflow handling and keyboard-accessible menu navigation.
+- Fix MCP-AQL agent execution loop guidance and recovery messaging so smaller models get clearer lifecycle instructions, stronger parameter errors, and better `get_execution_state` correction hints.
+
+## [2.0.31] - 2026-04-22
+
+- Fix Codex PreToolUse silent allow handling and expand permission hook diagnostics.
+
+## [2.0.30] - 2026-04-21
+
+- Improve hook reliability across Codex and other supported clients, including fail-open JSON behavior.
+- Automatically refresh stale local hook assets and surface repair outcomes in status/build info.
+- Add session platform metadata, update-available labeling, and cleaner dropdown alignment in the web console.
+
+## [2.0.29] - 2026-04-21
+
+- Added explicit session platform metadata and update-available status in the web console session dropdown
+- Improved dropdown alignment for session status, platform, and uptime columns
+- Fixed Codex pre-tool-use hook JSON output and expanded hook contract coverage across supported clients
+- Automatically verify and refresh installed local permission hook assets when they go stale
+
+## [2.0.28] - 2026-04-21
+
+- Add explicit session client metadata and update-available status in the web console dropdown, with improved layout alignment.
+- Fix Codex pre-tool-use allow-hook output so Bash permission checks no longer fail with invalid JSON.
+- Audit and document permission-hook contracts across supported clients, including stronger fail-open regression coverage and setup guidance.
+
+## [2.0.27] - 2026-04-20
+
+- Version bump
+
+## [2.0.26] - 2026-04-17
+
+- Version bump
+
+## [2.0.25] - 2026-04-16
+
+Restore audit markdown export and harden direct commercial license email delivery
+
+## [2.0.24] - 2026-04-16
+
+- Fix web console authority convergence so newer sessions replace stale listeners, register correctly, and serve current assets.
+
+## [2.0.23] - 2026-04-16
+
+- Expand npm package keywords for broader discovery across MCP clients, AI tool ecosystems, and Dollhouse element primitives.
+
+## [2.0.22] - 2026-04-16
+
+- Fix legacy console leader takeover so new authenticated sessions can replace older incompatible port owners and register correctly.
+
+## [2.0.21] - 2026-04-16
+
+- Sanitize OAuth and PAT helper logging to restore SonarCloud security quality
+
+## [2.0.20] - 2026-04-16
+
+Point release for console leader bind authority and follower registration recovery.
+
+## [2.0.19] - 2026-04-16
+
+Point release for deadlock relief recovery and version-aware web console leadership.
+
+## [2.0.18] - 2026-04-16
+
+- Expanded permission setup and support-matrix clarity across supported clients.
+- Added stronger gatekeeper validation, activation diagnostics, and audit tooling.
+- Fixed Claude Code hook response-shape compatibility and stabilized release CI tests.
+
 ## [2.0.17] - 2026-04-15
 
 - Expanded client setup and permission integration support across more MCP hosts.

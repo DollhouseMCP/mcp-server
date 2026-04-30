@@ -54,7 +54,7 @@ function isDollhouseProcess(cmdLine: string): boolean {
   const isDollhouseBin = /(?:^|\/)dollhousemcp(?:\s|$)/.test(cmdLine) ||
     cmdLine.includes('.bin/dollhousemcp');
   const isMcpServerBin = cmdLine.includes('.bin/mcp-server') ||
-    cmdLine.includes('dist/index.js');
+    /(?:dollhousemcp|mcp-server)[/\\]dist[/\\]index\.js/.test(cmdLine);
   return isDollhouseBin || isMcpServerBin;
 }
 
@@ -301,13 +301,31 @@ describe('Stale Process Recovery (#1850)', () => {
     });
   });
 
+  describe('recognized MCP host parents', () => {
+    it('treats Claude Desktop and Codex app-server parents as active MCP hosts', () => {
+      expect(Recovery.isRecognizedMcpHostParent('/Applications/Claude.app/Contents/Helpers/disclaimer npx @dollhousemcp/mcp-server@latest')).toBe(true);
+      expect(Recovery.isRecognizedMcpHostParent('/Applications/Codex.app/Contents/Resources/codex app-server')).toBe(true);
+    });
+
+    it('normalizes hidden Unicode characters before matching host parents', () => {
+      expect(Recovery.isRecognizedMcpHostParent('/Applications/Co\u200Bdex.app/Contents/Resources/codex app-server')).toBe(true);
+    });
+
+    it('does not treat launchd or plain shells as active MCP hosts', () => {
+      expect(Recovery.isRecognizedMcpHostParent('/sbin/launchd')).toBe(false);
+      expect(Recovery.isRecognizedMcpHostParent('/bin/zsh -lc npm exec @dollhousemcp/mcp-server')).toBe(false);
+    });
+  });
+
   // ── Exports ───────────────────────────────────────────────────────────
 
   describe('module exports', () => {
     it('all recovery functions are exported and callable', () => {
       expect(typeof Recovery.findPidOnPort).toBe('function');
       expect(typeof Recovery.killStaleProcess).toBe('function');
+      expect(typeof Recovery.killStaleProcessDetailed).toBe('function');
       expect(typeof Recovery.recoverStalePort).toBe('function');
+      expect(typeof Recovery.isRecognizedMcpHostParent).toBe('function');
     });
   });
 });

@@ -174,10 +174,11 @@ Users can inspect the permission profile before installing, and the server enfor
 
 ### [BLOG CANDIDATE] Why a Query Language Matters for Agent Security
 
-MCP-AQL (the GraphQL-inspired query language routed through CRUDE endpoints) isn't just an API design choice. It's a security architecture decision.
+MCP-AQL is a protocol layer on top of MCP, created by Dollhouse Research. In DollhouseMCP, that GraphQL-inspired query layer routed through CRUDE endpoints isn't just an API design choice. It's a security architecture decision.
 
 By collapsing dozens of individual MCP tools into 5 typed endpoints (Create, Read, Update, Delete, Execute), MCP-AQL provides:
 
+- **Semantic endpoint selection**: The model chooses an action family based on intent first, rather than hunting through a long list of narrowly functional tools. That better matches how LLMs reason about tasks.
 - **Endpoint-level permission defaults**: All READ operations auto-approve. All DELETE operations require single-use confirmation. This is enforced by the routing layer before any handler runs.
 - **Schema-driven validation**: Every operation has a typed schema. The server validates parameters before dispatch — malformed requests never reach handler code.
 - **Introspection as capability discovery**: The LLM doesn't need to know every operation at startup. It discovers available operations via `introspect`, reducing token overhead and eliminating stale tool definitions.

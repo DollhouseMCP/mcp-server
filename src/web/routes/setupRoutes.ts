@@ -14,14 +14,18 @@ import { accessSync, constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { homedir, platform } from 'node:os';
-import { parse as parseToml } from 'smol-toml';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _locator = new PackageResourceLocator();
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
-import { getPermissionHookStatusAsync, installPermissionHook, type InstallPermissionHookResult } from '../../utils/permissionHooks.js';
+import {
+  installPermissionHook,
+  reconcilePermissionHookStatus,
+  type InstallPermissionHookResult,
+  type PermissionHookStatus,
+} from '../../utils/permissionHooks.js';
 
 const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
@@ -46,6 +50,7 @@ function isMissingPathError(error: unknown): boolean {
 // src/telemetry/OperationalTelemetry.ts. Verified write-only 2026-04-07.
 // Can be overridden with POSTHOG_API_KEY env var for custom PostHog installations.
 const POSTHOG_PROJECT_KEY = process.env.POSTHOG_API_KEY || 'phc_xFJKIHAqRX1YLa0TSdTGwGj19d1JeoXDKjJNYq492vq';
+const LICENSE_WORKER_DIRECT_PATH = '/direct-verification';
 
 /** Supported client identifiers for one-click setup. */
 const ALLOWED_CLIENTS = new Set([
@@ -70,11 +75,29 @@ type ConfigPathClient =
   | 'claude'
   | 'claude-code'
   | 'cursor'
+  | 'vscode'
   | 'windsurf'
   | 'cline'
   | 'lmstudio'
   | 'gemini-cli'
   | 'codex';
+
+type SetupSupportLevel =
+  | 'full_native'
+  | 'partial_native'
+  | 'mcp_only'
+  | 'unsupported';
+
+const SETUP_SUPPORT_LEVELS: Record<string, SetupSupportLevel> = {
+  'claude': 'unsupported',
+  'claude-code': 'full_native',
+  'cursor': 'partial_native',
+  'cline': 'mcp_only',
+  'windsurf': 'partial_native',
+  'lmstudio': 'mcp_only',
+  'gemini-cli': 'partial_native',
+  'codex': 'partial_native',
+};
 
 /** Allowed release channels for the install endpoint. */
 const ALLOWED_INSTALL_CHANNELS: ReadonlySet<string> = new Set(['latest', 'beta', 'rc']);
@@ -98,6 +121,11 @@ function getConfigPath(client: string): string | null {
     },
     'claude-code': () => join(home, '.claude.json'),
     'cursor': () => join(home, '.cursor', 'mcp.json'),
+    'vscode': () => {
+      if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'settings.json');
+      if (plat === 'win32') return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'Code', 'User', 'settings.json');
+      return join(home, '.config', 'Code', 'User', 'settings.json');
+    },
     'windsurf': () => join(home, '.codeium', 'windsurf', 'mcp_config.json'),
     'cline': () => {
       if (plat === 'darwin') return join(home, 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json');
@@ -158,37 +186,66 @@ interface DetectResult {
   serverKey?: string;
 }
 
-/** Parse a TOML config file for a DollhouseMCP server entry */
-function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
+/**
+ * Parse a single `[mcp_servers.<name>]` TOML section into a config summary.
+ *
+ * When `caseSensitive` is true, the section header must match exactly. This is
+ * important for Codex because the installer writes `[mcp_servers.dollhousemcp]`
+ * in lowercase and we want to prefer that canonical entry over legacy mixed-case
+ * sections that may still be present in the file.
+ */
+function parseTomlSectionConfig(
+  sectionName: string,
+  raw: string,
+  caseSensitive = false,
+): Record<string, unknown> | null {
+  const escapedSectionName = sectionName.replaceAll(/[.*+?^${}()|[\]\\]/g, String.raw`\$&`);
+  const sectionRegex = new RegExp(String.raw`\[mcp_servers\.${escapedSectionName}\]`, caseSensitive ? '' : 'i');
+  const sectionMatch = sectionRegex.exec(raw);
+  if (!sectionMatch) return null;
+
+  const tomlConfig: Record<string, unknown> = { serverName: sectionName };
+  const sectionStart = sectionMatch.index + sectionMatch[0].length;
+  const nextSection = raw.indexOf('\n[', sectionStart);
+  const sectionContent = nextSection > -1 ? raw.slice(sectionStart, nextSection) : raw.slice(sectionStart);
+
+  const commandMatch = /command\s*=\s*"([^"]+)"/.exec(sectionContent);
+  const argsMatch = /args\s*=\s*\[([^\]]*)\]/.exec(sectionContent);
+  const enabledMatch = /enabled\s*=\s*(true|false)/i.exec(sectionContent);
+
+  if (commandMatch) tomlConfig.command = commandMatch[1];
+  if (argsMatch) {
+    tomlConfig.args = argsMatch[1].split(',').map((arg) => arg.trim().replaceAll('"', ''));
+  }
+  if (enabledMatch) {
+    tomlConfig.enabled = enabledMatch[1].toLowerCase() === 'true';
+  }
+
+  return tomlConfig;
+}
+
+/**
+ * Parse a TOML config file for a DollhouseMCP server entry.
+ *
+ * Detection prefers the canonical lowercase Codex section name first, then
+ * falls back to older Dollhouse-related section names so stale configs are
+ * still visible in the UI instead of being mistaken for a fresh install.
+ */
+export function parseTomlConfig(raw: string): Omit<DetectResult, 'configPath'> {
   if (!raw.toLowerCase().includes('dollhousemcp')) {
     return { installed: false };
   }
 
-  try {
-    const parsed = parseToml(raw) as Record<string, unknown>;
-    const mcpServers = parsed.mcp_servers;
-    if (!mcpServers || typeof mcpServers !== 'object' || Array.isArray(mcpServers)) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const matchingEntry = Object.entries(mcpServers).find(([key]) =>
-      key.toLowerCase().includes('dollhousemcp'));
-    if (!matchingEntry) {
-      return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
-    }
-
-    const [serverName, serverConfig] = matchingEntry;
-    const tomlConfig: Record<string, unknown> = { serverName };
-    if (serverConfig && typeof serverConfig === 'object' && !Array.isArray(serverConfig)) {
-      const { command, args } = serverConfig as { command?: unknown; args?: unknown };
-      if (typeof command === 'string') tomlConfig.command = command;
-      if (Array.isArray(args)) tomlConfig.args = args;
-    }
-
-    return { installed: true, currentConfig: tomlConfig, serverKey: 'mcp_servers' };
-  } catch {
-    return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+  const exactConfig = parseTomlSectionConfig('dollhousemcp', raw, true);
+  if (exactConfig) {
+    return { installed: true, currentConfig: exactConfig, serverKey: 'mcp_servers' };
   }
+
+  const sectionMatch = /\[mcp_servers\.([^\]]*dollhousemcp[^\]]*)\]/i.exec(raw);
+  if (!sectionMatch) return { installed: true, currentConfig: {}, serverKey: 'mcp_servers' };
+
+  const fallbackConfig = parseTomlSectionConfig(sectionMatch[1], raw) ?? { serverName: sectionMatch[1] };
+  return { installed: true, currentConfig: fallbackConfig, serverKey: 'mcp_servers' };
 }
 
 /** Parse a JSON config file for a DollhouseMCP server entry */
@@ -245,11 +302,15 @@ function validateClient(
   return normalized;
 }
 
-function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: string; error?: string } {
+type RequestedInstallVersionResult =
+  | { effectiveVersion: string | undefined; error: null }
+  | { effectiveVersion: null; error: string };
+
+function resolveRequestedInstallVersion(body: unknown): RequestedInstallVersionResult {
   const { version, channel } = (body ?? {}) as { version?: string; channel?: string };
   const normalizedVersion = version ? UnicodeValidator.normalize(version).normalizedContent : undefined;
   if (normalizedVersion && !/^\d+\.\d+\.\d+/.test(normalizedVersion)) {
-    return { error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
+    return { effectiveVersion: null, error: 'Invalid version format. Expected semver (e.g., 2.0.2)' };
   }
 
   const normalizedChannel = channel ? UnicodeValidator.normalize(channel).normalizedContent : undefined;
@@ -257,7 +318,7 @@ function resolveRequestedInstallVersion(body: unknown): { effectiveVersion?: str
     ? normalizedChannel
     : normalizedVersion;
 
-  return { effectiveVersion };
+  return { effectiveVersion, error: null };
 }
 
 function toNvmMitigationApplied(result: Awaited<ReturnType<typeof applyNvmLauncherIfNeeded>>): boolean | null {
@@ -272,6 +333,9 @@ const MS_PER_MINUTE = 60 * 1000;
 const VERIFICATION_CODE_TTL_MINUTES = 10;
 const VERIFICATION_CODE_TTL_MS = VERIFICATION_CODE_TTL_MINUTES * MS_PER_MINUTE;
 const VERIFICATION_MAX_ATTEMPTS = 5;
+const LICENSE_WORKER_TIMEOUT_MS = 8_000;
+const LICENSE_WORKER_ERROR_BODY_LIMIT = 300;
+const DEFAULT_LICENSE_WORKER_URL = 'https://dollhousemcp-license-email.mick-eba.workers.dev';
 
 /** Generate a cryptographically random 6-digit verification code. */
 function generateVerificationCode(): string {
@@ -420,11 +484,101 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
   await posthog.shutdown();
 }
 
+function buildLicenseWorkerRequestBody(
+  licenseData: Record<string, unknown>,
+  verificationCode: string,
+  distinctId: string,
+): string {
+  return JSON.stringify({
+    event: 'license_activation',
+    distinct_id: distinctId,
+    properties: {
+      tier: licenseData.tier,
+      email: licenseData.email,
+      event_type: 'verification',
+      verification_code: verificationCode,
+      server_version: PACKAGE_VERSION,
+      os: platform(),
+    },
+  });
+}
+
+async function sendLicenseWorkerVerificationEmail(
+  licenseData: Record<string, unknown>,
+  verificationCode: string,
+  distinctId: string,
+): Promise<{ ok: true } | { ok: false; status?: number; error: string; responseBody?: string }> {
+  const workerUrl = new URL(LICENSE_WORKER_DIRECT_PATH, process.env.DOLLHOUSE_LICENSE_WORKER_URL || DEFAULT_LICENSE_WORKER_URL);
+
+  try {
+    const response = await fetch(workerUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: buildLicenseWorkerRequestBody(licenseData, verificationCode, distinctId),
+      signal: AbortSignal.timeout(LICENSE_WORKER_TIMEOUT_MS),
+    });
+
+    if (response.ok) {
+      return { ok: true };
+    }
+
+    return {
+      ok: false,
+      status: response.status,
+      error: `worker_http_${response.status}`,
+      responseBody: (await response.text()).slice(0, LICENSE_WORKER_ERROR_BODY_LIMIT),
+    };
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      (error.name === 'TimeoutError' ||
+        error.name === 'AbortError' ||
+        error.message.toLowerCase().includes('timeout') ||
+        error.message.toLowerCase().includes('timed out'))
+    ) {
+      return { ok: false, error: 'worker_timeout' };
+    }
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getLicenseWorkerFailureMessage(result: { status?: number; error: string }): string {
+  if (result.status === 401 || result.status === 403) {
+    return 'Verification email service rejected the request. Please check the local email delivery configuration and try again.';
+  }
+  if (result.error === 'worker_timeout') {
+    return 'Verification email service timed out. Please try again in a moment.';
+  }
+  return 'We could not send the verification email right now. Please try again in a moment.';
+}
+
+function logLicenseWorkerDeliveryFailure(
+  message: string,
+  licenseData: Record<string, unknown>,
+  deliveryResult: { status?: number; error: string; responseBody?: string },
+): void {
+  logger.error(message, {
+    tier: licenseData.tier,
+    status: deliveryResult.status ?? null,
+    error: deliveryResult.error,
+    responseBodyLength: deliveryResult.responseBody?.length ?? 0,
+  });
+}
+
 export function createSetupRoutes(opts?: {
   /** Override install-mcp runner. For testing only — prefix signals test-only use. */
   _runInstallMcp?: (client: string, version?: string) => Promise<string>;
   /** Override permission hook installer. For testing only. */
   _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
+  /** Override permission hook status reconciler. For testing only. */
+  _reconcilePermissionHookStatus?: (client: string) => Promise<PermissionHookStatus>;
+  /** Enable automatic hook asset repair during detect. Defaults off in tests. */
+  _autoRepairPermissionHooksOnDetect?: boolean;
   /** Skip the sliding-window rate limiter. For testing only. */
   _skipRateLimit?: boolean;
 }): {
@@ -440,6 +594,9 @@ export function createSetupRoutes(opts?: {
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
   const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
+  const autoRepairPermissionHooksOnDetect = opts?._autoRepairPermissionHooksOnDetect ?? process.env.NODE_ENV !== 'test';
+  const hookStatusReconciler = opts?._reconcilePermissionHookStatus ?? (async (client: string) =>
+    reconcilePermissionHookStatus(client, { autoRepair: autoRepairPermissionHooksOnDetect }));
   const skipRateLimit = opts?._skipRateLimit ?? false;
   // ── Detect existing installations ───────────────────────────────────
   const detectHandler = async (_req: Request, res: Response): Promise<void> => {
@@ -447,6 +604,7 @@ export function createSetupRoutes(opts?: {
       { id: 'claude', name: 'Claude Desktop' },
       { id: 'claude-code', name: 'Claude Code' },
       { id: 'cursor', name: 'Cursor' },
+      { id: 'vscode', name: 'VS Code' },
       { id: 'cline', name: 'Cline' },
       { id: 'windsurf', name: 'Windsurf' },
       { id: 'lmstudio', name: 'LM Studio' },
@@ -458,11 +616,19 @@ export function createSetupRoutes(opts?: {
     await Promise.all(clients.map(async ({ id, name }) => {
       const detection = await detectClient(id);
       if (detection) {
-        const result: Record<string, unknown> = { name, ...detection };
-        if (id === 'claude-code' || id === 'cursor' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
-          const hookStatus = await getPermissionHookStatusAsync(undefined, id);
+        const result: Record<string, unknown> = {
+          name,
+          support: { level: SETUP_SUPPORT_LEVELS[id] },
+          ...detection,
+        };
+        if (id === 'claude-code' || id === 'cursor' || id === 'vscode' || id === 'windsurf' || id === 'gemini-cli' || id === 'codex') {
+          const hookStatus = await hookStatusReconciler(id);
           result.hookInstalled = hookStatus.installed;
           result.hookAssetsPrepared = hookStatus.assetsPrepared;
+          result.hookAssetsCurrent = hookStatus.assetsCurrent;
+          result.hookAutoRepaired = hookStatus.autoRepaired;
+          result.hookNeedsRepair = hookStatus.needsRepair;
+          result.hookRepairError = hookStatus.repairError;
         }
         results[id] = result;
       }
@@ -520,7 +686,7 @@ export function createSetupRoutes(opts?: {
     if (!normalizedClient) return;
 
     const { effectiveVersion, error } = resolveRequestedInstallVersion(req.body);
-    if (error) {
+    if (error !== null) {
       res.status(400).json({ error });
       return;
     }
@@ -684,7 +850,7 @@ export function createSetupRoutes(opts?: {
       licenseData.verificationRequestedAt = new Date().toISOString();
       await writeLicense(licenseData);
 
-      logger.info(`[Setup] License pending verification: ${licenseData.tier} (${licenseData.email})`);
+      logger.info(`[Setup] License pending verification: ${licenseData.tier}`);
 
       SecurityMonitor.logSecurityEvent({
         type: 'CONFIG_UPDATED',
@@ -693,38 +859,25 @@ export function createSetupRoutes(opts?: {
         details: `License verification initiated: ${licenseData.tier}`,
         additionalData: {
           tier: licenseData.tier,
-          email: licenseData.email,
         },
       });
 
       // Send verification email directly to Worker for instant delivery.
       // PostHog event also fires for analytics, but the email can't wait for
       // PostHog's event pipeline (1-5 min delay).
-      try {
-        const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
-        const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-        await fetch(workerUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-          },
-          body: JSON.stringify({
-            event: 'license_activation',
-            distinct_id: 'direct-verification',
-            properties: {
-              tier: licenseData.tier,
-              email: licenseData.email,
-              event_type: 'verification',
-              verification_code: code,
-              server_version: PACKAGE_VERSION,
-              os: platform(),
-            },
-          }),
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(licenseData, code, 'direct-verification');
+      if (deliveryResult.ok) {
+        logger.info(`[Setup] Verification email sent directly via Worker for ${licenseData.tier}`);
+      } else {
+        logLicenseWorkerDeliveryFailure('[Setup] Verification email delivery failed', licenseData, deliveryResult);
+
+        const { verificationCode: _c, verificationAttempts: _a, ...publicData } = licenseData;
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+          license: publicData,
         });
-        logger.info(`[Setup] Verification email sent directly via Worker: ${licenseData.email}`);
-      } catch (workerError) {
-        logger.warn(`[Setup] Direct Worker call failed, falling back to PostHog pipeline: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+        return;
       }
 
       // Also fire PostHog event for analytics (non-blocking, delay is fine)
@@ -784,7 +937,8 @@ export function createSetupRoutes(opts?: {
         type: 'RATE_LIMIT_EXCEEDED',
         severity: 'HIGH',
         source: 'setupRoutes.verifyLicenseHandler',
-        details: `Verification max attempts exceeded for: ${license.email}`,
+        details: `Verification max attempts exceeded for tier: ${license.tier}`,
+        additionalData: { tier: license.tier },
       });
       res.status(400).json({ error: 'Too many failed attempts. Please submit the form again to receive a new code.' });
       return;
@@ -813,14 +967,17 @@ export function createSetupRoutes(opts?: {
     delete license.verificationRequestedAt;
     await writeLicense(license);
 
-    logger.info(`[Setup] License verified and activated: ${license.tier} (${license.email}) — ${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`);
+    logger.info(
+      `[Setup] License verified and activated: ${license.tier} — ` +
+      `${timeToVerifyMs ? Math.round(timeToVerifyMs / 1000) + 's' : 'unknown'}, ${attemptsUsed} attempt(s)`,
+    );
 
     SecurityMonitor.logSecurityEvent({
       type: 'CONFIG_UPDATED',
       severity: 'LOW',
       source: 'setupRoutes.verifyLicenseHandler',
       details: `License activated after email verification: ${license.tier}`,
-      additionalData: { tier: license.tier, email: license.email },
+      additionalData: { tier: license.tier },
     });
 
     // Send confirmation email + PostHog activation event with analytics
@@ -865,30 +1022,24 @@ export function createSetupRoutes(opts?: {
 
     // Send verification email directly to Worker for instant delivery
     try {
-      const workerUrl = process.env.DOLLHOUSE_LICENSE_WORKER_URL || 'https://dollhousemcp-license-email.mick-eba.workers.dev';
-      const workerSecret = process.env.DOLLHOUSE_LICENSE_WORKER_SECRET || '';
-      await fetch(workerUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(workerSecret ? { 'x-posthog-secret': workerSecret } : {}),
-        },
-        body: JSON.stringify({
-          event: 'license_activation',
-          distinct_id: 'direct-resend',
-          properties: {
-            tier: license.tier,
-            email: license.email,
-            event_type: 'verification',
-            verification_code: code,
-            server_version: PACKAGE_VERSION,
-            os: platform(),
-          },
-        }),
-      });
-      logger.info(`[Setup] Verification code resent directly via Worker: ${license.email}`);
+      const deliveryResult = await sendLicenseWorkerVerificationEmail(license, code, 'direct-resend');
+      if (!deliveryResult.ok) {
+        logLicenseWorkerDeliveryFailure('[Setup] Verification resend delivery failed', license, deliveryResult);
+        res.status(502).json({
+          error: getLicenseWorkerFailureMessage(deliveryResult),
+          verificationRequired: true,
+        });
+        return;
+      }
+
+      logger.info(`[Setup] Verification code resent directly via Worker for ${license.tier}`);
     } catch (workerError) {
-      logger.warn(`[Setup] Direct Worker call failed: ${workerError instanceof Error ? workerError.message : String(workerError)}`);
+      logger.error('[Setup] Unexpected verification resend failure', {
+        tier: license.tier,
+        error: workerError instanceof Error ? workerError.message : String(workerError),
+      });
+      res.status(500).json({ error: 'Failed to resend verification code.' });
+      return;
     }
 
     res.json({ success: true, message: 'A new verification code has been sent to your email.' });

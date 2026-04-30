@@ -13,17 +13,23 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { BuildInfoService, BuildInfo } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import {
+  _resetPermissionHookStartupRepairSummaryForTests,
+  repairPermissionHooksOnStartup,
+} from '../../../src/utils/permissionHooks.js';
 
 describe('BuildInfoService', () => {
   let service: BuildInfoService;
   let container: DollhouseContainer;
 
   beforeEach(() => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     container = new DollhouseContainer();
     service = container.resolve<BuildInfoService>('BuildInfoService');
   });
 
   afterEach(async () => {
+    _resetPermissionHookStartupRepairSummaryForTests();
     await container.dispose();
     jest.restoreAllMocks();
     jest.clearAllMocks();
@@ -34,11 +40,22 @@ describe('BuildInfoService', () => {
       const info = await service.getBuildInfo();
 
       // Verify the structure exists
+      expect(info).toHaveProperty('sessionId');
+      expect(info).toHaveProperty('runtimeSessionId');
+      expect(info).toHaveProperty('sessionSource');
       expect(info).toHaveProperty('package');
       expect(info).toHaveProperty('build');
       expect(info).toHaveProperty('runtime');
       expect(info).toHaveProperty('environment');
       expect(info).toHaveProperty('server');
+    });
+
+    it('should populate session identity information', async () => {
+      const info = await service.getBuildInfo();
+
+      expect(info.sessionId).toMatch(/^local-[a-f0-9]{10}$/);
+      expect(info.runtimeSessionId).toMatch(new RegExp(`^${info.sessionId}-[a-z0-9]+$`));
+      expect(info.sessionSource).toBe('derived');
     });
 
     it('should populate package information', async () => {
@@ -57,6 +74,7 @@ describe('BuildInfoService', () => {
 
       expect(info.build).toHaveProperty('type');
       expect(['git', 'npm', 'unknown']).toContain(info.build.type);
+      expect(info.build).not.toHaveProperty('collectionFix');
       
       // Optional fields
       if (info.build.gitCommit) {
@@ -110,6 +128,34 @@ describe('BuildInfoService', () => {
       expect(info.server.mcpConnection).toBe(true);
     });
 
+    it('includes permission hook audit summary in build info', async () => {
+      await repairPermissionHooksOnStartup();
+      const info = await service.getBuildInfo();
+
+      expect(info.permissionHooks).toBeDefined();
+      expect(Array.isArray(info.permissionHooks?.installedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.currentHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.repairedHosts)).toBe(true);
+      expect(Array.isArray(info.permissionHooks?.needsRepairHosts)).toBe(true);
+      expect(typeof info.permissionHooks?.diagnosticsPath).toBe('string');
+      expect(info.permissionHooks?.health).toEqual(
+        expect.objectContaining({
+          status: expect.any(String),
+          message: expect.any(String),
+        }),
+      );
+      if (info.permissionHooks?.lastDiagnostic) {
+        expect(info.permissionHooks.lastDiagnostic).toEqual(
+          expect.objectContaining({
+            invocationId: expect.any(String),
+            event: expect.any(String),
+          }),
+        );
+      }
+      expect(info.permissionHooks?.lastStartupRepair).toBeTruthy();
+      expect(Array.isArray(info.permissionHooks?.lastStartupRepair?.hostResults)).toBe(true);
+    });
+
     it('should have consistent results across calls', async () => {
       const info1 = await service.getBuildInfo();
       const info2 = await service.getBuildInfo();
@@ -145,6 +191,9 @@ describe('BuildInfoService', () => {
 
     beforeEach(() => {
       sampleBuildInfo = {
+        sessionId: 'workspace-a1b2c3d4e5',
+        runtimeSessionId: 'workspace-a1b2c3d4e5-k9',
+        sessionSource: 'derived',
         package: {
           name: '@dollhousemcp/mcp-server',
           version: '1.3.2'
@@ -180,7 +229,61 @@ describe('BuildInfoService', () => {
           startTime: new Date('2024-01-01T10:00:00.000Z'),
           uptime: 7200000, // 2 hours in ms
           mcpConnection: true
-        }
+        },
+        permissionHooks: {
+          health: {
+            status: 'warning',
+            message: '1 hook host still needs repair',
+            repairedCount: 1,
+            needsRepairCount: 1,
+            lastCheckedAt: '2024-01-01T10:00:00.000Z',
+          },
+          installedHosts: [],
+          currentHosts: [],
+          repairedHosts: [],
+          needsRepairHosts: [],
+          diagnosticsPath: '/Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl',
+          lastDiagnostic: {
+            timestamp: '2024-01-01T10:00:01.000Z',
+            invocationId: 'diag-1',
+            event: 'complete',
+            platform: 'codex',
+            stage: 'response_normalized',
+            outcome: 'success',
+            reason: 'Allowed by policy',
+            rawInputLength: 118,
+            normalizedResponseLength: 0,
+            emittedResponseLength: 0,
+          },
+          lastStartupRepair: {
+            startedAt: '2024-01-01T09:59:58.000Z',
+            completedAt: '2024-01-01T10:00:00.000Z',
+            durationMs: 2000,
+            repairedCount: 1,
+            needsRepairCount: 1,
+            hostResults: [
+              {
+                host: 'codex',
+                installed: true,
+                assetsPrepared: true,
+                assetsCurrent: true,
+                autoRepaired: true,
+                needsRepair: false,
+                outcome: 'repaired',
+              },
+              {
+                host: 'vscode',
+                installed: true,
+                assetsPrepared: true,
+                assetsCurrent: false,
+                autoRepaired: false,
+                needsRepair: true,
+                repairError: 'ENOENT: missing shared script',
+                outcome: 'error',
+              },
+            ],
+          },
+        },
       };
     });
 
@@ -191,11 +294,16 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('## 📦 Package');
       expect(formatted).toContain('**Name**: @dollhousemcp/mcp-server');
       expect(formatted).toContain('**Version**: 1.3.2');
+      expect(formatted).toContain('## 🪪 Session');
+      expect(formatted).toContain('**Session ID**: workspace-a1b2c3d4e5');
+      expect(formatted).toContain('**Runtime Session ID**: workspace-a1b2c3d4e5-k9');
+      expect(formatted).toContain('**Identity Source**: Derived from workspace context');
       expect(formatted).toContain('## 🏗️ Build');
       expect(formatted).toContain('**Type**: git');
       expect(formatted).toContain('**Timestamp**: 2024-01-01T12:00:00.000Z');
       expect(formatted).toContain('**Git Commit**: `abc123def`');
       expect(formatted).toContain('**Git Branch**: main');
+      expect(formatted).not.toContain('collection-fix');
       expect(formatted).toContain('## 💻 Runtime');
       expect(formatted).toContain('**Node.js**: v18.17.0');
       expect(formatted).toContain('**Platform**: linux');
@@ -212,10 +320,28 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Started**: 2024-01-01T10:00:00.000Z');
       expect(formatted).toContain('**Uptime**: 2h');
       expect(formatted).toContain('**MCP Connection**: ✅ Connected');
+      expect(formatted).toContain('## 🔐 Permission Hooks');
+      expect(formatted).toContain('**Health**: WARNING — 1 hook host still needs repair');
+      expect(formatted).toContain('**Installed Hosts**: None');
+      expect(formatted).toContain('**Current Assets**: None');
+      expect(formatted).toContain('**Needs Repair**: None');
+      expect(formatted).toContain('**Diagnostics Log**: /Users/test/.dollhouse/run/permission-hook-diagnostics.jsonl');
+      expect(formatted).toContain('**Last Startup Audit**: 2024-01-01T10:00:00.000Z (2000ms)');
+      expect(formatted).toContain('**Startup Repairs Applied**: 1');
+      expect(formatted).toContain('**Startup Repair Issues**: vscode (ENOENT: missing shared script)');
+      expect(formatted).toContain('**Last Diagnostic Event**: 2024-01-01T10:00:01.000Z (complete / success)');
+      expect(formatted).toContain('**Last Diagnostic Stage**: response_normalized');
+      expect(formatted).toContain('**Last Diagnostic Input Bytes**: 118');
+      expect(formatted).toContain('**Last Diagnostic Normalized Bytes**: 0');
+      expect(formatted).toContain('**Last Diagnostic Emitted Bytes**: 0');
+      expect(formatted).toContain('**Last Diagnostic Reason**: Allowed by policy');
     });
 
     it('should handle missing optional fields gracefully', () => {
       const minimalInfo: BuildInfo = {
+        sessionId: 'session-from-env',
+        runtimeSessionId: 'session-from-env',
+        sessionSource: 'env',
         package: {
           name: 'test-app',
           version: '1.0.0'
@@ -255,6 +381,9 @@ describe('BuildInfoService', () => {
       expect(formatted).toContain('**Mode**: Unknown');
       expect(formatted).toContain('**Docker**: No');
       expect(formatted).toContain('**MCP Connection**: ❌ Disconnected');
+      expect(formatted).toContain('**Session ID**: session-from-env');
+      expect(formatted).toContain('**Identity Source**: Explicit environment');
+      expect(formatted).not.toContain('**Runtime Session ID**:');
       expect(formatted).not.toContain('**Timestamp**:');
       expect(formatted).not.toContain('**Git Commit**:');
       expect(formatted).not.toContain('**Git Branch**:');

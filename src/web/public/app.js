@@ -105,6 +105,37 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   let activeSort = 'date-desc';
   let activeSource = 'all'; // 'all' | 'collection' | 'portfolio'
   let searchQuery = '';
+  const DOLLHOUSE_SERVER_VERSION = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
+  const DOLLHOUSE_SESSION_ID = document.querySelector('meta[name="dollhouse-session-id"]')?.content || '';
+  const DOLLHOUSE_RUNTIME_SESSION_ID = document.querySelector('meta[name="dollhouse-runtime-session-id"]')?.content || '';
+
+  function escHtml(value) {
+    return String(value)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+  }
+
+  function renderHeaderStatsMarkup(primaryMarkup) {
+    const sessionTitle = DOLLHOUSE_RUNTIME_SESSION_ID && DOLLHOUSE_RUNTIME_SESSION_ID !== DOLLHOUSE_SESSION_ID
+      ? `Stable session ${DOLLHOUSE_SESSION_ID}; runtime ${DOLLHOUSE_RUNTIME_SESSION_ID}`
+      : `Stable session ${DOLLHOUSE_SESSION_ID}`;
+    const sessionMarkup = DOLLHOUSE_SESSION_ID
+      ? `
+      <span class="stat stat--session" title="${escHtml(sessionTitle)}">
+        <strong>${escHtml(DOLLHOUSE_SESSION_ID)}</strong> session
+      </span>`
+      : '';
+    return `${primaryMarkup}${sessionMarkup}`;
+  }
+
+  function updateFooterVersion() {
+    const footerVersion = document.getElementById('footer-version');
+    if (!footerVersion) return;
+    footerVersion.textContent = `Version: ${DOLLHOUSE_SERVER_VERSION || 'unknown'}`;
+  }
 
   // ── Bootstrap ──────────────────────────────────────────────────────────────
 
@@ -121,10 +152,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     renderTopicFilters();
     applyFilters();
     const statsEl = document.getElementById('stats');
-    if (statsEl) statsEl.innerHTML = `
+    if (statsEl) statsEl.innerHTML = renderHeaderStatsMarkup(`
       <span class="stat"><strong>${localElements.length}</strong> portfolio</span>
       <span class="stat"><strong>${collectionElements.length}</strong> collection</span>
-    `;
+    `);
   }
 
   async function init() {
@@ -208,10 +239,10 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     const el = document.getElementById('stats');
     if (!el) return;
     const types = Object.keys(data.index).length;
-    el.innerHTML = `
+    el.innerHTML = renderHeaderStatsMarkup(`
       <span class="stat"><strong>${data.total_elements}</strong> elements</span>
       <span class="stat"><strong>${types}</strong> types</span>
-    `;
+    `);
   }
 
   // ── Type filter chips ──────────────────────────────────────────────────────
@@ -1853,6 +1884,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
   // ── Event wiring ───────────────────────────────────────────────────────────
 
   document.addEventListener('DOMContentLoaded', () => {
+    updateFooterVersion();
 
     // Theme toggle
     const themeToggleBtn  = document.getElementById('theme-toggle');
@@ -1974,16 +2006,77 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
     // ── Tab switching ─────────────────────────────────────────────────────────
     const consoleTabs = document.getElementById('console-tabs');
+    const headerNavRow = document.querySelector('.header-nav-row');
+    const consoleTabMenuToggle = document.getElementById('console-tab-menu-toggle');
+    const consoleTabMenu = document.getElementById('console-tab-menu');
     const tabInits = { logs: false, metrics: false, permissions: false, security: false };
 
     const TAB_KEY = 'dollhousemcp-active-tab';
     const SETUP_SEEN_KEY = 'dollhousemcp-setup-seen';
+    const FORCED_RELOAD_KEY = 'dollhousemcp-last-forced-reload';
     // Server version injected at request time — used to show Setup tab once per version
     // so upgraders automatically see it on each new release (not just first-ever visit).
     // Validate format (semver-like) before trusting the value; malformed falls back to
     // 'unknown' which safely triggers setup on every load rather than silently skipping.
     const _rawVersion = document.querySelector('meta[name="dollhouse-server-version"]')?.content || '';
     const currentServerVersion = /^\d+\.\d+\.\d+/.test(_rawVersion) ? _rawVersion : 'unknown';
+    const _rawAssetVersion = document.querySelector('meta[name="dollhouse-console-asset-version"]')?.content || '';
+    const currentAssetVersion = /^\d+\.\d+\.\d+/.test(_rawAssetVersion) ? _rawAssetVersion : currentServerVersion;
+    let forcedReloadInFlight = false;
+
+    function normalizeReloadVersion(version) {
+      return typeof version === 'string' && /^\d+\.\d+\.\d+/.test(version)
+        ? version
+        : (currentAssetVersion || currentServerVersion || 'unknown');
+    }
+
+    function shouldThrottleForcedReload(targetVersion) {
+      try {
+        const raw = sessionStorage.getItem(FORCED_RELOAD_KEY);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        return parsed
+          && parsed.version === targetVersion
+          && typeof parsed.at === 'number'
+          && Date.now() - parsed.at < 60_000;
+      } catch {
+        return false;
+      }
+    }
+
+    function rememberForcedReload(targetVersion, reason) {
+      try {
+        sessionStorage.setItem(FORCED_RELOAD_KEY, JSON.stringify({
+          version: targetVersion,
+          reason: reason || 'manual',
+          at: Date.now(),
+        }));
+      } catch {
+        // Ignore storage failures — reload still proceeds.
+      }
+    }
+
+    function buildCacheBustedConsoleUrl(targetVersion, reason) {
+      const url = new URL(globalThis.location.href);
+      url.searchParams.set('dollhouse_bust', targetVersion + '-' + Date.now());
+      url.searchParams.set('dollhouse_asset_version', targetVersion);
+      if (reason) {
+        url.searchParams.set('dollhouse_reload_reason', reason);
+      }
+      return url.toString();
+    }
+
+    function forceConsoleReload(reason, targetVersion) {
+      const normalizedTargetVersion = normalizeReloadVersion(targetVersion);
+      if (forcedReloadInFlight || shouldThrottleForcedReload(normalizedTargetVersion)) {
+        return false;
+      }
+      forcedReloadInFlight = true;
+      rememberForcedReload(normalizedTargetVersion, reason);
+      const reloadUrl = buildCacheBustedConsoleUrl(normalizedTargetVersion, reason);
+      globalThis.location.replace(reloadUrl);
+      return true;
+    }
 
     // Determine which tab to show on load:
     // 1. URL hash (deep link)
@@ -2000,7 +2093,156 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
         p.hidden = p.id !== 'tab-' + tabName;
         p.classList.toggle('active', p.id === 'tab-' + tabName);
       });
+      syncConsoleTabMenuSelection();
+      closeConsoleTabMenu();
+      scheduleConsoleTabOverflowCheck();
     };
+
+    function renderConsoleTabMenu() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      consoleTabMenu.innerHTML = '';
+      consoleTabs.querySelectorAll('.console-tab').forEach((btn) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'console-tab-menu-item';
+        item.dataset.tab = btn.dataset.tab || '';
+        item.setAttribute('role', 'menuitem');
+        item.textContent = btn.textContent || '';
+        if (btn.classList.contains('active')) item.classList.add('active');
+        consoleTabMenu.appendChild(item);
+      });
+    }
+
+    function syncConsoleTabMenuSelection() {
+      if (!consoleTabs || !consoleTabMenu) return;
+      const activeTab = consoleTabs.querySelector('.console-tab.active')?.dataset.tab || '';
+      consoleTabMenu.querySelectorAll('.console-tab-menu-item').forEach((item) => {
+        item.classList.toggle('active', item.dataset.tab === activeTab);
+      });
+    }
+
+    function closeConsoleTabMenu() {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = true;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'false');
+    }
+
+    function getConsoleTabMenuItems() {
+      if (!consoleTabMenu) return [];
+      return Array.from(consoleTabMenu.querySelectorAll('.console-tab-menu-item'));
+    }
+
+    function openConsoleTabMenu(focusTarget) {
+      if (!consoleTabMenu || !consoleTabMenuToggle) return;
+      consoleTabMenu.hidden = false;
+      consoleTabMenuToggle.setAttribute('aria-expanded', 'true');
+
+      if (!focusTarget) return;
+
+      const items = getConsoleTabMenuItems();
+      if (!items.length) return;
+      const focusItem = (index) => {
+        const boundedIndex = Math.max(0, Math.min(index, items.length - 1));
+        items[boundedIndex].focus();
+      };
+
+      if (focusTarget === 'first') {
+        focusItem(0);
+        return;
+      }
+
+      if (focusTarget === 'last') {
+        focusItem(items.length - 1);
+        return;
+      }
+
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      focusItem(activeIndex);
+    }
+
+    function moveConsoleTabMenuFocus(step, origin) {
+      const items = getConsoleTabMenuItems();
+      if (!items.length) return;
+
+      const currentIndex = origin instanceof Element
+        ? items.findIndex((item) => item === origin || item.contains(origin))
+        : -1;
+      const activeIndex = Math.max(items.findIndex((item) => item.classList.contains('active')), 0);
+      const baseIndex = currentIndex >= 0 ? currentIndex : activeIndex;
+      const nextIndex = (baseIndex + step + items.length) % items.length;
+      items[nextIndex].focus();
+    }
+
+    function handleConsoleTabMenuToggleKeydown(event) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        openConsoleTabMenu('first');
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        openConsoleTabMenu('last');
+      }
+    }
+
+    function handleConsoleTabMenuKeydown(event) {
+      switch (event.key) {
+      case 'ArrowDown':
+        event.preventDefault();
+        moveConsoleTabMenuFocus(1, event.target);
+        break;
+      case 'ArrowUp':
+        event.preventDefault();
+        moveConsoleTabMenuFocus(-1, event.target);
+        break;
+      case 'Home':
+        event.preventDefault();
+        getConsoleTabMenuItems()[0]?.focus();
+        break;
+      case 'End': {
+        event.preventDefault();
+        const items = getConsoleTabMenuItems();
+        items.at(-1)?.focus();
+        break;
+      }
+      case 'Escape':
+        event.preventDefault();
+        closeConsoleTabMenu();
+        consoleTabMenuToggle?.focus();
+        break;
+      default:
+        break;
+      }
+    }
+
+    function tabsNeedOverflowMenu() {
+      if (!consoleTabs) return false;
+      const buttons = Array.from(consoleTabs.querySelectorAll('.console-tab'));
+      if (buttons.length < 2) return false;
+      const firstTop = buttons[0].offsetTop;
+      return buttons.some((btn) => btn.offsetTop !== firstTop);
+    }
+
+    let consoleTabOverflowFrame = 0;
+    function updateConsoleTabOverflow() {
+      if (!consoleTabs || !headerNavRow || !consoleTabMenuToggle) return;
+      headerNavRow.classList.remove('header-nav-row--collapsed');
+      consoleTabMenuToggle.hidden = true;
+      const shouldCollapse = tabsNeedOverflowMenu();
+      if (shouldCollapse) {
+        headerNavRow.classList.add('header-nav-row--collapsed');
+        consoleTabMenuToggle.hidden = false;
+      }
+      if (!shouldCollapse) {
+        closeConsoleTabMenu();
+      }
+    }
+
+    function scheduleConsoleTabOverflowCheck() {
+      if (consoleTabOverflowFrame) cancelAnimationFrame(consoleTabOverflowFrame);
+      consoleTabOverflowFrame = requestAnimationFrame(() => {
+        consoleTabOverflowFrame = 0;
+        updateConsoleTabOverflow();
+      });
+    }
 
     /**
      * Parse the URL hash into tab name and query parameters.
@@ -2022,6 +2264,9 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
     // Expose for other scripts (logs.js, metrics.js, permissions.js)
     globalThis.DollhouseConsole = globalThis.DollhouseConsole || {};
     globalThis.DollhouseConsole.getUrlParams = () => getTabAndParams().params;
+    globalThis.DollhouseConsole.currentServerVersion = currentServerVersion;
+    globalThis.DollhouseConsole.currentAssetVersion = currentAssetVersion;
+    globalThis.DollhouseConsole.forceReload = forceConsoleReload;
 
     /**
      * Apply URL params to the portfolio tab.
@@ -2115,26 +2360,41 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       return false;
     }
 
-    if (!applyHashTab()) {
+    function restoreInitialConsoleTab() {
       // Version check takes priority over saved tab — upgraders must see Setup
       // regardless of whether they have a saved tab from their previous session.
       if (localStorage.getItem(SETUP_SEEN_KEY) === currentServerVersion) {
         const savedTab = localStorage.getItem(TAB_KEY);
-        if (savedTab) {
-          switchToTab(savedTab);
-          lazyInitTab(savedTab, tabInits);
-        }
-      } else {
-        localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
-        switchToTab('setup');
+        if (!savedTab) return;
+        switchToTab(savedTab);
+        lazyInitTab(savedTab, tabInits);
+        return;
       }
+
+      localStorage.setItem(SETUP_SEEN_KEY, currentServerVersion);
+      switchToTab('setup');
     }
 
-    // Handle hash changes for deep-linking (e.g., open_logs operation)
-    globalThis.addEventListener('hashchange', () => applyHashTab());
+    function initializeConsoleTabs() {
+      if (applyHashTab()) return;
+      restoreInitialConsoleTab();
+    }
 
-    if (consoleTabs) {
-      consoleTabs.addEventListener('click', (e) => {
+    function registerConsoleTabObservers() {
+      globalThis.addEventListener('hashchange', () => applyHashTab());
+      renderConsoleTabMenu();
+      syncConsoleTabMenuSelection();
+      scheduleConsoleTabOverflowCheck();
+      globalThis.addEventListener('resize', scheduleConsoleTabOverflowCheck);
+
+      if (typeof ResizeObserver !== 'function' || !headerNavRow) return;
+
+      const tabOverflowObserver = new ResizeObserver(() => scheduleConsoleTabOverflowCheck());
+      tabOverflowObserver.observe(headerNavRow);
+    }
+
+    function registerConsoleTabInteractions() {
+      consoleTabs?.addEventListener('click', (e) => {
         const btn = e.target.closest('.console-tab');
         if (!btn) return;
         const tab = btn.dataset.tab;
@@ -2145,7 +2405,41 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
 
         lazyInitTab(tab, tabInits);
       });
+
+      consoleTabMenuToggle?.addEventListener('click', () => {
+        if (!consoleTabMenu) return;
+        if (consoleTabMenu.hidden) {
+          openConsoleTabMenu();
+          return;
+        }
+
+        closeConsoleTabMenu();
+      });
+
+      consoleTabMenuToggle?.addEventListener('keydown', handleConsoleTabMenuToggleKeydown);
+      consoleTabMenu?.addEventListener('keydown', handleConsoleTabMenuKeydown);
+      consoleTabMenu?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.console-tab-menu-item');
+        const tab = btn?.dataset.tab;
+        if (!tab) return;
+        switchToTab(tab);
+        localStorage.setItem(TAB_KEY, tab);
+        lazyInitTab(tab, tabInits);
+      });
+
+      globalThis.addEventListener('click', (e) => {
+        if (!consoleTabMenu || !consoleTabMenuToggle) return;
+        if (consoleTabMenu.hidden) return;
+        const target = e.target;
+        if (!(target instanceof Element)) return;
+        if (consoleTabMenu.contains(target) || consoleTabMenuToggle.contains(target)) return;
+        closeConsoleTabMenu();
+      });
     }
+
+    initializeConsoleTabs();
+    registerConsoleTabObservers();
+    registerConsoleTabInteractions();
 
     function lazyInitTab(tab, tabInits, params) {
       const dc = globalThis.DollhouseConsole;
@@ -2175,7 +2469,7 @@ globalThis.DollhouseConsoleUI.clearBanner = function(bannerId) {
       toast.innerHTML = 'Console session token changed\u2009\u2014\u2009'
         + '<button style="background:#fff;color:#b91c1c;border:none;padding:6px 16px;'
         + 'border-radius:4px;cursor:pointer;font-weight:600;font-size:14px"'
-        + ' onclick="location.reload()">Reload</button>';
+        + ' onclick="window.DollhouseConsole.forceReload(\'session-expired\')">Reload</button>';
       document.body.appendChild(toast);
     });
 

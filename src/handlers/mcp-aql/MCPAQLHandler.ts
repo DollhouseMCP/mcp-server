@@ -79,6 +79,11 @@ import type { GitHubAuthHandler } from '../GitHubAuthHandler.js';
 import type { ConfigHandler } from '../ConfigHandler.js';
 import type { EnhancedIndexHandler } from '../EnhancedIndexHandler.js';
 import { getPermissionHookStatus } from '../../utils/permissionHooks.js';
+import {
+  PERMISSION_AUTHORITY_HOSTS,
+  PERMISSION_AUTHORITY_MODES,
+  readPermissionAuthorityState,
+} from '../../utils/permissionAuthority.js';
 import type { PersonaHandler } from '../PersonaHandler.js';
 import type { SyncHandler } from '../SyncHandlerV2.js';
 import type { BuildInfoService } from '../../services/BuildInfoService.js';
@@ -119,6 +124,47 @@ function validateRequiredString(
     );
   }
   return value;
+}
+
+const EXECUTION_OPERATION_NAMES: Record<string, string> = {
+  execute: 'execute_agent',
+  getState: 'get_execution_state',
+  updateState: 'record_execution_step',
+  complete: 'complete_execution',
+  continue: 'continue_execution',
+  abort: 'abort_execution',
+  getGatheredData: 'get_gathered_data',
+  prepareHandoff: 'prepare_handoff',
+  resumeFromHandoff: 'resume_from_handoff',
+};
+
+function validateExecutionElementName(
+  method: string,
+  params: Record<string, unknown>
+): string {
+  const value = params.element_name;
+  if (value !== undefined && value !== null && typeof value === 'string' && value.trim() !== '') {
+    return value;
+  }
+
+  const operationName = EXECUTION_OPERATION_NAMES[method] || 'execution lifecycle operation';
+
+  if (method === 'getState') {
+    throw new Error(
+      `Missing required parameter 'element_name'. Expected: string ` +
+      `(the name of the agent/executable element whose execution state you want to inspect). ` +
+      `Use the same element_name you passed to execute_agent. ` +
+      `Retry with: { operation: "get_execution_state", params: { element_name: "code-reviewer", includeDecisionHistory: true } }. ` +
+      `If you're unsure which name to use, call introspect for "get_execution_state" or list active agents first.`
+    );
+  }
+
+  throw new Error(
+    `Missing required parameter 'element_name'. Expected: string ` +
+    `(the name of the agent/executable element for ${operationName}). ` +
+    `If this is part of an existing execution lifecycle, reuse the same element_name you passed to execute_agent. ` +
+    `If you're unsure which name to use, call introspect for "${operationName}" or list active agents first.`
+  );
 }
 
 /**
@@ -304,6 +350,11 @@ class VerificationError extends Error {
     this.name = 'VerificationError';
   }
 }
+
+const DEADLOCK_RELIEF_REASON = 'Deadlock relief requested';
+const DEADLOCK_RELIEF_TIMEOUT_MS = 5 * 60 * 1000;
+const DEADLOCK_RELIEF_DIALOG_REASON =
+  'Deadlock relief requested.\n\nThis will deactivate all active elements for the current session and clear persisted activation state.';
 
 /**
  * Global rate limiter for verification attempts.
@@ -2490,6 +2541,128 @@ export class MCPAQLHandler {
     }
   }
 
+  private challengeIsForDeadlockRelief(challenge: { reason: string } | undefined): boolean {
+    return typeof challenge?.reason === 'string' && challenge.reason.startsWith(DEADLOCK_RELIEF_REASON);
+  }
+
+  private issueDeadlockReliefChallenge(): {
+    pending: true;
+    challenge_id: string;
+    message: string;
+    warning: string;
+  } {
+    const store = this.handlers.verificationStore;
+    if (!store) {
+      throw new Error('Verification system not available. Ensure the server is properly configured.');
+    }
+
+    const challengeId = randomUUID();
+    const code = generateDisplayCode();
+    store.set(challengeId, {
+      code,
+      expiresAt: Date.now() + DEADLOCK_RELIEF_TIMEOUT_MS,
+      reason: DEADLOCK_RELIEF_REASON,
+    });
+
+    this.handlers.verificationNotifier?.showCode(code, DEADLOCK_RELIEF_DIALOG_REASON);
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'DANGER_ZONE_TRIGGERED',
+      severity: 'MEDIUM',
+      source: 'MCPAQLHandler.issueDeadlockReliefChallenge',
+      details: `Deadlock relief challenge issued for session ${this.gatekeeper.sessionId}`,
+      additionalData: {
+        challengeId,
+        sessionId: this.gatekeeper.sessionId,
+      },
+    });
+
+    return {
+      pending: true,
+      challenge_id: challengeId,
+      message: 'Deadlock relief requires human confirmation. A verification code has been displayed to the user.',
+      warning: 'Completing this flow will deactivate all active elements for the current session and clear persisted activation state.',
+    };
+  }
+
+  private async completeDeadlockRelief(challengeId: string, code: string): Promise<{
+    released: true;
+    challenge_id: string;
+    sessionId?: string;
+    activeBeforeReset: Array<{ type: string; name: string }>;
+    deactivated: Array<{ type: string; name: string }>;
+    failed: Array<{ type: string; name: string; error: string }>;
+    persistedStateCleared: boolean;
+    likelyDeadlockCause: {
+      sandboxingElement?: { type: string; name: string };
+      advisoryElements: Array<{ type: string; name: string }>;
+    };
+    snapshotFile?: string;
+    message: string;
+  }> {
+    const store = this.handlers.verificationStore;
+    if (!store) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Verification system not available. Ensure the server is properly configured.',
+      );
+    }
+
+    validateChallengeIdFormat(challengeId);
+
+    const challenge = store.get(challengeId);
+    if (!challenge) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_TIMEOUT,
+        'Deadlock relief challenge not found. It may have expired or already been used. Retry release_deadlock to receive a new code.',
+      );
+    }
+
+    if (!this.challengeIsForDeadlockRelief(challenge)) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'This challenge is not for deadlock relief. Use the matching verification flow for the requested operation.',
+      );
+    }
+
+    const valid = store.verify(challengeId, code);
+    if (!valid) {
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Verification failed: incorrect code. The code has been consumed (one-time use). Retry release_deadlock to receive a new code.',
+      );
+    }
+
+    const reset = await this.handlers.elementCRUD.releaseDeadlock();
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'VERIFICATION_SUCCEEDED',
+      severity: 'MEDIUM',
+      source: 'MCPAQLHandler.completeDeadlockRelief',
+      details: `Deadlock relief completed for session ${this.gatekeeper.sessionId}`,
+      additionalData: {
+        challengeId,
+        sessionId: this.gatekeeper.sessionId,
+        deactivatedCount: reset.deactivated.length,
+        failedCount: reset.failed.length,
+      },
+    });
+
+    const snapshotSuffix = reset.snapshotFile
+      ? ` A recovery snapshot was saved to ${reset.snapshotFile}.`
+      : '';
+    const message = reset.failed.length > 0
+      ? `Deadlock relief completed with ${reset.failed.length} deactivation failure(s). Review the failed list, likely deadlock cause, and recovery snapshot before reactivating elements.`
+      : `Deadlock relief completed. All active elements for this session were deactivated and persisted activation state was cleared.${snapshotSuffix}`;
+
+    return {
+      released: true,
+      challenge_id: challengeId,
+      ...reset,
+      message,
+    };
+  }
+
   /**
    * Dispatch Gatekeeper operations for confirmation management.
    *
@@ -2715,6 +2888,13 @@ export class MCPAQLHandler {
           }
         }
 
+        if (this.challengeIsForDeadlockRelief(challengePreCheck)) {
+          throw new VerificationError(
+            GatekeeperErrorCode.VERIFICATION_FAILED,
+            'This verification code is reserved for deadlock relief. Use release_deadlock with challenge_id and code to complete the reset.'
+          );
+        }
+
         // Verify the code (one-time use — store deletes challenge after this call)
         const valid = store.verify(challengeId, code);
         if (!valid) {
@@ -2786,6 +2966,27 @@ export class MCPAQLHandler {
           verified: true,
           message: 'Verification successful. You may now retry the operation.',
         };
+      }
+
+      case 'releaseDeadlock': {
+        const challengeIdValue = typeof params.challenge_id === 'string'
+          ? params.challenge_id.trim()
+          : '';
+        const codeValue = typeof params.code === 'string'
+          ? params.code.trim()
+          : '';
+
+        if ((challengeIdValue && !codeValue) || (!challengeIdValue && codeValue)) {
+          throw new Error(
+            'release_deadlock requires both challenge_id and code together, or neither for the initial challenge request.'
+          );
+        }
+
+        if (!challengeIdValue && !codeValue) {
+          return this.issueDeadlockReliefChallenge();
+        }
+
+        return this.completeDeadlockRelief(challengeIdValue, codeValue);
       }
 
       case 'beetlejuice': {
@@ -3206,6 +3407,23 @@ export class MCPAQLHandler {
         };
       }
 
+      case 'getPermissionAuthority': {
+        const requestedHost = typeof params.host === 'string' ? params.host : undefined;
+        const authorityState = await readPermissionAuthorityState();
+        return {
+          defaultMode: authorityState.defaultMode,
+          updatedAt: authorityState.updatedAt,
+          supportedHosts: [...PERMISSION_AUTHORITY_HOSTS],
+          supportedModes: [...PERMISSION_AUTHORITY_MODES],
+          aiMutable: false,
+          hosts: authorityState.hosts,
+          host: requestedHost,
+          mode: requestedHost && requestedHost in authorityState.hosts
+            ? authorityState.hosts[requestedHost as keyof typeof authorityState.hosts]?.mode ?? authorityState.defaultMode
+            : authorityState.defaultMode,
+        };
+      }
+
       case 'approveCliPermission': {
         // Issue #625 Phase 3: Approve a pending CLI tool permission request
         const requestId = validateRequiredString(
@@ -3546,11 +3764,7 @@ export class MCPAQLHandler {
 
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
-    const elementName = validateRequiredString(
-      params,
-      'element_name',
-      'the name of the agent/element to execute'
-    );
+    const elementName = validateExecutionElementName(method, params);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton

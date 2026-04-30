@@ -8,7 +8,7 @@
  * Covers: validation, sanitization, rate limiting, error handling, security.
  */
 
-import { describe, it, expect, beforeEach, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeEach, beforeAll, afterAll, afterEach, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { readFile, writeFile, unlink } from 'node:fs/promises';
@@ -19,11 +19,51 @@ import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const LICENSE_PATH = join(homedir(), '.dollhouse', 'license.json');
+const DIRECT_WORKER_PATH_SUFFIX = 'workers.dev/direct-verification';
+
+function mockFetchResponse(ok: boolean, status: number, body: Record<string, unknown> | string) {
+  const responseBody = typeof body === 'string' ? body : JSON.stringify(body);
+  return Promise.resolve({
+    ok,
+    status,
+    text: async () => responseBody,
+    json: async () => (typeof body === 'string' ? { message: body } : body),
+  }) as Promise<Response>;
+}
+
+function installWorkerTimeoutFetchMock() {
+  globalThis.fetch = jest.fn<typeof fetch>().mockImplementation(async (_input, init) => {
+    const signal = init?.signal as AbortSignal | undefined;
+    await new Promise((resolve, reject) => {
+      signal?.addEventListener('abort', () => reject(new Error('worker timeout')));
+      setTimeout(resolve, 15_000);
+    });
+    return new Response(null, { status: 204 });
+  });
+}
+
+function findDirectWorkerCall(fetchMock: jest.Mock): unknown[] | undefined {
+  return fetchMock.mock.calls.find(([input]) => {
+    const url = getFetchInputUrl(input);
+    return url.includes(DIRECT_WORKER_PATH_SUFFIX);
+  });
+}
+
+function getFetchInputUrl(input: unknown): string {
+  if (typeof input === 'string') {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return '';
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /** Save the existing license.json (if any) before tests, restore after. */
 let savedLicense: string | null = null;
+const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
   try {
@@ -45,12 +85,17 @@ afterAll(async () => {
   }
 });
 
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
 // ── API Endpoint Tests ───────────────────────────────────────────────────
 
 describe('License Routes — API Endpoints', () => {
   let app: express.Express;
 
   beforeEach(async () => {
+    globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(true, 200, { success: true }));
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
     const { getLicenseHandler, setLicenseHandler } = createSetupRoutes();
 
@@ -87,6 +132,22 @@ describe('License Routes — API Endpoints', () => {
       expect(res.body.license.tier).toBe('free-commercial');
       expect(res.body.license.email).toBe('dev@example.com');
       expect(res.body.license.attestedAt).toBeDefined();
+    });
+
+    it('returns a delivery error when the verification worker rejects the request', async () => {
+      globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(false, 401, 'Unauthorized'));
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'dev@example.com', ...COMMERCIAL_ACKS })
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/Verification email service rejected the request/);
+
+      const saved = JSON.parse(await readFile(LICENSE_PATH, 'utf-8'));
+      expect(saved.status).toBe('pending');
+      expect(saved.verificationCode).toHaveLength(6);
     });
 
     it('accepts valid paid-commercial with all fields', async () => {
@@ -625,6 +686,7 @@ describe('License Routes — Email Verification', () => {
   const COMMERCIAL_ACKS = { telemetryAcknowledged: true, attributionAcknowledged: true, revenueAttested: true };
 
   beforeEach(async () => {
+    globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(true, 200, { success: true }));
     const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
     const { getLicenseHandler, setLicenseHandler, verifyLicenseHandler, resendVerificationHandler } = createSetupRoutes();
 
@@ -637,6 +699,21 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license — Verification Required', () => {
+    it('returns a delivery error if the direct worker call times out', async () => {
+      installWorkerTimeoutFetchMock();
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/timed out/i);
+      const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
+      expect(workerCall).toBeDefined();
+      expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    });
+
     it('commercial license returns verificationRequired: true', async () => {
       const res = await request(app)
         .post('/api/setup/license')
@@ -752,6 +829,26 @@ describe('License Routes — Email Verification', () => {
   });
 
   describe('POST /api/setup/license/resend', () => {
+    it('returns a delivery error when the resend worker call times out', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      installWorkerTimeoutFetchMock();
+
+      const res = await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/timed out/i);
+      const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
+      expect(workerCall).toBeDefined();
+      expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
+    });
+
     it('generates a new code for pending license', async () => {
       await request(app)
         .post('/api/setup/license')
@@ -781,6 +878,44 @@ describe('License Routes — Email Verification', () => {
         .post('/api/setup/license/resend')
         .send({})
         .expect(400);
+    });
+
+    it('reports resend delivery failures instead of claiming success', async () => {
+      await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'resend@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      globalThis.fetch = jest.fn().mockImplementation(() => mockFetchResponse(false, 500, 'Worker error'));
+
+      const res = await request(app)
+        .post('/api/setup/license/resend')
+        .send({})
+        .expect(502);
+
+      expect(res.body.verificationRequired).toBe(true);
+      expect(res.body.error).toMatch(/could not send the verification email/i);
+    });
+
+    it('keeps the setup flow successful when PostHog capture fails after worker success', async () => {
+      globalThis.fetch = jest.fn().mockImplementation((input: string | URL) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('workers.dev/direct-verification')) {
+          return mockFetchResponse(true, 200, { success: true });
+        }
+        if (url.includes('app.posthog.com/batch')) {
+          return Promise.reject(new Error('posthog unavailable'));
+        }
+        return mockFetchResponse(true, 200, { success: true });
+      });
+
+      const res = await request(app)
+        .post('/api/setup/license')
+        .send({ tier: 'free-commercial', email: 'verify@example.com', ...COMMERCIAL_ACKS })
+        .expect(200);
+
+      expect(res.body.success).toBe(true);
+      expect(res.body.verificationRequired).toBe(true);
     });
   });
 });

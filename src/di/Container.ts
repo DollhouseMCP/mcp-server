@@ -7,6 +7,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { env } from "../config/env.js";
 import { getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
 import { BackupService } from "../services/BackupService.js";
+import { resolveSessionIdentity } from "../services/sessionIdentity.js";
 import { PortfolioManager, ElementType } from "../portfolio/PortfolioManager.js";
 import { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
@@ -620,7 +621,8 @@ export class DollhouseContainer {
       if (!env.DOLLHOUSE_WEB_CONSOLE) return null;
 
       const activationStore = this.resolve<IActivationStateStore>('ActivationStore');
-      const sessionId = activationStore.getSessionId();
+      const stableSessionId = activationStore.getSessionId();
+      const sessionId = resolveSessionIdentity().runtimeSessionId;
       const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
       const memorySink = this.resolve<MemoryLogSink>('MemoryLogSink');
       const metricsSink = this.tryResolve<MemoryMetricsSink>('MemoryMetricsSink');
@@ -637,6 +639,7 @@ export class DollhouseContainer {
         : undefined;
       const result = await startUnifiedConsole({
         sessionId,
+        stableSessionId,
         portfolioDir: portfolioManager.getBaseDir(),
         memorySink,
         metricsSink,

@@ -10,6 +10,7 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
+import { resolveSessionIdentity } from "./services/sessionIdentity.js";
 import { DollhouseContainer } from "./di/Container.js";
 import {
   createStreamableHttpRuntime,
@@ -1136,8 +1137,20 @@ async function startWebStandaloneMode(): Promise<void> {
   }
 
   const resolvedPort = cliPort || await resolvePortFromConfig();
+  const sessionIdentity = resolveSessionIdentity();
   const { startWebServer } = await import('./web/server.js');
-  const webResult = await startWebServer({ portfolioDir, port: resolvedPort, openBrowser: !noBrowser, mcpAqlHandler, memorySink, metricsSink, additionalRouters: [ingestResult.router], tokenStore });
+  const webResult = await startWebServer({
+    portfolioDir,
+    port: resolvedPort,
+    openBrowser: !noBrowser,
+    mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    additionalRouters: [ingestResult.router],
+    tokenStore,
+    sessionId: sessionIdentity.sessionId,
+    runtimeSessionId: sessionIdentity.runtimeSessionId,
+  });
 
   if (webResult.logBroadcast && logManager) {
     const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
