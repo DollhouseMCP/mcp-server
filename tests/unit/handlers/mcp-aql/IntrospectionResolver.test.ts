@@ -818,6 +818,32 @@ describe('IntrospectionResolver', () => {
         expect(result.operation!.returns.description).toContain('goalId');
         expect(result.operation!.returns.description).toContain('stateVersion');
       });
+
+      it('should expose the canonical lifecycle loop in introspection', () => {
+        const result = IntrospectionResolver.resolve({
+          query: 'operations',
+          name: 'execute_agent',
+        });
+
+        expect(result.operation!.description).toContain('record_execution_step');
+        expect(result.operation!.description).toContain('mcp_aql_create');
+        expect(result.operation!.description).toContain('complete_execution');
+      });
+    });
+
+    describe('continue_execution introspection', () => {
+      it('should explain paused-only semantics and full-parameter resume', () => {
+        const result = IntrospectionResolver.resolve({
+          query: 'operations',
+          name: 'continue_execution',
+        });
+
+        expect(result.operation).toBeDefined();
+        expect(result.operation!.description).toContain('paused');
+        expect(result.operation!.description).toContain('same goal parameters');
+        expect(result.operation!.examples[0]).toContain('run_dir');
+        expect(result.operation!.examples[0]).toContain('deliverable_path');
+      });
     });
 
     describe('addEntry introspection', () => {
@@ -839,13 +865,13 @@ describe('IntrospectionResolver', () => {
       });
     });
 
-    describe('all 14 migrated operations have schema metadata via introspect', () => {
+    describe('all 15 migrated operations have schema metadata via introspect', () => {
       const migratedOps = [
         'addEntry', 'clear',
         'execute_agent', 'get_execution_state', 'record_execution_step',
         'complete_execution', 'continue_execution', 'abort_execution',
         'get_gathered_data', 'prepare_handoff', 'resume_from_handoff',
-        'confirm_operation', 'verify_challenge', 'beetlejuice_beetlejuice_beetlejuice',
+        'confirm_operation', 'verify_challenge', 'release_deadlock', 'beetlejuice_beetlejuice_beetlejuice',
         'query_logs',
       ];
 

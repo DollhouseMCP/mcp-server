@@ -19,6 +19,8 @@ For a high-level overview, see the [Architecture Overview](overview.md).
 
 ### Specialized Topics
 - [Version Storage](version-storage-approach.md) - How we handle element versions
+- [Permission Hook Platform Contracts](permission-hook-platform-contracts.md) - Authoritative stdout and exit-code contracts for Claude Code, Codex, Cursor, VS Code, Gemini CLI, and Windsurf hook integrations
+- [ADR-002: Version-Aware Web Console Leadership](ADR-002-CONSOLE-VERSION-AWARE-LEADERSHIP.md) - Why the newest compatible console leader wins and how stale tabs recover
 
 ## For Contributors
 If you're implementing new features, start with the relevant deep dive, then refer to the [Development Guide](../developer-guide/workflow.md).

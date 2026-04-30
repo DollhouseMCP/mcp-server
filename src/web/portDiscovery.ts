@@ -18,7 +18,7 @@
 import { createServer, type Server } from 'node:net';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { mkdir, writeFile, unlink, readdir } from 'node:fs/promises';
+import { mkdir, writeFile, unlink, readdir, readFile } from 'node:fs/promises';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
 
@@ -35,6 +35,16 @@ const DEFAULT_MAX_PORT_ATTEMPTS = 10;
  */
 function getRunDir(): string {
   return process.env.DOLLHOUSE_RUN_DIR || join(homedir(), '.dollhouse', 'run');
+}
+
+const LATEST_PORT_FILENAME = 'permission-server.port';
+
+function pidPortFilePath(dir: string = getRunDir(), pid: number = process.pid): string {
+  return join(dir, `permission-server-${pid}.port`);
+}
+
+function latestPortFilePath(dir: string = getRunDir()): string {
+  return join(dir, LATEST_PORT_FILENAME);
 }
 
 /** Track port file path for cleanup */
@@ -115,13 +125,40 @@ export async function findAvailablePort(
 export async function writePortFile(port: number): Promise<string> {
   const runDir = getRunDir();
   await mkdir(runDir, { recursive: true });
-  const pidFile = join(runDir, `permission-server-${process.pid}.port`);
-  const latestFile = join(runDir, 'permission-server.port');
+  const pidFile = pidPortFilePath(runDir);
+  const latestFile = latestPortFilePath(runDir);
   await writeFile(pidFile, String(port), 'utf-8');
   await writeFile(latestFile, String(port), 'utf-8');
   portFilePath = pidFile;
   logger.debug(`[PortDiscovery] Port file written: ${pidFile}`);
   return pidFile;
+}
+
+/**
+ * Restore or update the shared latest port file for the active listener.
+ *
+ * Returns true when the file had to be written or updated, false when it
+ * already matched the active port.
+ */
+export async function ensureLatestPortFile(port: number, customDir?: string): Promise<boolean> {
+  const dir = customDir || getRunDir();
+  const latestFile = latestPortFilePath(dir);
+  const desiredValue = String(port);
+
+  await mkdir(dir, { recursive: true });
+
+  try {
+    const existingValue = (await readFile(latestFile, 'utf-8')).trim();
+    if (existingValue === desiredValue) {
+      return false;
+    }
+  } catch {
+    // Missing/unreadable file — rewrite below.
+  }
+
+  await writeFile(latestFile, desiredValue, 'utf-8');
+  logger.debug(`[PortDiscovery] Shared latest port file refreshed: ${latestFile}`);
+  return true;
 }
 
 /**

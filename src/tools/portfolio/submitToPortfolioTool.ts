@@ -41,6 +41,7 @@ import { CollectionErrorCode, formatCollectionError } from '../../config/error-c
 import * as path from 'path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { IFileOperationsService } from '../../services/FileOperationsService.js';
+import { PACKAGE_VERSION } from '../../generated/version.js';
 
 // PortfolioElement, SubmitToPortfolioParams, and SubmitToPortfolioResult
 // are imported from ./types.ts and re-exported above
@@ -1769,7 +1770,7 @@ export class SubmitToPortfolioTool {
             elementName: params.elementName,
             contentLength: elementContent.length,
             securityIssues: validationResult.detectedPatterns?.length || 0,
-            buildVersion: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
+            buildVersion: `v${PACKAGE_VERSION}`,
           });
         } catch (error) {
           logger.warn('Failed to read element file content, falling back to metadata only', {
@@ -1815,7 +1816,7 @@ ${elementContent}
 - [ ] No duplicate of existing collection content
 
 ---
-*This submission was created automatically via the DollhouseMCP submit_collection_content tool (v1.6.9-beta1-collection-fix).*`;
+*This submission was created automatically via the DollhouseMCP submit_collection_content tool (v${PACKAGE_VERSION}).*`;
 
       // Determine labels based on element type
       const labels = [

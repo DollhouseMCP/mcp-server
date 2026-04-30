@@ -22,6 +22,7 @@ describe('OperationRouter', () => {
         'import_element',
         'addEntry',
         'verify_challenge',
+        'release_deadlock',
         'beetlejuice_beetlejuice_beetlejuice',
         'install_collection_content',
         'submit_collection_content',
@@ -95,6 +96,7 @@ describe('OperationRouter', () => {
         'resume_from_handoff',
       'confirm_operation',
       'get_effective_cli_policies', // Issue #625 Phase 2
+      'get_permission_authority',
       'approve_cli_permission', // Issue #625 Phase 3
       'get_pending_cli_approvals', // Issue #625 Phase 3
   ];
@@ -166,6 +168,7 @@ describe('OperationRouter', () => {
       expect(createOps.length).toBeGreaterThan(0);
       expect(createOps).toContain('create_element');
       expect(createOps).toContain('record_execution_step');
+      expect(createOps).toContain('release_deadlock');
     });
   });
 

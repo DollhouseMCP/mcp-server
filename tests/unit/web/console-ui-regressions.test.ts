@@ -10,6 +10,7 @@ import { describe, it, expect, beforeAll, afterEach, jest } from '@jest/globals'
 import { JSDOM } from 'jsdom';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { PACKAGE_VERSION } from '../../../src/generated/version.js';
 
 let appSource = '';
 let sessionsSource = '';
@@ -118,6 +119,220 @@ function installBannerHelper(win: Record<string, any>) {
 }
 
 describe('Web console cleanup regressions', () => {
+  it('shows the running server version in the footer', async () => {
+    const { window: win, cleanup } = createDom(`
+      <meta name="dollhouse-server-version" content="${PACKAGE_VERSION}">
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div id="console-tabs"><button class="console-tab active" data-tab="portfolio"></button></div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-version" aria-live="polite" aria-atomic="true"></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.getElementById('footer-version')?.textContent).toBe(`Version: ${PACKAGE_VERSION}`);
+    expect(win.document.getElementById('footer-version')?.getAttribute('aria-live')).toBe('polite');
+
+    cleanup();
+  });
+
+  it('collapses wrapped console tabs into a menu instead of a second row', async () => {
+    const { window: win, cleanup } = createDom(`
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div class="header-nav-row">
+        <div id="console-tabs">
+          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+          <button class="console-tab" data-tab="permissions">Permissions</button>
+        </div>
+        <div id="console-tab-menu-shell">
+          <button id="console-tab-menu-toggle" hidden aria-expanded="false" aria-haspopup="menu"></button>
+          <div id="console-tab-menu" role="menu" hidden></div>
+        </div>
+      </div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="tab-permissions" class="tab-panel"></div>
+      <div id="session-indicator"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const tabButtons = Array.from(win.document.querySelectorAll('#console-tabs .console-tab')) as HTMLElement[];
+    Object.defineProperty(tabButtons[0], 'offsetTop', { configurable: true, get: () => 0 });
+    Object.defineProperty(tabButtons[1], 'offsetTop', { configurable: true, get: () => 24 });
+    win.dispatchEvent(new win.Event('resize'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const navRow = win.document.querySelector('.header-nav-row');
+    const menuToggle = win.document.getElementById('console-tab-menu-toggle') as HTMLButtonElement | null;
+    expect(navRow?.classList.contains('header-nav-row--collapsed')).toBe(true);
+    expect(menuToggle?.hidden).toBe(false);
+
+    menuToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const menuButton = win.document.querySelector('.console-tab-menu-item[data-tab="permissions"]') as HTMLButtonElement | null;
+    expect(menuButton).not.toBeNull();
+    menuButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect((win.document.querySelector('#console-tabs .console-tab.active') as HTMLElement | null)?.dataset.tab).toBe('permissions');
+    expect(win.document.getElementById('tab-permissions')?.classList.contains('active')).toBe(true);
+
+    cleanup();
+  });
+
+  it('supports keyboard navigation in the collapsed console tab menu', async () => {
+    const { window: win, cleanup } = createDom(`
+      <button id="theme-toggle"></button>
+      <span id="theme-toggle-icon"></span>
+      <span id="theme-toggle-label"></span>
+      <link id="hljs-theme-light">
+      <link id="hljs-theme-dark">
+      <div id="view-toggle"><button class="view-btn" data-view="grid"></button></div>
+      <select id="sort-select"><option value="date-desc">date-desc</option></select>
+      <input id="search-input">
+      <div id="source-toggle"><button data-source="all"></button></div>
+      <button id="btn-portfolio"></button>
+      <div class="header-nav-row">
+        <div id="console-tabs">
+          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+          <button class="console-tab" data-tab="permissions">Permissions</button>
+        </div>
+        <div id="console-tab-menu-shell">
+          <button id="console-tab-menu-toggle" hidden aria-expanded="false" aria-haspopup="menu"></button>
+          <div id="console-tab-menu" role="menu" hidden></div>
+        </div>
+      </div>
+      <div id="tab-portfolio" class="tab-panel active"></div>
+      <div id="tab-permissions" class="tab-panel"></div>
+      <div id="session-indicator"></div>
+      <div id="stats"></div>
+      <div><div id="type-filters"></div></div>
+      <div id="topic-filters"></div>
+      <div id="results-count"></div>
+      <div id="results-announcer"></div>
+      <div id="elements-grid"></div>
+      <div id="pagination" hidden><button id="btn-prev-page"></button><button id="btn-next-page"></button><span id="page-info"></span></div>
+      <div id="footer-updated"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/elements') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ elements: { personas: [] }, totalCount: 0 }),
+        });
+      }
+      if (url === '/api/collection') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ index: { personas: [] } }),
+        });
+      }
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(appSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const tabButtons = Array.from(win.document.querySelectorAll('#console-tabs .console-tab')) as HTMLElement[];
+    Object.defineProperty(tabButtons[0], 'offsetTop', { configurable: true, get: () => 0 });
+    Object.defineProperty(tabButtons[1], 'offsetTop', { configurable: true, get: () => 24 });
+    win.dispatchEvent(new win.Event('resize'));
+    await wait(DEFAULT_WAIT_MS);
+
+    const menuToggle = win.document.getElementById('console-tab-menu-toggle') as HTMLButtonElement | null;
+    const menu = win.document.getElementById('console-tab-menu');
+    menuToggle?.focus();
+    menuToggle?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+
+    const menuItems = Array.from(win.document.querySelectorAll('.console-tab-menu-item')) as HTMLButtonElement[];
+    expect(menu?.hidden).toBe(false);
+    expect(win.document.activeElement).toBe(menuItems[0]);
+
+    menuItems[0]?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+    expect(win.document.activeElement).toBe(menuItems[1]);
+
+    menuItems[1]?.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+    expect(menu?.hidden).toBe(true);
+    expect(win.document.activeElement).toBe(menuToggle);
+
+    cleanup();
+  });
+
   it('shows a visible collection banner when the community collection fetch fails', async () => {
     const { window: win, cleanup } = createDom(`
       <button id="theme-toggle"></button>
@@ -187,6 +402,143 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('renders explicit client platform labels and update-available metadata in the session dropdown', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [
+          {
+            sessionId: 'session-new',
+            status: 'active',
+            displayName: 'Bert',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: true,
+            authenticated: true,
+            kind: 'mcp',
+            color: '#1d4ed8',
+            serverVersion: '2.0.27',
+            clientPlatform: 'claude-code',
+            clientPlatformLabel: 'Claude Code',
+          },
+          {
+            sessionId: 'session-old',
+            status: 'active',
+            displayName: 'Teddy',
+            startedAt: '2026-04-20T17:30:00.000Z',
+            isLeader: false,
+            authenticated: false,
+            kind: 'mcp',
+            color: '#92400e',
+            serverVersion: '2.0.26',
+            clientPlatform: 'codex',
+            clientPlatformLabel: 'Codex',
+          },
+          {
+            sessionId: 'console-1',
+            status: 'active',
+            displayName: 'Web Console',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: false,
+            authenticated: true,
+            kind: 'console',
+            color: '#6366f1',
+            serverVersion: '2.0.27',
+            clientPlatform: 'web-console',
+            clientPlatformLabel: 'Web Console',
+          },
+        ],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    (win.document.querySelector('.session-box') as HTMLButtonElement | null)?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const leaderItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-new"]') as HTMLElement | null;
+    const oldItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-old"]') as HTMLElement | null;
+    const consoleItem = win.document.querySelector('.session-dropdown-item[data-session-id="console-1"]') as HTMLElement | null;
+
+    expect(leaderItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.27');
+    expect(leaderItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Claude Code');
+
+    expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.26');
+    expect(oldItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Codex');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.getAttribute('title')).toBe(
+      'A newer local DollhouseMCP session version is active.',
+    );
+
+    expect(consoleItem?.querySelector('.session-dropdown-client-label')?.textContent).toBe('Web Console');
+
+    cleanup();
+  });
+
+  it('handles prerelease update comparisons and missing platform metadata safely', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({
+        sessions: [
+          {
+            sessionId: 'session-new',
+            status: 'active',
+            displayName: 'Bert',
+            startedAt: '2026-04-20T18:00:00.000Z',
+            isLeader: true,
+            authenticated: true,
+            kind: 'mcp',
+            color: '#1d4ed8',
+            serverVersion: '2.0.27-rc.17',
+            clientPlatform: 'claude-code',
+            clientPlatformLabel: 'Claude Code',
+          },
+          {
+            sessionId: 'session-old',
+            status: 'active',
+            displayName: 'Teddy',
+            startedAt: '2026-04-20T17:30:00.000Z',
+            isLeader: false,
+            authenticated: false,
+            kind: 'mcp',
+            color: '#92400e',
+            serverVersion: '2.0.27-rc.16',
+            clientPlatform: null,
+            clientPlatformLabel: null,
+          },
+        ],
+      }),
+    });
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+
+    win.eval(sessionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    await wait(DEFAULT_WAIT_MS);
+
+    (win.document.querySelector('.session-box') as HTMLButtonElement | null)?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const oldItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-old"]') as HTMLElement | null;
+
+    expect(oldItem?.querySelector('.session-dropdown-version')?.textContent).toBe('v2.0.27-rc.16');
+    expect(oldItem?.querySelector('.session-dropdown-update')?.textContent).toBe('Update available');
+    expect(oldItem?.querySelector('.session-dropdown-client-label')).toBeNull();
+
+    cleanup();
+  });
+
   it('injects the log session filter into .log-controls and populates active sessions', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="session-indicator"></div>
@@ -218,6 +570,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -318,13 +671,17 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
     win.eval(permissionsSource);
     win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
     win.DollhouseConsole.permissions.init();
-    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+    await wait(200);
+
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('No active elements with policies');
+    expect(win.document.getElementById('perm-selected-card')?.hidden).toBe(true);
 
     const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
     expect(sessionBox).not.toBeNull();
@@ -333,7 +690,17 @@ describe('Web console cleanup regressions', () => {
 
     const debugHeading = Array.from(win.document.querySelectorAll('.session-dropdown-heading'))
       .map(node => node.textContent);
-    expect(debugHeading).toContain('Persisted Policy State (Debug Info)');
+    expect(debugHeading.some(text => text?.includes('Persisted Policy State (Debug Info)'))).toBe(true);
+    const debugToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(debugToggle?.dataset.state).toBe('off');
+    expect(win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]')).toBeNull();
+
+    debugToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect((win.document.querySelector('.session-dropdown') as HTMLDivElement | null)?.hidden).toBe(false);
+    const enabledToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(enabledToggle?.dataset.state).toBe('on');
 
     const persistedItem = win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]') as HTMLElement | null;
     expect(persistedItem).not.toBeNull();
@@ -360,6 +727,17 @@ describe('Web console cleanup regressions', () => {
       .map(([url]) => url)
       .filter((url): url is string => typeof url === 'string' && url.includes('sessionId=session-focus'));
     expect(selectedSessionRequests).toHaveLength(0);
+
+    const currentSessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    currentSessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const hideToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    hideToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.querySelector('.session-dropdown-item[data-session-id="session-focus"]')).toBeNull();
+    expect(win.document.getElementById('perm-selected-card')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('No active elements with policies');
 
     cleanup();
   });
@@ -422,6 +800,74 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(200);
+
+    expect(win.document.getElementById('perm-all-invalid-policy-summary')?.textContent).toContain('malformed gatekeeper policy');
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('broken-guardian');
+    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('policy invalid');
+
+    cleanup();
+  });
+
+  it('renders the authority card as a human-only control and disables unsupported authoritative hosts', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            knownSessions: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': { mode: 'shared', updatedAt: '2026-04-17T14:00:00.000Z' },
+                codex: { mode: 'off', updatedAt: '2026-04-17T14:00:00.000Z' },
+              },
+            },
+            authoritySupportedHosts: ['claude-code', 'codex'],
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -430,9 +876,148 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsole.permissions.init();
     await wait(SESSION_FILTER_INJECTION_WAIT_MS);
 
-    expect(win.document.getElementById('perm-all-invalid-policy-summary')?.textContent).toContain('malformed gatekeeper policy');
-    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('broken-guardian');
-    expect(win.document.getElementById('perm-source-list')?.textContent).toContain('policy invalid');
+    expect(win.document.getElementById('perm-authority-card')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-note')?.textContent).toContain('Human-only control');
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(true);
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Claude Code');
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Codex');
+    expect(win.document.getElementById('perm-authority-option-off')?.textContent).toContain('steps out of the way');
+    expect(win.document.getElementById('perm-authority-selected-host')?.textContent).toContain('Claude Code');
+
+    const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
+    expect(authoritativeRadio?.disabled).toBe(false);
+
+    const codexHostButton = win.document.querySelector('.perm-authority-current-host[data-host="codex"]') as HTMLButtonElement | null;
+    expect(codexHostButton).not.toBeNull();
+    codexHostButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(authoritativeRadio?.disabled).toBe(true);
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-authoritative-note')?.textContent).toContain('Claude Code only');
+    expect(win.document.getElementById('perm-authority-selected-host')?.textContent).toContain('Codex');
+
+    const sharedRadio = win.document.getElementById('perm-authority-mode-shared') as HTMLInputElement | null;
+    sharedRadio!.checked = true;
+    sharedRadio!.dispatchEvent(new win.Event('change', { bubbles: true }));
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.document.getElementById('perm-authority-dirty-state')?.hidden).toBe(false);
+    expect(win.document.getElementById('perm-authority-dirty-state')?.textContent).toContain('Codex');
+    expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Save Shared Permissioning Mode for Codex');
+    expect((win.document.getElementById('perm-authority-save-shell') as HTMLElement | null)?.dataset.dirty).toBe('true');
+
+    cleanup();
+  });
+
+  it('posts authority-mode changes from the permissions card through the human-only local API', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const apiFetch = jest.fn((url: string, options?: any) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            knownSessions: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': { mode: 'shared', updatedAt: '2026-04-17T14:00:00.000Z' },
+              },
+            },
+            authoritySupportedHosts: ['claude-code'],
+          }),
+        });
+      }
+
+      if (url === '/api/permissions/authority') {
+        expect(options?.method).toBe('POST');
+        expect(JSON.parse(options?.body || '{}')).toEqual({
+          host: 'claude-code',
+          mode: 'authoritative',
+          reason: 'Hands-off bridge run',
+        });
+
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            success: true,
+            authority: {
+              defaultMode: 'shared',
+              hosts: {
+                'claude-code': {
+                  mode: 'authoritative',
+                  updatedAt: '2026-04-17T14:05:00.000Z',
+                  lastSyncedAt: '2026-04-17T14:05:00.000Z',
+                },
+              },
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseAuth.apiFetch = apiFetch;
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
+    };
+    win.confirm = jest.fn().mockReturnValue(true);
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const authoritativeRadio = win.document.getElementById('perm-authority-mode-authoritative') as HTMLInputElement | null;
+    authoritativeRadio!.checked = true;
+    authoritativeRadio!.dispatchEvent(new win.Event('change', { bubbles: true }));
+
+    const reasonInput = win.document.getElementById('perm-authority-reason') as HTMLInputElement | null;
+    reasonInput!.value = 'Hands-off bridge run';
+    reasonInput!.dispatchEvent(new win.Event('input', { bubbles: true }));
+    expect(reasonInput?.getAttribute('placeholder')).toContain('permission authority mode');
+
+    const saveButton = win.document.getElementById('perm-authority-save-btn') as HTMLButtonElement | null;
+    expect(saveButton?.textContent).toContain('Save Dollhouse-Controlled Permissions Mode for Claude Code');
+    expect(win.document.getElementById('perm-authority-dirty-state')?.textContent).toContain('Unsaved change');
+    saveButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(win.confirm).toHaveBeenCalled();
+    expect(win.document.getElementById('perm-authority-current-host-list')?.textContent).toContain('Dollhouse-Controlled Permissions');
+    expect(win.document.getElementById('perm-authority-message')?.textContent).toContain('Saved Dollhouse-Controlled Permissions mode');
+    expect((win.document.getElementById('perm-authority-save-shell') as HTMLElement | null)?.dataset.dirty).toBe('false');
+    expect(win.document.getElementById('perm-authority-save-btn')?.textContent).toContain('Saved for Claude Code');
 
     cleanup();
   });
@@ -462,6 +1047,7 @@ describe('Web console cleanup regressions', () => {
     win.DollhouseConsoleConfig = {
       sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
       sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
     };
 
     win.eval(sessionsSource);
@@ -476,6 +1062,19 @@ describe('Web console cleanup regressions', () => {
       { sessionId: 42, displayName: 'bad-type' },
     ]);
 
+    expect(Array.from((win.document.getElementById('log-session-filter') as HTMLSelectElement | null)?.options ?? []).map(option => option.value)).toEqual([
+      '',
+      'console-1',
+    ]);
+
+    const sessionBox = win.document.querySelector('.session-box') as HTMLButtonElement | null;
+    sessionBox?.click();
+    await wait(DEFAULT_WAIT_MS);
+    const debugToggle = win.document.querySelector('.session-dropdown-switch') as HTMLButtonElement | null;
+    expect(debugToggle?.dataset.state).toBe('off');
+    debugToggle?.click();
+    await wait(DEFAULT_WAIT_MS);
+
     const select = win.document.getElementById('log-session-filter') as HTMLSelectElement | null;
     expect(select).not.toBeNull();
     const options = Array.from(select?.options ?? []).map(option => ({
@@ -488,6 +1087,261 @@ describe('Web console cleanup regressions', () => {
       { value: 'console-1', label: 'Web Console' },
       { value: 'session-good', label: 'session-good (policy only)' },
     ]);
+
+    cleanup();
+  });
+
+  it('renders an expanded audit modal with scrollable decision context details', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+    const writeText = jest.fn().mockResolvedValue(undefined);
+    Object.defineProperty(win.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [
+              {
+                id: 'd-1',
+                timestamp: '2026-04-15T20:10:11.000Z',
+                tool_name: 'Edit',
+                decision: 'ask',
+                reason: 'Needs confirmation before editing a protected file.',
+                platform: 'codex',
+                session_id: 'session-audit-1',
+                turn_id: 'turn-audit-1',
+                target: '/opt/dollhouse/important.txt',
+                targetLabel: 'File',
+                details: [
+                  { label: 'Platform', value: 'codex', monospace: true },
+                  { label: 'Session', value: 'session-audit-1', monospace: true },
+                  { label: 'Turn', value: 'turn-audit-1', monospace: true },
+                  { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
+                  { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
+                ],
+              },
+            ],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+      permissionDetailRefreshSpinnerDelayMs: 0,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS + DEFAULT_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    expect(openButton).not.toBeNull();
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const modal = win.document.getElementById('perm-audit-modal');
+    const modalFeed = win.document.getElementById('perm-audit-modal-feed');
+    const compactFeed = win.document.getElementById('perm-feed');
+    expect(modal?.hasAttribute('open')).toBe(true);
+    expect(win.document.getElementById('perm-audit-modal-title')?.textContent).toContain('All Sessions Audit View');
+    expect(compactFeed?.textContent).toContain('Codex');
+    expect(compactFeed?.textContent).toContain('session session-audit-1');
+    expect(modalFeed?.textContent).toContain('Needs confirmation before editing a protected file.');
+    expect(modalFeed?.textContent).toContain('/opt/dollhouse/important.txt');
+    expect(modalFeed?.textContent).toContain('session-audit-1');
+    expect(modalFeed?.textContent).toContain('turn-audit-1');
+    expect(modalFeed?.textContent).toContain('Matched Pattern');
+    expect(modalFeed?.textContent).toContain('Exact Time');
+    expect(modalFeed?.querySelector('.perm-audit-entry')).not.toBeNull();
+    const auditDetailRows = Array.from(modalFeed?.querySelectorAll('.perm-audit-detail-row') ?? []);
+    expect(auditDetailRows.some(row => row.getAttribute('aria-label') === 'Platform: codex')).toBe(true);
+    expect(auditDetailRows.some(row => row.getAttribute('aria-label') === 'Session: session-audit-1')).toBe(true);
+    expect(auditDetailRows.some(row => row.getAttribute('role') === 'group')).toBe(true);
+
+    const details = modalFeed?.querySelector('details') as HTMLDetailsElement | null;
+    expect(details).not.toBeNull();
+    details?.setAttribute('open', '');
+
+    const copyButton = win.document.getElementById('perm-audit-copy-btn') as HTMLButtonElement | null;
+    expect(copyButton).not.toBeNull();
+    expect(copyButton?.parentElement?.classList.contains('modal-header-actions')).toBe(true);
+    expect(copyButton?.nextElementSibling?.id).toBe('perm-audit-modal-close');
+    copyButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(writeText.mock.calls[0][0]).toContain('# DollhouseMCP Permissions Audit');
+    expect(writeText.mock.calls[0][0]).toContain('## 1. Edit');
+    expect(writeText.mock.calls[0][0]).toContain('Matched Pattern: Edit:*');
+
+    const closeButton = win.document.getElementById('perm-audit-modal-close') as HTMLButtonElement | null;
+    closeButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+    expect(modal?.hasAttribute('open')).toBe(false);
+
+    cleanup();
+  });
+
+  it('surfaces malformed permissions JSON through the dashboard error boundary', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+    const warnSpy = jest.spyOn(win.console, 'warn').mockImplementation(() => undefined);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.reject(new SyntaxError('bad permissions json')),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(DEFAULT_WAIT_MS);
+
+    const serverDot = win.document.getElementById('perm-dot-server') as HTMLElement | null;
+    expect(serverDot?.dataset.status).toBe('error');
+    expect(serverDot?.parentElement?.querySelector('.perm-status-label')?.textContent).toBe('Server unreachable');
+    expect(warnSpy.mock.calls.some(call => String(call[0]).includes('Invalid permission status JSON'))).toBe(true);
+
+    cleanup();
+  });
+
+  it('falls back to selection-based copy when the clipboard API write fails', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="session-indicator"></div>
+      <div id="tab-logs"><div class="log-controls"></div></div>
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    const writeText = jest.fn().mockRejectedValue(new Error('clipboard denied'));
+    Object.defineProperty(win.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    const execCommand = jest.fn().mockImplementation((command: string) => {
+      if (command !== 'copy') {
+        return false;
+      }
+      const event = new win.Event('copy', { bubbles: true, cancelable: true }) as Event & {
+        clipboardData?: { setData: jest.Mock };
+      };
+      event.clipboardData = { setData: jest.fn() };
+      win.document.dispatchEvent(event);
+      return true;
+    });
+    Object.defineProperty(win.document, 'execCommand', {
+      configurable: true,
+      value: execCommand,
+    });
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/sessions') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ sessions: [] }),
+        });
+      }
+
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 1,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            recentDecisions: [
+              {
+                id: 'd-1',
+                timestamp: '2026-04-15T20:10:11.000Z',
+                tool_name: 'Edit',
+                decision: 'ask',
+                reason: 'Needs confirmation before editing a protected file.',
+                platform: 'cursor',
+                target: '/opt/dollhouse/important.txt',
+                targetLabel: 'File',
+                details: [
+                  { label: 'Platform', value: 'cursor', monospace: true },
+                ],
+              },
+            ],
+            permissionPromptActive: false,
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.DollhouseConsole = { logs: { refilter: jest.fn() } };
+    win.DollhouseConsoleConfig = {
+      sessionFilterInjectionRetryIntervalMs: TEST_SESSION_FILTER_INJECTION_RETRY_INTERVAL_MS,
+      sessionFilterInjectionMaxRetries: 5,
+    };
+
+    win.eval(sessionsSource);
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(SESSION_FILTER_INJECTION_WAIT_MS);
+
+    const openButton = win.document.getElementById('perm-feed-expand-btn') as HTMLButtonElement | null;
+    openButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    const copyButton = win.document.getElementById('perm-audit-copy-btn') as HTMLButtonElement | null;
+    copyButton?.click();
+    await wait(DEFAULT_WAIT_MS);
+
+    expect(writeText).toHaveBeenCalledTimes(1);
+    expect(execCommand).toHaveBeenCalledWith('copy');
+    expect(copyButton?.textContent).toBe('Copied!');
 
     cleanup();
   });
@@ -537,4 +1391,5 @@ describe('Web console cleanup regressions', () => {
 
     cleanup();
   });
+
 });

@@ -110,7 +110,7 @@ To switch back:
 
 ## Step 4: Explore What's Available
 
-DollhouseMCP ships with 37 starter elements across all 6 types:
+DollhouseMCP ships with 41 starter elements across all 6 types:
 
 ### Personas (7)
 | Name | What It Does |
@@ -123,7 +123,7 @@ DollhouseMCP ships with 37 starter elements across all 6 types:
 | ELI5 Explainer | Simplifies complex topics for anyone |
 | Security Analyst | Security-focused expert perspective |
 
-### Skills (7)
+### Skills (8)
 | Name | What It Does |
 |------|-------------|
 | Code Review | Systematic code analysis for quality and security |
@@ -131,6 +131,7 @@ DollhouseMCP ships with 37 starter elements across all 6 types:
 | Data Analysis | Statistical and data insights |
 | Penetration Testing | Security testing methodologies |
 | Research | Research and investigation methodology |
+| research-to-elements | Guided workflow for turning research into reusable Dollhouse elements |
 | Threat Modeling | Security threat assessment |
 | Translation | Language translation |
 
@@ -157,17 +158,18 @@ DollhouseMCP ships with 37 starter elements across all 6 types:
 | Test Generator | Automated test creation |
 | Task Manager | Task orchestration |
 
-### Memories (3)
+### Memories (5)
 | Name | What It Does |
 |------|-------------|
 | Conversation History | Session conversation tracking |
 | GitHub Label Correction | Repository labeling patterns |
 | Learning Progress | Learning state tracking |
 | Project Context | Project-specific context storage |
+| welcome-to-dollhouse-guide | Onboarding guide memory for learning Dollhouse elements and workflows |
 
 Memories use YAML format and are created as you work. The bundled memories provide starter examples of the format.
 
-### Ensembles (5)
+### Ensembles (6)
 | Name | What It Does |
 |------|-------------|
 | Business Advisor | Combined business analysis ensemble |
@@ -175,6 +177,7 @@ Memories use YAML format and are created as you work. The bundled memories provi
 | Development Team | Coordinates developer persona + code review skill |
 | dollhouse-expert-suite | DollhouseMCP expert persona + knowledge base memory |
 | Security Analysis Team | Combined security expert workflow |
+| welcome-to-the-dollhouse | Guided onboarding ensemble for learning DollhouseMCP by building with it |
 
 To see everything available:
 
@@ -198,7 +201,7 @@ This activates a persona and supporting skills together, with combined permissio
 
 ## What's Happening Under the Hood
 
-When you interact with DollhouseMCP, you're using **MCP-AQL** — a query language that routes operations through 5 endpoints:
+When you interact with DollhouseMCP, you're using **MCP-AQL** — a protocol layer on top of MCP, created by Dollhouse Research, that routes operations through 5 semantic endpoints:
 
 | Endpoint | Purpose | Example Operations |
 |----------|---------|-------------------|
@@ -208,7 +211,7 @@ When you interact with DollhouseMCP, you're using **MCP-AQL** — a query langua
 | **Delete** | Remove things | `delete_element` |
 | **Execute** | Run agents and workflows | `execute_agent`, `confirm_operation` |
 
-You don't need to memorize these — the AI discovers available operations automatically via introspection. But understanding the model helps when things don't work as expected: operations that create or delete require confirmation, while read operations work immediately.
+You don't need to memorize these — the AI discovers available operations automatically via introspection. The important design idea is that these are semantic endpoints, not tool-by-tool functional endpoints, so the model can reason about intent first and parameters second. But understanding the model helps when things don't work as expected: operations that create or delete require confirmation, while read operations work immediately.
 
 ### The Gatekeeper
 
@@ -376,7 +379,7 @@ For a detailed operation reference written for the AI itself, see the [LLM Quick
 | **Portfolio** | Your local collection of elements at `~/.dollhouse/portfolio/`. Optionally synced to GitHub for backup. |
 | **Collection** | The community-contributed library of shared elements, browsable and installable via MCP-AQL or at [dollhousemcp.github.io/collection](https://dollhousemcp.github.io/collection/). |
 | **MCP** | Model Context Protocol — the standard that lets AI clients communicate with tool servers. DollhouseMCP is an MCP server. |
-| **MCP-AQL** | DollhouseMCP's query language, routing operations through 5 CRUDE endpoints (Create, Read, Update, Delete, Execute). |
+| **MCP-AQL** | A protocol layer on top of MCP, created by Dollhouse Research, that routes Dollhouse operations through 5 CRUDE endpoints (Create, Read, Update, Delete, Execute). |
 | **CRUDE** | The 5 endpoint categories: **C**reate, **R**ead, **U**pdate, **D**elete, **E**xecute. Each has a default permission level. |
 | **Gatekeeper** | The three-layer permission system that checks every operation server-side. Enforces route policies, element policies, and session confirmations. |
 | **Activation** | Turning on an element for the current session. Changes the AI's behavior and may change the permission surface. |

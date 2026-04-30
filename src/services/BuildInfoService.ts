@@ -14,8 +14,19 @@ import { logger } from '../utils/logger.js';
 import { IFileOperationsService } from './FileOperationsService.js';
 import { PACKAGE_NAME, PACKAGE_VERSION, BUILD_TIMESTAMP, BUILD_TYPE } from '../generated/version.js';
 import type { StartupTimer, StartupReport } from '../telemetry/StartupTimer.js';
+import { resolveSessionIdentity } from './sessionIdentity.js';
+import {
+  getPermissionHookAuditSummary,
+  type PermissionHookDiagnosticRecord,
+  summarizePermissionHookHealth,
+  type PermissionHookHealthSummary,
+  type PermissionHookStartupRepairSummary,
+} from '../utils/permissionHooks.js';
 
 export interface BuildInfo {
+  sessionId: string;
+  runtimeSessionId: string;
+  sessionSource: 'env' | 'derived';
   package: {
     name: string;
     version: string;
@@ -25,7 +36,6 @@ export interface BuildInfo {
     type: 'git' | 'npm' | 'unknown';
     gitCommit?: string;
     gitBranch?: string;
-    collectionFix?: string;  // Version identifier for verification
   };
   runtime: {
     nodeVersion: string;
@@ -46,6 +56,16 @@ export interface BuildInfo {
     startTime: Date;
     uptime: number;
     mcpConnection: boolean;
+  };
+  permissionHooks?: {
+    health: PermissionHookHealthSummary;
+    installedHosts: string[];
+    currentHosts: string[];
+    repairedHosts: string[];
+    needsRepairHosts: string[];
+    diagnosticsPath: string;
+    lastDiagnostic: PermissionHookDiagnosticRecord | null;
+    lastStartupRepair: PermissionHookStartupRepairSummary | null;
   };
   /** Issue #706: Startup timing and readiness status. */
   startup?: {
@@ -100,7 +120,8 @@ export class BuildInfoService {
     // Use Promise.allSettled to collect all available info, even if some sources fail
     const results = await Promise.allSettled([
       this.getGitInfo(),
-      this.getDockerInfo()
+      this.getDockerInfo(),
+      getPermissionHookAuditSummary(),
     ]);
 
     // Package info comes from build-time generated constants
@@ -113,14 +134,33 @@ export class BuildInfoService {
     const dockerInfo = results[1].status === 'fulfilled'
       ? results[1].value
       : { isDocker: false, info: undefined };
+    const permissionHookInfo = results[2].status === 'fulfilled'
+      ? results[2].value
+      : {
+        installedHosts: [],
+        currentHosts: [],
+        repairedHosts: [],
+        needsRepairHosts: [],
+        diagnosticsPath: '',
+        lastDiagnostic: null,
+        lastStartupRepair: null,
+      };
+    const permissionHookHealth = summarizePermissionHookHealth(permissionHookInfo);
+
+    const formatSettledReason = (reason: unknown): string => (
+      reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
+    );
 
     // Log any failures for diagnostics
     const failures: string[] = [];
     if (results[0].status === 'rejected') {
-      failures.push(`git info: ${results[0].reason}`);
+      failures.push(`git info: ${formatSettledReason(results[0].reason)}`);
     }
     if (results[1].status === 'rejected') {
-      failures.push(`docker info: ${results[1].reason}`);
+      failures.push(`docker info: ${formatSettledReason(results[1].reason)}`);
+    }
+    if (results[2].status === 'rejected') {
+      failures.push(`permission hook audit: ${formatSettledReason(results[2].reason)}`);
     }
 
     if (failures.length > 0) {
@@ -138,15 +178,18 @@ export class BuildInfoService {
       uptimeMs: Date.now() - this.startTime.getTime(),
       startupTimingMs: this.startupTimer?.getReport(),
     };
+    const sessionIdentity = resolveSessionIdentity();
 
     return {
+      sessionId: sessionIdentity.sessionId,
+      runtimeSessionId: sessionIdentity.runtimeSessionId,
+      sessionSource: sessionIdentity.source,
       package: packageInfo,
       build: {
         timestamp: buildTimestamp,
         type: BUILD_TYPE,
         gitCommit: gitInfo.commit,
         gitBranch: gitInfo.branch,
-        collectionFix: 'v1.6.9-beta1-collection-fix'  // Version identifier for verification
       },
       runtime: {
         nodeVersion: process.version,
@@ -168,6 +211,10 @@ export class BuildInfoService {
         uptime: Date.now() - this.startTime.getTime(),
         mcpConnection: true // We're connected if this method is being called via MCP
       },
+      permissionHooks: {
+        ...permissionHookInfo,
+        health: permissionHookHealth,
+      },
       startup: startupInfo,
     };
   }
@@ -187,6 +234,19 @@ export class BuildInfoService {
     lines.push(`- **Name**: ${info.package.name}`);
     lines.push(`- **Version**: ${info.package.version}`);
     lines.push('');
+
+    const identitySourceLabel = info.sessionSource === 'env'
+      ? 'Explicit environment'
+      : 'Derived from workspace context';
+    const sessionLines = [
+      '## 🪪 Session',
+      `- **Session ID**: ${info.sessionId}`,
+      `- **Identity Source**: ${identitySourceLabel}`,
+    ];
+    if (info.runtimeSessionId !== info.sessionId) {
+      sessionLines.splice(2, 0, `- **Runtime Session ID**: ${info.runtimeSessionId}`);
+    }
+    lines.push(...sessionLines, '');
     
     // Build info
     lines.push('## 🏗️ Build');
@@ -227,6 +287,63 @@ export class BuildInfoService {
     lines.push(`- **Started**: ${info.server.startTime.toISOString()}`);
     lines.push(`- **Uptime**: ${this.formatUptime(info.server.uptime / 1000)}`);
     lines.push(`- **MCP Connection**: ${info.server.mcpConnection ? '✅ Connected' : '❌ Disconnected'}`);
+
+    if (info.permissionHooks) {
+      const installedHosts = info.permissionHooks.installedHosts.length > 0
+        ? info.permissionHooks.installedHosts.join(', ')
+        : 'None';
+      const currentHosts = info.permissionHooks.currentHosts.length > 0
+        ? info.permissionHooks.currentHosts.join(', ')
+        : 'None';
+      const needsRepairHosts = info.permissionHooks.needsRepairHosts.length > 0
+        ? info.permissionHooks.needsRepairHosts.join(', ')
+        : 'None';
+      const lastStartupRepair = info.permissionHooks.lastStartupRepair;
+      const startupRepairIssues = lastStartupRepair
+        ? lastStartupRepair.hostResults
+          .filter((result) => result.outcome === 'needs_repair' || result.outcome === 'error')
+          .map((result) => result.repairError ? `${result.host} (${result.repairError})` : result.host)
+          .join('; ')
+        : '';
+
+      lines.push(
+        '',
+        '## 🔐 Permission Hooks',
+        `- **Health**: ${info.permissionHooks.health.status.toUpperCase()} — ${info.permissionHooks.health.message}`,
+        `- **Installed Hosts**: ${installedHosts}`,
+        `- **Current Assets**: ${currentHosts}`,
+        `- **Needs Repair**: ${needsRepairHosts}`,
+      );
+
+      if (info.permissionHooks.diagnosticsPath) {
+        lines.push(`- **Diagnostics Log**: ${info.permissionHooks.diagnosticsPath}`);
+      }
+
+      if (lastStartupRepair) {
+        lines.push(
+          `- **Last Startup Audit**: ${lastStartupRepair.completedAt} (${lastStartupRepair.durationMs}ms)`,
+          `- **Startup Repairs Applied**: ${lastStartupRepair.repairedCount}`,
+          `- **Startup Repair Issues**: ${startupRepairIssues || 'None'}`,
+        );
+      }
+
+      if (info.permissionHooks.lastDiagnostic) {
+        const lastDiagnostic = info.permissionHooks.lastDiagnostic;
+        const diagnosticOutcome = lastDiagnostic.outcome
+          ? `${lastDiagnostic.event} / ${lastDiagnostic.outcome}`
+          : lastDiagnostic.event;
+        lines.push(
+          `- **Last Diagnostic Event**: ${lastDiagnostic.timestamp} (${diagnosticOutcome})`,
+          `- **Last Diagnostic Stage**: ${lastDiagnostic.stage}`,
+          `- **Last Diagnostic Input Bytes**: ${lastDiagnostic.rawInputLength ?? 0}`,
+          `- **Last Diagnostic Normalized Bytes**: ${lastDiagnostic.normalizedResponseLength ?? 0}`,
+          `- **Last Diagnostic Emitted Bytes**: ${lastDiagnostic.emittedResponseLength ?? 0}`,
+        );
+        if (lastDiagnostic.reason) {
+          lines.push(`- **Last Diagnostic Reason**: ${lastDiagnostic.reason}`);
+        }
+      }
+    }
 
     // Issue #706: Startup timing
     if (info.startup) {

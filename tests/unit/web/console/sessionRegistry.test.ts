@@ -13,6 +13,8 @@ import {
   type IngestRoutesResult,
   type SessionInfo,
 } from '../../../../src/web/console/IngestRoutes.js';
+import { PACKAGE_VERSION } from '../../../../src/generated/version.js';
+import { CONSOLE_PROTOCOL_VERSION } from '../../../../src/web/console/LeaderElection.js';
 
 function buildApp(ingestResult: IngestRoutesResult) {
   const app = express();
@@ -32,13 +34,17 @@ describe('Session registry (#1805)', () => {
 
   describe('registerLeaderSession', () => {
     it('registers a leader session with authenticated=true and kind=mcp', () => {
-      ingestResult.registerLeaderSession('test-leader-001', process.pid);
+      ingestResult.registerLeaderSession('test-leader-001', process.pid, 'claude-code');
       const sessions = ingestResult.getSessions();
       expect(sessions).toHaveLength(1);
       expect(sessions[0].authenticated).toBe(true);
       expect(sessions[0].kind).toBe('mcp');
       expect(sessions[0].isLeader).toBe(true);
       expect(sessions[0].status).toBe('active');
+      expect(sessions[0].serverVersion).toBe(PACKAGE_VERSION);
+      expect(sessions[0].consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
+      expect(sessions[0].clientPlatform).toBe('claude-code');
+      expect(sessions[0].clientPlatformLabel).toBe('Claude Code');
     });
 
     it('assigns a puppet display name', () => {
@@ -84,6 +90,8 @@ describe('Session registry (#1805)', () => {
       expect(consoleSessions[0].kind).toBe('console');
       expect(consoleSessions[0].displayName).toBe('Web Console');
       expect(consoleSessions[0].status).toBe('active');
+      expect(consoleSessions[0].clientPlatform).toBe('web-console');
+      expect(consoleSessions[0].clientPlatformLabel).toBe('Web Console');
     });
 
     it('is idempotent — calling twice does not create duplicates', () => {
@@ -142,11 +150,40 @@ describe('Session registry (#1805)', () => {
       expect(leader).toBeDefined();
       expect(leader.authenticated).toBe(true);
       expect(leader.kind).toBe('mcp');
+      expect(leader.serverVersion).toBe(PACKAGE_VERSION);
+      expect(leader.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
 
       const consoleSess = res.body.sessions.find((s: SessionInfo) => s.kind === 'console');
       expect(consoleSess).toBeDefined();
       expect(consoleSess.authenticated).toBe(true);
       expect(consoleSess.displayName).toBe('Web Console');
+      expect(consoleSess.serverVersion).toBe(PACKAGE_VERSION);
+      expect(consoleSess.consoleProtocolVersion).toBe(CONSOLE_PROTOCOL_VERSION);
+    });
+
+    it('records follower version metadata from session heartbeat payloads', async () => {
+      const app = buildApp(ingestResult);
+
+      await request(app)
+        .post('/api/ingest/session')
+        .send({
+          sessionId: 'follower-001',
+          event: 'started',
+          pid: 12345,
+          startedAt: new Date().toISOString(),
+          serverVersion: '2.0.99',
+          consoleProtocolVersion: 1,
+          clientPlatform: 'codex',
+        });
+
+      const res = await request(app).get('/api/sessions');
+      expect(res.status).toBe(200);
+      const follower = res.body.sessions.find((s: SessionInfo) => s.sessionId === 'follower-001');
+      expect(follower).toBeDefined();
+      expect(follower.serverVersion).toBe('2.0.99');
+      expect(follower.consoleProtocolVersion).toBe(1);
+      expect(follower.clientPlatform).toBe('codex');
+      expect(follower.clientPlatformLabel).toBe('Codex');
     });
   });
 
@@ -194,6 +231,8 @@ describe('Session registry (#1805)', () => {
         isLeader: true,
         authenticated: true,
         kind: 'mcp',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
       }));
       expect(session.displayName).toBeTruthy();
       expect(session.color).toMatch(/^#[0-9a-fA-F]{6}$/);
@@ -211,6 +250,10 @@ describe('Session registry (#1805)', () => {
         isLeader: false,
         authenticated: true,
         kind: 'console',
+        serverVersion: PACKAGE_VERSION,
+        consoleProtocolVersion: CONSOLE_PROTOCOL_VERSION,
+        clientPlatform: 'web-console',
+        clientPlatformLabel: 'Web Console',
       }));
       expect(session.sessionId).toMatch(/^console-\d+$/);
       expect(session.color).toBe('#6366f1');

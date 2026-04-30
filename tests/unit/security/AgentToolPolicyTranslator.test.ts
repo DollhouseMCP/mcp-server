@@ -125,6 +125,7 @@ describe('AgentToolPolicyTranslator', () => {
         expect(policy).toBeDefined();
         expect(policy!.deny).not.toContain('confirm_operation');
         expect(policy!.deny).not.toContain('verify_challenge');
+        expect(policy!.deny).not.toContain('release_deadlock');
       });
 
       it('should never deny lifecycle operations even when EXECUTE is explicitly denied', () => {

@@ -587,6 +587,14 @@ describe('OperationSchema', () => {
         expect(desc).toContain('automatically activated');
       });
 
+      it('should document the canonical execution loop in execute_agent description', () => {
+        const desc = EXECUTION_SCHEMAS.execute_agent.description;
+        expect(desc).toContain('record_execution_step');
+        expect(desc).toContain('mcp_aql_create');
+        expect(desc).toContain('complete_execution');
+        expect(desc).toContain('not the normal next call after execute_agent');
+      });
+
       it('should document resilience interaction in maxAutonomousSteps param (issue #736)', () => {
         const paramDesc = EXECUTION_SCHEMAS.execute_agent.params?.maxAutonomousSteps?.description;
         expect(paramDesc).toContain('resilience');
@@ -602,11 +610,24 @@ describe('OperationSchema', () => {
         expect(EXECUTION_SCHEMAS.record_execution_step.params?.riskScore?.required).toBeUndefined();
       });
 
+      it('should document get_execution_state name reuse guidance', () => {
+        const schema = EXECUTION_SCHEMAS.get_execution_state;
+        expect(schema.description).toContain('same element_name you passed to execute_agent');
+        expect(schema.params?.element_name?.description).toContain('Reuse the same element_name from execute_agent');
+      });
+
       it('should define required params for complete_execution', () => {
         expect(EXECUTION_SCHEMAS.complete_execution.params?.element_name?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.outcome?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.summary?.required).toBe(true);
         expect(EXECUTION_SCHEMAS.complete_execution.params?.goalId?.required).toBeUndefined();
+      });
+
+      it('should document paused-only semantics and full-parameter resume for continue_execution', () => {
+        expect(EXECUTION_SCHEMAS.continue_execution.description).toContain('paused');
+        expect(EXECUTION_SCHEMAS.continue_execution.description).toContain('same goal parameters');
+        expect(EXECUTION_SCHEMAS.continue_execution.examples?.[0]).toContain('run_dir');
+        expect(EXECUTION_SCHEMAS.continue_execution.examples?.[0]).toContain('deliverable_path');
       });
 
       it('should define required params for handoff operations', () => {
@@ -619,13 +640,15 @@ describe('OperationSchema', () => {
     });
 
     describe('GATEKEEPER_SCHEMAS', () => {
-      it('should define 8 gatekeeper operations', () => {
-        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(8);
+      it('should define 10 gatekeeper operations', () => {
+        expect(Object.keys(GATEKEEPER_SCHEMAS)).toHaveLength(10);
         expect(GATEKEEPER_SCHEMAS.confirm_operation).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.verify_challenge).toBeDefined();
+        expect(GATEKEEPER_SCHEMAS.release_deadlock).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.permission_prompt).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.get_effective_cli_policies).toBeDefined();
+        expect(GATEKEEPER_SCHEMAS.get_permission_authority).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.approve_cli_permission).toBeDefined();
         expect(GATEKEEPER_SCHEMAS.get_pending_cli_approvals).toBeDefined();
       });
@@ -633,6 +656,7 @@ describe('OperationSchema', () => {
       it('should have correct endpoints', () => {
         expect(GATEKEEPER_SCHEMAS.confirm_operation.endpoint).toBe('EXECUTE');
         expect(GATEKEEPER_SCHEMAS.verify_challenge.endpoint).toBe('CREATE');
+        expect(GATEKEEPER_SCHEMAS.release_deadlock.endpoint).toBe('CREATE');
         expect(GATEKEEPER_SCHEMAS.beetlejuice_beetlejuice_beetlejuice.endpoint).toBe('CREATE');
         // Issue #647: permission_prompt is a read-only policy evaluation
         expect(GATEKEEPER_SCHEMAS.permission_prompt.endpoint).toBe('READ');
@@ -646,6 +670,11 @@ describe('OperationSchema', () => {
       it('should define required params for verify_challenge', () => {
         expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.challenge_id?.required).toBe(true);
         expect(GATEKEEPER_SCHEMAS.verify_challenge.params?.code?.required).toBe(true);
+      });
+
+      it('should allow a challenge request or completion payload for release_deadlock', () => {
+        expect(GATEKEEPER_SCHEMAS.release_deadlock.params?.challenge_id?.required).toBeUndefined();
+        expect(GATEKEEPER_SCHEMAS.release_deadlock.params?.code?.required).toBeUndefined();
       });
 
       it('should have optional agent_name for beetlejuice', () => {

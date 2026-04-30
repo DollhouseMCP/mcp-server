@@ -178,7 +178,7 @@ describe('GitHub Actions Workflow Validation', () => {
       try {
         const workflow = await loadWorkflow('build-artifacts.yml');
         
-        const buildJob = workflow.jobs?.build;
+        const buildJob = workflow.jobs?.['build-artifacts'];
         if (buildJob) {
           const steps = buildJob.steps || [];
           
@@ -193,7 +193,16 @@ describe('GitHub Actions Workflow Validation', () => {
             
             // Should check for required files
             expect(verifyStep.run).toContain('index.js');
-            expect(verifyStep.run).toContain('package.json');
+            expect(verifyStep.run).toContain('data/personas');
+          }
+
+          const packageStep = steps.find((s: any) =>
+            s.name?.includes('Verify npm package contents')
+          );
+
+          expect(packageStep).toBeDefined();
+          if (packageStep) {
+            expect(packageStep.run).toContain('verify:package-assets');
           }
         }
       } catch {

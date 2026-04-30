@@ -188,6 +188,28 @@ describe('Tool Description ↔ Operation Route Integrity (Issue #535)', () => {
     }
   });
 
+  describe('Agent execution guidance remains actionable', () => {
+    it('mcp_aql_execute documents the canonical loop and paused-only continue semantics', async () => {
+      const descriptions = await getToolDescriptions();
+      const description = descriptions.mcp_aql_execute;
+
+      expect(description).toContain('mcp_aql_create');
+      expect(description).toContain('record_execution_step');
+      expect(description).toContain('complete_execution');
+      expect(description).toContain('paused');
+      expect(description).toContain('not the normal next call after execute_agent');
+      expect(description).toContain('deliverable_path');
+    });
+
+    it('mcp_aql_create documents record_execution_step as the normal post-execute call', async () => {
+      const descriptions = await getToolDescriptions();
+      const description = descriptions.mcp_aql_create;
+
+      expect(description).toContain('normal next lifecycle call after mcp_aql_execute');
+      expect(description).toContain('record_execution_step');
+    });
+  });
+
   describe('100% operation example coverage', () => {
     for (const [suffix, endpoint] of Object.entries(TOOL_ENDPOINT_MAP)) {
       const toolName = `mcp_aql_${suffix}`;
@@ -260,5 +282,13 @@ describe('Tool Description ↔ Operation Route Integrity (Issue #535)', () => {
         'record_execution_step',
       ]);
     });
+  });
+
+  it('mcp_aql_read documents get_execution_state name reuse guidance', async () => {
+    const descriptions = await getToolDescriptions();
+    const description = descriptions.mcp_aql_read;
+
+    expect(description).toContain('{ operation: "get_execution_state", params: { element_name: "code-reviewer" } }');
+    expect(description).toContain('reuse the same element_name you passed to execute_agent');
   });
 });

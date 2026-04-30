@@ -139,6 +139,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     handler: 'Gatekeeper.getEffectiveCliPolicies',
     description: 'Get effective CLI permission policies for the current session (Issue #625 Phase 2)',
   },
+  get_permission_authority: {
+    endpoint: 'READ',
+    handler: 'Gatekeeper.getPermissionAuthority',
+    description: 'Get the current host vs Dollhouse permission authority mode (read-only)',
+  },
   // Issue #625 Phase 3: CLI approval workflow
   approve_cli_permission: {
     endpoint: 'EXECUTE',
@@ -155,6 +160,11 @@ export const OPERATION_ROUTES: Record<string, OperationRoute> = {
     endpoint: 'CREATE',
     handler: 'Gatekeeper.verify',
     description: 'Submit verification code to unblock a danger zone operation',
+  },
+  release_deadlock: {
+    endpoint: 'CREATE',
+    handler: 'Gatekeeper.releaseDeadlock',
+    description: 'Use out-of-band verification to deactivate all active elements and clear current-session activation state',
   },
   // Issue #503: Beetlejuice safe-trigger for danger zone verification testing
   beetlejuice_beetlejuice_beetlejuice: {

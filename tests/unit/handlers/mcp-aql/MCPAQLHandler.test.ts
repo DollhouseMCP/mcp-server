@@ -59,6 +59,12 @@ describe('MCPAQLHandler', () => {
         deleteElement: jest.fn().mockResolvedValue({ deleted: true }),
         activateElement: jest.fn().mockResolvedValue({ activated: true }),
         deactivateElement: jest.fn().mockResolvedValue({ deactivated: true }),
+        releaseDeadlock: jest.fn().mockResolvedValue({
+          sessionId: 'test-session',
+          deactivated: [],
+          failed: [],
+          persistedStateCleared: true,
+        }),
         getActiveElements: jest.fn().mockResolvedValue([]),
         getActiveElementsForPolicy: jest.fn().mockResolvedValue([]),
         getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
@@ -1361,6 +1367,23 @@ describe('MCPAQLHandler', () => {
           includeContext: undefined,
         });
       });
+
+      it('should explain how to recover when element_name is missing', async () => {
+        const input: OperationInput = {
+          operation: 'get_execution_state',
+          params: {},
+        };
+
+        const result = await handler.handleRead(input);
+
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error).toContain("Missing required parameter 'element_name'");
+          expect(result.error).toContain('Use the same element_name you passed to execute_agent');
+          expect(result.error).toContain('{ operation: "get_execution_state", params: { element_name: "code-reviewer", includeDecisionHistory: true } }');
+          expect(result.error).toContain('list active agents first');
+        }
+      });
     });
 
     describe('Permission violations', () => {
@@ -2043,6 +2066,25 @@ describe('MCPAQLHandler', () => {
       }
     });
 
+    it('should reject deadlock relief challenges via verify_challenge', async () => {
+      mockVerificationStore.get.mockReturnValue({
+        code: 'RELIEF1',
+        expiresAt: Date.now() + 300000,
+        reason: 'Deadlock relief requested',
+      });
+
+      const result = await verifyHandler.handleCreate({
+        operation: 'verify_challenge',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'RELIEF1' },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('reserved for deadlock relief');
+      }
+      expect(mockVerificationStore.verify).not.toHaveBeenCalled();
+    });
+
     // --- UUID v4 format validation ---
 
     it('should reject challenge_id with invalid UUID format', async () => {
@@ -2302,6 +2344,187 @@ describe('MCPAQLHandler', () => {
       if (!result.success) {
         expect(result.error).toContain('one-time use');
         expect(result.error).toContain('Retry the blocked operation');
+      }
+    });
+  });
+
+  describe('release_deadlock operation', () => {
+    const VALID_CHALLENGE_ID = '550e8400-e29b-41d4-a716-446655440000';
+
+    it('should issue a challenge on the first call', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn(),
+        verify: jest.fn(),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(0),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const verificationNotifier = {
+        showCode: jest.fn(),
+        isAvailable: jest.fn().mockReturnValue(true),
+      };
+
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        verificationStore,
+        verificationNotifier,
+      } as unknown as HandlerRegistry);
+
+      const result = await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual(expect.objectContaining({
+          pending: true,
+          challenge_id: expect.any(String),
+        }));
+      }
+      expect(verificationStore.set).toHaveBeenCalled();
+      expect(verificationNotifier.showCode).toHaveBeenCalled();
+    });
+
+    it('should complete deadlock relief after successful verification', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn().mockReturnValue({
+          code: 'RELIEF1',
+          expiresAt: Date.now() + 300000,
+          reason: 'Deadlock relief requested',
+        }),
+        verify: jest.fn().mockReturnValue(true),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(1),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const elementCRUD = {
+        ...mockRegistry.elementCRUD,
+        releaseDeadlock: jest.fn().mockResolvedValue({
+          sessionId: 'test-session',
+          activeBeforeReset: [{ type: 'persona', name: 'locked-persona' }],
+          deactivated: [{ type: 'persona', name: 'locked-persona' }],
+          failed: [],
+          likelyDeadlockCause: {
+            sandboxingElement: { type: 'persona', name: 'locked-persona' },
+            advisoryElements: [],
+          },
+          persistedStateCleared: true,
+          snapshotFile: '/opt/dollhouse/test-data/deadlock-relief-test.json',
+        }),
+      };
+
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        elementCRUD,
+        verificationStore,
+      } as unknown as HandlerRegistry);
+
+      const result = await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'RELIEF1' },
+      });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual(expect.objectContaining({
+          released: true,
+          persistedStateCleared: true,
+          activeBeforeReset: [{ type: 'persona', element_name: 'locked-persona' }],
+          deactivated: [{ type: 'persona', element_name: 'locked-persona' }],
+          likelyDeadlockCause: {
+            sandboxingElement: { type: 'persona', element_name: 'locked-persona' },
+            advisoryElements: [],
+          },
+          snapshotFile: '/opt/dollhouse/test-data/deadlock-relief-test.json',
+        }));
+      }
+      expect(verificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'RELIEF1');
+      expect(elementCRUD.releaseDeadlock).toHaveBeenCalled();
+    });
+
+    it('should remain available even when confirm_operation is sandboxed by an active element', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn(),
+        verify: jest.fn(),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(0),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const verificationNotifier = {
+        showCode: jest.fn(),
+        isAvailable: jest.fn().mockReturnValue(true),
+      };
+      const restrictiveRegistry = {
+        ...mockRegistry,
+        gatekeeper: new Gatekeeper(undefined, { enableAuditLogging: false }),
+        verificationStore,
+        verificationNotifier,
+        elementCRUD: {
+          ...mockRegistry.elementCRUD,
+          getActiveElementsForPolicy: jest.fn().mockResolvedValue([
+            {
+              type: 'persona',
+              name: 'sandbox-persona',
+              metadata: {
+                gatekeeper: {
+                  deny: ['confirm_operation'],
+                },
+              },
+            },
+          ]),
+        },
+      } as unknown as HandlerRegistry;
+
+      const restrictiveHandler = new MCPAQLHandler(restrictiveRegistry);
+
+      const confirmResult = await restrictiveHandler.handleExecute({
+        operation: 'confirm_operation',
+        params: { operation: 'edit_element' },
+      });
+      expect(confirmResult.success).toBe(false);
+
+      const releaseResult = await restrictiveHandler.handleCreate({
+        operation: 'release_deadlock',
+      });
+
+      expect(releaseResult.success).toBe(true);
+      if (releaseResult.success) {
+        expect(releaseResult.data).toEqual(expect.objectContaining({
+          pending: true,
+          challenge_id: expect.any(String),
+        }));
+      }
+      expect(verificationStore.set).toHaveBeenCalled();
+    });
+
+    it('should require challenge_id and code together on completion', async () => {
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        verificationStore: {
+          set: jest.fn(),
+          get: jest.fn(),
+          verify: jest.fn(),
+          clear: jest.fn(),
+          size: jest.fn(),
+          cleanup: jest.fn(),
+          destroy: jest.fn(),
+        },
+      } as unknown as HandlerRegistry);
+
+      const result = await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('requires both challenge_id and code together');
       }
     });
   });

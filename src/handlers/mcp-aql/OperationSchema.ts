@@ -1222,6 +1222,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     method: 'dispatchExecute',
     category: 'Agent Execution',
     description: 'Start execution of an agent. The agent must have a goal.template defined (set during create_element). Pass values for the template placeholders in parameters. ' +
+      'Canonical loop: call execute_agent once to start, then use mcp_aql_create record_execution_step after each work chunk, inspect autonomy.continue and autonomy.notifications, and call complete_execution when done. continue_execution is only for resuming an already-paused execution and is not the normal next call after execute_agent. ' +
       'Lifecycle: Elements listed in the agent\'s activates field (e.g., activates: { personas: ["Reviewer"], skills: ["code-analysis"] }) are automatically activated when execution begins — their gatekeeper policies, instructions, and capabilities become active for the duration. ' +
       'Resilience: If the agent has a resilience policy, it governs automatic recovery during execution. onStepLimitReached (pause|continue|restart) controls what happens when maxAutonomousSteps is hit. onExecutionFailure (pause|retry|restart-fresh) controls recovery from step failures. Additional fields: maxRetries (default 3), maxContinuations (default 10), retryBackoff (linear|exponential). Without a resilience policy, execution pauses at step limits and failures (safe default).',
     params: {
@@ -1241,9 +1242,9 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
     category: 'Agent Execution',
-    description: 'Query current execution state including progress and findings',
+    description: 'Query current execution state including progress and findings. Use the same element_name you passed to execute_agent for this execution.',
     params: {
-      element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
+      element_name: { type: 'string', required: true, description: 'Agent or executable element name. Reuse the same element_name from execute_agent.' },
       includeDecisionHistory: { type: 'boolean', description: 'Include decision history in response' },
       includeContext: { type: 'boolean', description: 'Include execution context in response' },
     },
@@ -1257,7 +1258,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
     category: 'Agent Execution',
-    description: 'Record execution progress, step completion, or findings. Returns autonomy directive with continue/pause decision and notifications.',
+    description: 'Record execution progress, step completion, or findings. This is the normal follow-up call after execute_agent. Returns autonomy directive with continue/pause decision and notifications.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
       stepDescription: { type: 'string', required: true, description: 'Description of step completed' },
@@ -1295,7 +1296,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
     category: 'Agent Execution',
-    description: 'Resume execution from saved state',
+    description: 'Resume a previously paused execution from saved state. Use only after a pause or handoff boundary, not as the normal next call after execute_agent. Pass the same goal parameters used for execute_agent so the goal template can be revalidated before resuming.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
       previousStepResult: { type: 'string', description: 'Result from previous step' },
@@ -1303,7 +1304,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     },
     returns: { name: 'ContinueResult', kind: 'object', description: 'Resumed execution state with updated context and stateVersion' },
     examples: [
-      '{ operation: "continue_execution", params: { element_name: "code-reviewer", previousStepResult: "Files analyzed" } }',
+      '{ operation: "continue_execution", params: { element_name: "rubric-qa-agent", previousStepResult: "Verified citations", parameters: { run_dir: "/app/run", deliverable_path: "/app/run/output.docx" } } }',
     ],
   },
   abort_execution: {
@@ -1420,6 +1421,22 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       // Response: { verified: true, challenge_id: "...", agentName: "my-agent", message: "Agent unblocked" }
     ],
   },
+  release_deadlock: {
+    endpoint: 'CREATE',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
+    description: 'Recover from a restrictive permission deadlock by showing a human-only verification code, then deactivating all active elements and clearing current-session activation state',
+    params: {
+      challenge_id: { type: 'string', description: 'Challenge ID from the first release_deadlock call' },
+      code: { type: 'string', description: 'Verification code displayed to the user for deadlock relief' },
+    },
+    returns: { name: 'DeadlockReliefResult', kind: 'object', description: 'Two-step flow. First call returns { pending, challenge_id, message }. Second call with challenge_id + code returns { released, activeBeforeReset, deactivated, failed, likelyDeadlockCause, persistedStateCleared, snapshotFile?, message }.' },
+    examples: [
+      '{ operation: "release_deadlock" }',
+      '{ operation: "release_deadlock", params: { challenge_id: "550e8400-e29b-41d4-a716-446655440000", code: "ABC123" } }',
+    ],
+  },
   beetlejuice_beetlejuice_beetlejuice: {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
@@ -1468,7 +1485,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
       platform: { type: 'string', description: 'Target platform for response formatting (default: "claude_code"). Options: claude_code, gemini, cursor, windsurf, codex' },
       session_id: { type: 'string', description: 'Optional persisted activation session ID to evaluate against when hooks run in a separate leader process' },
     },
-    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow"|"deny"|"ask", permissionDecisionReason? } }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex: { hookSpecificOutput: { permissionDecision, reason? } }.' },
+    returns: { name: 'PlatformPermissionDecision', kind: 'object', description: 'Platform-formatted permission decision. Claude Code: { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow"|"deny"|"ask", permissionDecisionReason? } }. Gemini: { decision: "allow"|"deny", reason? }. Cursor: { permission: "allow"|"deny"|"ask", reason? }. Windsurf: { allowed: boolean, reason? }. Codex PreToolUse: allow becomes zero stdout bytes (`{}` at the API layer), deny returns { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason? } }.' },
     examples: [
       '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" } } }',
       '{ operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git push --force" }, platform: "claude_code", session_id: "claude-code-session" } }',
@@ -1489,6 +1506,21 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     examples: [
       '{ operation: "get_effective_cli_policies" }',
       '{ operation: "get_effective_cli_policies", params: { tool_name: "Bash", tool_input: { command: "git push" } } }',
+    ],
+  },
+  get_permission_authority: {
+    endpoint: 'READ',
+    handler: 'mcpAqlHandler',
+    method: 'dispatchGatekeeper',
+    category: 'Security & Permissions',
+    description: 'Get the current permission-authority mode for supported hosts. Read-only: AI can inspect authority state but cannot change it.',
+    params: {
+      host: { type: 'string', description: 'Optional host to inspect (e.g., "claude-code", "codex")' },
+    },
+    returns: { name: 'PermissionAuthorityState', kind: 'object', description: '{ defaultMode, hosts, supportedHosts, supportedModes, aiMutable: false }' },
+    examples: [
+      '{ operation: "get_permission_authority" }',
+      '{ operation: "get_permission_authority", params: { host: "claude-code" } }',
     ],
   },
   // Issue #625 Phase 3: CLI approval workflow

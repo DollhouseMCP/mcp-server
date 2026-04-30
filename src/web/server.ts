@@ -22,6 +22,7 @@ import { createLogRoutes, type LogRoutesResult } from './routes/logRoutes.js';
 import { createMetricsRoutes, type MetricsRoutesResult } from './routes/metricsRoutes.js';
 import { createHealthRoutes } from './routes/healthRoutes.js';
 import { createSetupRoutes, repairNvmLauncherOnStartup } from './routes/setupRoutes.js';
+import { repairPermissionHooksOnStartup } from '../utils/permissionHooks.js';
 import { createTotpRoutes } from './routes/totpRoutes.js';
 import { createTokenRoutes } from './routes/tokenRoutes.js';
 import { logger } from '../utils/logger.js';
@@ -51,6 +52,12 @@ const PUBLIC_PATH_PREFIXES = [
 const TOKEN_META_PLACEHOLDER = '{{CONSOLE_TOKEN}}';
 /** Placeholder in index.html that is replaced with the running server version. */
 const VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_VERSION}}';
+/** Placeholder in index.html that is replaced with the stable Dollhouse session ID. */
+const SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_SESSION_ID}}';
+/** Placeholder in index.html that is replaced with the runtime session ID. */
+const RUNTIME_SESSION_ID_META_PLACEHOLDER = '{{DOLLHOUSE_RUNTIME_SESSION_ID}}';
+/** Placeholder in index.html that is replaced with the asset cache-busting version. */
+const ASSET_VERSION_META_PLACEHOLDER = '{{DOLLHOUSE_ASSET_VERSION}}';
 
 const _packageLocator = new PackageResourceLocator();
 /**
@@ -143,6 +150,10 @@ export interface WebServerOptions {
   tokenStore?: ConsoleTokenStore;
   /** Unified JWT auth middleware (from src/auth). When provided, mounted on /api before console token auth. */
   unifiedAuthMiddleware?: import('express').RequestHandler;
+  /** Stable Dollhouse session identity shown in the web console UI. */
+  sessionId?: string;
+  /** Runtime-unique session identity for diagnostics. */
+  runtimeSessionId?: string;
 }
 
 /**
@@ -324,6 +335,20 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   repairNvmLauncherOnStartup().catch(err =>
     logger.warn(`[Setup] NVM startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
   );
+  if (process.env.NODE_ENV !== 'test') {
+    repairPermissionHooksOnStartup()
+      .then((summary) => {
+        if (summary.needsRepairCount > 0) {
+          logger.warn(
+            `[Setup] Permission hook startup repair completed with ${summary.needsRepairCount} issue(s) ` +
+            `across ${summary.hostResults.length} host(s)`,
+          );
+        }
+      })
+      .catch(err =>
+        logger.warn(`[Setup] Permission hook startup repair threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`)
+      );
+  }
 
   // API routes — use MCP-AQL gateway when handler is available (Issue #796)
   if (options.mcpAqlHandler) {
@@ -389,7 +414,9 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     index: false,
     // In debug mode, disable caching on all static assets (JS, CSS) so
     // UI changes are picked up on normal reload without Cmd+Shift+R.
-    ...(isDebug ? { etag: false, lastModified: false, maxAge: 0 } : {}),
+    ...(isDebug
+      ? { etag: false, lastModified: false, maxAge: 0 }
+      : { maxAge: '1y', immutable: true }),
   }));
 
   // SPA fallback with console token injection (#1780).
@@ -418,9 +445,24 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
       .replaceAll("'", '&#39;')
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
+    const escapedSessionId = (options.sessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
+    const escapedRuntimeSessionId = (options.runtimeSessionId ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;');
     cachedIndexHtml = template
       .replaceAll(TOKEN_META_PLACEHOLDER, escapedToken)
-      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
+      .replaceAll(VERSION_META_PLACEHOLDER, PACKAGE_VERSION)
+      .replaceAll(SESSION_ID_META_PLACEHOLDER, escapedSessionId)
+      .replaceAll(RUNTIME_SESSION_ID_META_PLACEHOLDER, escapedRuntimeSessionId)
+      .replaceAll(ASSET_VERSION_META_PLACEHOLDER, PACKAGE_VERSION);
     cachedTokenValue = tokenValue;
     return cachedIndexHtml;
   };
@@ -438,12 +480,10 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     try {
       const html = await renderIndexHtml();
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      // In debug mode, prevent browser caching so UI changes are picked up
-      // immediately. In production, allow short caching for performance.
-      const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
-      res.setHeader('Cache-Control', isDebug
-        ? 'no-cache, no-store, must-revalidate'
-        : 'private, max-age=60');
+      // The shell should always revalidate so a forced reload can pick up
+      // a new leader/version immediately. Asset files themselves carry a
+      // version query and can be cached aggressively.
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
       res.send(html);
     } catch (err) {
       logger.error(`[WebUI] Failed to render index.html: ${(err as Error).message}`);

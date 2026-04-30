@@ -276,7 +276,50 @@ describe('Setup Routes — API Endpoints', () => {
         expect(res.body[client].name).toBeDefined();
         expect(typeof res.body[client].installed).toBe('boolean');
         expect(res.body[client].configPath).toBeDefined();
+        expect(res.body[client].support).toBeDefined();
+        expect(typeof res.body[client].support.level).toBe('string');
       }
+    });
+
+    it('returns support metadata that distinguishes native and MCP-only clients', async () => {
+      const res = await request(app)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      expect(res.body['claude-code'].support.level).toBe('full_native');
+      expect(res.body['cursor'].support.level).toBe('partial_native');
+      expect(res.body['cline'].support.level).toBe('mcp_only');
+      expect(res.body['lmstudio'].support.level).toBe('mcp_only');
+    });
+
+    it('includes repaired hook freshness metadata for native hook clients', async () => {
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { detectHandler } = createSetupRoutes({
+        _reconcilePermissionHookStatus: async (client: string) => ({
+          installed: client === 'codex',
+          configured: client === 'codex',
+          assetsPrepared: true,
+          assetsCurrent: true,
+          autoRepaired: client === 'codex',
+          needsRepair: false,
+          host: client,
+          scriptPath: `/Users/test/.dollhouse/hooks/pretooluse-${client}.sh`,
+        }),
+      });
+
+      const testApp = express();
+      testApp.get('/api/setup/detect', detectHandler);
+
+      const res = await request(testApp)
+        .get('/api/setup/detect')
+        .expect(200);
+
+      expect(res.body.codex.hookInstalled).toBe(true);
+      expect(res.body.codex.hookAssetsPrepared).toBe(true);
+      expect(res.body.codex.hookAssetsCurrent).toBe(true);
+      expect(res.body.codex.hookAutoRepaired).toBe(true);
+      expect(res.body.codex.hookNeedsRepair).toBe(false);
+      expect(res.body.vscode.hookAssetsCurrent).toBe(true);
     });
 
     it('includes currentConfig when installed', async () => {
@@ -403,6 +446,106 @@ describe('Setup Routes — direct JSON MCP installs', () => {
   });
 });
 
+describe('Setup Routes — TOML detection', () => {
+  it('prefers the exact codex dollhousemcp entry over legacy similarly named sections', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP-V2-Refactor]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/mcp-server-v2-refactor/dist/index.js"]',
+      'enabled = false',
+      '',
+      '[mcp_servers.dollhousemcp]',
+      'command = "npx"',
+      'args = ["-y", "@dollhousemcp/mcp-server@latest"]',
+      'enabled = true',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.serverKey).toBe('mcp_servers');
+    expect(result.currentConfig).toEqual({
+      serverName: 'dollhousemcp',
+      command: 'npx',
+      args: ['-y', '@dollhousemcp/mcp-server@latest'],
+      enabled: true,
+    });
+  });
+
+  it('treats the canonical lowercase codex section as a stricter match than mixed-case sections', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/legacy.js"]',
+      'enabled = false',
+      '',
+      '[mcp_servers.dollhousemcp]',
+      'command = "npx"',
+      'args = ["-y", "@dollhousemcp/mcp-server@latest"]',
+      'enabled = true',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.currentConfig).toEqual({
+      serverName: 'dollhousemcp',
+      command: 'npx',
+      args: ['-y', '@dollhousemcp/mcp-server@latest'],
+      enabled: true,
+    });
+  });
+
+  it('falls back to a legacy dollhouse-style section when no exact entry exists', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP-V2-Refactor]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/mcp-server-v2-refactor/dist/index.js"]',
+      'enabled = false',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.currentConfig).toEqual({
+      serverName: 'DollhouseMCP-V2-Refactor',
+      command: '/bin/zsh',
+      args: ['-lc', 'node /tmp/mcp-server-v2-refactor/dist/index.js'],
+      enabled: false,
+    });
+  });
+
+  it('preserves a mixed-case legacy section when no lowercase canonical section exists', async () => {
+    const { parseTomlConfig } = await import('../../../src/web/routes/setupRoutes.js');
+
+    const raw = [
+      '[mcp_servers.DollhouseMCP]',
+      'command = "/bin/zsh"',
+      'args = ["-lc", "node /tmp/legacy.js"]',
+      'enabled = false',
+      '',
+    ].join('\n');
+
+    const result = parseTomlConfig(raw);
+
+    expect(result.installed).toBe(true);
+    expect(result.currentConfig).toEqual({
+      serverName: 'DollhouseMCP',
+      command: '/bin/zsh',
+      args: ['-lc', 'node /tmp/legacy.js'],
+      enabled: false,
+    });
+  });
+});
+
 // ── HTML content integrity tests ──────────────────────────────────────
 
 describe('Setup Tab — HTML Content Integrity', () => {
@@ -424,16 +567,16 @@ describe('Setup Tab — HTML Content Integrity', () => {
     });
 
     it('has setup.css linked', () => {
-      expect(html).toContain('href="setup.css"');
+      expect(html).toContain('href="setup.css?v={{DOLLHOUSE_ASSET_VERSION}}"');
     });
 
     it('has setup.js loaded', () => {
-      expect(html).toContain('src="setup.js"');
+      expect(html).toContain('src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
     });
 
     it('loads setup.js before app.js', () => {
-      const setupIdx = html.indexOf('src="setup.js"');
-      const appIdx = html.indexOf('src="app.js"');
+      const setupIdx = html.indexOf('src="setup.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
+      const appIdx = html.indexOf('src="app.js?v={{DOLLHOUSE_ASSET_VERSION}}"');
       expect(setupIdx).toBeLessThan(appIdx);
     });
   });
@@ -725,11 +868,18 @@ describe('Setup Tab — JavaScript Integrity', () => {
     });
 
     it('treats Codex as partial Bash-only permission support', () => {
-      expect(js).toContain("hookSupport: 'partial'");
+      expect(js).toContain("supportLevel: 'partial_native'");
       expect(js).toContain('~/.codex/hooks.json');
       expect(js).toContain('codex_hooks = true');
       expect(js).toContain('PreToolUse');
       expect(js).toContain('Checking Bash permissions');
+    });
+
+    it('stores permission support in one shared matrix', () => {
+      expect(js).toContain('PERMISSION_SUPPORT_MATRIX');
+      expect(js).toContain("supportLevel: 'full_native'");
+      expect(js).toContain("supportLevel: 'partial_native'");
+      expect(js).toContain("supportLevel: 'mcp_only'");
     });
 
     it('builds pinned configs with version parameter', () => {
@@ -1631,6 +1781,22 @@ describe('Setup Tab — Generated Panel DOM Validation', () => {
     expect(panel?.textContent).toContain('Codex currently only supports native PreToolUse hooks for Bash');
   });
 
+  it('Cline permissions panel is labeled as MCP-only without a native hook button', () => {
+    const panel = document.getElementById('setup-panel-cline');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).toBeNull();
+    expect(panel?.textContent).toContain('mcp only');
+    expect(panel?.textContent).toContain('native permission-hook automation is still incomplete');
+  });
+
+  it('LM Studio permissions panel is labeled as MCP-only without a native hook button', () => {
+    const panel = document.getElementById('setup-panel-lmstudio');
+    const btn = panel?.querySelector('.setup-permission-install-btn') as HTMLButtonElement | null;
+    expect(btn).toBeNull();
+    expect(panel?.textContent).toContain('mcp only');
+    expect(panel?.textContent).toContain('built-in confirmations or a future fallback adapter');
+  });
+
   it('all generated panels are hidden by default', () => {
     for (const p of generatedPlatforms) {
       const panel = document.getElementById('setup-panel-' + p);
@@ -1922,6 +2088,15 @@ describe('Setup Tab — Channel Selector Interactions', () => {
       expect(status?.textContent).toContain('Permissions & security tools are unavailable for Claude Desktop right now.');
       expect(status?.textContent).not.toContain('already configured for this client');
     });
+
+    it('links to the platform contract reference for advanced hook details', () => {
+      const intro = document.getElementById('setup-permissions-intro');
+      const link = intro?.querySelector('a[href="https://github.com/DollhouseMCP/mcp-server/blob/main/docs/architecture/permission-hook-platform-contracts.md"]') as HTMLAnchorElement | null;
+
+      expect(link).not.toBeNull();
+      expect(link?.textContent).toContain('platform contract reference');
+      expect(link?.target).toBe('_blank');
+    });
   });
 });
 
@@ -1947,9 +2122,11 @@ describe('Setup Tab — Package Inclusion', () => {
     expect(files).toContain('dist/seed-elements/**');
   });
 
-  it('files field includes manual permission hook wrapper scripts', () => {
+  it('files field includes manual permission hook scripts and helpers', () => {
     const files = packageJson.files as string[];
     expect(files).toContain('scripts/pretooluse-dollhouse.sh');
+    expect(files).toContain('scripts/permission-port-discovery.sh');
+    expect(files).toContain('scripts/permission-hook-config.sh');
     expect(files).toContain('scripts/pretooluse-vscode.sh');
     expect(files).toContain('scripts/pretooluse-cursor.sh');
     expect(files).toContain('scripts/pretooluse-windsurf.sh');

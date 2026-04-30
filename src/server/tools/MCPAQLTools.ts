@@ -197,6 +197,13 @@ Quick start examples:
 { operation: "create_element", element_type: "memory", params: { element_name: "session-notes", description: "Session context and notes" } }
 { operation: "addEntry", params: { element_name: "session-notes", content: "Remember this fact", tags: ["important"] } }
 { operation: "execute_agent", params: { element_name: "MyAgent", parameters: { objective: "Review code" } } }
+{ operation: "record_execution_step", params: { element_name: "MyAgent", stepDescription: "Reviewed auth module", outcome: "success", findings: "Found 2 issues" } }
+{ operation: "complete_execution", params: { element_name: "MyAgent", outcome: "success", summary: "Review complete" } }
+
+Execution loop: call execute_agent once to start, then record_execution_step after
+each work chunk, then complete_execution when done. Use continue_execution only to
+resume a paused execution, and pass the same goal parameters you used for
+execute_agent when resuming.
 
 Gatekeeper: Some operations may return a confirmation prompt instead of executing immediately. Use confirm_operation to approve, then retry.
 
@@ -266,6 +273,7 @@ Note: addEntry content supports markdown (headers, lists, bold, tables, code blo
 
 Execution lifecycle — record agent progress (appends step records, like addEntry):
 { operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Analyzed files", outcome: "success", findings: "Found 3 issues" } }
+This is the normal next lifecycle call after mcp_aql_execute { operation: "execute_agent", ... }.
 Response flow: record_execution_step returns { autonomy: { continue, factors, notifications? } }. Check autonomy.continue to decide whether to proceed. Check autonomy.notifications for permission_pending (gatekeeper blocks), autonomy_pause, or danger_zone alerts to relay to human operators.
 
 Import & portfolio:
@@ -281,6 +289,7 @@ Auth & verification:
 { operation: "setup_github_auth" }
 { operation: "configure_oauth", params: { client_id: "your-client-id" } }
 { operation: "verify_challenge", params: { code: "ABC123" } }
+{ operation: "release_deadlock" }
 { operation: "beetlejuice_beetlejuice_beetlejuice" }
 
 Batch operations: Use the operations array to execute multiple operations sequentially in a single request.
@@ -347,6 +356,7 @@ Memory-specific search (filter by tags):
 Execution lifecycle — read-only queries:
 { operation: "get_execution_state", params: { element_name: "code-reviewer" } }
 { operation: "get_gathered_data", params: { element_name: "code-reviewer", goalId: "goal-id" } }
+For execution-state reads, reuse the same element_name you passed to execute_agent. If element_name is missing, retry with the same agent name rather than inventing a new one.
 
 Collection:
 { operation: "browse_collection", params: { section: "personas" } }
@@ -381,6 +391,8 @@ Gatekeeper & CLI policies:
 { operation: "evaluate_permission", params: { tool_name: "Bash", input: { command: "git status" }, platform: "claude_code" } }
 { operation: "get_effective_cli_policies" }
 { operation: "get_pending_cli_approvals" }
+{ operation: "get_permission_authority" }
+{ operation: "get_permission_authority", params: { host: "claude-code" } }
 
 Enhanced index:
 { operation: "find_similar_elements", params: { element_type: "persona", element_name: "Creative-Writer" } }
@@ -502,8 +514,8 @@ Supported operations: ${getOperationsString('EXECUTE')}
 
 These operations manage runtime execution state. Unlike CRUD operations (which manage definitions), Execute operations handle the execution lifecycle:
 - execute_agent: Start a new execution (returns goalId and stateVersion for tracking)
-- complete_execution: Signal successful completion
-- continue_execution: Resume from saved state
+- complete_execution: Signal successful completion once the goal is done
+- continue_execution: Resume a previously paused execution with the same goal parameters
 - abort_execution: Abort a running execution, rejecting further operations
 - confirm_operation: Confirm a pending operation that requires user approval (Gatekeeper flow)
 - approve_cli_permission: Approve a pending CLI tool permission request
@@ -514,13 +526,20 @@ IMPORTANT: Execute operations are potentially destructive (agents can perform an
 
 ⚠️ SECURITY: Do not auto-allow this endpoint in your host settings (e.g., Claude Code settings.json). Each execution should require explicit human approval. Auto-allowing bypasses the per-operation confirmation gate. While DangerZone verification and element deny policies still provide protection, the primary human review checkpoint is lost.
 
-Response flow: execute_agent returns { goalId, stateVersion, activeElements, safetyTier, ... }. Use goalId with record_execution_step and complete_execution. stateVersion enables optimistic locking. record_execution_step returns { autonomy: { continue, notifications? } } — check notifications for gatekeeper blocks and danger zone alerts.
+Canonical loop:
+1. Call execute_agent once to start the goal and receive { goalId, stateVersion, activeElements, safetyTier, ... }.
+2. After each chunk of work, use mcp_aql_create: { operation: "record_execution_step", ... }.
+3. Read record_execution_step.autonomy.continue and any autonomy.notifications to decide whether to continue, pause for a human, or handle a gatekeeper block.
+4. When the goal is finished, call complete_execution.
+Use continue_execution only when an already-started goal was paused and you are resuming it with the same goal parameters. It is not the normal next call after execute_agent.
 
 Quick start examples:
 { operation: "execute_agent", params: { element_name: "code-reviewer", parameters: { objective: "Review code" } } }
+Next lifecycle step — use mcp_aql_create:
+{ operation: "record_execution_step", params: { element_name: "code-reviewer", stepDescription: "Reviewed auth module", outcome: "success", findings: "Found 2 security issues" } }
 { operation: "complete_execution", params: { element_name: "code-reviewer", outcome: "success", summary: "Completed review" } }
 { operation: "abort_execution", params: { element_name: "data-collector", reason: "User requested cancellation" } }
-{ operation: "continue_execution", params: { element_name: "code-reviewer" } }
+{ operation: "continue_execution", params: { element_name: "rubric-qa-agent", previousStepResult: "Verified citation set", parameters: { run_dir: "/app/run", deliverable_path: "/app/run/output.docx" } } }
 { operation: "confirm_operation", params: { operation: "execute_agent" } }
 { operation: "approve_cli_permission", params: { request_id: "req-123", decision: "allow" } }
 { operation: "prepare_handoff", params: { element_name: "code-reviewer" } }
