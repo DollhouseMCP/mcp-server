@@ -1019,6 +1019,9 @@ async function startStreamableHttpServer(
     ...options,
     authMiddleware,
     oauthProvider,
+    tlsConfig: container.hasRegistration('TlsConfig')
+      ? container.resolve<import('./server/TlsConfig.js').TlsConfig>('TlsConfig')
+      : undefined,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());

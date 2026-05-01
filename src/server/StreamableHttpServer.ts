@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
+import type { Server as HttpsServer } from 'node:https';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
@@ -9,6 +10,8 @@ import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl } from '../auth/oauth/url.js';
+import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
+import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
 export type DeferredSetupMode = 'full' | 'sink-only' | 'none';
@@ -37,6 +40,12 @@ export interface StreamableHttpRuntimeOptions {
     setPublicBaseUrl?: (publicBaseUrl: string) => void;
     createRouter: () => import('express').Router;
   };
+  /**
+   * TLS configuration for the HTTP transport. When enabled, the server binds HTTPS.
+   * Defaults to a TlsConfig constructed from env (DOLLHOUSE_TLS_CERT_PATH/_KEY_PATH).
+   * Tests can pass a stub TlsConfig with overrides.
+   */
+  tlsConfig?: TlsConfig;
   /** Called when a new HTTP session is initialized (after MCP handshake). */
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
@@ -49,7 +58,9 @@ export interface StreamableHttpRuntimeHandle {
   port: number;
   mcpPath: string;
   url: string;
-  httpServer: HttpServer;
+  httpServer: HttpServer | HttpsServer;
+  /** True when the server is bound HTTPS (TLS enabled). */
+  isHttps: boolean;
   close(): Promise<void>;
   activeSessionCount(): number;
   pooledSessionCount(): number;
@@ -193,7 +204,7 @@ export function getStreamableHttpRuntimeOptions(): StreamableHttpRuntimeOptions 
   };
 }
 
-async function closeHttpServer(httpServer: HttpServer): Promise<void> {
+async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<void> {
   // Destroy all active sockets so keep-alive connections don't prevent shutdown.
   // httpServer.close() only stops accepting new connections — existing sockets
   // stay alive until their keep-alive timeout expires.
@@ -620,19 +631,23 @@ export async function createStreamableHttpRuntime(
   app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
   app.delete(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'DELETE'));
 
-  const httpServer = await new Promise<HttpServer>((resolve, reject) => {
-    const server = app.listen(port, host, () => resolve(server));
-    server.on('error', reject);
+  const tlsConfig = options.tlsConfig ?? new TlsConfig();
+  const { server: httpServer, isHttps } = await createHttpOrHttpsServer(app, {
+    host,
+    port,
+    tlsConfig,
   });
 
   const address = httpServer.address();
   const resolvedPort = typeof address === 'object' && address ? address.port : port;
-  const url = `http://${host}:${resolvedPort}${mcpPath}`;
+  const scheme = isHttps ? 'https' : 'http';
+  const url = `${scheme}://${host}:${resolvedPort}${mcpPath}`;
 
   logger.info('[StreamableHTTP] Hosted MCP server listening', {
     host,
     port: resolvedPort,
     mcpPath,
+    scheme,
     allowedHosts,
     sessionIdleTimeoutMs,
     sessionPoolSize,
@@ -703,6 +718,7 @@ export async function createStreamableHttpRuntime(
     mcpPath,
     url,
     httpServer,
+    isHttps,
     activeSessionCount: () => sessions.size,
     pooledSessionCount: () => pooledSessions.length,
     close: async () => {

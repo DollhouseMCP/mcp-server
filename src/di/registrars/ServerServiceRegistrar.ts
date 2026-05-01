@@ -17,10 +17,15 @@ import { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import type { SessionResolver } from '../../context/SessionContext.js';
 import { ServerSetup } from '../../server/index.js';
 import { ServerStartup } from '../../server/startup.js';
+import { TlsConfig } from '../../server/TlsConfig.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 
 export class ServerServiceRegistrar {
   public register(container: DiContainerFacade): void {
+    // TLS configuration for HTTP transport (and any future HTTPS surface).
+    // Reads DOLLHOUSE_TLS_CERT_PATH / DOLLHOUSE_TLS_KEY_PATH from env.
+    container.register('TlsConfig', () => new TlsConfig());
+
     // SERVER
     container.register('ServerSetup', () => {
       const stdioSession = container.resolve<ReturnType<typeof createStdioSession>>('StdioSession');

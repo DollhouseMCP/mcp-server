@@ -127,6 +127,14 @@ const envSchema = z.object({
   /** Public HTTPS base URL used in OAuth discovery metadata for remote connectors. */
   DOLLHOUSE_PUBLIC_BASE_URL: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Path to TLS certificate (PEM). When set with DOLLHOUSE_TLS_KEY_PATH, the HTTP transport binds HTTPS. */
+  DOLLHOUSE_TLS_CERT_PATH: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Path to TLS private key (PEM). Required alongside DOLLHOUSE_TLS_CERT_PATH for HTTPS. */
+  DOLLHOUSE_TLS_KEY_PATH: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** CI-only escape hatch: allow non-loopback bind without TLS. Never set in production. */
+  DOLLHOUSE_UNSAFE_NO_TLS: envBool(false),
 
   // ============================================================================
   // Database Configuration (Phase 4)
