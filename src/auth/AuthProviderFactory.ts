@@ -4,9 +4,19 @@
  * Creates the appropriate IAuthProvider based on environment configuration.
  * Returns null when auth is disabled (the default).
  *
+ * Two-level structure (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
+ *   1. Outer: select the auth mode (embedded AS vs OIDC bridge) from
+ *      DOLLHOUSE_AUTH_PROVIDER. The legacy 'local' value is treated as
+ *      'embedded' for mode purposes; the underlying construction stays
+ *      LocalDevAuthProvider until C4 collapses both into the embedded AS.
+ *   2. Inner: AuthMethodFactory selects which IAuthMethod implementations
+ *      the embedded AS exposes (trivial-consent today; github, local,
+ *      magic-link, oidc-bridge as later commits land them).
+ *
  * Provider selection:
- *   DOLLHOUSE_AUTH_PROVIDER=local  → LocalDevAuthProvider (self-signed JWTs)
- *   DOLLHOUSE_AUTH_PROVIDER=oidc   → OidcAuthProvider (external IdP)
+ *   DOLLHOUSE_AUTH_PROVIDER=local     → LocalDevAuthProvider (dev-only JWT issuer)
+ *   DOLLHOUSE_AUTH_PROVIDER=embedded  → EmbeddedOAuthProvider (the embedded AS)
+ *   DOLLHOUSE_AUTH_PROVIDER=oidc      → OidcAuthProvider (OIDC bridge mode)
  *
  * @module auth/AuthProviderFactory
  */
@@ -15,6 +25,13 @@ import * as path from 'node:path';
 import os from 'node:os';
 import { logger } from '../utils/logger.js';
 import type { IAuthProvider } from './IAuthProvider.js';
+import {
+  AuthMethodFactory,
+  createDefaultAuthMethodFactory,
+  type AuthMethodId,
+} from './embedded-as/AuthMethodFactory.js';
+
+export type AuthProviderMode = 'embedded' | 'oidc-bridge';
 
 export interface AuthConfig {
   enabled: boolean;
@@ -26,6 +43,36 @@ export interface AuthConfig {
   localDefaultSub?: string;
   publicBaseUrl?: string;
   mcpPath?: string;
+  /**
+   * Auth methods exposed by the embedded AS. Defaults to ['trivial-consent']
+   * which preserves the existing solo-localhost behavior. Ignored when
+   * provider='oidc' (the OIDC bridge owns identity end-to-end).
+   */
+  methods?: AuthMethodId[];
+  /** Inner factory; defaults to createDefaultAuthMethodFactory(). Tests inject. */
+  methodFactory?: AuthMethodFactory;
+}
+
+/**
+ * Select the outer auth mode from the provider config value.
+ * 'local' and 'embedded' both run inside the embedded AS mode; 'oidc'
+ * is the bridge mode that delegates to an external IdP.
+ */
+export function selectAuthMode(provider: AuthConfig['provider']): AuthProviderMode {
+  return provider === 'oidc' ? 'oidc-bridge' : 'embedded';
+}
+
+/**
+ * Resolve the methods list for the embedded AS mode. Honors explicit
+ * `methods` config; otherwise defaults to ['trivial-consent'].
+ */
+export function resolveAuthMethods(config: AuthConfig): AuthMethodId[] {
+  if (config.provider === 'oidc') {
+    return ['oidc-bridge'];
+  }
+  return config.methods && config.methods.length > 0
+    ? config.methods
+    : ['trivial-consent'];
 }
 
 function resolveDefaultKeyFilePath(): string {
@@ -42,6 +89,20 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     logger.info('[AuthProviderFactory] Authentication disabled');
     return null;
   }
+
+  // Validate the requested method set against the inner factory before
+  // constructing anything. Catches typos and unregistered methods early.
+  const methodFactory = config.methodFactory ?? createDefaultAuthMethodFactory();
+  const methods = resolveAuthMethods(config);
+  const mode = selectAuthMode(config.provider);
+  if (mode === 'embedded') {
+    methodFactory.assertAllRegistered(methods);
+  }
+  logger.info('[AuthProviderFactory] Resolved auth configuration', {
+    provider: config.provider,
+    mode,
+    methods,
+  });
 
   if (config.provider === 'oidc') {
     if (!config.issuer) {
