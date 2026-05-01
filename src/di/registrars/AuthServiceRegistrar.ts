@@ -15,6 +15,11 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { IAuthProvider } from '../../auth/IAuthProvider.js';
+
+interface ProtectedResourceMetadataProvider extends IAuthProvider {
+  getProtectedResourceMetadataUrl(): string;
+}
 
 export class AuthServiceRegistrar {
   /**
@@ -38,6 +43,8 @@ export class AuthServiceRegistrar {
       jwksUri: env.DOLLHOUSE_AUTH_JWKS_URI,
       localKeyFile: env.DOLLHOUSE_AUTH_LOCAL_KEY_FILE,
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
+      publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
+      mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
     });
 
     if (!provider) return;
@@ -47,9 +54,16 @@ export class AuthServiceRegistrar {
     const middleware = createUnifiedAuthMiddleware({
       provider,
       publicPaths: ['/healthz', '/readyz', '/version'],
+      protectedResourceMetadataUrl: hasProtectedResourceMetadata(provider)
+        ? provider.getProtectedResourceMetadataUrl()
+        : undefined,
     });
     container.register('AuthMiddleware', () => middleware);
 
     logger.info(`[AuthServiceRegistrar] Auth enabled with provider: ${provider.name}`);
   }
+}
+
+function hasProtectedResourceMetadata(provider: IAuthProvider): provider is ProtectedResourceMetadataProvider {
+  return typeof (provider as { getProtectedResourceMetadataUrl?: unknown }).getProtectedResourceMetadataUrl === 'function';
 }

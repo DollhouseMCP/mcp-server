@@ -124,6 +124,9 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_SESSION_POOL_SIZE: z.coerce.number().int().min(0).max(32).default(0),
   /** Start the web console alongside HTTP transport for session monitoring. */
   DOLLHOUSE_HTTP_WEB_CONSOLE: envBool(true),
+  /** Public HTTPS base URL used in OAuth discovery metadata for remote connectors. */
+  DOLLHOUSE_PUBLIC_BASE_URL: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   // ============================================================================
   // Database Configuration (Phase 4)
@@ -276,8 +279,8 @@ const envSchema = z.object({
    */
   DOLLHOUSE_AUTH_ENABLED: envBool(false),
 
-  /** Auth provider: 'local' (self-signed JWTs for dev) or 'oidc' (external IdP). */
-  DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'oidc']).default('local'),
+  /** Auth provider: 'local' (self-signed JWTs), 'embedded' (Dollhouse OAuth AS), or 'oidc' (external IdP). */
+  DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'embedded', 'oidc']).default('local'),
 
   /** OIDC issuer URL (required when provider=oidc). */
   DOLLHOUSE_AUTH_ISSUER: z.string().optional(),

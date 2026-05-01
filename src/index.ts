@@ -23,6 +23,7 @@ import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
 import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
 import { PACKAGE_VERSION } from "./generated/version.js";
+import { joinUrl } from './auth/oauth/url.js';
 import type { IndicatorConfig } from "./config/indicator-config.js";
 import type { IToolHandler } from "./server/index.js";
 import type { ToolRegistry } from "./handlers/ToolRegistry.js";
@@ -952,6 +953,10 @@ async function startStreamableHttpServer(
   const authMiddleware = container.hasRegistration('AuthMiddleware')
     ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
     : undefined;
+  const authProvider = container.hasRegistration('AuthProvider')
+    ? container.resolve<unknown>('AuthProvider')
+    : undefined;
+  const oauthProvider = isEmbeddedOAuthProvider(authProvider) ? authProvider : undefined;
 
   // Fallback userId for unauthenticated sessions (DB mode bootstrap user)
   const fallbackUserId = container.hasRegistration('BootstrappedUserId')
@@ -1013,6 +1018,7 @@ async function startStreamableHttpServer(
   }, {
     ...options,
     authMiddleware,
+    oauthProvider,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
@@ -1021,6 +1027,15 @@ async function startStreamableHttpServer(
       ingestRoutes?.deregisterHttpSession(sessionId);
     },
   });
+}
+
+function isEmbeddedOAuthProvider(value: unknown): value is {
+  setPublicBaseUrl?: (publicBaseUrl: string) => void;
+  createRouter: () => import('express').Router;
+} {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { createRouter?: unknown }).createRouter === 'function';
 }
 
 /**
@@ -1179,6 +1194,13 @@ async function startHttpMode(): Promise<void> {
 
   const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
   console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+  const connectorUrl = env.DOLLHOUSE_PUBLIC_BASE_URL
+    ? joinUrl(env.DOLLHOUSE_PUBLIC_BASE_URL, runtime.mcpPath)
+    : runtime.url;
+  console.error(`[DollhouseMCP] Claude connector URL: ${connectorUrl}`);
+  if (!env.DOLLHOUSE_PUBLIC_BASE_URL) {
+    console.error('[DollhouseMCP] For claude.ai, expose this server through HTTPS and set DOLLHOUSE_PUBLIC_BASE_URL. Cloudflare Tunnel works for the first public setup path.');
+  }
 }
 
 /**

@@ -25,6 +25,8 @@ export interface AuthMiddlewareOptions {
   provider: IAuthProvider;
   /** Paths that bypass authentication (e.g. health checks). */
   publicPaths?: string[];
+  /** RFC 9728 protected resource metadata URL for WWW-Authenticate discovery. */
+  protectedResourceMetadataUrl?: string;
 }
 
 /**
@@ -45,7 +47,7 @@ declare module 'express' {
  *   app.use('/api', createAuthMiddleware({ provider, publicPaths: ['/api/health'] }));
  */
 export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
-  const { provider, publicPaths = [] } = options;
+  const { provider, publicPaths = [], protectedResourceMetadataUrl } = options;
   const publicSet = new Set(publicPaths);
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -66,6 +68,7 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
         details: 'Missing authentication token',
         additionalData: { path: req.path, method: req.method },
       });
+      setAuthenticateHeader(res, protectedResourceMetadataUrl);
       res.status(401).json({ error: 'Authentication required. Provide a Bearer token in the Authorization header.' });
       return;
     }
@@ -84,6 +87,7 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
         provider: provider.name,
         path: req.path,
       });
+      setAuthenticateHeader(res, protectedResourceMetadataUrl);
       res.status(401).json({ error: `Authentication failed: ${result.reason}` });
       return;
     }
@@ -92,6 +96,15 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
     res.locals.authClaims = result.claims;
     next();
   };
+}
+
+function setAuthenticateHeader(res: Response, protectedResourceMetadataUrl: string | undefined): void {
+  if (protectedResourceMetadataUrl) {
+    res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${protectedResourceMetadataUrl}"`);
+    return;
+  }
+
+  res.setHeader('WWW-Authenticate', 'Bearer');
 }
 
 /** Extract Bearer token from header or query parameter. */

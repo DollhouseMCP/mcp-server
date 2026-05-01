@@ -8,6 +8,7 @@ import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { logger } from '../utils/logger.js';
+import { assertSafePublicBaseUrl } from '../auth/oauth/url.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
 export type DeferredSetupMode = 'full' | 'sink-only' | 'none';
@@ -31,6 +32,11 @@ export interface StreamableHttpRuntimeOptions {
   sessionPoolSize?: number;
   /** Express middleware for authentication. Mounted before MCP handlers when provided. */
   authMiddleware?: import('express').RequestHandler;
+  /** Embedded OAuth provider. Discovery and token routes are mounted before MCP auth middleware. */
+  oauthProvider?: {
+    setPublicBaseUrl?: (publicBaseUrl: string) => void;
+    createRouter: () => import('express').Router;
+  };
   /** Called when a new HTTP session is initialized (after MCP handshake). */
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
@@ -218,6 +224,10 @@ export async function createStreamableHttpRuntime(
   const rateLimitMaxRequests = Math.max(0, options.rateLimitMaxRequests ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS);
   const sessionIdleTimeoutMs = Math.max(0, options.sessionIdleTimeoutMs ?? env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS);
   const sessionPoolSize = Math.max(0, options.sessionPoolSize ?? env.DOLLHOUSE_HTTP_SESSION_POOL_SIZE);
+  const publicBaseUrl = env.DOLLHOUSE_PUBLIC_BASE_URL;
+  if (publicBaseUrl) {
+    assertSafePublicBaseUrl(publicBaseUrl);
+  }
   const app = createMcpExpressApp({ host, allowedHosts });
   const sessions = new Map<string, ActiveSessionRecord>();
   const rateLimits = new Map<string, RateLimitRecord>();
@@ -459,6 +469,7 @@ export async function createStreamableHttpRuntime(
       version: PACKAGE_VERSION,
       transport: 'streamable-http',
       mcpPath,
+      connectorUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}${mcpPath}` : mcpPath,
       health: '/healthz',
       readiness: '/readyz',
       sessionPoolSize,
@@ -497,6 +508,16 @@ export async function createStreamableHttpRuntime(
       version: PACKAGE_VERSION,
     });
   });
+
+  if (options.oauthProvider) {
+    if (publicBaseUrl) {
+      options.oauthProvider.setPublicBaseUrl?.(publicBaseUrl);
+    }
+    app.use(options.oauthProvider.createRouter());
+    logger.info('[StreamableHTTP] Embedded OAuth routes mounted', {
+      publicBaseUrl: publicBaseUrl ?? `http://${host}:${port}`,
+    });
+  }
 
   // Mount auth middleware on MCP path when provided
   if (options.authMiddleware) {

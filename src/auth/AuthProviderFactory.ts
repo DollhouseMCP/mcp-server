@@ -18,12 +18,14 @@ import type { IAuthProvider } from './IAuthProvider.js';
 
 export interface AuthConfig {
   enabled: boolean;
-  provider: 'local' | 'oidc';
+  provider: 'local' | 'embedded' | 'oidc';
   issuer?: string;
   audience?: string;
   jwksUri?: string;
   localKeyFile?: string;
   localDefaultSub?: string;
+  publicBaseUrl?: string;
+  mcpPath?: string;
 }
 
 function resolveDefaultKeyFilePath(): string {
@@ -54,6 +56,16 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       issuer: config.issuer,
       audience: config.audience,
       jwksUri: config.jwksUri,
+    });
+  }
+
+  if (config.provider === 'embedded') {
+    const { EmbeddedOAuthProvider } = await import('./EmbeddedOAuthProvider.js');
+    return new EmbeddedOAuthProvider({
+      publicBaseUrl: config.publicBaseUrl,
+      mcpPath: config.mcpPath,
+      keyFilePath: config.localKeyFile,
+      defaultSubject: config.localDefaultSub,
     });
   }
 
