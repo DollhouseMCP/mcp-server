@@ -27,6 +27,7 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
+  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
@@ -216,7 +217,7 @@ function validateFieldValue(
 
   // Determine max length based on field type, using system constants
   const maxLength = fieldType === 'name' ? SECURITY_LIMITS.MAX_NAME_LENGTH :
-                    fieldType === 'description' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH :
+                    fieldType === 'description' ? SECURITY_LIMITS.MAX_YAML_LENGTH :
                     fieldType === 'content' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH : SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
 
   const result = validationService.validateAndSanitizeInput(value, {
@@ -609,6 +610,11 @@ export async function editElement(
   const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
   if (gatekeeperErrors.length > 0) {
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
+  }
+
+  const descriptionLengthErrors = findOversizedDescriptionFields(input);
+  if (descriptionLengthErrors.length > 0) {
+    return error(`Description length validation failed:\n${descriptionLengthErrors.map(e => `  • ${e}`).join('\n')}`);
   }
 
   // Validate string field values using injected validator

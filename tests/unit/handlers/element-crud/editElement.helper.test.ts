@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 const { editElement } = await import('../../../../src/handlers/element-crud/editElement.js');
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
 const { ElementNotFoundError } = await import('../../../../src/utils/ErrorHandler.js');
+const { SECURITY_LIMITS } = await import('../../../../src/security/constants.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 
 describe('editElement helper', () => {
@@ -377,6 +378,26 @@ describe('editElement helper', () => {
       const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
       expect(saved.metadata.description).toBe(longDescription);
       expect(saved.metadata.description.length).toBeGreaterThan(500);
+    });
+
+    it('should reject description edits that exceed the YAML frontmatter safety limit', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1)
+          }
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('Description length validation failed');
+      expect(result.content[0].text).toContain('input.metadata.description');
+      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
   });
 

@@ -808,7 +808,7 @@ description: Pure YAML
         expect(result).toContain('description: Test description');
       });
 
-      it.each([500, 501, 1024, 4096, 16384, 32768])(
+      it.each([500, 501, 1024, 4096, 16384, 32768, 60000])(
         'should roundtrip a %i character description',
         (descriptionLength) => {
           const description = `Description ${descriptionLength}: `.padEnd(descriptionLength, 'x');

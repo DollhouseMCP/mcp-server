@@ -252,7 +252,7 @@ export class Memory extends BaseElement implements IElement {
         sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) :
         'Unnamed Memory',
       description: metadata.description ?
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) :
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) :
         undefined,
       // FIX #1124: Preserve triggers for Enhanced Index
       // SECURITY: Validate BEFORE sanitization to reject invalid characters

@@ -241,7 +241,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (data.description) {
       const descResult = this.validationService.validateMetadataField('description', data.description, {
         required: false,
-        maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         pattern: VALIDATION_PATTERNS.SAFE_DESCRIPTION
       });
       if (!descResult.isValid) {

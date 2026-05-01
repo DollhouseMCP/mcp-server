@@ -720,7 +720,7 @@ export abstract class BaseElementManager<T extends IElement> {
     // Sanitize inputs
     const sanitizedName = sanitizeInput(metadata.name, 100);
     const sanitizedDesc = metadata.description ?
-      sanitizeInput(metadata.description, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : '';
+      sanitizeInput(metadata.description, SECURITY_LIMITS.MAX_YAML_LENGTH) : '';
     const sanitizedContent = content ?
       sanitizeInput(content, 50000) : '';
 
@@ -1094,7 +1094,7 @@ const skillConfig: ElementTypeConfig = {
   },
   validation: {
     namePattern: /^[a-zA-Z0-9-]+$/,
-    descriptionMaxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    descriptionMaxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
     contentMaxLength: 50000,
     customValidation: (element) => {
       const skill = element as Skill;
@@ -1126,7 +1126,7 @@ const agentConfig: ElementTypeConfig = {
   },
   validation: {
     namePattern: /^[a-zA-Z0-9_-]+$/,
-    descriptionMaxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    descriptionMaxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
     contentMaxLength: 50000
   },
   fileExtension: '.md',

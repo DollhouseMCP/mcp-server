@@ -66,7 +66,7 @@ export class Agent extends BaseElement implements IElement {
     const sanitizedMetadata: Partial<AgentMetadata> = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
       specializations: metadata.specializations?.map(s => sanitizeInput(s, 50)),
       decisionFramework: metadata.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK,
       riskTolerance: metadata.riskTolerance || AGENT_DEFAULTS.RISK_TOLERANCE,

@@ -101,6 +101,22 @@ describe('Input Length Validation', () => {
 
       expect(result.isValid).toBe(true);
     });
+
+    test('rejects descriptions exceeding YAML frontmatter limit', () => {
+      const metadata = {
+        name: 'Test',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1)
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(false);
+      expect(result.detectedPatterns).toEqual(
+        expect.arrayContaining([
+          `description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+        ])
+      );
+    });
   });
 
   describe('SecureYamlParser length checks', () => {

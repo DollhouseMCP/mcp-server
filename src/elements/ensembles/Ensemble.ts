@@ -172,7 +172,7 @@ export class Ensemble extends BaseElement implements IElement {
       ) : undefined,
       description: metadata.description !== undefined ? (
         metadata.description === '' ? '' :  // Preserve empty string for validation
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH)
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH)
       ) : undefined
     };
 

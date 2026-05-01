@@ -96,7 +96,7 @@ export class Template extends BaseElement implements IElement {
     const sanitizedMetadata = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
       category: metadata.category ? sanitizeInput(UnicodeValidator.normalize(metadata.category).normalizedContent, 50) : undefined,
       output_format: metadata.output_format ? sanitizeInput(metadata.output_format, 20) : undefined
     };
@@ -144,7 +144,7 @@ export class Template extends BaseElement implements IElement {
       this.metadata.variables = this.metadata.variables.map(variable => ({
         ...variable,
         name: sanitizeInput(UnicodeValidator.normalize(variable.name).normalizedContent, 50),
-        description: variable.description ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined,
+        description: variable.description ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
         validation: variable.validation ? sanitizeInput(variable.validation, 200) : undefined
       }));
     }

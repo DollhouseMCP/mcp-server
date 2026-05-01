@@ -76,12 +76,12 @@ export class ElementValidation {
    * Validate and sanitize a description field
    *
    * @param description - Raw description value
-   * @param maxLength - Maximum length (default: global content limit)
+   * @param maxLength - Maximum length (default: YAML/frontmatter limit)
    * @returns Sanitized description or undefined
    */
   static validateDescription(
     description: any,
-    maxLength: number = SECURITY_LIMITS.MAX_CONTENT_LENGTH
+    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH
   ): string | undefined {
     if (!description) {
       return undefined;
