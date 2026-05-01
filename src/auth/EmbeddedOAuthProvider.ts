@@ -12,9 +12,8 @@ import {
   type JWK,
 } from 'jose';
 import { env } from '../config/env.js';
-import { PACKAGE_VERSION } from '../generated/version.js';
 import { logger } from '../utils/logger.js';
-import type { AuthClaims, AuthResult, IAuthProvider, IssueOptions } from './IAuthProvider.js';
+import type { AuthResult, IAuthProvider, IssueOptions } from './IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from './oauth/url.js';
 
 const ALGORITHM = 'ES256';
