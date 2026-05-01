@@ -10,6 +10,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeInput, validateContentSize, validateCategory } from '../../security/InputValidator.js';
 import {
   sanitizeMetadata,
+  findOversizedDescriptionFields,
   normalizeElementTypeInput,
   formatValidElementTypesList,
   detectUnknownMetadataProperties,
@@ -166,8 +167,19 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
       };
     }
 
+    const descriptionLengthErrors = findOversizedDescriptionFields({ description, metadata });
+    if (descriptionLengthErrors.length > 0) {
+      const formattedErrors = descriptionLengthErrors.map(error => `  • ${error}`).join('\n');
+      return {
+        content: [{
+          type: "text",
+          text: `❌ Description too large:\n${formattedErrors}`
+        }]
+      };
+    }
+
     const validatedName = sanitizeInput(name, SECURITY_LIMITS.MAX_FILENAME_LENGTH);
-    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
+    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_YAML_LENGTH);
 
     if (content) {
       try {

@@ -151,11 +151,11 @@ export const ENSEMBLE_CONFIG: ElementTypeTestConfig = {
       required: true,
       validValues: [
         'Updated ensemble description',
-        'A completely different description'
+        'A completely different description',
+        'Long-form ensemble description. '.repeat(40)
       ],
       invalidValues: [
-        { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: '', expectedError: 'required|empty' }
       ]
     },
     {

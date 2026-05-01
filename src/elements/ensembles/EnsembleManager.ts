@@ -241,7 +241,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     if (data.description) {
       const descResult = this.validationService.validateMetadataField('description', data.description, {
         required: false,
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         pattern: VALIDATION_PATTERNS.SAFE_DESCRIPTION
       });
       if (!descResult.isValid) {
@@ -438,7 +438,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       let purpose: string | undefined;
       if (elem.purpose) {
         const purposeResult = this.validationService.validateAndSanitizeInput(String(elem.purpose), {
-          maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+          maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
           allowSpaces: true,
           fieldType: 'description'  // Allow full description punctuation (commas, em-dashes, etc.)
         });

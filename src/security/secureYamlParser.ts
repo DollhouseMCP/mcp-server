@@ -69,7 +69,7 @@ export class SecureYamlParser {
   // Additional validation for specific persona fields
   private static readonly FIELD_VALIDATORS: Record<string, (value: any) => boolean> = {
     name: (v) => typeof v === 'string' && v.length <= 100,
-    description: (v) => typeof v === 'string' && v.length <= 500,
+    description: (v) => typeof v === 'string',
     author: (v) => typeof v === 'string' && v.length <= 100,
     version: (v) => typeof v === 'string' && /^\d+\.\d+(\.\d+)?(-[a-zA-Z0-9.-]+)?$/.test(v),
     category: (v) => typeof v === 'string' && v.length <= 50,

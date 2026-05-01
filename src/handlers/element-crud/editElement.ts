@@ -27,6 +27,7 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
+  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
@@ -70,6 +71,19 @@ const READ_ONLY_FIELDS = new Set([
   '_status',
   '_isDirty'
 ]);
+
+function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
+  switch (fieldType) {
+    case 'name':
+      return SECURITY_LIMITS.MAX_NAME_LENGTH;
+    case 'description':
+      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+    case 'content':
+      return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+    case 'filename':
+      return SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
+  }
+}
 
 /**
  * Issue #662: Systematic field type validation at the editElement boundary.
@@ -215,9 +229,7 @@ function validateFieldValue(
   }
 
   // Determine max length based on field type, using system constants
-  const maxLength = fieldType === 'name' ? SECURITY_LIMITS.MAX_NAME_LENGTH :
-                    fieldType === 'description' ? SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH :
-                    fieldType === 'content' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH : SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
+  const maxLength = getMaxLengthForFieldType(fieldType);
 
   const result = validationService.validateAndSanitizeInput(value, {
     maxLength,
@@ -609,6 +621,12 @@ export async function editElement(
   const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
   if (gatekeeperErrors.length > 0) {
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
+  }
+
+  const descriptionLengthErrors = findOversizedDescriptionFields(input);
+  if (descriptionLengthErrors.length > 0) {
+    const formattedErrors = descriptionLengthErrors.map(descriptionError => `  • ${descriptionError}`).join('\n');
+    return error(`Description length validation failed:\n${formattedErrors}`);
   }
 
   // Validate string field values using injected validator

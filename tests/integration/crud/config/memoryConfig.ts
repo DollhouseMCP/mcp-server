@@ -117,11 +117,11 @@ export const MEMORY_CONFIG: ElementTypeTestConfig = {
       required: true,
       validValues: [
         'Updated memory description',
-        'A completely different description'
+        'A completely different description',
+        'Long-form memory description. '.repeat(40)
       ],
       invalidValues: [
-        { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: '', expectedError: 'required|empty' }
       ]
     },
     {
