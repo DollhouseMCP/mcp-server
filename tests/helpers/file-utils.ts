@@ -4,8 +4,8 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { randomUUID } from 'node:crypto';
 import matter from 'gray-matter';
-import { v4 as uuidv4 } from 'uuid';
 import { Persona } from '../../src/types/persona.js';
 import { createPersonaFileContent } from './test-fixtures.js';
 
@@ -102,7 +102,7 @@ export async function createTempDir(prefix: string): Promise<string> {
   }
   
   // Use UUID instead of Date.now() for better uniqueness guarantees
-  const tempDir = path.join(baseDir, `${prefix}-${uuidv4()}`);
+  const tempDir = path.join(baseDir, `${prefix}-${randomUUID()}`);
   await fs.mkdir(tempDir, { recursive: true });
   return tempDir;
 }
