@@ -178,7 +178,6 @@ count: 42
     it('should validate field types', () => {
       const invalidFields = [
         { field: 'name', value: 'x'.repeat(101), error: 'Invalid value for field \'name\'' },
-        { field: 'description', value: 'x'.repeat(501), error: 'Invalid value for field \'description\'' },
         { field: 'age_rating', value: 'invalid', error: 'Invalid value for field \'age_rating\'' },
         { field: 'price', value: '$invalid', error: 'Invalid value for field \'price\'' },
         { field: 'version', value: 'not.a.version', error: 'Invalid value for field \'version\'' }
@@ -191,6 +190,19 @@ count: 42
           SecureYamlParser.parse(yaml);
         }).toThrow(error);
       });
+    });
+
+    it('should accept substantive descriptions longer than 500 characters', () => {
+      const longDescription = 'Long-form element description. '.repeat(40).trim();
+      const yaml = `---
+name: Test
+description: ${longDescription}
+---`;
+
+      const result = SecureYamlParser.parse(yaml);
+
+      expect(result.data.description).toBe(longDescription);
+      expect(result.data.description.length).toBeGreaterThan(500);
     });
 
     it('should sanitize content with security threats', () => {

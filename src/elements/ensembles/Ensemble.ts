@@ -31,6 +31,7 @@ import { ElementType } from '../../portfolio/types.js';
 import * as vm from 'vm';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
@@ -171,7 +172,7 @@ export class Ensemble extends BaseElement implements IElement {
       ) : undefined,
       description: metadata.description !== undefined ? (
         metadata.description === '' ? '' :  // Preserve empty string for validation
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500)
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH)
       ) : undefined
     };
 

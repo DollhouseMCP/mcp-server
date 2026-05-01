@@ -243,7 +243,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Sanitize inputs for element creation
       const sanitizedName = sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100);
-      const sanitizedDescription = sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, 500);
+      const sanitizedDescription = sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
       // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
       // while still detecting prompt injection attacks
       const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' });
@@ -1874,7 +1874,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
@@ -2421,7 +2421,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
         const validated: AgentGoalParameter = { name, type, required };
         if (typeof p.description === 'string' && p.description.length > 0) {
-          validated.description = sanitizeInput(p.description, 500);
+          validated.description = sanitizeInput(p.description, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
         }
         if (p.default !== undefined) {
           // Sanitize string defaults to prevent injection when used in goal rendering

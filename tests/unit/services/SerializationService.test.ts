@@ -807,6 +807,25 @@ description: Pure YAML
         expect(result).toContain('name: test');
         expect(result).toContain('description: Test description');
       });
+
+      it.each([500, 501, 1024, 4096, 16384, 32768])(
+        'should roundtrip a %i character description',
+        (descriptionLength) => {
+          const description = `Description ${descriptionLength}: `.padEnd(descriptionLength, 'x');
+          const metadata = {
+            name: `long-description-${descriptionLength}`,
+            description
+          };
+          const content = '# Long Description Element\n\nElement content stays separate.';
+
+          const result = service.createFrontmatter(metadata, content);
+          const parsed = service.parseFrontmatter(result);
+
+          expect(parsed.data.description).toBe(description);
+          expect(parsed.data.description).toHaveLength(descriptionLength);
+          expect(parsed.content).toBe(content);
+        }
+      );
     });
 
     describe('Method Options', () => {

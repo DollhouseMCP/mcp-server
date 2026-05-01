@@ -18,6 +18,7 @@ import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -95,7 +96,7 @@ export class Template extends BaseElement implements IElement {
     const sanitizedMetadata = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined,
       category: metadata.category ? sanitizeInput(UnicodeValidator.normalize(metadata.category).normalizedContent, 50) : undefined,
       output_format: metadata.output_format ? sanitizeInput(metadata.output_format, 20) : undefined
     };
@@ -143,7 +144,7 @@ export class Template extends BaseElement implements IElement {
       this.metadata.variables = this.metadata.variables.map(variable => ({
         ...variable,
         name: sanitizeInput(UnicodeValidator.normalize(variable.name).normalizedContent, 50),
-        description: variable.description ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, 200) : undefined,
+        description: variable.description ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined,
         validation: variable.validation ? sanitizeInput(variable.validation, 200) : undefined
       }));
     }

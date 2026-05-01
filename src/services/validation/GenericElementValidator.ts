@@ -428,7 +428,7 @@ export class GenericElementValidator implements ElementValidator {
     }
 
     const result = this.validationService.validateAndSanitizeInput(description, {
-      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+      maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
       allowSpaces: true,
       fieldType: 'description'
     });

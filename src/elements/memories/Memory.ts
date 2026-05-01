@@ -21,6 +21,7 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MetadataService } from '../../services/MetadataService.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
@@ -251,7 +252,7 @@ export class Memory extends BaseElement implements IElement {
         sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) :
         'Unnamed Memory',
       description: metadata.description ?
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) :
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) :
         undefined,
       // FIX #1124: Preserve triggers for Enhanced Index
       // SECURITY: Validate BEFORE sanitization to reject invalid characters

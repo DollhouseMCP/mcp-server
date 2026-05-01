@@ -338,6 +338,46 @@ describe('editElement helper', () => {
       expect(saved.metadata.author).toBe('New Author');
       expect(saved.metadata.tags).toEqual(['tag1', 'tag2']);
     });
+
+    it('should preserve long top-level descriptions instead of rejecting or truncating them', async () => {
+      const element = createMockElement('test-skill');
+      const longDescription = 'Long-form skill description. '.repeat(80);
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          description: longDescription
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.description).toBe(longDescription);
+      expect(saved.metadata.description.length).toBeGreaterThan(500);
+    });
+
+    it('should preserve long nested metadata descriptions instead of rejecting or truncating them', async () => {
+      const element = createMockElement('test-skill');
+      const longDescription = 'Nested long-form skill description. '.repeat(80);
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            description: longDescription
+          }
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.description).toBe(longDescription);
+      expect(saved.metadata.description.length).toBeGreaterThan(500);
+    });
   });
 
   describe('persona editing', () => {

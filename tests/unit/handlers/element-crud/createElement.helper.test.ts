@@ -149,6 +149,20 @@ describe('createElement helper', () => {
       expect(call.description).not.toContain('<script>');
     });
 
+    it('should preserve long descriptions when creating elements', async () => {
+      const longDescription = 'Long-form skill description. '.repeat(80);
+
+      await createElement(mockContext, {
+        name: 'test',
+        type: ElementType.SKILL,
+        description: longDescription,
+      });
+
+      const call = (mockContext.skillManager.create as jest.Mock).mock.calls[0][0];
+      expect(call.description).toBe(longDescription.trim());
+      expect(call.description.length).toBeGreaterThan(500);
+    });
+
     it('should sanitize metadata to remove dangerous properties', async () => {
       const metadata = {
         description: 'safe',

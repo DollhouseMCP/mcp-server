@@ -78,7 +78,7 @@ export class Skill extends BaseElement implements IElement {
     const sanitizedMetadata = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : undefined
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH) : undefined
     };
 
     super(ElementType.SKILL, sanitizedMetadata, metadataService);
@@ -112,7 +112,7 @@ export class Skill extends BaseElement implements IElement {
         const sanitized: SkillParameter = {
           ...param,
           name: sanitizeInput(UnicodeValidator.normalize(param.name).normalizedContent, 50),
-          description: sanitizeInput(UnicodeValidator.normalize(param.description).normalizedContent, 200)
+          description: sanitizeInput(UnicodeValidator.normalize(param.description).normalizedContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH)
         };
         // Only include options if they exist (avoid undefined)
         if (param.options) {
