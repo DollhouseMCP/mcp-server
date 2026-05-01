@@ -169,10 +169,11 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
 
     const descriptionLengthErrors = findOversizedDescriptionFields({ description, metadata });
     if (descriptionLengthErrors.length > 0) {
+      const formattedErrors = descriptionLengthErrors.map(error => `  • ${error}`).join('\n');
       return {
         content: [{
           type: "text",
-          text: `❌ Description too large:\n${descriptionLengthErrors.map(e => `  • ${e}`).join('\n')}`
+          text: `❌ Description too large:\n${formattedErrors}`
         }]
       };
     }
