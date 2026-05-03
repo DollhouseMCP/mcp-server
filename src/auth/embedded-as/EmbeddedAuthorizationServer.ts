@@ -36,6 +36,7 @@ import type {
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import { createInteractionRouter } from './InteractionRouter.js';
+import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
   loadOrGenerateSigningJwks,
@@ -167,6 +168,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   createRouter(): Router {
     const router = express.Router();
 
+    // Frame-busting headers (must-fix #7) on every embedded AS response so the
+    // consent / login pages can never be iframed for clickjacking.
+    router.use(securityHeaders());
+
     // RFC 9728 protected-resource metadata. oidc-provider doesn't emit this;
     // we add it so MCP clients can discover the AS.
     router.get('/.well-known/oauth-protected-resource', (_req, res) => {
@@ -247,6 +252,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   private async initialize(): Promise<InitializedState> {
+    // jwks rotation procedure (must-fix #15 forward-compat):
+    //   Today the AS publishes a single ES256 key under one kid loaded from
+    //   the persistKeys file. To rotate without invalidating in-flight tokens:
+    //     1. Generate a new ES256 keypair, append it to the JWKS keyset.
+    //     2. Restart the AS — JWKS endpoint now publishes both keys.
+    //     3. Update persistKeys to mark the new kid as the SIGNING kid; the
+    //        old kid stays in the keyset for verification only.
+    //     4. After the access-token TTL window passes (1h default), drop the
+    //        old kid from the JWKS keyset and the file.
+    //   The SqliteAuthStorageLayer (out-of-scope for §8.1) will replace this
+    //   procedure with the multi-instance encrypted-JWK-in-database approach
+    //   spec'd in PRODUCTION-AUTH-ARCHITECTURE.md §5.2a.
     const keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
 
     const adapterFactory = createOidcAdapterFactory(this.storage);
@@ -304,6 +321,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         openid: ['sub'],
         profile: ['name'],
         email: ['email', 'email_verified'],
+        // must-fix #12: emit auth_time on issued tokens so future step-up
+        // enforcement (§8.3 / Web Phase D) can compare against scope-specific
+        // max-age windows without re-prompting the user unnecessarily.
+        acr: ['auth_time'],
       },
       // Only OIDC standard scopes here. The `mcp` resource scope is declared
       // via resourceIndicators.getResourceServerInfo below — keeping it out of
@@ -318,6 +339,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         RefreshToken: 30 * 24 * 3600,
         AuthorizationCode: 5 * 60,
         Interaction: 10 * 60,
+        Session: 14 * 24 * 3600,
+      },
+      // must-fix #11: rotate the refresh token on every refresh and reject any
+      // attempt to reuse a previously-rotated token. oidc-provider revokes the
+      // entire refresh family on reuse-detection.
+      rotateRefreshToken: true,
+      issueRefreshToken: async (_ctx, client, code) => {
+        // Only issue a refresh token when offline_access was granted.
+        return client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access');
       },
       interactions: {
         url: (_ctx, interaction) => `/interaction/${interaction.uid}`,

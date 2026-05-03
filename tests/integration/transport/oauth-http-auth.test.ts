@@ -179,6 +179,11 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(authServer.authorization_endpoint).toBeTruthy();
     expect(authServer.token_endpoint).toBeTruthy();
 
+    // Security headers (must-fix #7) on AS endpoints prevent the consent /
+    // login pages from being clickjacked through an iframe.
+    expect(metadata.headers.get('content-security-policy')).toContain("frame-ancestors 'none'");
+    expect(metadata.headers.get('x-frame-options')).toBe('DENY');
+
     // 3. Begin the OAuth flow. Browsers send GET to /authorize per RFC 6749;
     //    expect 303 redirect to the interaction URL.
     const verifier = randomBytes(32).toString('base64url');
