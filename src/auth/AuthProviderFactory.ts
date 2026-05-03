@@ -121,12 +121,15 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
   }
 
   if (config.provider === 'embedded') {
-    const { EmbeddedOAuthProvider } = await import('./EmbeddedOAuthProvider.js');
-    return new EmbeddedOAuthProvider({
+    const { EmbeddedAuthorizationServer } = await import('./embedded-as/EmbeddedAuthorizationServer.js');
+    const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
+    const { InMemoryAuthStorageLayer } = await import('./embedded-as/storage/InMemoryAuthStorageLayer.js');
+    return new EmbeddedAuthorizationServer({
       publicBaseUrl: config.publicBaseUrl,
       mcpPath: config.mcpPath,
       keyFilePath: config.localKeyFile,
-      defaultSubject: config.localDefaultSub,
+      method: new TrivialConsentMethod({ defaultSubject: config.localDefaultSub }),
+      storage: new InMemoryAuthStorageLayer(),
     });
   }
 

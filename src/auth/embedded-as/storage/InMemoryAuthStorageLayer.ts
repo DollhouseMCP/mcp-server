@@ -185,6 +185,26 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   async genericDestroy(model: string, id: string): Promise<void> {
     this.genericStore.delete(genericKey(model, id));
   }
+
+  /**
+   * oidc-provider's Session model carries a `uid` field separate from the
+   * adapter id; AccessToken / AuthorizationCode reference Session by uid.
+   * Linear scan over the generic store; fine for in-memory dev volumes.
+   */
+  async genericFindByUid(uid: string): Promise<unknown | null> {
+    const now = Date.now();
+    for (const [key, record] of this.genericStore.entries()) {
+      if (record.expiresAt && record.expiresAt <= now) {
+        this.genericStore.delete(key);
+        continue;
+      }
+      const payload = record.payload as { uid?: string } | null;
+      if (payload && typeof payload === 'object' && payload.uid === uid) {
+        return record.payload;
+      }
+    }
+    return null;
+  }
 }
 
 function externalKey(provider: string, externalSub: string): string {

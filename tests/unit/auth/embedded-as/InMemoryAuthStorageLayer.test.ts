@@ -11,7 +11,7 @@ const PAST_MS = Date.now() - 1000;
 
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
-    sub: 'github:42',
+    sub: 'github_42',
     provider: 'github',
     externalSub: '42',
     email: 'user@example.com',
@@ -31,7 +31,7 @@ function makeCode(overrides: Partial<StoredAuthCode> = {}): StoredAuthCode {
     codeChallenge: 'challenge',
     codeChallengeMethod: 'S256',
     scope: 'mcp',
-    sub: 'local:operator',
+    sub: 'local_operator',
     expiresAt: FUTURE_MS,
     ...overrides,
   };
@@ -42,7 +42,7 @@ function makeRefresh(overrides: Partial<StoredRefreshToken> = {}): StoredRefresh
     token: 'rt-1',
     familyId: 'fam-1',
     clientId: 'client-1',
-    sub: 'local:operator',
+    sub: 'local_operator',
     scope: 'mcp',
     expiresAt: FUTURE_MS,
     ...overrides,
@@ -69,7 +69,7 @@ describe('InMemoryAuthStorageLayer', () => {
       await store.upsertAccount(makeAccount({ email: 'new@example.com', updatedAt: Date.now() + 1 }));
       const found = await store.findAccountByExternalId('github', '42');
       expect(found?.email).toBe('new@example.com');
-      expect(found?.sub).toBe('github:42');
+      expect(found?.sub).toBe('github_42');
     });
 
     it('returns null for unknown external id', async () => {
@@ -80,7 +80,7 @@ describe('InMemoryAuthStorageLayer', () => {
     it('looks up by sub after upsert', async () => {
       const account = makeAccount();
       await store.upsertAccount(account);
-      const found = await store.getAccount('github:42');
+      const found = await store.getAccount('github_42');
       expect(found).toEqual(account);
     });
   });

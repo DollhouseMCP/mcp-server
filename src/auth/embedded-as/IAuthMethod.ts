@@ -22,12 +22,15 @@ import type { AuthMethodId } from './AuthMethodFactory.js';
 
 /**
  * The identity returned by a successful interaction (or by findAccount on
- * a known sub). For social methods, `sub` is keyed `${provider}:${external_sub}`
- * (must-fix #18 — never email-keyed). `emailVerified` must reflect the
- * upstream provider's current state at this moment, not historical truth.
+ * a known sub). For social methods, `sub` is keyed `${provider}_${external_sub}`
+ * (must-fix #18 — never email-keyed). The underscore separator satisfies the
+ * project-wide userId regex `/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/` so the sub
+ * can flow through HttpSession/UserIdentity validation as a userId.
+ * `emailVerified` must reflect the upstream provider's current state at this
+ * moment, not historical truth.
  */
 export interface AuthenticatedIdentity {
-  /** Stable account key. Format: 'local:<uuid>' | 'github:<numeric_id>' | etc. */
+  /** Stable account key. Format: 'local_<username>' | 'github_<numeric_id>' | etc. */
   sub: string;
   displayName?: string;
   email?: string;

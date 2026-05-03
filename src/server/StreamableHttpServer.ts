@@ -520,17 +520,11 @@ export async function createStreamableHttpRuntime(
     });
   });
 
-  if (options.oauthProvider) {
-    if (publicBaseUrl) {
-      options.oauthProvider.setPublicBaseUrl?.(publicBaseUrl);
-    }
-    app.use(options.oauthProvider.createRouter());
-    logger.info('[StreamableHTTP] Embedded OAuth routes mounted', {
-      publicBaseUrl: publicBaseUrl ?? `http://${host}:${port}`,
-    });
-  }
-
-  // Mount auth middleware on MCP path when provided
+  // Mount auth middleware on MCP path so /mcp requests are validated
+  // (and 401 on missing/invalid token) before they reach the MCP handler.
+  // The embedded OAuth provider's router is mounted LATER, after the /mcp
+  // handlers, because oidc-provider's catch-all responds 404 to anything it
+  // doesn't recognize — placing it last lets specific routes match first.
   if (options.authMiddleware) {
     app.use(mcpPath, options.authMiddleware);
     logger.info('[StreamableHTTP] Auth middleware mounted on MCP path', { mcpPath });
@@ -630,6 +624,20 @@ export async function createStreamableHttpRuntime(
 
   app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
   app.delete(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'DELETE'));
+
+  // OAuth provider router is mounted LAST so its catch-all (oidc-provider's
+  // request handler) only sees URLs that none of the specific routes above
+  // matched. The well-known + interaction routes inside the provider's router
+  // are still matched first within its own scope.
+  if (options.oauthProvider) {
+    if (publicBaseUrl) {
+      options.oauthProvider.setPublicBaseUrl?.(publicBaseUrl);
+    }
+    app.use(options.oauthProvider.createRouter());
+    logger.info('[StreamableHTTP] Embedded OAuth routes mounted', {
+      publicBaseUrl: publicBaseUrl ?? `http://${host}:${port}`,
+    });
+  }
 
   const tlsConfig = options.tlsConfig ?? new TlsConfig();
   const { server: httpServer, isHttps } = await createHttpOrHttpsServer(app, {

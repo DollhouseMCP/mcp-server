@@ -24,7 +24,7 @@
  */
 
 export interface StoredAccount {
-  /** `${provider}:${externalSub}` — the account identity in JWT `sub`. */
+  /** `${provider}_${externalSub}` — the account identity in JWT `sub`. */
   sub: string;
   provider: string;
   externalSub: string;
