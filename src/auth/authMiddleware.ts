@@ -2,15 +2,18 @@
  * Unified Authentication Middleware
  *
  * Express middleware that validates Bearer tokens via IAuthProvider.
- * Mounted on both the MCP HTTP transport and the web console — one
- * middleware, two surfaces, same identity model.
+ * Mounted on the MCP HTTP transport. The web console has its own
+ * middleware (src/web/middleware/authMiddleware.ts) with a separate
+ * ?token= EventSource fallback that the upcoming console rewrite will
+ * replace with the per-stream ticket pattern in src/server/sseTickets.ts.
  *
  * On success, attaches AuthClaims to res.locals.authClaims for
- * downstream handlers. On failure, responds with 401.
+ * downstream handlers. On failure, responds with 401 and a
+ * WWW-Authenticate header pointing at the protected-resource doc.
  *
- * Supports:
- * - Authorization: Bearer <token> header (primary)
- * - ?token=<token> query parameter (fallback for SSE/EventSource)
+ * Header-only: Authorization: Bearer <token>. The previous
+ * ?token=<token> query-string fallback was removed (§8.1 compliance);
+ * MCP clients always set the Authorization header.
  *
  * @module auth/authMiddleware
  */
@@ -107,19 +110,10 @@ function setAuthenticateHeader(res: Response, protectedResourceMetadataUrl: stri
   res.setHeader('WWW-Authenticate', 'Bearer');
 }
 
-/** Extract Bearer token from header or query parameter. */
+/** Extract Bearer token from the Authorization header. Header-only by design. */
 function extractToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
-  if (authHeader) {
-    const match = /^Bearer\s+(\S+)$/i.exec(authHeader);
-    if (match) return match[1];
-  }
-
-  // Fallback: query parameter (for SSE/EventSource which can't set headers)
-  const queryToken = req.query.token;
-  if (typeof queryToken === 'string' && queryToken.length > 0) {
-    return queryToken;
-  }
-
-  return null;
+  if (!authHeader) return null;
+  const match = /^Bearer\s+(\S+)$/i.exec(authHeader);
+  return match ? match[1] : null;
 }

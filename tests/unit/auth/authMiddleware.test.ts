@@ -67,17 +67,20 @@ describe('createUnifiedAuthMiddleware', () => {
     });
   });
 
-  describe('query parameter fallback', () => {
-    it('should accept token from query parameter', async () => {
-      const provider = createMockProvider(async () => ({
+  describe('header-only auth (query-string fallback removed in §8.1)', () => {
+    it('rejects requests that try to authenticate via ?token= query parameter', async () => {
+      const validateFn = jest.fn(async () => ({
         ok: true,
         claims: { sub: 'bob' },
-      }));
+      }) as AuthResult);
+      const provider = createMockProvider(validateFn);
       const app = createTestApp(provider);
 
       const res = await request(app).get('/api/data?token=valid-token');
-      expect(res.status).toBe(200);
-      expect(res.body.claims.sub).toBe('bob');
+      expect(res.status).toBe(401);
+      // The provider should NOT have been called — the middleware never
+      // extracted a token from the query string.
+      expect(validateFn).not.toHaveBeenCalled();
     });
   });
 
