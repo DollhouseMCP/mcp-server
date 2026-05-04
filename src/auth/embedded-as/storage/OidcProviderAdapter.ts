@@ -39,15 +39,13 @@ export class OidcProviderAdapter {
   }
 
   async consume(id: string): Promise<void> {
-    // oidc-provider calls consume() to mark a token as used (not delete).
-    // Marker on the existing record; find() callers see it and treat consumed.
-    const existing = await this.storage.genericGet(this.model, id);
-    if (existing && typeof existing === 'object') {
-      await this.storage.genericSet(this.model, id, {
-        ...(existing as Record<string, unknown>),
-        consumed: Math.floor(Date.now() / 1000),
-      });
-    }
+    // oidc-provider calls consume() when a token has been used and should
+    // become unusable on subsequent finds. The earlier soft-marker
+    // implementation wrote `consumed: <ts>` into the payload but find()
+    // never honored it — so a previously-consumed token would still
+    // resolve. We destroy outright; oidc-provider's contract is that find
+    // returning undefined is the "consumed" signal it acts on.
+    await this.storage.genericDestroy(this.model, id);
   }
 
   async findByUserCode(userCode: string): Promise<Record<string, unknown> | undefined> {

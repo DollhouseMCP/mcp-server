@@ -40,6 +40,8 @@ const PROVIDER_NAME = 'magic-link';
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const REQUEST_RATE_LIMIT_PER_EMAIL = 3;
 const REQUEST_RATE_LIMIT_PER_IP = 5;
+/** Single error reason returned to users; precise causes go to logs only. */
+const GENERIC_LINK_INVALID = 'this link is no longer valid';
 
 export interface SendMagicLinkInput {
   to: string;
@@ -99,11 +101,10 @@ export class MagicLinkMethod implements IAuthMethod {
       return this.handleRequestLink(form, input.ip ?? 'unknown', ctx.interactionId);
     }
 
-    if (action === 'consume-link') {
-      // POST from the email-confirmation page — actually consume the token.
-      return this.handleConsumeLink(form);
-    }
-
+    // The 'consume-link' action used to be handled here, but that path
+    // never knew the OAuth interactionId. Consumption is now driven by
+    // the /auth/email/verify POST route in EmbeddedAuthorizationServer,
+    // which calls consumeMagicLink() directly.
     return { kind: 'denied', reason: 'unknown form action' };
   }
 
@@ -128,12 +129,18 @@ export class MagicLinkMethod implements IAuthMethod {
    * Verify (no-consume) used by the GET /auth/email/verify handler so the
    * confirmation page only renders when the token is valid + not yet
    * consumed. POST then consumes via consumeMagicLink().
+   *
+   * On failure, returns a single generic reason regardless of cause
+   * (invalid signature, expired, wrong purpose). Distinguishing those
+   * cases would let an attacker probing a captured token confirm whether
+   * the token signature was once valid — useful for credential-validation
+   * oracles. Operators see the precise reason via logs (not exposed here).
    */
   verifyMagicLink(token: string): { ok: true; interactionId?: string } | { ok: false; reason: string } {
     const verified = this.options.invites.verify(token);
-    if (!verified.ok) return { ok: false, reason: verified.reason };
+    if (!verified.ok) return { ok: false, reason: GENERIC_LINK_INVALID };
     if (verified.payload.purpose !== 'magic-link') {
-      return { ok: false, reason: 'token is not a magic link' };
+      return { ok: false, reason: GENERIC_LINK_INVALID };
     }
     return { ok: true, interactionId: verified.payload.interactionId };
   }
@@ -149,9 +156,10 @@ export class MagicLinkMethod implements IAuthMethod {
     | { kind: 'error'; reason: string }
   > {
     const consume = this.options.invites.consume(token);
-    if (!consume.ok) return { kind: 'error', reason: `magic link ${consume.reason}` };
+    // Generic error reason regardless of cause — see verifyMagicLink rationale.
+    if (!consume.ok) return { kind: 'error', reason: GENERIC_LINK_INVALID };
     if (consume.payload.purpose !== 'magic-link') {
-      return { kind: 'error', reason: 'token is not a magic link' };
+      return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }
 
     const sub = consume.payload.sub;
@@ -235,41 +243,6 @@ export class MagicLinkMethod implements IAuthMethod {
     };
   }
 
-  private async handleConsumeLink(form: Record<string, string>): Promise<InteractionResult> {
-    const token = String(form.token ?? '');
-    if (!token) return { kind: 'denied', reason: 'missing token' };
-
-    const consume = this.options.invites.consume(token);
-    if (!consume.ok) {
-      return { kind: 'denied', reason: `magic link ${consume.reason}` };
-    }
-    if (consume.payload.purpose !== 'magic-link') {
-      return { kind: 'denied', reason: 'token is not a magic link' };
-    }
-
-    const sub = consume.payload.sub;
-    const email = consume.payload.email;
-    const now = Date.now();
-
-    // Upsert the account (lazy create on first verified login).
-    const existing = await this.options.storage.getAccount(sub);
-    await this.options.storage.upsertAccount({
-      sub,
-      provider: PROVIDER_NAME,
-      externalSub: hashEmail(email),
-      email,
-      emailVerified: true, // The magic link proved control of the inbox.
-      displayName: existing?.displayName ?? email,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-
-    return {
-      kind: 'authenticated',
-      identity: { sub, email, emailVerified: true, displayName: existing?.displayName ?? email },
-    };
-  }
-
   private checkRequestRate(
     bucketMap: Map<string, RequestRateBucket>,
     key: string,
@@ -317,6 +290,6 @@ function renderConfirmationPage(token: string): string {
 <html lang="en"><head><meta charset="utf-8"><title>Confirm sign-in</title>
 <style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}button{background:#185c37;color:white;border:0;border-radius:6px;padding:12px 16px;font-weight:700;cursor:pointer;margin-top:16px}</style>
 </head><body><main><h1>Confirm sign-in</h1><p>Click below to complete sign-in.</p>
-<form method="post"><input type="hidden" name="action" value="consume-link"><input type="hidden" name="token" value="${safeToken}">
+<form method="post"><input type="hidden" name="token" value="${safeToken}">
 <button type="submit">Sign in</button></form></main></body></html>`;
 }

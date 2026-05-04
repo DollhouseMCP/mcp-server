@@ -92,37 +92,44 @@ describe('MagicLinkMethod', () => {
     expect(emailSender.sent.length).toBeLessThanOrEqual(3);
   });
 
-  it('consumes the link on POST and authenticates with a verified email', async () => {
+  it('consumes the link via consumeMagicLink and authenticates with a verified email', async () => {
     await method.completeInteraction(CTX, {
       formBody: { action: 'request-link', email: 'alice@example.com' }, ip: '1.1.1.1',
     });
     const url = new URL(emailSender.sent[0].url);
     const token = url.searchParams.get('token')!;
 
-    const consumed = await method.completeInteraction(CTX, {
-      formBody: { action: 'consume-link', token }, ip: '1.1.1.1',
-    });
-    expect(consumed.kind).toBe('authenticated');
-    if (consumed.kind !== 'authenticated') return;
+    const consumed = await method.consumeMagicLink(token);
+    expect(consumed.kind).toBe('ok');
+    if (consumed.kind !== 'ok') return;
     expect(consumed.identity.email).toBe('alice@example.com');
     expect(consumed.identity.emailVerified).toBe(true);
   });
 
-  it('rejects re-use of a magic-link token (single-use, must-fix #1)', async () => {
+  it('rejects re-use of a magic-link token via consumeMagicLink (single-use, must-fix #1)', async () => {
     await method.completeInteraction(CTX, {
       formBody: { action: 'request-link', email: 'alice@example.com' }, ip: '1.1.1.1',
     });
     const token = new URL(emailSender.sent[0].url).searchParams.get('token')!;
-    await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token }, ip: '1.1.1.1' });
-    const replay = await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token }, ip: '1.1.1.1' });
-    expect(replay.kind).toBe('denied');
+    await method.consumeMagicLink(token);
+    const replay = await method.consumeMagicLink(token);
+    expect(replay.kind).toBe('error');
+  });
+
+  it('rejects unknown form actions on completeInteraction (consume-link path was removed in C9)', async () => {
+    const result = await method.completeInteraction(CTX, {
+      formBody: { action: 'consume-link', token: 'whatever' }, ip: '1.1.1.1',
+    });
+    expect(result.kind).toBe('denied');
   });
 
   it('renderConfirmationPage emits a POST form with the token (anti-pre-fetch GET)', () => {
     const html = method.renderConfirmationPage('test-token');
     expect(html).toContain('method="post"');
     expect(html).toContain('value="test-token"');
-    expect(html).toContain('value="consume-link"');
+    // The 'action' hidden input was removed in C9 — /auth/email/verify POST
+    // calls consumeMagicLink directly; no form action dispatch is needed.
+    expect(html).not.toContain('value="consume-link"');
   });
 
   describe('verifyMagicLink / consumeMagicLink (used by /auth/email/verify)', () => {

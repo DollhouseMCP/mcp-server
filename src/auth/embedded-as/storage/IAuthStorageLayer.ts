@@ -1,24 +1,34 @@
 /**
  * IAuthStorageLayer
  *
- * Persistence contract for the embedded authorization server. Higher-level
- * than oidc-provider's Adapter interface: semantic methods for the
- * operations that need atomicity guarantees (refresh rotation, code
- * single-use), generic K/V for everything else (Session, Grant, Interaction,
- * BackchannelAuthenticationRequest, RegistrationAccessToken, ReplayDetection).
+ * Typed K/V persistence backend for the embedded authorization server.
+ * Two responsibilities:
  *
- * The OidcProviderAdapter (C4) translates between oidc-provider's Adapter
- * calls and these methods, so oidc-provider types never leak out of
- * src/auth/embedded-as/.
+ *   1. Semantic account model (must-fix #18: keyed on
+ *      `(provider, externalSub)`) plus the identity-change audit log
+ *      (must-fix #21). Methods + storage layer own this directly.
+ *
+ *   2. Generic K/V escape hatch (genericGet/Set/Destroy) that
+ *      OidcProviderAdapter translates oidc-provider's Adapter calls
+ *      into. All ephemeral OAuth state — Session, Grant, Interaction,
+ *      AuthorizationCode, RefreshToken, AccessToken,
+ *      RegistrationAccessToken, ReplayDetection,
+ *      BackchannelAuthenticationRequest — flows through this path.
+ *
+ * Atomicity for refresh-token rotation and authorization-code single-use
+ * lives inside oidc-provider itself, not in this interface. An earlier
+ * draft of this interface defined `rotateRefreshToken`,
+ * `revokeRefreshTokenFamily`, `consumeAuthorizationCode`,
+ * `storeRefreshToken`, `storeAuthorizationCode` with strong "MUST be
+ * atomic" wording — but no code path actually called them; oidc-provider
+ * drives rotation through the generic Adapter contract. Removing those
+ * methods (C9) eliminated dead code that misleadingly advertised
+ * atomicity guarantees the runtime did not provide.
  *
  * Implementations:
- *   - InMemoryAuthStorageLayer (C3) — solo-dev default, per-key mutex
+ *   - InMemoryAuthStorageLayer (C3) — solo-dev default
  *   - SqliteAuthStorageLayer / PostgresAuthStorageLayer — when the auth
  *     schema lands; out of scope for the §8.1 PR
- *
- * Per-account-key design (must-fix #18): account records are keyed on
- * `(provider, externalSub)` — never on email. `sub` in StoredAccount is
- * formatted `${provider}:${externalSub}` for embedding in JWTs.
  *
  * @module auth/embedded-as/storage/IAuthStorageLayer
  */
@@ -37,35 +47,6 @@ export interface StoredAccount {
   updatedAt: number;
 }
 
-export interface StoredAuthCode {
-  code: string;
-  clientId: string;
-  redirectUri: string;
-  codeChallenge: string;
-  codeChallengeMethod: 'S256';
-  resource?: string;
-  scope: string;
-  sub: string;
-  expiresAt: number;
-}
-
-export interface StoredRefreshToken {
-  /** Cryptographic token value used as the lookup key. */
-  token: string;
-  /** Family lineage; rotation produces a new token under the same family. */
-  familyId: string;
-  clientId: string;
-  sub: string;
-  resource?: string;
-  scope: string;
-  expiresAt: number;
-}
-
-export type RotationResult =
-  | { kind: 'rotated'; successor: StoredRefreshToken }
-  | { kind: 'reuse-detected'; familyId: string }
-  | { kind: 'unknown' };
-
 export interface IdentityAuditEvent {
   /** e.g. 'auth.social.identity_changed', 'auth.local.brute_force_suspected'. */
   type: string;
@@ -77,11 +58,9 @@ export interface IdentityAuditEvent {
 }
 
 /**
- * Storage contract. All methods are async and idempotent where noted.
- * Atomic operations (rotateRefreshToken, consumeAuthorizationCode) MUST
- * serialize concurrent calls for the same key — the InMemory implementation
- * uses per-key mutexes; DB implementations use row locks or RETURNING-clause
- * compare-and-swap.
+ * Storage contract. All methods are async. The semantic account methods
+ * are owned by the IAuthMethod implementations; the generic methods are
+ * owned by OidcProviderAdapter (the only caller).
  */
 export interface IAuthStorageLayer {
   // --- Accounts (must-fix #18) ---
@@ -90,31 +69,14 @@ export interface IAuthStorageLayer {
   upsertAccount(account: StoredAccount): Promise<void>;
   getAccount(sub: string): Promise<StoredAccount | null>;
 
-  // --- Authorization codes (atomic single-use) ---
-
-  storeAuthorizationCode(code: StoredAuthCode): Promise<void>;
-  /** Atomic: returns and deletes the code; returns null if already consumed or expired. */
-  consumeAuthorizationCode(code: string): Promise<StoredAuthCode | null>;
-
-  // --- Refresh tokens (must-fix #11: atomic rotation + reuse detection) ---
-
-  storeRefreshToken(token: StoredRefreshToken): Promise<void>;
-  /**
-   * Atomic: marks `token` consumed and inserts `successor` in one transaction.
-   * If `token` was already consumed, returns reuse-detected; the caller MUST
-   * revoke the entire family (handled by the AS, not here).
-   * If `token` is unknown or expired, returns unknown.
-   */
-  rotateRefreshToken(token: string, successor: StoredRefreshToken): Promise<RotationResult>;
-  revokeRefreshTokenFamily(familyId: string): Promise<void>;
-
   // --- Audit (must-fix #21) ---
 
   recordIdentityEvent(event: IdentityAuditEvent): Promise<void>;
 
-  // --- Generic K/V backing oidc-provider's Adapter for non-semantic models ---
-  // Models routed here: Session, Grant, Interaction, BackchannelAuthenticationRequest,
-  // RegistrationAccessToken, ReplayDetection, PushedAuthorizationRequest.
+  // --- Generic K/V backing oidc-provider's Adapter ---
+  // Models routed here: Session, Grant, Interaction, AuthorizationCode,
+  // RefreshToken, AccessToken, RegistrationAccessToken, ReplayDetection,
+  // PushedAuthorizationRequest, BackchannelAuthenticationRequest.
 
   genericGet(model: string, id: string): Promise<unknown | null>;
   genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void>;

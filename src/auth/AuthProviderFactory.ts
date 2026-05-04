@@ -64,11 +64,13 @@ export function selectAuthMode(provider: AuthConfig['provider']): AuthProviderMo
 
 /**
  * Resolve the methods list for the embedded AS mode. Honors explicit
- * `methods` config; otherwise defaults to ['trivial-consent'].
+ * `methods` config; otherwise defaults to ['trivial-consent']. Returns
+ * an empty list for the OIDC bridge mode — that path constructs
+ * OidcAuthProvider directly (no embedded-AS methods involved).
  */
 export function resolveAuthMethods(config: AuthConfig): AuthMethodId[] {
   if (config.provider === 'oidc') {
-    return ['oidc-bridge'];
+    return [];
   }
   return config.methods && config.methods.length > 0
     ? config.methods
@@ -181,15 +183,6 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       const invites = new InviteTokenStore(loadOrGenerateInviteSecret());
       const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
       method = new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
-    } else if (activeMethodId === 'oidc-bridge') {
-      const { OidcBridgeMethod } = await import('./embedded-as/methods/OidcBridgeMethod.js');
-      if (!config.issuer || !config.audience) {
-        throw new Error(
-          'OIDC bridge embedded mode requires DOLLHOUSE_AUTH_ISSUER and DOLLHOUSE_AUTH_AUDIENCE. ' +
-          'Use DOLLHOUSE_AUTH_PROVIDER=oidc for the legacy direct-validation path instead.',
-        );
-      }
-      method = new OidcBridgeMethod({ issuer: config.issuer, audience: config.audience });
     } else {
       const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
       method = new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });

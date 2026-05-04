@@ -31,6 +31,8 @@ import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
 
 const LOCAL_PROVIDER = 'local';
+/** Single error reason returned to users; precise causes go to logs only. */
+const GENERIC_INVITE_INVALID = 'this invite is no longer valid';
 const ARGON2_OPTIONS: argon2.Options = {
   type: argon2.argon2id,
   memoryCost: 19_456, // 19 MiB — OWASP 2024 recommendation
@@ -114,15 +116,20 @@ export class LocalAccountMethod implements IAuthMethod {
   /**
    * Verify an invite without consuming it. Used by the GET /auth/local/invite
    * handler so the password-set form only renders for valid tokens.
+   *
+   * Returns a single generic reason on failure (invalid signature, expired,
+   * wrong purpose). See MagicLinkMethod.verifyMagicLink for rationale —
+   * differentiating these cases would let an attacker confirm token
+   * capture via an oracle.
    */
   verifyInvite(token: string):
     | { ok: true; sub: string; email: string }
     | { ok: false; reason: string }
   {
     const verified = this.options.invites.verify(token);
-    if (!verified.ok) return { ok: false, reason: verified.reason };
+    if (!verified.ok) return { ok: false, reason: GENERIC_INVITE_INVALID };
     if (verified.payload.purpose !== 'invite') {
-      return { ok: false, reason: 'token is not an invite' };
+      return { ok: false, reason: GENERIC_INVITE_INVALID };
     }
     return { ok: true, sub: verified.payload.sub, email: verified.payload.email };
   }
@@ -143,11 +150,10 @@ export class LocalAccountMethod implements IAuthMethod {
     }
 
     const consume = this.options.invites.consume(token);
-    if (!consume.ok) {
-      return { kind: 'error', reason: `invite token ${consume.reason}` };
-    }
+    // Generic error reason regardless of cause — see verifyInvite rationale.
+    if (!consume.ok) return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     if (consume.payload.purpose !== 'invite') {
-      return { kind: 'error', reason: 'token is not an invite' };
+      return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     }
 
     const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
@@ -215,7 +221,10 @@ export class LocalAccountMethod implements IAuthMethod {
     form: Record<string, string>,
     ip: string,
   ): Promise<InteractionResult> {
-    const username = String(form.username ?? '').trim();
+    // Lowercase + trim so 'Alice' and 'alice' don't get independent rate-limit
+    // buckets — otherwise an attacker can bypass the per-account threshold by
+    // varying case.
+    const username = String(form.username ?? '').trim().toLowerCase();
     const password = String(form.password ?? '');
 
     if (!username || !password) {

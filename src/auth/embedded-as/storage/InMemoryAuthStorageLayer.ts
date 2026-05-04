@@ -1,13 +1,14 @@
 /**
  * InMemoryAuthStorageLayer
  *
- * Solo-dev / single-process implementation of IAuthStorageLayer. All state
- * lives in Maps; nothing persists across restarts. Atomic operations use a
- * per-key mutex (KeyedLock) so concurrent rotateRefreshToken or
- * consumeAuthorizationCode calls for the same key serialize correctly.
+ * Solo-dev / single-process implementation of IAuthStorageLayer. All
+ * state lives in Maps; nothing persists across restarts. Use a DB-backed
+ * implementation (out of scope for the §8.1 PR) for any multi-process
+ * or restart-survival deployment.
  *
- * Use a DB-backed implementation (out of scope for the §8.1 PR) for any
- * multi-process or restart-survival deployment.
+ * Atomicity for refresh-token rotation and authorization-code single-use
+ * is owned by oidc-provider, not this layer — this storage is a typed
+ * K/V backend for the generic Adapter contract.
  *
  * @module auth/embedded-as/storage/InMemoryAuthStorageLayer
  */
@@ -16,10 +17,7 @@ import { logger } from '../../../utils/logger.js';
 import type {
   IAuthStorageLayer,
   IdentityAuditEvent,
-  RotationResult,
   StoredAccount,
-  StoredAuthCode,
-  StoredRefreshToken,
 } from './IAuthStorageLayer.js';
 
 interface GenericRecord {
@@ -27,48 +25,13 @@ interface GenericRecord {
   expiresAt?: number;
 }
 
-/**
- * Per-key serialization. Calls to withLock(key, fn) for the same key run
- * one at a time, in the order they arrive. Different keys run concurrently.
- */
-class KeyedLock<K> {
-  private chains = new Map<K, Promise<void>>();
-
-  async withLock<T>(key: K, fn: () => Promise<T>): Promise<T> {
-    const previous = this.chains.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const releasePromise = new Promise<void>(resolve => {
-      release = resolve;
-    });
-    const myChain = previous.then(() => releasePromise);
-    this.chains.set(key, myChain);
-
-    try {
-      await previous;
-      return await fn();
-    } finally {
-      release();
-      // Only delete the chain if no one else queued behind us.
-      if (this.chains.get(key) === myChain) {
-        this.chains.delete(key);
-      }
-    }
-  }
-}
-
 export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   private readonly accountsBySub = new Map<string, StoredAccount>();
   private readonly accountIndexByExternal = new Map<string, string>(); // `${provider}|${externalSub}` → sub
-  private readonly authCodes = new Map<string, StoredAuthCode>();
-  private readonly refreshTokens = new Map<string, StoredRefreshToken>();
-  private readonly revokedFamilies = new Set<string>();
   private readonly genericStore = new Map<string, GenericRecord>(); // `${model}|${id}` → record
   private readonly auditEvents: IdentityAuditEvent[] = [];
 
-  private readonly authCodeLock = new KeyedLock<string>();
-  private readonly refreshLock = new KeyedLock<string>();
-
-  // ---- Accounts ----
+  // ---- Accounts (must-fix #18) ----
 
   async findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null> {
     const sub = this.accountIndexByExternal.get(externalKey(provider, externalSub));
@@ -85,71 +48,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     return this.accountsBySub.get(sub) ?? null;
   }
 
-  // ---- Authorization codes ----
-
-  async storeAuthorizationCode(code: StoredAuthCode): Promise<void> {
-    this.authCodes.set(code.code, code);
-  }
-
-  async consumeAuthorizationCode(code: string): Promise<StoredAuthCode | null> {
-    return this.authCodeLock.withLock(code, async () => {
-      const record = this.authCodes.get(code);
-      if (!record) return null;
-      if (record.expiresAt <= Date.now()) {
-        this.authCodes.delete(code);
-        return null;
-      }
-      this.authCodes.delete(code);
-      return record;
-    });
-  }
-
-  // ---- Refresh tokens (atomic rotation + reuse detection) ----
-
-  async storeRefreshToken(token: StoredRefreshToken): Promise<void> {
-    this.refreshTokens.set(token.token, token);
-  }
-
-  async rotateRefreshToken(token: string, successor: StoredRefreshToken): Promise<RotationResult> {
-    return this.refreshLock.withLock(token, async () => {
-      const existing = this.refreshTokens.get(token);
-      if (!existing) {
-        return { kind: 'unknown' };
-      }
-      if (this.revokedFamilies.has(existing.familyId)) {
-        // Family already revoked (likely from a prior reuse); treat as unknown.
-        this.refreshTokens.delete(token);
-        return { kind: 'unknown' };
-      }
-      if (existing.expiresAt <= Date.now()) {
-        this.refreshTokens.delete(token);
-        return { kind: 'unknown' };
-      }
-
-      // Successor must inherit the family for reuse-detection lineage.
-      if (successor.familyId !== existing.familyId) {
-        throw new Error(
-          `Refresh successor must inherit familyId. Expected ${existing.familyId}, got ${successor.familyId}.`,
-        );
-      }
-
-      // Atomic swap: delete the consumed token, insert the successor.
-      this.refreshTokens.delete(token);
-      this.refreshTokens.set(successor.token, successor);
-      return { kind: 'rotated', successor };
-    });
-  }
-
-  async revokeRefreshTokenFamily(familyId: string): Promise<void> {
-    this.revokedFamilies.add(familyId);
-    for (const [tokenValue, record] of this.refreshTokens.entries()) {
-      if (record.familyId === familyId) {
-        this.refreshTokens.delete(tokenValue);
-      }
-    }
-  }
-
-  // ---- Audit ----
+  // ---- Audit (must-fix #21) ----
 
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
     this.auditEvents.push(event);
@@ -190,6 +89,8 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
    * oidc-provider's Session model carries a `uid` field separate from the
    * adapter id; AccessToken / AuthorizationCode reference Session by uid.
    * Linear scan over the generic store; fine for in-memory dev volumes.
+   * Map iteration tolerates concurrent delete (Node 22+ documented behavior),
+   * which the inline GC pass relies on.
    */
   async genericFindByUid(uid: string): Promise<unknown | null> {
     const now = Date.now();

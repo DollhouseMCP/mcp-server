@@ -30,14 +30,14 @@ const IP_LOCKOUT_MS = 15 * 60 * 1000; // 15 min IP lockout
 interface AccountRecord {
   failures: number;
   firstFailureAt: number;
-  brutForceFired: boolean;
+  bruteForceFired: boolean;
 }
 
 interface IpRecord {
   failures: number;
   firstFailureAt: number;
   lockedUntil: number;
-  brutForceFired: boolean;
+  bruteForceFired: boolean;
 }
 
 export interface CheckResult {
@@ -89,9 +89,17 @@ export class LocalLoginRateLimiter {
     return { allowed: true };
   }
 
-  /** Record a successful login; clears any failure state for the account. */
-  async noteSuccess(account: string, ip: string): Promise<void> {
-    void ip;
+  /**
+   * Record a successful login; clears any failure state for the account.
+   *
+   * IP bucket intentionally NOT reset on success: an attacker who
+   * succeeds once (e.g. via a stolen credential or after a partial
+   * compromise) should not be able to clear the IP-level lockout state
+   * accumulated by their failed probes against other usernames. The
+   * per-account counter resets so a legitimate user who eventually got
+   * the password right doesn't stay rate-limited.
+   */
+  async noteSuccess(account: string, _ip: string): Promise<void> {
     this.accounts.delete(account);
   }
 
@@ -103,20 +111,20 @@ export class LocalLoginRateLimiter {
     const acctRec = this.accounts.get(account) ?? {
       failures: 0,
       firstFailureAt: now,
-      brutForceFired: false,
+      bruteForceFired: false,
     };
     if (now - acctRec.firstFailureAt > ACCOUNT_WINDOW_MS && acctRec.failures < ACCOUNT_THRESHOLD) {
       // Window elapsed; reset.
       acctRec.failures = 0;
       acctRec.firstFailureAt = now;
-      acctRec.brutForceFired = false;
+      acctRec.bruteForceFired = false;
     }
     acctRec.failures += 1;
     if (acctRec.failures === 1) acctRec.firstFailureAt = now;
     this.accounts.set(account, acctRec);
 
-    if (acctRec.failures >= ACCOUNT_THRESHOLD && !acctRec.brutForceFired) {
-      acctRec.brutForceFired = true;
+    if (acctRec.failures >= ACCOUNT_THRESHOLD && !acctRec.bruteForceFired) {
+      acctRec.bruteForceFired = true;
       await this.storage.recordIdentityEvent({
         type: 'auth.local.brute_force_suspected',
         sub: account,
@@ -130,12 +138,12 @@ export class LocalLoginRateLimiter {
       failures: 0,
       firstFailureAt: now,
       lockedUntil: 0,
-      brutForceFired: false,
+      bruteForceFired: false,
     };
     if (now - ipRec.firstFailureAt > IP_LOCKOUT_MS && ipRec.failures < IP_THRESHOLD) {
       ipRec.failures = 0;
       ipRec.firstFailureAt = now;
-      ipRec.brutForceFired = false;
+      ipRec.bruteForceFired = false;
     }
     ipRec.failures += 1;
     if (ipRec.failures === 1) ipRec.firstFailureAt = now;
@@ -144,8 +152,8 @@ export class LocalLoginRateLimiter {
     }
     this.ips.set(ip, ipRec);
 
-    if (ipRec.failures >= IP_THRESHOLD && !ipRec.brutForceFired) {
-      ipRec.brutForceFired = true;
+    if (ipRec.failures >= IP_THRESHOLD && !ipRec.bruteForceFired) {
+      ipRec.bruteForceFired = true;
       await this.storage.recordIdentityEvent({
         type: 'auth.local.brute_force_suspected',
         details: { dimension: 'ip', ip, failures: ipRec.failures },

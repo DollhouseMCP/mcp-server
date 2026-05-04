@@ -23,19 +23,27 @@
  * @module auth/embedded-as/AuthMethodFactory
  */
 
+/**
+ * Auth method identifiers recognized by the embedded AS.
+ *
+ * `oidc-bridge` is intentionally NOT in this union. The embedded-AS-bridges-
+ * to-IdP implementation was scaffolded but the upstream OIDC discovery +
+ * code-exchange + JWKS validation aren't wired. Operators with an existing
+ * IdP should use the legacy `DOLLHOUSE_AUTH_PROVIDER=oidc` path
+ * (OidcAuthProvider, direct upstream-token validation). When the bridge
+ * implementation lands, add 'oidc-bridge' back to this union.
+ */
 export type AuthMethodId =
   | 'trivial-consent'
   | 'github'
   | 'local-password'
-  | 'magic-link'
-  | 'oidc-bridge';
+  | 'magic-link';
 
 export const ALL_AUTH_METHOD_IDS: readonly AuthMethodId[] = [
   'trivial-consent',
   'github',
   'local-password',
   'magic-link',
-  'oidc-bridge',
 ];
 
 /**
@@ -75,17 +83,9 @@ export class AuthMethodFactory {
 }
 
 /**
- * Build the default factory with the methods that ship in the current
- * commit. C2/C4 added 'trivial-consent'. C7 added 'github'. C8 added
- * 'local-password' and 'magic-link'.
- *
- * `oidc-bridge` is NOT registered: the embedded-AS-bridges-to-IdP
- * implementation is scaffolded but the upstream OIDC discovery + code
- * exchange + JWKS validation are not yet wired. Operators with an existing
- * IdP should use the legacy `DOLLHOUSE_AUTH_PROVIDER=oidc` path
- * (OidcAuthProvider) for direct upstream-token validation. The
- * 'oidc-bridge' AuthMethodId is preserved in the type union for future
- * registration without breaking the factory contract.
+ * Build the default factory with all methods that ship today: trivial-consent
+ * (C2/C4), github (C7), local-password and magic-link (C8). When future
+ * commits add new methods, register them here.
  */
 export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   const factory = new AuthMethodFactory();

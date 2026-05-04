@@ -35,6 +35,7 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import type { IAuthMethod } from './IAuthMethod.js';
+import { verifyInteractionCookieMatches } from './interactionCookieBinding.js';
 import {
   createInteractionRouter,
   finishInteractionWithIdentity,
@@ -87,6 +88,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private resource: string;
   private state: InitializedState | null = null;
   private initPromise: Promise<InitializedState> | null = null;
+  /**
+   * Generation counter incremented on every setPublicBaseUrl. ensureInitialized
+   * captures this at start; if it has moved on by the time initialize() returns,
+   * the in-flight result is discarded so a stale init never overwrites a fresh
+   * setPublicBaseUrl. Without this, a concurrent validate() racing with a
+   * publicBaseUrl change could re-assign stale state to this.state, routing
+   * subsequent token validations against the wrong issuer.
+   */
+  private generation = 0;
 
   constructor(options: EmbeddedAuthorizationServerOptions) {
     this.method = options.method;
@@ -102,7 +112,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.publicBaseUrl = assertSafePublicBaseUrl(publicBaseUrl);
     this.issuer = this.publicBaseUrl;
     this.resource = joinUrl(this.publicBaseUrl, this.mcpPath);
-    // Force re-init so the new issuer flows into oidc-provider config.
+    // Bump the generation BEFORE clearing state so any in-flight init() that
+    // resolves between this.state = null and the next ensureInitialized()
+    // sees the moved-on generation and refuses to assign stale results.
+    this.generation += 1;
     this.state = null;
     this.initPromise = null;
   }
@@ -292,6 +305,16 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
             res.type('html').send(renderMagicLinkSuccessNoInteraction(consume.identity.email ?? ''));
             return;
           }
+          // Defense in depth: refuse to drive interactionFinished unless the
+          // calling browser holds the same interaction cookie that started
+          // the OAuth flow. Prevents an attacker who obtains a magic-link
+          // token (forwarded email, leaked URL) from completing the
+          // interaction in a browser that didn't open it.
+          const binding = verifyInteractionCookieMatches(req, consume.interactionId);
+          if (!binding.ok) {
+            res.status(400).type('html').send(renderInteractionBindingError('magic link'));
+            return;
+          }
           const state = await this.ensureInitialized();
           // Restore the request URL to the interaction so oidc-provider's
           // interactionDetails reads the correct interaction record.
@@ -320,6 +343,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           const result = await this.method.processCallback({ code, state });
           if (result.kind === 'error') {
             res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
+            return;
+          }
+          // Defense in depth: refuse to drive interactionFinished unless the
+          // calling browser holds the same interaction cookie. Same threat
+          // model as the magic-link route — the GitHub `state` could be
+          // stolen + replayed; the interaction cookie is the binding.
+          const binding = verifyInteractionCookieMatches(req, result.interactionId);
+          if (!binding.ok) {
+            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
             return;
           }
           const state2 = await this.ensureInitialized();
@@ -389,10 +421,22 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
   private async ensureInitialized(): Promise<InitializedState> {
     if (this.state) return this.state;
+    // Capture the generation BEFORE awaiting init. If setPublicBaseUrl bumps
+    // the counter while initialize() is in flight, the result we receive is
+    // stale and must NOT replace this.state — a fresh ensureInitialized()
+    // call will start a new initialize() against the new generation.
+    const startedAt = this.generation;
     if (!this.initPromise) {
       this.initPromise = this.initialize();
     }
-    this.state = await this.initPromise;
+    const inFlight = this.initPromise;
+    const result = await inFlight;
+    if (this.generation !== startedAt) {
+      // Generation moved on; this result is stale. Don't assign it; let the
+      // next call see this.state === null and trigger a fresh initialize().
+      return this.ensureInitialized();
+    }
+    this.state = result;
     return this.state;
   }
 
@@ -415,8 +459,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     const method = this.method;
 
     const config: Configuration = {
-      // adapter is typed via constructor; cast around oidc-provider's runtime expectations.
+      // adapter: oidc-provider's TypeScript type expects a function-shape
+      // constructor, but the runtime accepts a class. Cast bridges the
+      // mismatch — see https://github.com/panva/node-oidc-provider docs on
+      // adapter shape (the `Adapter` interface is structural at runtime).
       adapter: adapterFactory as unknown as Configuration['adapter'],
+      // jwks: the JWKS object shape we produce from `loadOrGenerateSigningJwks`
+      // matches the runtime spec ({ keys: [JWK] }) but the @types/oidc-provider
+      // declares a narrower internal type. Cast preserves runtime correctness.
       jwks: keyset.jwks as unknown as Configuration['jwks'],
       // Pre-register the default Claude connector client so curl-based dev flows
       // and the integration test work without DCR. id_token_signed_response_alg
@@ -444,7 +494,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         requestObjectSigningAlgValues: ['ES256'],
       },
       features: {
-        registration: { enabled: true },
+        // RFC 7591 Dynamic Client Registration. initialAccessToken: true
+        // means /reg requires an InitialAccessToken bearer issued out-of-band
+        // by the operator (CLI: `dollhouse-issue-dcr-token`). Without this
+        // gate, any unauthenticated client on the network could register
+        // with arbitrary redirect_uris, defeating the redirect-URI exact-match
+        // guarantee. The pre-registered DEFAULT_CLIENT_ID below works without
+        // DCR; only third-party / dynamically-discovered clients need a token.
+        registration: { enabled: true, initialAccessToken: true },
         // Disable oidc-provider's developer-only built-in interaction page;
         // we own /interaction/:uid via InteractionRouter.
         devInteractions: { enabled: false },
@@ -585,6 +642,18 @@ function renderInviteError(reason: string): string {
 <html lang="en"><head><meta charset="utf-8"><title>Invite invalid</title>
 <style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
 </head><body><main><h1>Invite invalid</h1><p>${safe}</p><p>Ask your operator to issue a new invite.</p></main></body></html>`;
+}
+
+function renderInteractionBindingError(flowLabel: string): string {
+  const safe = flowLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Continue in your original browser</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main>
+<h1>Continue in your original browser</h1>
+<p>This ${safe} link must be opened in the same browser where you started the sign-in flow.</p>
+<p>Return to that browser and re-open the link, or restart sign-in from your application.</p>
+</main></body></html>`;
 }
 
 function renderMagicLinkSuccessNoInteraction(email: string): string {

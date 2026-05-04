@@ -40,9 +40,9 @@ describe('AuthProviderFactory two-level structure', () => {
       expect(resolveAuthMethods(config)).toEqual(['trivial-consent', 'github']);
     });
 
-    it('forces oidc-bridge methods for oidc provider', () => {
+    it('returns empty methods list for oidc provider (bypasses embedded-AS methods)', () => {
       const config: AuthConfig = { enabled: true, provider: 'oidc' };
-      expect(resolveAuthMethods(config)).toEqual(['oidc-bridge']);
+      expect(resolveAuthMethods(config)).toEqual([]);
     });
 
     it('ignores explicit methods when provider=oidc', () => {
@@ -51,7 +51,7 @@ describe('AuthProviderFactory two-level structure', () => {
         provider: 'oidc',
         methods: ['trivial-consent'],
       };
-      expect(resolveAuthMethods(config)).toEqual(['oidc-bridge']);
+      expect(resolveAuthMethods(config)).toEqual([]);
     });
   });
 
@@ -120,9 +120,14 @@ describe('AuthProviderFactory two-level structure', () => {
       expect(factory.has('magic-link')).toBe(true);
     });
 
-    it('does NOT register oidc-bridge (scaffold only — use DOLLHOUSE_AUTH_PROVIDER=oidc)', () => {
+    it('does NOT include oidc-bridge in the method ID type union (use DOLLHOUSE_AUTH_PROVIDER=oidc instead)', () => {
+      // The scaffold method was removed from AuthMethodId in C9. The legacy
+      // `provider: oidc` branch in AuthProviderFactory constructs OidcAuthProvider
+      // directly, bypassing the embedded-AS method system entirely.
       const factory = createDefaultAuthMethodFactory();
-      expect(factory.has('oidc-bridge')).toBe(false);
+      // Cast through unknown to assert runtime behavior on a string the type
+      // system would otherwise reject.
+      expect(factory.has('oidc-bridge' as unknown as Parameters<typeof factory.has>[0])).toBe(false);
     });
   });
 });
