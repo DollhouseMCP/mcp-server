@@ -114,11 +114,15 @@ describe('AuthProviderFactory two-level structure', () => {
       expect(factory.has('github')).toBe(true);
     });
 
-    it('registers Stage C methods (C8): local-password, magic-link, oidc-bridge', () => {
+    it('registers Stage C methods (C8): local-password, magic-link', () => {
       const factory = createDefaultAuthMethodFactory();
       expect(factory.has('local-password')).toBe(true);
       expect(factory.has('magic-link')).toBe(true);
-      expect(factory.has('oidc-bridge')).toBe(true);
+    });
+
+    it('does NOT register oidc-bridge (scaffold only — use DOLLHOUSE_AUTH_PROVIDER=oidc)', () => {
+      const factory = createDefaultAuthMethodFactory();
+      expect(factory.has('oidc-bridge')).toBe(false);
     });
   });
 });

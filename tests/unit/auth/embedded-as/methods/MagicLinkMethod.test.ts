@@ -52,7 +52,7 @@ describe('MagicLinkMethod', () => {
 
   it('sends a magic link on request and returns the generic check-email page', async () => {
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'request-link', email: 'alice@example.com', __ip: '1.1.1.1' },
+      formBody: { action: 'request-link', email: 'alice@example.com' }, ip: '1.1.1.1',
     });
     expect(result.kind).toBe('next-step');
     if (result.kind !== 'next-step') return;
@@ -67,7 +67,7 @@ describe('MagicLinkMethod', () => {
   it('returns the same generic page even when SMTP throws (must-fix #2 enumeration prevention)', async () => {
     emailSender.shouldThrow = true;
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'request-link', email: 'unknown@example.com', __ip: '1.1.1.1' },
+      formBody: { action: 'request-link', email: 'unknown@example.com' }, ip: '1.1.1.1',
     });
     expect(result.kind).toBe('next-step');
     if (result.kind !== 'next-step') return;
@@ -77,7 +77,7 @@ describe('MagicLinkMethod', () => {
 
   it('rejects invalid email shape with the same generic page (no error leak)', async () => {
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'request-link', email: 'not-an-email', __ip: '1.1.1.1' },
+      formBody: { action: 'request-link', email: 'not-an-email' }, ip: '1.1.1.1',
     });
     expect(result.kind).toBe('next-step');
     expect(emailSender.sent).toHaveLength(0);
@@ -86,7 +86,7 @@ describe('MagicLinkMethod', () => {
   it('rate-limits per email after 3 requests in a minute (must-fix #3 from existing list)', async () => {
     for (let i = 0; i < 5; i += 1) {
       await method.completeInteraction(CTX, {
-        formBody: { action: 'request-link', email: 'alice@example.com', __ip: `1.1.1.${i}` },
+        formBody: { action: 'request-link', email: 'alice@example.com' }, ip: `1.1.1.${i}`,
       });
     }
     expect(emailSender.sent.length).toBeLessThanOrEqual(3);
@@ -94,13 +94,13 @@ describe('MagicLinkMethod', () => {
 
   it('consumes the link on POST and authenticates with a verified email', async () => {
     await method.completeInteraction(CTX, {
-      formBody: { action: 'request-link', email: 'alice@example.com', __ip: '1.1.1.1' },
+      formBody: { action: 'request-link', email: 'alice@example.com' }, ip: '1.1.1.1',
     });
     const url = new URL(emailSender.sent[0].url);
     const token = url.searchParams.get('token')!;
 
     const consumed = await method.completeInteraction(CTX, {
-      formBody: { action: 'consume-link', token },
+      formBody: { action: 'consume-link', token }, ip: '1.1.1.1',
     });
     expect(consumed.kind).toBe('authenticated');
     if (consumed.kind !== 'authenticated') return;
@@ -110,11 +110,11 @@ describe('MagicLinkMethod', () => {
 
   it('rejects re-use of a magic-link token (single-use, must-fix #1)', async () => {
     await method.completeInteraction(CTX, {
-      formBody: { action: 'request-link', email: 'alice@example.com', __ip: '1.1.1.1' },
+      formBody: { action: 'request-link', email: 'alice@example.com' }, ip: '1.1.1.1',
     });
     const token = new URL(emailSender.sent[0].url).searchParams.get('token')!;
-    await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token } });
-    const replay = await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token } });
+    await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token }, ip: '1.1.1.1' });
+    const replay = await method.completeInteraction(CTX, { formBody: { action: 'consume-link', token }, ip: '1.1.1.1' });
     expect(replay.kind).toBe('denied');
   });
 
@@ -123,5 +123,48 @@ describe('MagicLinkMethod', () => {
     expect(html).toContain('method="post"');
     expect(html).toContain('value="test-token"');
     expect(html).toContain('value="consume-link"');
+  });
+
+  describe('verifyMagicLink / consumeMagicLink (used by /auth/email/verify)', () => {
+    async function issueViaInteraction(): Promise<string> {
+      await method.completeInteraction(
+        { interactionId: 'INTERACT-42', clientId: 'c', requestedScopes: [], requestUrl: '/' },
+        { formBody: { action: 'request-link', email: 'eve@example.com' }, ip: '1.1.1.1' },
+      );
+      return new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    }
+
+    it('verifyMagicLink returns the interactionId from the token payload', async () => {
+      const token = await issueViaInteraction();
+      const verified = method.verifyMagicLink(token);
+      expect(verified.ok).toBe(true);
+      if (!verified.ok) return;
+      expect(verified.interactionId).toBe('INTERACT-42');
+    });
+
+    it('verifyMagicLink does NOT consume — anti-pre-fetch (must-fix #1)', async () => {
+      const token = await issueViaInteraction();
+      method.verifyMagicLink(token);
+      method.verifyMagicLink(token);
+      // Still consumable.
+      const consumed = await method.consumeMagicLink(token);
+      expect(consumed.kind).toBe('ok');
+    });
+
+    it('consumeMagicLink returns the interactionId so the route can complete the OAuth flow', async () => {
+      const token = await issueViaInteraction();
+      const consumed = await method.consumeMagicLink(token);
+      expect(consumed.kind).toBe('ok');
+      if (consumed.kind !== 'ok') return;
+      expect(consumed.interactionId).toBe('INTERACT-42');
+      expect(consumed.identity.emailVerified).toBe(true);
+    });
+
+    it('consumeMagicLink rejects already-consumed tokens', async () => {
+      const token = await issueViaInteraction();
+      await method.consumeMagicLink(token);
+      const replay = await method.consumeMagicLink(token);
+      expect(replay.kind).toBe('error');
+    });
   });
 });

@@ -159,6 +159,7 @@ async function handlePost(
   const result = await method.completeInteraction(ctx, {
     formBody: req.body && typeof req.body === 'object' ? (req.body as Record<string, string>) : undefined,
     query: req.query as Record<string, string>,
+    ip: req.ip ?? 'unknown',
   });
 
   if (result.kind === 'denied') {

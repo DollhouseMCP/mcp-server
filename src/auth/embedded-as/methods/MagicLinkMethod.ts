@@ -86,7 +86,7 @@ export class MagicLinkMethod implements IAuthMethod {
   }
 
   async completeInteraction(
-    _ctx: InteractionContext,
+    ctx: InteractionContext,
     input: InteractionInput,
   ): Promise<InteractionResult> {
     const form = input.formBody ?? {};
@@ -96,7 +96,7 @@ export class MagicLinkMethod implements IAuthMethod {
       // POST /interaction/:uid with action=request-link → send the magic link.
       // Returns the same "check your email" page regardless of whether the
       // email exists (must-fix #2).
-      return this.handleRequestLink(form);
+      return this.handleRequestLink(form, input.ip ?? 'unknown', ctx.interactionId);
     }
 
     if (action === 'consume-link') {
@@ -124,9 +124,65 @@ export class MagicLinkMethod implements IAuthMethod {
     return renderConfirmationPage(token);
   }
 
-  private async handleRequestLink(form: Record<string, string>): Promise<InteractionResult> {
+  /**
+   * Verify (no-consume) used by the GET /auth/email/verify handler so the
+   * confirmation page only renders when the token is valid + not yet
+   * consumed. POST then consumes via consumeMagicLink().
+   */
+  verifyMagicLink(token: string): { ok: true; interactionId?: string } | { ok: false; reason: string } {
+    const verified = this.options.invites.verify(token);
+    if (!verified.ok) return { ok: false, reason: verified.reason };
+    if (verified.payload.purpose !== 'magic-link') {
+      return { ok: false, reason: 'token is not a magic link' };
+    }
+    return { ok: true, interactionId: verified.payload.interactionId };
+  }
+
+  /**
+   * Consume a magic-link token AND upsert the account. Returns the
+   * interactionId from the token payload (so the caller can complete the
+   * matching oidc-provider interaction) plus the authenticated identity.
+   * Used by the /auth/email/verify POST handler.
+   */
+  async consumeMagicLink(token: string): Promise<
+    | { kind: 'ok'; interactionId: string | undefined; identity: AuthenticatedIdentity }
+    | { kind: 'error'; reason: string }
+  > {
+    const consume = this.options.invites.consume(token);
+    if (!consume.ok) return { kind: 'error', reason: `magic link ${consume.reason}` };
+    if (consume.payload.purpose !== 'magic-link') {
+      return { kind: 'error', reason: 'token is not a magic link' };
+    }
+
+    const sub = consume.payload.sub;
+    const email = consume.payload.email;
+    const now = Date.now();
+
+    const existing = await this.options.storage.getAccount(sub);
+    await this.options.storage.upsertAccount({
+      sub,
+      provider: PROVIDER_NAME,
+      externalSub: hashEmail(email),
+      email,
+      emailVerified: true,
+      displayName: existing?.displayName ?? email,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    });
+
+    return {
+      kind: 'ok',
+      interactionId: consume.payload.interactionId,
+      identity: { sub, email, emailVerified: true, displayName: existing?.displayName ?? email },
+    };
+  }
+
+  private async handleRequestLink(
+    form: Record<string, string>,
+    ip: string,
+    interactionId: string,
+  ): Promise<InteractionResult> {
     const email = String(form.email ?? '').trim().toLowerCase();
-    const ip = String(form.__ip ?? 'unknown');
 
     if (!email || !email.includes('@')) {
       // Don't reveal validation error shape; render the same generic response.
@@ -155,8 +211,15 @@ export class MagicLinkMethod implements IAuthMethod {
     // timing of "exists vs not" is roughly equivalent. We do NOT look up
     // the account before issuing — we issue the token, attempt to send, and
     // if the email isn't on file the upstream will silently swallow it.
+    // Stamp the interactionId into the token so the /auth/email/verify
+    // route can find the right interaction to complete after consumption.
     const sub = `${PROVIDER_NAME}_${hashEmail(email)}`;
-    const token = this.options.invites.issue({ sub, email, purpose: 'magic-link' });
+    const token = this.options.invites.issue({
+      sub,
+      email,
+      purpose: 'magic-link',
+      interactionId,
+    });
     const url = new URL(this.options.verifyUrl);
     url.searchParams.set('token', token);
 

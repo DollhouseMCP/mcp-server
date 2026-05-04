@@ -153,21 +153,17 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       });
     } else if (activeMethodId === 'local-password') {
       const { LocalAccountMethod } = await import('./embedded-as/methods/LocalAccountMethod.js');
-      const { InviteTokenStore } = await import('./embedded-as/inviteTokens.js');
+      const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
       const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
-      const { randomBytes } = await import('node:crypto');
-      const secretHex = env.DOLLHOUSE_INVITE_TOKEN_SECRET;
-      const secret = secretHex
-        ? Buffer.from(secretHex, 'hex')
-        : randomBytes(32);
-      const invites = new InviteTokenStore(secret);
+      // Persisted secret so CLI-issued invites verify against the runtime
+      // and tokens survive process restart.
+      const invites = new InviteTokenStore(loadOrGenerateInviteSecret());
       const rateLimiter = new LocalLoginRateLimiter({ storage });
       method = new LocalAccountMethod({ storage, invites, rateLimiter });
     } else if (activeMethodId === 'magic-link') {
       const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
-      const { InviteTokenStore } = await import('./embedded-as/inviteTokens.js');
+      const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
       const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
-      const { randomBytes } = await import('node:crypto');
       if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
         || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
         throw new Error(
@@ -182,10 +178,7 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
         password: env.DOLLHOUSE_SMTP_PASSWORD,
         from: env.DOLLHOUSE_SMTP_FROM,
       });
-      const secret = env.DOLLHOUSE_INVITE_TOKEN_SECRET
-        ? Buffer.from(env.DOLLHOUSE_INVITE_TOKEN_SECRET, 'hex')
-        : randomBytes(32);
-      const invites = new InviteTokenStore(secret);
+      const invites = new InviteTokenStore(loadOrGenerateInviteSecret());
       const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
       method = new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
     } else if (activeMethodId === 'oidc-bridge') {

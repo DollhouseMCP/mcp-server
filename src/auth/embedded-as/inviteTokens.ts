@@ -25,6 +25,9 @@
  * @module auth/embedded-as/inviteTokens
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import os from 'node:os';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
@@ -38,6 +41,14 @@ export interface InviteTokenPayload {
   purpose: InviteTokenPurpose;
   jti: string;
   exp: number;
+  /**
+   * Optional interaction context. The magic-link flow stamps this with the
+   * oidc-provider interaction uid that started the flow, so the
+   * /auth/email/verify route can find the right interaction to complete
+   * even when the user clicks the link in a different tab. Invite tokens
+   * issued by the CLI omit this field.
+   */
+  interactionId?: string;
 }
 
 export interface IssueInviteInput {
@@ -46,6 +57,8 @@ export interface IssueInviteInput {
   purpose: InviteTokenPurpose;
   /** TTL override; default 15 min. Capped at 1 hour. */
   ttlMs?: number;
+  /** Optional interaction uid; embedded into the token payload. */
+  interactionId?: string;
 }
 
 export type ConsumeResult =
@@ -86,6 +99,7 @@ export class InviteTokenStore {
       purpose: input.purpose,
       jti: randomBytes(16).toString('base64url'),
       exp: Date.now() + ttl,
+      ...(input.interactionId ? { interactionId: input.interactionId } : {}),
     };
     const payloadEncoded = base64UrlEncode(JSON.stringify(payload));
     const signature = sign(this.secret, payloadEncoded);
@@ -145,6 +159,45 @@ export class InviteTokenStore {
 
 function sign(secret: Buffer, payload: string): string {
   return createHmac('sha256', secret).update(payload).digest('base64url');
+}
+
+export function defaultInviteSecretFilePath(): string {
+  const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
+  return path.join(homeDir, '.dollhouse', 'run', 'invite-secret.bin');
+}
+
+/**
+ * Load an existing invite-token HMAC secret from disk, or generate + persist
+ * a new 32-byte one. Mode 0600. Used by both the AS runtime (so all issued
+ * tokens stay valid across restarts) and the `dollhousemcp create-user` CLI
+ * (so CLI-issued invites verify against the runtime's secret).
+ *
+ * If `DOLLHOUSE_INVITE_TOKEN_SECRET` env var is set (hex-encoded), it
+ * overrides the file — useful for multi-instance deployments where all
+ * instances need to share the secret.
+ */
+export function loadOrGenerateInviteSecret(filePath?: string): Buffer {
+  const envSecret = process.env.DOLLHOUSE_INVITE_TOKEN_SECRET?.trim();
+  if (envSecret && envSecret.length > 0) {
+    const buf = Buffer.from(envSecret, 'hex');
+    if (buf.length < 16) {
+      throw new Error('DOLLHOUSE_INVITE_TOKEN_SECRET must decode to at least 16 bytes (hex)');
+    }
+    return buf;
+  }
+
+  const target = filePath ?? defaultInviteSecretFilePath();
+  try {
+    const buf = fs.readFileSync(target);
+    if (buf.length >= 16) return buf;
+  } catch {
+    // Fall through to generation.
+  }
+
+  const fresh = randomBytes(32);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, fresh, { mode: 0o600 });
+  return fresh;
 }
 
 function base64UrlEncode(value: string): string {

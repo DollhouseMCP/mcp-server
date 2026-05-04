@@ -76,8 +76,16 @@ export class AuthMethodFactory {
 
 /**
  * Build the default factory with the methods that ship in the current
- * commit. All §8.1 methods are now registered: trivial-consent (C2/C4),
- * github (C7), and local-password / magic-link / oidc-bridge (C8).
+ * commit. C2/C4 added 'trivial-consent'. C7 added 'github'. C8 added
+ * 'local-password' and 'magic-link'.
+ *
+ * `oidc-bridge` is NOT registered: the embedded-AS-bridges-to-IdP
+ * implementation is scaffolded but the upstream OIDC discovery + code
+ * exchange + JWKS validation are not yet wired. Operators with an existing
+ * IdP should use the legacy `DOLLHOUSE_AUTH_PROVIDER=oidc` path
+ * (OidcAuthProvider) for direct upstream-token validation. The
+ * 'oidc-bridge' AuthMethodId is preserved in the type union for future
+ * registration without breaking the factory contract.
  */
 export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   const factory = new AuthMethodFactory();
@@ -85,6 +93,5 @@ export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   factory.register('github');
   factory.register('local-password');
   factory.register('magic-link');
-  factory.register('oidc-bridge');
   return factory;
 }

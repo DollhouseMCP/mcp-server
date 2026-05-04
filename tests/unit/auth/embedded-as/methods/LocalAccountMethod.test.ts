@@ -81,7 +81,7 @@ describe('LocalAccountMethod', () => {
 
     // Now log in.
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password', __ip: '10.0.0.1' },
+      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password' }, ip: '10.0.0.1',
     });
     expect(result.kind).toBe('authenticated');
   });
@@ -95,13 +95,13 @@ describe('LocalAccountMethod', () => {
 
     for (let i = 0; i < 5; i += 1) {
       const result = await method.completeInteraction(CTX, {
-        formBody: { action: 'login', username: 'alice', password: 'wrong', __ip: '10.0.0.1' },
+        formBody: { action: 'login', username: 'alice', password: 'wrong' }, ip: '10.0.0.1',
       });
       expect(result.kind).toBe('denied');
     }
     // Sixth attempt should be rate-limited even with the correct password.
     const sixth = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password', __ip: '10.0.0.1' },
+      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password' }, ip: '10.0.0.1',
     });
     expect(sixth.kind).toBe('denied');
     if (sixth.kind === 'denied') {
@@ -111,8 +111,55 @@ describe('LocalAccountMethod', () => {
 
   it('rejects login attempts on unknown usernames (no enumeration via timing)', async () => {
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'ghost', password: 'whatever', __ip: '10.0.0.1' },
+      formBody: { action: 'login', username: 'ghost', password: 'whatever' }, ip: '10.0.0.1',
     });
     expect(result.kind).toBe('denied');
+  });
+
+  describe('consumeInvite (out-of-band CLI invite redemption)', () => {
+    it('verifies + creates the account when called directly (used by /auth/local/invite POST)', async () => {
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+
+      const result = await method.consumeInvite(token, 'a-very-long-password');
+      expect(result.kind).toBe('ok');
+      if (result.kind !== 'ok') return;
+      expect(result.sub).toBe('local_bob');
+      expect(result.email).toBe('bob@example.com');
+
+      // Subsequent login with the just-set password works.
+      const login = await method.completeInteraction(CTX, {
+        formBody: { action: 'login', username: 'bob', password: 'a-very-long-password' },
+      });
+      expect(login.kind).toBe('authenticated');
+    });
+
+    it('rejects re-use of the same invite (single-use)', async () => {
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+      await method.consumeInvite(token, 'a-very-long-password');
+      const second = await method.consumeInvite(token, 'a-very-long-password');
+      expect(second.kind).toBe('error');
+    });
+
+    it('rejects passwords shorter than 12 characters with a clear reason', async () => {
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+      const result = await method.consumeInvite(token, 'short');
+      expect(result.kind).toBe('error');
+      if (result.kind !== 'error') return;
+      expect(result.reason).toMatch(/12 characters/);
+    });
+
+    it('verifyInvite returns the email without consuming the token', () => {
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+      const verified = method.verifyInvite(token);
+      expect(verified.ok).toBe(true);
+      if (!verified.ok) return;
+      expect(verified.email).toBe('bob@example.com');
+      // Token should still be consumable after verify.
+      expect(invites.consume(token).ok).toBe(true);
+    });
   });
 });

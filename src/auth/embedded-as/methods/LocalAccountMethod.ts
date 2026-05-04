@@ -71,7 +71,7 @@ export class LocalAccountMethod implements IAuthMethod {
   }
 
   async completeInteraction(
-    ctx: InteractionContext,
+    _ctx: InteractionContext,
     input: InteractionInput,
   ): Promise<InteractionResult> {
     const form = input.formBody ?? {};
@@ -82,7 +82,7 @@ export class LocalAccountMethod implements IAuthMethod {
     }
 
     if (action === 'login') {
-      return this.handleLogin(form, ctx);
+      return this.handleLogin(form, input.ip ?? 'unknown');
     }
 
     return { kind: 'denied', reason: 'unknown form action' };
@@ -111,22 +111,43 @@ export class LocalAccountMethod implements IAuthMethod {
     return url.toString();
   }
 
-  private async handleSetPassword(form: Record<string, string>): Promise<InteractionResult> {
-    const inviteToken = String(form.invite ?? '');
-    const newPassword = String(form.password ?? '');
-    if (!inviteToken || newPassword.length < 12) {
-      return {
-        kind: 'next-step',
-        step: { kind: 'render-html', html: renderError('password must be at least 12 characters'), csrfToken: '' },
-      };
+  /**
+   * Verify an invite without consuming it. Used by the GET /auth/local/invite
+   * handler so the password-set form only renders for valid tokens.
+   */
+  verifyInvite(token: string):
+    | { ok: true; sub: string; email: string }
+    | { ok: false; reason: string }
+  {
+    const verified = this.options.invites.verify(token);
+    if (!verified.ok) return { ok: false, reason: verified.reason };
+    if (verified.payload.purpose !== 'invite') {
+      return { ok: false, reason: 'token is not an invite' };
+    }
+    return { ok: true, sub: verified.payload.sub, email: verified.payload.email };
+  }
+
+  /**
+   * Consume an invite token and create the local account with the user's
+   * chosen password. Used by both the POST /interaction/:uid path (when
+   * LocalAccountMethod is the active method during an OAuth flow) and the
+   * standalone POST /auth/local/invite path (when the user clicks an
+   * out-of-band CLI-issued invite URL).
+   */
+  async consumeInvite(token: string, newPassword: string): Promise<
+    | { kind: 'ok'; sub: string; email: string }
+    | { kind: 'error'; reason: string }
+  > {
+    if (!token || newPassword.length < 12) {
+      return { kind: 'error', reason: 'password must be at least 12 characters' };
     }
 
-    const consume = this.options.invites.consume(inviteToken);
+    const consume = this.options.invites.consume(token);
     if (!consume.ok) {
-      return { kind: 'denied', reason: `invite token ${consume.reason}` };
+      return { kind: 'error', reason: `invite token ${consume.reason}` };
     }
     if (consume.payload.purpose !== 'invite') {
-      return { kind: 'denied', reason: 'token is not an invite' };
+      return { kind: 'error', reason: 'token is not an invite' };
     }
 
     const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
@@ -134,7 +155,7 @@ export class LocalAccountMethod implements IAuthMethod {
     const externalSub = sub.replace(/^local_/, '');
     const now = Date.now();
 
-    const existing = await this.options.storage.getAccount(sub);
+    const existing = (await this.options.storage.getAccount(sub)) as LocalStoredAccount | null;
     const account: LocalStoredAccount = {
       sub,
       provider: LOCAL_PROVIDER,
@@ -148,24 +169,54 @@ export class LocalAccountMethod implements IAuthMethod {
     };
     await this.options.storage.upsertAccount(account);
 
+    return { kind: 'ok', sub, email: consume.payload.email };
+  }
+
+  private async handleSetPassword(form: Record<string, string>): Promise<InteractionResult> {
+    const inviteToken = String(form.invite ?? '');
+    const newPassword = String(form.password ?? '');
+    const result = await this.consumeInvite(inviteToken, newPassword);
+    if (result.kind === 'error') {
+      // Terminal token errors deny the OAuth flow outright (the token is
+      // dead — re-rendering the form would just let the user re-submit the
+      // same dead token). Recoverable errors (password too short) re-render
+      // the form so the user can fix their input.
+      const recoverable = /password must be at least/.test(result.reason);
+      if (recoverable) {
+        return {
+          kind: 'next-step',
+          step: { kind: 'render-html', html: renderError(result.reason), csrfToken: '' },
+        };
+      }
+      return { kind: 'denied', reason: result.reason };
+    }
     return {
       kind: 'authenticated',
       identity: {
-        sub,
-        displayName: account.displayName,
-        email: account.email,
+        sub: result.sub,
+        displayName: result.email,
+        email: result.email,
         emailVerified: false,
       },
     };
   }
 
+  /** Used by /auth/local/invite GET to render the password-set form. */
+  renderInviteForm(token: string, email: string): string {
+    return renderInvitePage(token, email);
+  }
+
+  /** Success page rendered by /auth/local/invite POST after the password is set. */
+  renderInviteSuccess(email: string): string {
+    return renderInviteSuccess(email);
+  }
+
   private async handleLogin(
     form: Record<string, string>,
-    _ctx: InteractionContext,
+    ip: string,
   ): Promise<InteractionResult> {
     const username = String(form.username ?? '').trim();
     const password = String(form.password ?? '');
-    const ip = String(form.__ip ?? 'unknown'); // InteractionRouter would supply via input.query
 
     if (!username || !password) {
       return { kind: 'denied', reason: 'missing username or password' };
@@ -271,6 +322,47 @@ function renderLoginOrInvitePage(): string {
 }
 
 function renderError(message: string): string {
-  return `<!doctype html><html><body><main><h1>Error</h1><p>${message
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p></main></body></html>`;
+  return `<!doctype html><html><body><main><h1>Error</h1><p>${escapeHtml(message)}</p></main></body></html>`;
+}
+
+function renderInvitePage(token: string, email: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Set up your DollhouseMCP account</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:8vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}label{display:block;margin-top:12px;font-size:14px}input{display:block;width:100%;box-sizing:border-box;padding:8px;border:1px solid #ccc;border-radius:4px;margin-top:4px}button{background:#185c37;color:white;border:0;border-radius:6px;padding:12px 16px;font-weight:700;cursor:pointer;margin-top:16px}.muted{color:#68675f;font-size:14px}</style>
+</head><body><main>
+<h1>Set up your account</h1>
+<p>Welcome, <strong>${escapeHtml(email)}</strong>. Choose a password (at least 12 characters).</p>
+<form method="post">
+  <input type="hidden" name="invite" value="${escapeHtmlAttr(token)}">
+  <label>New password
+    <input type="password" name="password" autocomplete="new-password" required minlength="12">
+  </label>
+  <button type="submit">Set password</button>
+</form>
+<p class="muted">After you set your password, you can sign in via Claude Desktop or claude.ai.</p>
+</main></body></html>`;
+}
+
+function renderInviteSuccess(email: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Account created</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main>
+<h1>Account created</h1>
+<p>Your password is set for <strong>${escapeHtml(email)}</strong>.</p>
+<p>Connect your MCP client (Claude Desktop, claude.ai, etc.) to this server and sign in
+   when prompted using the username your operator gave you.</p>
+</main></body></html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }

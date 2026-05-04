@@ -57,6 +57,16 @@ export interface InteractionInput {
   query?: Record<string, string>;
   /** Verified by the host route before the method's completeInteraction runs. */
   csrfToken?: string;
+  /**
+   * Client IP as Express resolved it (req.ip). Used by methods for per-IP
+   * rate limiting and audit. Optional — when omitted, methods see
+   * 'unknown' and treat the call as having no resolvable client address.
+   *
+   * Behind a proxy / tunnel, the operator must configure
+   * `app.set('trust proxy', ...)` so Express returns the real client IP
+   * from X-Forwarded-For instead of the proxy's address.
+   */
+  ip?: string;
 }
 
 /**

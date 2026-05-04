@@ -40,6 +40,8 @@ import {
   finishInteractionWithIdentity,
 } from './InteractionRouter.js';
 import { GithubSocialMethod } from './methods/GithubSocialMethod.js';
+import { LocalAccountMethod } from './methods/LocalAccountMethod.js';
+import { MagicLinkMethod } from './methods/MagicLinkMethod.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
@@ -191,6 +193,115 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // /.well-known/openid-configuration by default.
     router.get('/.well-known/oauth-authorization-server', (req, res) => {
       void this.handleAuthorizationServerMetadata(req, res);
+    });
+
+    // /auth/email/verify and /auth/local/invite need to parse POST bodies.
+    // Limit to 4 KB so unauthenticated POSTs can't flood memory.
+    const inviteBodyParser = express.urlencoded({ extended: false, limit: '4kb' });
+
+    // CLI-issued local-account invite landing page. The user clicks the URL
+    // printed by `dollhouse-create-user`, hits GET to see the password-set
+    // form, submits to consume the invite + create the account. The flow is
+    // standalone — not part of an active OAuth interaction. After setting
+    // the password, the user signs in via their MCP client which starts the
+    // normal OAuth flow.
+    router.get('/auth/local/invite', (req, res, next) => {
+      void (async () => {
+        try {
+          if (!(this.method instanceof LocalAccountMethod)) {
+            res.status(404).json({ error: 'local accounts not configured' });
+            return;
+          }
+          const token = typeof req.query.invite === 'string' ? req.query.invite : '';
+          const verified = this.method.verifyInvite(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderInviteError(verified.reason));
+            return;
+          }
+          res.type('html').send(this.method.renderInviteForm(token, verified.email));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+
+    router.post('/auth/local/invite', inviteBodyParser, (req, res, next) => {
+      void (async () => {
+        try {
+          if (!(this.method instanceof LocalAccountMethod)) {
+            res.status(404).json({ error: 'local accounts not configured' });
+            return;
+          }
+          const body = req.body as Record<string, string> | undefined;
+          const token = typeof body?.invite === 'string' ? body.invite : '';
+          const password = typeof body?.password === 'string' ? body.password : '';
+          const result = await this.method.consumeInvite(token, password);
+          if (result.kind === 'error') {
+            res.status(400).type('html').send(renderInviteError(result.reason));
+            return;
+          }
+          res.type('html').send(this.method.renderInviteSuccess(result.email));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+
+    // Magic-link callback. The user clicks the link in their email; GET
+    // shows a confirmation form (anti-pre-fetch — must-fix #1), POST consumes
+    // the token + completes the original interaction the link was issued for.
+    // Mounted only when MagicLinkMethod is the active method.
+    router.get('/auth/email/verify', (req, res, next) => {
+      void (async () => {
+        try {
+          if (!(this.method instanceof MagicLinkMethod)) {
+            res.status(404).json({ error: 'magic link not configured' });
+            return;
+          }
+          const token = typeof req.query.token === 'string' ? req.query.token : '';
+          const verified = this.method.verifyMagicLink(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
+            return;
+          }
+          // Render the confirmation page; POST will consume the token.
+          res.type('html').send(this.method.renderConfirmationPage(token));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+
+    router.post('/auth/email/verify', inviteBodyParser, (req, res, next) => {
+      void (async () => {
+        try {
+          if (!(this.method instanceof MagicLinkMethod)) {
+            res.status(404).json({ error: 'magic link not configured' });
+            return;
+          }
+          const token = typeof req.body?.token === 'string' ? req.body.token : '';
+          const consume = await this.method.consumeMagicLink(token);
+          if (consume.kind === 'error') {
+            res.status(400).type('html').send(renderMagicLinkError(consume.reason));
+            return;
+          }
+          if (!consume.interactionId) {
+            // Token was issued without an interactionId (CLI-issued, or an
+            // older client that didn't stamp it). The user is authenticated
+            // but we have no OAuth flow to complete; show a friendly page.
+            res.type('html').send(renderMagicLinkSuccessNoInteraction(consume.identity.email ?? ''));
+            return;
+          }
+          const state = await this.ensureInitialized();
+          // Restore the request URL to the interaction so oidc-provider's
+          // interactionDetails reads the correct interaction record.
+          req.url = `/interaction/${consume.interactionId}`;
+          const details = await state.provider.interactionDetails(req, res);
+          await finishInteractionWithIdentity(req, res, state.provider, details, consume.identity.sub);
+        } catch (err) {
+          next(err);
+        }
+      })();
     });
 
     // GitHub social-login callback. The active IAuthMethod owns the OAuth
@@ -458,4 +569,28 @@ function stripPrivate(jwk: JWK): JWK {
 function normalizePath(rawPath: string): string {
   if (!rawPath || rawPath === '/') return '/mcp';
   return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+}
+
+function renderMagicLinkError(reason: string): string {
+  const safe = reason.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sign-in failed</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Sign-in failed</h1><p>${safe}</p><p>Request a new link from the application.</p></main></body></html>`;
+}
+
+function renderInviteError(reason: string): string {
+  const safe = reason.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Invite invalid</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Invite invalid</h1><p>${safe}</p><p>Ask your operator to issue a new invite.</p></main></body></html>`;
+}
+
+function renderMagicLinkSuccessNoInteraction(email: string): string {
+  const safe = email.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Signed in</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Signed in as ${safe}</h1><p>This link wasn't bound to an active sign-in flow. Return to the application to continue.</p></main></body></html>`;
 }
