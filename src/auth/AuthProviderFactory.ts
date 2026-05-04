@@ -132,6 +132,9 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     const activeMethodId = methods[0];
 
     let method;
+    const baseUrl = config.publicBaseUrl
+      ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
+
     if (activeMethodId === 'github') {
       const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
       const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
@@ -142,14 +145,58 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
           'Set both env vars or remove "github" from DOLLHOUSE_AUTH_METHODS.',
         );
       }
-      const baseUrl = config.publicBaseUrl
-        ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
       method = new GithubSocialMethod({
         clientId,
         clientSecret,
         callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
         storage,
       });
+    } else if (activeMethodId === 'local-password') {
+      const { LocalAccountMethod } = await import('./embedded-as/methods/LocalAccountMethod.js');
+      const { InviteTokenStore } = await import('./embedded-as/inviteTokens.js');
+      const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
+      const { randomBytes } = await import('node:crypto');
+      const secretHex = env.DOLLHOUSE_INVITE_TOKEN_SECRET;
+      const secret = secretHex
+        ? Buffer.from(secretHex, 'hex')
+        : randomBytes(32);
+      const invites = new InviteTokenStore(secret);
+      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      method = new LocalAccountMethod({ storage, invites, rateLimiter });
+    } else if (activeMethodId === 'magic-link') {
+      const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
+      const { InviteTokenStore } = await import('./embedded-as/inviteTokens.js');
+      const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
+      const { randomBytes } = await import('node:crypto');
+      if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
+        || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
+        throw new Error(
+          'Magic link requires DOLLHOUSE_SMTP_HOST/USER/PASSWORD/FROM. ' +
+          'Configure SMTP or pick a different method via DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      const emailSender = new NodemailerEmailSender({
+        host: env.DOLLHOUSE_SMTP_HOST,
+        port: env.DOLLHOUSE_SMTP_PORT,
+        user: env.DOLLHOUSE_SMTP_USER,
+        password: env.DOLLHOUSE_SMTP_PASSWORD,
+        from: env.DOLLHOUSE_SMTP_FROM,
+      });
+      const secret = env.DOLLHOUSE_INVITE_TOKEN_SECRET
+        ? Buffer.from(env.DOLLHOUSE_INVITE_TOKEN_SECRET, 'hex')
+        : randomBytes(32);
+      const invites = new InviteTokenStore(secret);
+      const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
+      method = new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
+    } else if (activeMethodId === 'oidc-bridge') {
+      const { OidcBridgeMethod } = await import('./embedded-as/methods/OidcBridgeMethod.js');
+      if (!config.issuer || !config.audience) {
+        throw new Error(
+          'OIDC bridge embedded mode requires DOLLHOUSE_AUTH_ISSUER and DOLLHOUSE_AUTH_AUDIENCE. ' +
+          'Use DOLLHOUSE_AUTH_PROVIDER=oidc for the legacy direct-validation path instead.',
+        );
+      }
+      method = new OidcBridgeMethod({ issuer: config.issuer, audience: config.audience });
     } else {
       const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
       method = new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });

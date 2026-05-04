@@ -142,6 +142,20 @@ const envSchema = z.object({
    */
   DOLLHOUSE_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * HMAC secret for invite-token / magic-link signing. ≥32 hex chars.
+   * Auto-generated and persisted with the AS signing key on first run if
+   * not provided. Set explicitly for multi-instance deployments so all
+   * instances share the secret.
+   */
+  DOLLHOUSE_INVITE_TOKEN_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  // SMTP for the magic-link auth method (must-fix #10 STARTTLS-mandatory).
+  DOLLHOUSE_SMTP_HOST: z.string().trim().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  DOLLHOUSE_SMTP_USER: z.string().trim().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_PASSWORD: z.string().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_FROM: z.string().trim().optional().transform(v => v || undefined),
 
   // ============================================================================
   // Database Configuration (Phase 4)

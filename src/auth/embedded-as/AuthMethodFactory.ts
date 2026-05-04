@@ -76,12 +76,15 @@ export class AuthMethodFactory {
 
 /**
  * Build the default factory with the methods that ship in the current
- * commit. C2 added 'trivial-consent'. C7 adds 'github'. C8 will add
- * 'local-password' / 'magic-link' / 'oidc-bridge'.
+ * commit. All §8.1 methods are now registered: trivial-consent (C2/C4),
+ * github (C7), and local-password / magic-link / oidc-bridge (C8).
  */
 export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   const factory = new AuthMethodFactory();
   factory.register('trivial-consent');
   factory.register('github');
+  factory.register('local-password');
+  factory.register('magic-link');
+  factory.register('oidc-bridge');
   return factory;
 }
