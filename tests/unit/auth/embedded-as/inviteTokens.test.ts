@@ -66,4 +66,42 @@ describe('InviteTokenStore', () => {
     expect(store.verify('only-one-part').ok).toBe(false);
     expect(store.verify('aaa.bbb.ccc').ok).toBe(false);
   });
+
+  it('prunes expired consumed entries on the next consume', () => {
+    // Consume a short-TTL token, wait for it to expire, then consume a
+    // long-TTL one — the expired jti should be evicted from the
+    // consumed-set as part of the second consume.
+    const shortToken = store.issue({ sub: 'a', email: 'a@x', purpose: 'invite', ttlMs: 1 });
+    expect(store.consume(shortToken).ok).toBe(true);
+
+    // @ts-expect-error reach into private state for the assertion
+    expect(store['consumed'].size).toBe(1);
+
+    const start = Date.now();
+    while (Date.now() === start) { /* spin past 1 ms TTL */ }
+
+    const longToken = store.issue({ sub: 'b', email: 'b@x', purpose: 'invite' });
+    expect(store.consume(longToken).ok).toBe(true);
+
+    // The expired short-token jti was pruned; only the long-token jti remains.
+    // @ts-expect-error reach into private state for the assertion
+    expect(store['consumed'].size).toBe(1);
+  });
+
+  it('refuses a new consume when the cap is reached with no expired entries to prune', () => {
+    // Saturating the consumed-set with still-replayable tokens must not
+    // evict any of them — that would let the evicted jti be replayed.
+    // Instead the new consume is rejected with rate-exceeded.
+    // @ts-expect-error stub the cap so we don't have to issue 10k tokens
+    const consumed: Map<string, number> = store['consumed'];
+    const stillValidExp = Date.now() + 60 * 60 * 1000;
+    for (let i = 0; i < 10_000; i += 1) {
+      consumed.set(`jti_${i}`, stillValidExp);
+    }
+
+    const fresh = store.issue({ sub: 'a', email: 'a@x', purpose: 'invite' });
+    const result = store.consume(fresh);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe('rate-exceeded');
+  });
 });

@@ -31,7 +31,12 @@ import os from 'node:os';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
-const MAX_CONSUMED = 10_000; // bound the consumed-set memory
+// Bound the consumed-set memory. Eviction is TTL-driven (see consume): once a
+// jti's `exp` has passed the underlying token can no longer pass verify(),
+// so retaining it in the consumed-set is unnecessary. The count cap is a
+// last-resort backstop — when reached without any expirable entries, the
+// new consume is rejected rather than evicting a still-replayable jti.
+const MAX_CONSUMED = 10_000;
 
 export type InviteTokenPurpose = 'invite' | 'magic-link' | 'password-reset';
 
@@ -63,7 +68,7 @@ export interface IssueInviteInput {
 
 export type ConsumeResult =
   | { ok: true; payload: InviteTokenPayload }
-  | { ok: false; reason: 'invalid' | 'expired' | 'already-consumed' };
+  | { ok: false; reason: 'invalid' | 'expired' | 'already-consumed' | 'rate-exceeded' };
 
 /**
  * Token store. Holds the HMAC secret and the consumed-jti set in-memory.
@@ -71,8 +76,8 @@ export type ConsumeResult =
  */
 export class InviteTokenStore {
   private readonly secret: Buffer;
-  private readonly consumed = new Set<string>();
-  private readonly consumedOrder: string[] = [];
+  /** jti → exp epoch ms. Map preserves insertion order for FIFO sweep. */
+  private readonly consumed = new Map<string, number>();
 
   /**
    * @param secret Raw HMAC key (≥32 bytes recommended). Caller is responsible
@@ -136,7 +141,9 @@ export class InviteTokenStore {
 
   /**
    * Verify + atomically mark consumed. Called by the POST handler. Returns
-   * already-consumed if the jti has been seen before.
+   * already-consumed if the jti has been seen before, rate-exceeded if the
+   * consumed-set is at capacity with no expired entries to prune (see
+   * MAX_CONSUMED comment).
    */
   consume(token: string): ConsumeResult {
     const verified = this.verify(token);
@@ -146,14 +153,29 @@ export class InviteTokenStore {
       return { ok: false, reason: 'already-consumed' };
     }
 
-    this.consumed.add(verified.payload.jti);
-    this.consumedOrder.push(verified.payload.jti);
-    if (this.consumedOrder.length > MAX_CONSUMED) {
-      const evict = this.consumedOrder.shift();
-      if (evict) this.consumed.delete(evict);
+    const now = Date.now();
+    this.pruneExpiredConsumed(now);
+
+    if (this.consumed.size >= MAX_CONSUMED) {
+      // Cap reached and pruning yielded nothing — the only entries left are
+      // still-replayable. Refuse the new consume rather than evict one of
+      // them, which would let the evicted jti be replayed.
+      return { ok: false, reason: 'rate-exceeded' };
     }
 
+    this.consumed.set(verified.payload.jti, verified.payload.exp);
     return { ok: true, payload: verified.payload };
+  }
+
+  /**
+   * Drop entries whose underlying token has already expired. Once exp has
+   * passed, verify() rejects the token before consume even checks the set,
+   * so the entry is no longer load-bearing.
+   */
+  private pruneExpiredConsumed(now: number): void {
+    for (const [jti, exp] of this.consumed) {
+      if (exp <= now) this.consumed.delete(jti);
+    }
   }
 }
 

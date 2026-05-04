@@ -27,6 +27,36 @@ const ACCOUNT_WINDOW_MS = 60 * 1000; // window over which failures count
 const IP_THRESHOLD = 20; // failures from one IP before lockout
 const IP_LOCKOUT_MS = 15 * 60 * 1000; // 15 min IP lockout
 
+// Bound the in-memory tracking Maps. Without these, an attacker can drive
+// memory exhaustion by failing logins under unique usernames or from unique
+// source IPs. The cap is enforced after every failure: expired entries are
+// swept first, then FIFO eviction kicks in only as a last resort.
+const MAX_TRACKED_ACCOUNTS = 10_000;
+const MAX_TRACKED_IPS = 10_000;
+
+const UNKNOWN_IP = 'unknown';
+
+/**
+ * Strip the IPv4-mapped IPv6 prefix so `::ffff:1.2.3.4` and `1.2.3.4` share
+ * the same bucket. Without this an attacker can bypass per-IP limits by
+ * alternating address families.
+ */
+function normalizeIp(ip: string): string {
+  if (ip.startsWith('::ffff:')) return ip.slice(7);
+  return ip;
+}
+
+/**
+ * Whether `ip` is a real source we can rate-limit on. An unresolvable IP
+ * (typically when `req.ip` is missing) is reported as `UNKNOWN_IP` by
+ * callers; lumping every such request into a single bucket is itself a DoS
+ * vector — one misbehaving caller would lock out every other unresolvable
+ * caller. Skip the per-IP path instead and rely on per-account limits.
+ */
+function isResolvableIp(ip: string): boolean {
+  return ip.length > 0 && ip !== UNKNOWN_IP;
+}
+
 interface AccountRecord {
   failures: number;
   firstFailureAt: number;
@@ -63,14 +93,17 @@ export class LocalLoginRateLimiter {
   /** Call before validating a password. Returns whether the attempt may proceed. */
   check(account: string, ip: string): CheckResult {
     const now = Date.now();
+    const normIp = normalizeIp(ip);
 
-    const ipRec = this.ips.get(ip);
-    if (ipRec && ipRec.lockedUntil > now) {
-      return {
-        allowed: false,
-        reason: 'ip locked due to too many failed attempts',
-        retryAfterMs: ipRec.lockedUntil - now,
-      };
+    if (isResolvableIp(normIp)) {
+      const ipRec = this.ips.get(normIp);
+      if (ipRec && ipRec.lockedUntil > now) {
+        return {
+          allowed: false,
+          reason: 'ip locked due to too many failed attempts',
+          retryAfterMs: ipRec.lockedUntil - now,
+        };
+      }
     }
 
     const acctRec = this.accounts.get(account);
@@ -106,6 +139,7 @@ export class LocalLoginRateLimiter {
   /** Record a failed login; updates counters and may emit the audit event. */
   async noteFailure(account: string, ip: string): Promise<void> {
     const now = Date.now();
+    const normIp = normalizeIp(ip);
 
     // Account counter
     const acctRec = this.accounts.get(account) ?? {
@@ -122,6 +156,7 @@ export class LocalLoginRateLimiter {
     acctRec.failures += 1;
     if (acctRec.failures === 1) acctRec.firstFailureAt = now;
     this.accounts.set(account, acctRec);
+    this.boundAccounts(now);
 
     if (acctRec.failures >= ACCOUNT_THRESHOLD && !acctRec.bruteForceFired) {
       acctRec.bruteForceFired = true;
@@ -133,8 +168,11 @@ export class LocalLoginRateLimiter {
       });
     }
 
-    // IP bucket
-    const ipRec = this.ips.get(ip) ?? {
+    // IP bucket — only track real source IPs. Unresolvable callers go
+    // through per-account limits only (see isResolvableIp).
+    if (!isResolvableIp(normIp)) return;
+
+    const ipRec = this.ips.get(normIp) ?? {
       failures: 0,
       firstFailureAt: now,
       lockedUntil: 0,
@@ -150,15 +188,81 @@ export class LocalLoginRateLimiter {
     if (ipRec.failures >= IP_THRESHOLD) {
       ipRec.lockedUntil = now + IP_LOCKOUT_MS;
     }
-    this.ips.set(ip, ipRec);
+    this.ips.set(normIp, ipRec);
+    this.boundIps(now);
 
     if (ipRec.failures >= IP_THRESHOLD && !ipRec.bruteForceFired) {
       ipRec.bruteForceFired = true;
       await this.storage.recordIdentityEvent({
         type: 'auth.local.brute_force_suspected',
-        details: { dimension: 'ip', ip, failures: ipRec.failures },
+        details: { dimension: 'ip', ip: normIp, failures: ipRec.failures },
         timestamp: now,
       });
+    }
+  }
+
+  /**
+   * Cap the accounts Map. Three passes:
+   *   1. Drop entries whose protection window has fully elapsed (safe).
+   *   2. FIFO-drop any entry that is NOT currently in active backoff —
+   *      preserves load-bearing locked entries even though they were
+   *      inserted before the flood.
+   *   3. If every entry is currently locked we are at saturation; plain
+   *      FIFO breaks the tie rather than refuse to track new failures.
+   */
+  private boundAccounts(now: number): void {
+    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+
+    for (const [key, rec] of this.accounts) {
+      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+      const elapsed = now - rec.firstFailureAt;
+      const safeToEvict = rec.failures < ACCOUNT_THRESHOLD
+        ? elapsed > ACCOUNT_WINDOW_MS
+        : elapsed >= backoffWindow(rec.failures);
+      if (safeToEvict) this.accounts.delete(key);
+    }
+
+    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+    for (const [key, rec] of this.accounts) {
+      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+      const stillLocked = rec.failures >= ACCOUNT_THRESHOLD
+        && (now - rec.firstFailureAt) < backoffWindow(rec.failures);
+      if (!stillLocked) this.accounts.delete(key);
+    }
+
+    while (this.accounts.size > MAX_TRACKED_ACCOUNTS) {
+      const oldest = this.accounts.keys().next().value;
+      if (oldest === undefined) break;
+      this.accounts.delete(oldest);
+    }
+  }
+
+  /**
+   * Cap the ips Map. Mirrors boundAccounts: actively-locked IPs are
+   * load-bearing and survive FIFO until their lockout window passes or
+   * total saturation forces eviction.
+   */
+  private boundIps(now: number): void {
+    if (this.ips.size <= MAX_TRACKED_IPS) return;
+
+    for (const [key, rec] of this.ips) {
+      if (this.ips.size <= MAX_TRACKED_IPS) return;
+      const beyondLock = rec.lockedUntil <= now;
+      const beyondWindow = (now - rec.firstFailureAt) > IP_LOCKOUT_MS;
+      if (beyondLock && beyondWindow) this.ips.delete(key);
+    }
+
+    if (this.ips.size <= MAX_TRACKED_IPS) return;
+    for (const [key, rec] of this.ips) {
+      if (this.ips.size <= MAX_TRACKED_IPS) return;
+      const stillLocked = rec.lockedUntil > now;
+      if (!stillLocked) this.ips.delete(key);
+    }
+
+    while (this.ips.size > MAX_TRACKED_IPS) {
+      const oldest = this.ips.keys().next().value;
+      if (oldest === undefined) break;
+      this.ips.delete(oldest);
     }
   }
 }
