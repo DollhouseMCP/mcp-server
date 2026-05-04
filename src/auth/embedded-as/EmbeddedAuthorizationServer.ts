@@ -132,6 +132,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * Verify a bearer token against our published JWKS. This is the path the
    * unified authMiddleware drives. We verify locally (no introspection
    * roundtrip) since we issued the token and have the keys in memory.
+   *
+   * Hardening (RFC 9068 conformance):
+   *   - typ MUST be `at+jwt` — rejects id_tokens or other JWTs signed by the
+   *     same key from being replayed as access tokens.
+   *   - kid MUST be present — without this an attacker could craft a token
+   *     omitting the kid header and bypass the kid match below.
+   *   - crit allow-list is empty — refuses any unknown critical extension
+   *     header rather than silently ignoring it.
    */
   async validate(token: string): Promise<AuthResult> {
     const { publicSigningKey, keyset } = await this.ensureInitialized();
@@ -140,9 +148,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         issuer: this.issuer,
         audience: this.resource,
         algorithms: [ALGORITHM],
+        typ: 'at+jwt',
+        crit: {},
       });
 
-      if (protectedHeader.kid && protectedHeader.kid !== keyset.kid) {
+      if (!protectedHeader.kid) {
+        return { ok: false, reason: 'token missing kid header' };
+      }
+      if (protectedHeader.kid !== keyset.kid) {
         return { ok: false, reason: 'unknown key id' };
       }
       if (!payload.sub) {
@@ -155,6 +168,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       if (message.includes('exp')) return { ok: false, reason: 'token expired' };
       if (message.includes('aud')) return { ok: false, reason: 'invalid audience' };
       if (message.includes('iss')) return { ok: false, reason: 'invalid issuer' };
+      if (message.includes('typ')) return { ok: false, reason: 'wrong token type' };
       return { ok: false, reason: 'token validation failed' };
     }
   }
@@ -320,7 +334,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${consume.interactionId}`;
           const details = await state.provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, state.provider, details, consume.identity.sub);
+          await finishInteractionWithIdentity(req, res, state.provider, details, consume.identity.sub, this.storage);
         } catch (err) {
           next(err);
         }
@@ -359,7 +373,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await state2.provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, state2.provider, details, result.identity.sub);
+          await finishInteractionWithIdentity(req, res, state2.provider, details, result.identity.sub, this.storage);
         } catch (err) {
           next(err);
         }
@@ -523,10 +537,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         openid: ['sub'],
         profile: ['name'],
         email: ['email', 'email_verified'],
-        // must-fix #12: emit auth_time on issued tokens so future step-up
-        // enforcement (§8.3 / Web Phase D) can compare against scope-specific
-        // max-age windows without re-prompting the user unnecessarily.
-        acr: ['auth_time'],
+      },
+      // must-fix #12: emit auth_time on issued tokens so future step-up
+      // enforcement (§8.3 / Web Phase D) can compare against scope-specific
+      // max-age windows without re-prompting the user unnecessarily. Sourced
+      // from `account.lastAuthAt`, which finishInteractionWithIdentity
+      // stamps on every successful login. The earlier `acr: ['auth_time']`
+      // config was a misconfiguration — `acr` is the OIDC Authentication
+      // Context Class Reference scope, not a vehicle for the auth_time
+      // claim — and produced no auth_time on issued tokens.
+      extraTokenClaims: async (_ctx, token) => {
+        const accountId = (token as { accountId?: string }).accountId;
+        if (!accountId) return undefined;
+        const account = await this.storage.getAccount(accountId);
+        if (!account?.lastAuthAt) return undefined;
+        return { auth_time: Math.floor(account.lastAuthAt / 1000) };
       },
       // Only OIDC standard scopes here. The `mcp` resource scope is declared
       // via resourceIndicators.getResourceServerInfo below — keeping it out of

@@ -45,6 +45,14 @@ export interface StoredAccount {
   rawProfile?: Record<string, unknown>;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Epoch ms of the most recent successful authentication. Sourced by the
+   * extraTokenClaims hook to populate the `auth_time` claim on issued
+   * tokens; future step-up enforcement compares against scope-specific
+   * max-age windows. Updated by finishInteractionWithIdentity on every
+   * interactionFinished login.
+   */
+  lastAuthAt?: number;
 }
 
 export interface IdentityAuditEvent {

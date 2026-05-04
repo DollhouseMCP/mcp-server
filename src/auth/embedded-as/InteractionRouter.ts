@@ -179,14 +179,15 @@ async function handlePost(
     return;
   }
 
-  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub);
+  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, storage);
 }
 
 /**
  * Shared interaction-completion helper. Manages the oidc-provider Grant
  * explicitly (so oidc-provider doesn't synthesize a second consent
- * interaction), splits OIDC standard scopes from resource scopes, and
- * calls provider.interactionFinished.
+ * interaction), splits OIDC standard scopes from resource scopes, stamps
+ * `account.lastAuthAt` so subsequent token issuance can populate the
+ * `auth_time` claim, and calls provider.interactionFinished.
  *
  * Used by:
  *   - The InteractionRouter POST handler when an IAuthMethod returns
@@ -200,6 +201,7 @@ export async function finishInteractionWithIdentity(
   provider: OidcProviderForInteractions,
   details: OidcInteractionDetails,
   accountId: string,
+  storage: IAuthStorageLayer,
 ): Promise<void> {
   try {
     const requestedScope = String(details.params.scope ?? '');
@@ -227,6 +229,18 @@ export async function finishInteractionWithIdentity(
       }
     }
     grantId = await grant.save();
+
+    // Stamp lastAuthAt before interactionFinished so the redirect-to-token
+    // round-trip that follows can read a fresh value via extraTokenClaims.
+    // Best-effort: a missing account row (race / new account) is logged but
+    // not fatal — the auth_time claim will simply be omitted.
+    const existing = await storage.getAccount(accountId);
+    if (existing) {
+      const now = Date.now();
+      await storage.upsertAccount({ ...existing, lastAuthAt: now, updatedAt: now });
+    } else {
+      logger.warn('[InteractionRouter] no account row to stamp lastAuthAt', { accountId });
+    }
 
     await provider.interactionFinished(req, res, {
       login: { accountId },
