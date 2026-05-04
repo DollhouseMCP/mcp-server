@@ -1,5 +1,6 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
+import argon2 from 'argon2';
 import { LocalAccountMethod } from '../../../../../src/auth/embedded-as/methods/LocalAccountMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InviteTokenStore } from '../../../../../src/auth/embedded-as/inviteTokens.js';
@@ -160,6 +161,30 @@ describe('LocalAccountMethod', () => {
       expect(verified.email).toBe('bob@example.com');
       // Token should still be consumable after verify.
       expect(invites.consume(token).ok).toBe(true);
+    });
+
+    it('does NOT consume the invite when argon2 hashing fails (atomicity)', async () => {
+      // Earlier order (consume → hash) left the user with a dead invite
+      // and no account if argon2 failed mid-flight. The fix verifies the
+      // invite + hashes the password BEFORE consuming, so a hash failure
+      // leaves the invite consumable for the user's retry.
+      const url = method.issueInvite('local_carol', 'carol@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+
+      const spy = jest.spyOn(argon2, 'hash').mockRejectedValueOnce(new Error('argon2 OOM'));
+      try {
+        const failed = await method.consumeInvite(token, 'a-very-long-password');
+        expect(failed.kind).toBe('error');
+      } finally {
+        spy.mockRestore();
+      }
+
+      // Token must still be consumable — the operator should not have to
+      // issue a new invite because of a transient hash failure.
+      const retried = await method.consumeInvite(token, 'a-very-long-password');
+      expect(retried.kind).toBe('ok');
+      const stored = await storage.getAccount('local_carol');
+      expect(stored?.email).toBe('carol@example.com');
     });
   });
 });

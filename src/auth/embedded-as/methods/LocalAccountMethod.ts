@@ -18,6 +18,7 @@
  */
 
 import argon2 from 'argon2';
+import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
   IAuthMethod,
@@ -149,14 +150,37 @@ export class LocalAccountMethod implements IAuthMethod {
       return { kind: 'error', reason: 'password must be at least 12 characters' };
     }
 
-    const consume = this.options.invites.consume(token);
-    // Generic error reason regardless of cause — see verifyInvite rationale.
-    if (!consume.ok) return { kind: 'error', reason: GENERIC_INVITE_INVALID };
-    if (consume.payload.purpose !== 'invite') {
+    // Step 1 — verify (no consume). Cheap. If the token is invalid /
+    // expired we bail before paying the argon2 hash cost.
+    const verified = this.options.invites.verify(token);
+    if (!verified.ok || verified.payload.purpose !== 'invite') {
       return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     }
 
-    const passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+    // Step 2 — hash the password BEFORE consuming. If hashing fails (OOM
+    // under load, etc.) the token stays consumable and the user can retry
+    // without needing the operator to re-issue a fresh invite. The
+    // earlier order (consume → hash) left the user with a dead invite
+    // and no account on hash failure.
+    let passwordHash: string;
+    try {
+      passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+    } catch (err) {
+      logger.warn('[LocalAccountMethod] argon2 hash failed during invite consume', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { kind: 'error', reason: 'failed to hash password, please try again' };
+    }
+
+    // Step 3 — consume. Race window between verify and consume is bounded
+    // by the argon2 hash time; concurrent submits of the same token still
+    // resolve via the InviteTokenStore's already-consumed check on the
+    // losing call.
+    const consume = this.options.invites.consume(token);
+    if (!consume.ok || consume.payload.purpose !== 'invite') {
+      return { kind: 'error', reason: GENERIC_INVITE_INVALID };
+    }
+
     const sub = consume.payload.sub;
     const externalSub = sub.replace(/^local_/, '');
     const now = Date.now();
