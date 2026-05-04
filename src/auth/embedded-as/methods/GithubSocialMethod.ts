@@ -46,6 +46,21 @@ import {
 
 const GITHUB_PROVIDER = 'github';
 
+/**
+ * Cached `emailVerified` claim is treated as stale after this window. We
+ * cannot actually re-call /user/emails on every findAccount because that
+ * would require persisting the GitHub access token (out of scope and a
+ * larger attack surface). Instead, we downgrade the cached value to
+ * false once the cache is older than this TTL — downstream consumers
+ * that depend on email_verified will trigger a fresh sign-in, which
+ * runs processCallback and re-validates email_verified for real.
+ *
+ * 7 days balances UX (most users re-auth more often anyway) against the
+ * window during which a user could un-verify the email at GitHub
+ * without us noticing.
+ */
+const DEFAULT_EMAIL_VERIFIED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface GithubSocialMethodOptions {
   /** GitHub OAuth app client ID. Reuses DOLLHOUSE_GITHUB_CLIENT_ID. */
   clientId: string;
@@ -57,6 +72,11 @@ export interface GithubSocialMethodOptions {
   storage: IAuthStorageLayer;
   /** Override fetch for tests. Defaults to globalThis.fetch. */
   fetchImpl?: typeof fetch;
+  /**
+   * Override the staleness window for the cached `emailVerified` claim.
+   * Defaults to 7 days. A value of 0 disables the downgrade.
+   */
+  emailVerifiedCacheTtlMs?: number;
 }
 
 interface GithubProfile {
@@ -114,17 +134,29 @@ export class GithubSocialMethod implements IAuthMethod {
    * calls this on findAccount). Pure DB read — does NOT hit GitHub's API.
    * The fresh email_verified check (must-fix #20) happens at login time
    * inside processCallback(); this method serves the cached attributes.
+   *
+   * Defense-in-depth: the cached `emailVerified` claim is downgraded to
+   * false once the account's lastAuthAt is older than the configured TTL
+   * (default 7 days). This bounds the window during which a user could
+   * un-verify their primary email at GitHub without us noticing — the
+   * downgrade forces a fresh sign-in, which calls processCallback and
+   * re-runs the /user/emails check against current GitHub state.
    */
   async findAccount(sub: string): Promise<AuthenticatedIdentity | null> {
     if (!sub.startsWith(`${GITHUB_PROVIDER}_`)) return null;
     const externalSub = sub.slice(`${GITHUB_PROVIDER}_`.length);
     const account = await this.options.storage.findAccountByExternalId(GITHUB_PROVIDER, externalSub);
     if (!account) return null;
+
+    const ttl = this.options.emailVerifiedCacheTtlMs ?? DEFAULT_EMAIL_VERIFIED_TTL_MS;
+    const stale = ttl > 0
+      && (!account.lastAuthAt || (Date.now() - account.lastAuthAt) > ttl);
+
     return {
       sub: account.sub,
       displayName: account.displayName,
       email: account.email,
-      emailVerified: account.emailVerified,
+      emailVerified: account.emailVerified && !stale,
     };
   }
 

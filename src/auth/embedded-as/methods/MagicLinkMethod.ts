@@ -25,6 +25,7 @@
  * @module auth/embedded-as/methods/MagicLinkMethod
  */
 
+import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
   IAuthMethod,
@@ -233,8 +234,15 @@ export class MagicLinkMethod implements IAuthMethod {
 
     try {
       await this.options.emailSender.sendMagicLink({ to: email, url: url.toString() });
-    } catch {
-      // Swallow — return generic response (must-fix #2 enumeration prevention).
+    } catch (err) {
+      // The user-facing response stays generic (must-fix #2 enumeration
+      // prevention) — but the operator needs to see relay outages, so log
+      // server-side. Email is omitted to avoid joining log + audit trails
+      // by email; sub is the safer audit handle.
+      logger.warn('[MagicLinkMethod] sendMagicLink failed', {
+        sub,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
 
     return {

@@ -251,6 +251,7 @@ describe('GithubSocialMethod', () => {
     });
 
     it('returns the cached account for a known github sub', async () => {
+      const now = Date.now();
       await storage.upsertAccount({
         sub: 'github_42',
         provider: 'github',
@@ -258,7 +259,8 @@ describe('GithubSocialMethod', () => {
         email: 'a@example.com',
         emailVerified: true,
         displayName: 'A',
-        createdAt: 1, updatedAt: 1,
+        createdAt: now, updatedAt: now,
+        lastAuthAt: now,
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
@@ -269,6 +271,58 @@ describe('GithubSocialMethod', () => {
       const found = await method.findAccount('github_42');
       expect(found?.sub).toBe('github_42');
       expect(found?.email).toBe('a@example.com');
+      expect(found?.emailVerified).toBe(true);
+    });
+
+    it('downgrades emailVerified to false once lastAuthAt is older than the TTL', async () => {
+      // Defense-in-depth: a user who un-verifies their primary email at
+      // GitHub between logins should not see email_verified=true forever.
+      // After the TTL the cached value is treated as stale, forcing a
+      // fresh sign-in (which calls processCallback and re-checks).
+      const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: 'a@example.com',
+        emailVerified: true,
+        displayName: 'A',
+        createdAt: eightDaysAgo, updatedAt: eightDaysAgo,
+        lastAuthAt: eightDaysAgo,
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage,
+        fetchImpl: jest.fn() as unknown as typeof fetch,
+      });
+      const found = await method.findAccount('github_42');
+      expect(found?.emailVerified).toBe(false);
+      // Other claims unchanged.
+      expect(found?.email).toBe('a@example.com');
+      expect(found?.sub).toBe('github_42');
+    });
+
+    it('emailVerifiedCacheTtlMs=0 disables the staleness downgrade', async () => {
+      const ancient = 1; // epoch ms; very stale
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: 'a@example.com',
+        emailVerified: true,
+        displayName: 'A',
+        createdAt: ancient, updatedAt: ancient,
+        lastAuthAt: ancient,
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage,
+        fetchImpl: jest.fn() as unknown as typeof fetch,
+        emailVerifiedCacheTtlMs: 0,
+      });
+      const found = await method.findAccount('github_42');
       expect(found?.emailVerified).toBe(true);
     });
   });
