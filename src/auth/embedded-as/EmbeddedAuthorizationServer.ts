@@ -35,7 +35,11 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import type { IAuthMethod } from './IAuthMethod.js';
-import { createInteractionRouter } from './InteractionRouter.js';
+import {
+  createInteractionRouter,
+  finishInteractionWithIdentity,
+} from './InteractionRouter.js';
+import { GithubSocialMethod } from './methods/GithubSocialMethod.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
@@ -187,6 +191,36 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // /.well-known/openid-configuration by default.
     router.get('/.well-known/oauth-authorization-server', (req, res) => {
       void this.handleAuthorizationServerMetadata(req, res);
+    });
+
+    // GitHub social-login callback. The active IAuthMethod owns the OAuth
+    // exchange + identity fetch; this route just orchestrates the response
+    // (call interactionFinished with the resolved identity). Unmounted /
+    // 404 unless a GitHub method is active.
+    router.get('/auth/social/github/callback', (req, res, next) => {
+      void (async () => {
+        try {
+          if (!(this.method instanceof GithubSocialMethod)) {
+            res.status(404).json({ error: 'github social not configured' });
+            return;
+          }
+          const code = typeof req.query.code === 'string' ? req.query.code : '';
+          const state = typeof req.query.state === 'string' ? req.query.state : '';
+          const result = await this.method.processCallback({ code, state });
+          if (result.kind === 'error') {
+            res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
+            return;
+          }
+          const state2 = await this.ensureInitialized();
+          // Restore the request URL to the interaction so oidc-provider's
+          // interactionDetails reads the correct interaction record.
+          req.url = `/interaction/${result.interactionId}`;
+          const details = await state2.provider.interactionDetails(req, res);
+          await finishInteractionWithIdentity(req, res, state2.provider, details, result.identity.sub);
+        } catch (err) {
+          next(err);
+        }
+      })();
     });
 
     // Mount oidc-provider's full OAuth/OIDC surface (/auth, /token, /jwks,

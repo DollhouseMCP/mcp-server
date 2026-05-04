@@ -45,6 +45,7 @@ export class AuthServiceRegistrar {
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
+      methods: env.DOLLHOUSE_AUTH_METHODS as import('../../auth/AuthProviderFactory.js').AuthConfig['methods'],
     });
 
     if (!provider) return;

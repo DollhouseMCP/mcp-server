@@ -76,12 +76,12 @@ export class AuthMethodFactory {
 
 /**
  * Build the default factory with the methods that ship in the current
- * commit. At C2: only 'trivial-consent' (the existing solo-localhost
- * behavior carried by EmbeddedOAuthProvider). Subsequent commits add
- * 'github' (C7), 'local-password' / 'magic-link' / 'oidc-bridge' (C8).
+ * commit. C2 added 'trivial-consent'. C7 adds 'github'. C8 will add
+ * 'local-password' / 'magic-link' / 'oidc-bridge'.
  */
 export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   const factory = new AuthMethodFactory();
   factory.register('trivial-consent');
+  factory.register('github');
   return factory;
 }

@@ -104,14 +104,21 @@ describe('AuthProviderFactory two-level structure', () => {
   });
 
   describe('createDefaultAuthMethodFactory', () => {
-    it('registers trivial-consent at C2', () => {
+    it('registers trivial-consent', () => {
       const factory = createDefaultAuthMethodFactory();
       expect(factory.has('trivial-consent')).toBe(true);
     });
 
-    it('does not register github yet at C2', () => {
+    it('registers github (C7)', () => {
       const factory = createDefaultAuthMethodFactory();
-      expect(factory.has('github')).toBe(false);
+      expect(factory.has('github')).toBe(true);
+    });
+
+    it('does not register Stage C methods yet (local-password, magic-link, oidc-bridge)', () => {
+      const factory = createDefaultAuthMethodFactory();
+      expect(factory.has('local-password')).toBe(false);
+      expect(factory.has('magic-link')).toBe(false);
+      expect(factory.has('oidc-bridge')).toBe(false);
     });
   });
 });

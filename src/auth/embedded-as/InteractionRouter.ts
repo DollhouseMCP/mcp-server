@@ -34,7 +34,7 @@ import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
 
-interface OidcInteractionDetails {
+export interface OidcInteractionDetails {
   uid: string;
   params: Record<string, unknown>;
   prompt: { name: string; details: Record<string, unknown> };
@@ -55,7 +55,7 @@ interface OidcGrantConstructor {
   find(id: string): Promise<OidcGrantInstance | undefined>;
 }
 
-interface OidcProviderForInteractions {
+export interface OidcProviderForInteractions {
   interactionDetails(req: Request, res: Response): Promise<OidcInteractionDetails>;
   interactionFinished(
     req: Request,
@@ -178,10 +178,28 @@ async function handlePost(
     return;
   }
 
-  // result.kind === 'authenticated' — manage the Grant explicitly so
-  // oidc-provider doesn't synthesize a second consent interaction. Split
-  // OIDC standard scopes from resource scopes; the former go on the grant
-  // root, the latter go on the per-resource scope set.
+  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub);
+}
+
+/**
+ * Shared interaction-completion helper. Manages the oidc-provider Grant
+ * explicitly (so oidc-provider doesn't synthesize a second consent
+ * interaction), splits OIDC standard scopes from resource scopes, and
+ * calls provider.interactionFinished.
+ *
+ * Used by:
+ *   - The InteractionRouter POST handler when an IAuthMethod returns
+ *     `authenticated` from completeInteraction.
+ *   - EmbeddedAuthorizationServer's /auth/social/github/callback route,
+ *     after GithubSocialMethod.processCallback returns the identity.
+ */
+export async function finishInteractionWithIdentity(
+  req: Request,
+  res: Response,
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+  accountId: string,
+): Promise<void> {
   try {
     const requestedScope = String(details.params.scope ?? '');
     const clientId = String(details.params.client_id ?? '');
@@ -194,7 +212,7 @@ async function handlePost(
       grant = await provider.Grant.find(grantId);
     }
     if (!grant) {
-      grant = new provider.Grant({ accountId: result.identity.sub, clientId });
+      grant = new provider.Grant({ accountId, clientId });
     }
     if (oidcScopes.length > 0) {
       grant.addOIDCScope(oidcScopes.join(' '));
@@ -210,7 +228,7 @@ async function handlePost(
     grantId = await grant.save();
 
     await provider.interactionFinished(req, res, {
-      login: { accountId: result.identity.sub },
+      login: { accountId },
       consent: { grantId },
     });
   } catch (err) {

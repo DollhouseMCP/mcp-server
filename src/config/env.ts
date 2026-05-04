@@ -135,6 +135,13 @@ const envSchema = z.object({
     .transform(v => (v && v.length > 0) ? v : undefined),
   /** CI-only escape hatch: allow non-loopback bind without TLS. Never set in production. */
   DOLLHOUSE_UNSAFE_NO_TLS: envBool(false),
+  /**
+   * GitHub OAuth client secret for the §8.1 social-login (auth-code) flow.
+   * Reuses the existing DOLLHOUSE_GITHUB_CLIENT_ID. The device-flow path
+   * (collection install) does not need this secret; the auth-code flow does.
+   */
+  DOLLHOUSE_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   // ============================================================================
   // Database Configuration (Phase 4)
@@ -289,6 +296,15 @@ const envSchema = z.object({
 
   /** Auth provider: 'local' (self-signed JWTs), 'embedded' (Dollhouse OAuth AS), or 'oidc' (external IdP). */
   DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'embedded', 'oidc']).default('local'),
+  /**
+   * Comma-separated list of auth methods exposed by the embedded AS.
+   * Recognized values (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
+   * 'trivial-consent', 'github', 'local-password', 'magic-link', 'oidc-bridge'.
+   * Defaults to 'trivial-consent' (solo localhost). Single-method per AS today;
+   * multi-method chooser UI is future work.
+   */
+  DOLLHOUSE_AUTH_METHODS: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
 
   /** OIDC issuer URL (required when provider=oidc). */
   DOLLHOUSE_AUTH_ISSUER: z.string().optional(),

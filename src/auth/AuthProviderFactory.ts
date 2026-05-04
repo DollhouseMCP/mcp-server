@@ -122,14 +122,45 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
 
   if (config.provider === 'embedded') {
     const { EmbeddedAuthorizationServer } = await import('./embedded-as/EmbeddedAuthorizationServer.js');
-    const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
     const { InMemoryAuthStorageLayer } = await import('./embedded-as/storage/InMemoryAuthStorageLayer.js');
+    const { env } = await import('../config/env.js');
+
+    const storage = new InMemoryAuthStorageLayer();
+
+    // Take the first configured method as the active IAuthMethod. Multi-
+    // method chooser UI is future work; for §8.1 the AS exposes one method.
+    const activeMethodId = methods[0];
+
+    let method;
+    if (activeMethodId === 'github') {
+      const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
+      const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      const clientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        throw new Error(
+          'GitHub social login requires DOLLHOUSE_GITHUB_CLIENT_ID and DOLLHOUSE_GITHUB_CLIENT_SECRET. ' +
+          'Set both env vars or remove "github" from DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      const baseUrl = config.publicBaseUrl
+        ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
+      method = new GithubSocialMethod({
+        clientId,
+        clientSecret,
+        callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
+        storage,
+      });
+    } else {
+      const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
+      method = new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });
+    }
+
     return new EmbeddedAuthorizationServer({
       publicBaseUrl: config.publicBaseUrl,
       mcpPath: config.mcpPath,
       keyFilePath: config.localKeyFile,
-      method: new TrivialConsentMethod({ defaultSubject: config.localDefaultSub }),
-      storage: new InMemoryAuthStorageLayer(),
+      method,
+      storage,
     });
   }
 
