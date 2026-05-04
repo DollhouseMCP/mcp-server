@@ -49,6 +49,7 @@ import {
   loadOrGenerateSigningJwks,
   type SigningKeyset,
 } from './persistKeys.js';
+import { loadOrGenerateCookieSigningKeys } from './cookieSecret.js';
 import { createOidcAdapterFactory } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
@@ -122,6 +123,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
   getProtectedResourceMetadataUrl(): string {
     return joinUrl(this.publicBaseUrl, '/.well-known/oauth-protected-resource');
+  }
+
+  private isHttpsPublicBaseUrl(): boolean {
+    try {
+      return new URL(this.publicBaseUrl).protocol === 'https:';
+    } catch {
+      return false;
+    }
   }
 
   getAuthorizationServerMetadataUrl(): string {
@@ -594,9 +603,33 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           },
         };
       },
-      // Required by oidc-provider when using cookies (interaction state).
+      // Cookie signing + transport defaults. The signing keys come from a
+      // dedicated secret file (see cookieSecret.ts) — earlier code reused
+      // the JWKS kid here, which made every cookie forgeable by anyone
+      // who could read /jwks.
+      //
+      // `secure` is conditional on the public base URL using https. Forcing
+      // secure=true on plain HTTP makes browsers refuse the cookie, breaking
+      // loopback dev. With TLS terminated upstream the AS sees http but the
+      // public base URL is still https, which is the right signal here.
       cookies: {
-        keys: [keyset.kid, `${keyset.kid}-secondary`],
+        keys: loadOrGenerateCookieSigningKeys(),
+        long: {
+          signed: true,
+          secure: this.isHttpsPublicBaseUrl(),
+          sameSite: 'lax',
+          httpOnly: true,
+          path: '/',
+          overwrite: true,
+        },
+        short: {
+          signed: true,
+          secure: this.isHttpsPublicBaseUrl(),
+          sameSite: 'lax',
+          httpOnly: true,
+          path: '/',
+          overwrite: true,
+        },
       },
     };
 
