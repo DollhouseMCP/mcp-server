@@ -20,6 +20,7 @@
  * @module auth/embedded-as/rateLimit
  */
 
+import { logger } from '../../utils/logger.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const ACCOUNT_THRESHOLD = 5; // failures before backoff kicks in
@@ -85,6 +86,9 @@ export class LocalLoginRateLimiter {
   private readonly accounts = new Map<string, AccountRecord>();
   private readonly ips = new Map<string, IpRecord>();
   private readonly storage: IAuthStorageLayer;
+  /** One-shot guard so the saturation audit fires once per process, not on every flood call. */
+  private accountSaturationFired = false;
+  private ipSaturationFired = false;
 
   constructor(deps: RateLimitDeps) {
     this.storage = deps.storage;
@@ -156,7 +160,7 @@ export class LocalLoginRateLimiter {
     acctRec.failures += 1;
     if (acctRec.failures === 1) acctRec.firstFailureAt = now;
     this.accounts.set(account, acctRec);
-    this.boundAccounts(now);
+    if (this.boundAccounts(now)) await this.recordAccountSaturation(now);
 
     if (acctRec.failures >= ACCOUNT_THRESHOLD && !acctRec.bruteForceFired) {
       acctRec.bruteForceFired = true;
@@ -189,7 +193,7 @@ export class LocalLoginRateLimiter {
       ipRec.lockedUntil = now + IP_LOCKOUT_MS;
     }
     this.ips.set(normIp, ipRec);
-    this.boundIps(now);
+    if (this.boundIps(now)) await this.recordIpSaturation(now);
 
     if (ipRec.failures >= IP_THRESHOLD && !ipRec.bruteForceFired) {
       ipRec.bruteForceFired = true;
@@ -209,12 +213,20 @@ export class LocalLoginRateLimiter {
    *      inserted before the flood.
    *   3. If every entry is currently locked we are at saturation; plain
    *      FIFO breaks the tie rather than refuse to track new failures.
+   *
+   * Returns true when pass-3 had to evict a still-locked record — that
+   * is the security-meaningful saturation event. The caller emits an
+   * audit + log so the operator can see that a flood has reached the
+   * point where historical lockouts are being rotated out. The deeper
+   * fix (refuse-new-tracking instead of FIFO-on-locked) is tracked as a
+   * follow-up; pass-3 is a known compromise of availability over
+   * lockout-persistence and the alarm is the mitigation today.
    */
-  private boundAccounts(now: number): void {
-    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+  private boundAccounts(now: number): boolean {
+    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
 
     for (const [key, rec] of this.accounts) {
-      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
       const elapsed = now - rec.firstFailureAt;
       const safeToEvict = rec.failures < ACCOUNT_THRESHOLD
         ? elapsed > ACCOUNT_WINDOW_MS
@@ -222,48 +234,83 @@ export class LocalLoginRateLimiter {
       if (safeToEvict) this.accounts.delete(key);
     }
 
-    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
     for (const [key, rec] of this.accounts) {
-      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return;
+      if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
       const stillLocked = rec.failures >= ACCOUNT_THRESHOLD
         && (now - rec.firstFailureAt) < backoffWindow(rec.failures);
       if (!stillLocked) this.accounts.delete(key);
     }
 
+    let evictedLocked = false;
     while (this.accounts.size > MAX_TRACKED_ACCOUNTS) {
       const oldest = this.accounts.keys().next().value;
       if (oldest === undefined) break;
       this.accounts.delete(oldest);
+      evictedLocked = true;
     }
+    return evictedLocked;
   }
 
   /**
    * Cap the ips Map. Mirrors boundAccounts: actively-locked IPs are
    * load-bearing and survive FIFO until their lockout window passes or
-   * total saturation forces eviction.
+   * total saturation forces eviction. Returns true when pass-3 evicted
+   * a still-locked record — the saturation alarm condition.
    */
-  private boundIps(now: number): void {
-    if (this.ips.size <= MAX_TRACKED_IPS) return;
+  private boundIps(now: number): boolean {
+    if (this.ips.size <= MAX_TRACKED_IPS) return false;
 
     for (const [key, rec] of this.ips) {
-      if (this.ips.size <= MAX_TRACKED_IPS) return;
+      if (this.ips.size <= MAX_TRACKED_IPS) return false;
       const beyondLock = rec.lockedUntil <= now;
       const beyondWindow = (now - rec.firstFailureAt) > IP_LOCKOUT_MS;
       if (beyondLock && beyondWindow) this.ips.delete(key);
     }
 
-    if (this.ips.size <= MAX_TRACKED_IPS) return;
+    if (this.ips.size <= MAX_TRACKED_IPS) return false;
     for (const [key, rec] of this.ips) {
-      if (this.ips.size <= MAX_TRACKED_IPS) return;
+      if (this.ips.size <= MAX_TRACKED_IPS) return false;
       const stillLocked = rec.lockedUntil > now;
       if (!stillLocked) this.ips.delete(key);
     }
 
+    let evictedLocked = false;
     while (this.ips.size > MAX_TRACKED_IPS) {
       const oldest = this.ips.keys().next().value;
       if (oldest === undefined) break;
       this.ips.delete(oldest);
+      evictedLocked = true;
     }
+    return evictedLocked;
+  }
+
+  private async recordAccountSaturation(now: number): Promise<void> {
+    if (this.accountSaturationFired) return;
+    this.accountSaturationFired = true;
+    logger.warn(
+      '[LocalLoginRateLimiter] account-table saturation: locked entries are being FIFO-evicted under flood. ' +
+      'Lockout persistence is degraded until the flood subsides.',
+    );
+    await this.storage.recordIdentityEvent({
+      type: 'auth.local.rate_limit_saturated',
+      details: { dimension: 'account', tracked: this.accounts.size },
+      timestamp: now,
+    });
+  }
+
+  private async recordIpSaturation(now: number): Promise<void> {
+    if (this.ipSaturationFired) return;
+    this.ipSaturationFired = true;
+    logger.warn(
+      '[LocalLoginRateLimiter] ip-table saturation: locked entries are being FIFO-evicted under flood. ' +
+      'Lockout persistence is degraded until the flood subsides.',
+    );
+    await this.storage.recordIdentityEvent({
+      type: 'auth.local.rate_limit_saturated',
+      details: { dimension: 'ip', tracked: this.ips.size },
+      timestamp: now,
+    });
   }
 }
 

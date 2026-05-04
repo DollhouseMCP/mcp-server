@@ -177,7 +177,17 @@ export class LocalAccountMethod implements IAuthMethod {
     // resolve via the InviteTokenStore's already-consumed check on the
     // losing call.
     const consume = this.options.invites.consume(token);
-    if (!consume.ok || consume.payload.purpose !== 'invite') {
+    if (!consume.ok) {
+      // rate-exceeded is server-side capacity, not a token problem; log so
+      // the operator sees the saturation instead of misreading the user-
+      // facing "invite invalid" page as a token issue.
+      if (consume.reason === 'rate-exceeded') {
+        logger.warn('[LocalAccountMethod] invite consume refused: rate-exceeded');
+        return { kind: 'error', reason: 'server is busy, please try again shortly' };
+      }
+      return { kind: 'error', reason: GENERIC_INVITE_INVALID };
+    }
+    if (consume.payload.purpose !== 'invite') {
       return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     }
 

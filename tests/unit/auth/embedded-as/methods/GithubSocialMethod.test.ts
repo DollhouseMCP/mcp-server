@@ -274,11 +274,14 @@ describe('GithubSocialMethod', () => {
       expect(found?.emailVerified).toBe(true);
     });
 
-    it('downgrades emailVerified to false once lastAuthAt is older than the TTL', async () => {
-      // Defense-in-depth: a user who un-verifies their primary email at
-      // GitHub between logins should not see email_verified=true forever.
-      // After the TTL the cached value is treated as stale, forcing a
-      // fresh sign-in (which calls processCallback and re-checks).
+    it('returns null once lastAuthAt is older than the TTL (forces re-auth)', async () => {
+      // Defense-in-depth: when the cached account is older than the TTL,
+      // findAccount returns null. oidc-provider treats that as "account
+      // not found" and refuses the refresh, forcing the client to redirect
+      // through /authorize — which re-runs processCallback and re-validates
+      // email_verified against current GitHub state. The earlier shape
+      // (return emailVerified=false) was theater because most clients
+      // silently accept the degraded id_token.
       const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
       await storage.upsertAccount({
         sub: 'github_42',
@@ -296,14 +299,32 @@ describe('GithubSocialMethod', () => {
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
-      const found = await method.findAccount('github_42');
-      expect(found?.emailVerified).toBe(false);
-      // Other claims unchanged.
-      expect(found?.email).toBe('a@example.com');
-      expect(found?.sub).toBe('github_42');
+      expect(await method.findAccount('github_42')).toBeNull();
     });
 
-    it('emailVerifiedCacheTtlMs=0 disables the staleness downgrade', async () => {
+    it('returns null when lastAuthAt is undefined under the default TTL (legacy row)', async () => {
+      // Pre-C10 accounts have no lastAuthAt. The staleness check treats
+      // missing lastAuthAt as stale, so a legacy account row forces re-auth
+      // before any token can be issued for it.
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: 'a@example.com',
+        emailVerified: true,
+        displayName: 'A',
+        createdAt: 1, updatedAt: 1,
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage,
+        fetchImpl: jest.fn() as unknown as typeof fetch,
+      });
+      expect(await method.findAccount('github_42')).toBeNull();
+    });
+
+    it('emailVerifiedCacheTtlMs=0 disables the staleness check entirely', async () => {
       const ancient = 1; // epoch ms; very stale
       await storage.upsertAccount({
         sub: 'github_42',

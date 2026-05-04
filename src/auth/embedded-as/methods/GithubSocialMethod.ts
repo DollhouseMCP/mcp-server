@@ -135,12 +135,17 @@ export class GithubSocialMethod implements IAuthMethod {
    * The fresh email_verified check (must-fix #20) happens at login time
    * inside processCallback(); this method serves the cached attributes.
    *
-   * Defense-in-depth: the cached `emailVerified` claim is downgraded to
-   * false once the account's lastAuthAt is older than the configured TTL
-   * (default 7 days). This bounds the window during which a user could
-   * un-verify their primary email at GitHub without us noticing — the
-   * downgrade forces a fresh sign-in, which calls processCallback and
-   * re-runs the /user/emails check against current GitHub state.
+   * Defense-in-depth: when the account's lastAuthAt is older than the
+   * configured TTL (default 7 days) we return `null` rather than a
+   * degraded account. oidc-provider treats that as "account not found"
+   * and refuses the in-flight refresh, forcing the client to redirect
+   * back through /authorize — which re-runs processCallback and
+   * re-validates email_verified against current GitHub state.
+   *
+   * The earlier shape (return account with emailVerified=false) was
+   * theater for refresh-token clients: most simply accept the degraded
+   * id_token and keep refreshing, never re-prompting. Returning null
+   * actually terminates the session.
    */
   async findAccount(sub: string): Promise<AuthenticatedIdentity | null> {
     if (!sub.startsWith(`${GITHUB_PROVIDER}_`)) return null;
@@ -151,12 +156,13 @@ export class GithubSocialMethod implements IAuthMethod {
     const ttl = this.options.emailVerifiedCacheTtlMs ?? DEFAULT_EMAIL_VERIFIED_TTL_MS;
     const stale = ttl > 0
       && (!account.lastAuthAt || (Date.now() - account.lastAuthAt) > ttl);
+    if (stale) return null;
 
     return {
       sub: account.sub,
       displayName: account.displayName,
       email: account.email,
-      emailVerified: account.emailVerified && !stale,
+      emailVerified: account.emailVerified,
     };
   }
 

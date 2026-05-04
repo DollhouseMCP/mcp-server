@@ -158,7 +158,13 @@ export class MagicLinkMethod implements IAuthMethod {
   > {
     const consume = this.options.invites.consume(token);
     // Generic error reason regardless of cause — see verifyMagicLink rationale.
-    if (!consume.ok) return { kind: 'error', reason: GENERIC_LINK_INVALID };
+    if (!consume.ok) {
+      if (consume.reason === 'rate-exceeded') {
+        logger.warn('[MagicLinkMethod] magic-link consume refused: rate-exceeded');
+        return { kind: 'error', reason: 'server is busy, please try again shortly' };
+      }
+      return { kind: 'error', reason: GENERIC_LINK_INVALID };
+    }
     if (consume.payload.purpose !== 'magic-link') {
       return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }

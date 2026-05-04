@@ -22,7 +22,7 @@
  */
 
 import express, { type Router, type Request, type Response } from 'express';
-import { jwtVerify, importJWK, SignJWT, type JWK } from 'jose';
+import { jwtVerify, importJWK, SignJWT, errors as joseErrors, type JWK } from 'jose';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
@@ -173,11 +173,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
       return { ok: true, claims: claimsFromPayload(payload) };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('exp')) return { ok: false, reason: 'token expired' };
-      if (message.includes('aud')) return { ok: false, reason: 'invalid audience' };
-      if (message.includes('iss')) return { ok: false, reason: 'invalid issuer' };
-      if (message.includes('typ')) return { ok: false, reason: 'wrong token type' };
+      // Use jose's typed errors instead of substring-matching .message —
+      // substrings like 'iss' or 'typ' collide with unrelated error text
+      // ('issuer', 'unexpected', 'cryptographic', 'type'), producing
+      // misleading reasons in operator logs.
+      if (error instanceof joseErrors.JWTExpired) {
+        return { ok: false, reason: 'token expired' };
+      }
+      if (error instanceof joseErrors.JWTClaimValidationFailed) {
+        const claim = (error as { claim?: string }).claim;
+        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
+        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
+        if (claim === 'typ') return { ok: false, reason: 'wrong token type' };
+        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
+      }
       return { ok: false, reason: 'token validation failed' };
     }
   }

@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { logger } from '../../utils/logger.js';
 
 export function defaultCookieSecretFilePath(): string {
   const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
@@ -53,8 +54,15 @@ export function loadOrGenerateCookieSigningKeys(filePath?: string): [string, str
       const primary = buf.toString('base64');
       return [primary, primary];
     }
+    // Operator-deployed file is too short to be safe; replacing it is
+    // correct but a silent overwrite would leave them wondering why
+    // their configured secret had no effect.
+    logger.warn(
+      `[cookieSecret] file at ${target} is shorter than 32 bytes; regenerating. ` +
+      `Any previous cookies signed with the prior key will be invalidated.`,
+    );
   } catch {
-    // Fall through to generation.
+    // Missing file is the normal first-run path; fall through silently.
   }
 
   const fresh = randomBytes(32);
