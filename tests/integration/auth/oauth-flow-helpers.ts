@@ -96,6 +96,14 @@ export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicB
    * needs `verifyUrl` to point back at the AS at construction time.
    */
   port?: number;
+  /**
+   * Use this directory for the harness key file + tmp working area. When
+   * provided the harness will NOT delete it on close() — caller owns
+   * lifecycle. Use this for restart tests that need the signing key (and
+   * any caller-managed storage rooted in the same dir) to survive a
+   * harness teardown.
+   */
+  tmpDir?: string;
 };
 
 /**
@@ -103,7 +111,8 @@ export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicB
  * Returns the URL the AS is reachable at + a `close()` to tear down.
  */
 export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness> {
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'as-e2e-'));
+  const ownsTmpDir = !opts.tmpDir;
+  const tmpDir = opts.tmpDir ?? await fs.mkdtemp(path.join(os.tmpdir(), 'as-e2e-'));
   const port = opts.port ?? (await getFreePort());
   const publicBaseUrl = opts.publicBaseUrl ?? `http://127.0.0.1:${port}`;
 
@@ -132,7 +141,9 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
     tmpDir,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await fs.rm(tmpDir, { recursive: true, force: true });
+      if (ownsTmpDir) {
+        await fs.rm(tmpDir, { recursive: true, force: true });
+      }
     },
   };
 }
@@ -154,6 +165,9 @@ export async function startAuthorizeFlow(opts: {
   redirectUri: string;
   resource: string;
   scope: string;
+  /** Optional `prompt` param. Use `'consent'` to force the consent prompt
+   * needed for offline_access to actually be granted under standard OIDC. */
+  prompt?: string;
 }): Promise<AuthorizeResult> {
   const verifier = newPkceVerifier();
   const params = new URLSearchParams({
@@ -165,6 +179,7 @@ export async function startAuthorizeFlow(opts: {
     resource: opts.resource,
     scope: opts.scope,
   });
+  if (opts.prompt) params.set('prompt', opts.prompt);
   const jar = new CookieJar();
   const authorize = await fetch(`${opts.authServerMetadata.authorization_endpoint}?${params}`, {
     method: 'GET',
