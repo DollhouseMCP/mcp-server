@@ -1,4 +1,4 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, afterEach } from '@jest/globals';
 import {
   selectAuthMode,
   resolveAuthMethods,
@@ -128,6 +128,88 @@ describe('AuthProviderFactory two-level structure', () => {
       // Cast through unknown to assert runtime behavior on a string the type
       // system would otherwise reject.
       expect(factory.has('oidc-bridge' as unknown as Parameters<typeof factory.has>[0])).toBe(false);
+    });
+  });
+
+  describe('trivial-consent reachability guard (must-fix #8)', () => {
+    const originalEnv = { ...process.env };
+
+    afterEach(() => {
+      process.env = { ...originalEnv };
+    });
+
+    it('refuses bind to 0.0.0.0 with trivial-consent (the canonical misconfig)', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '0.0.0.0';
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+      })).rejects.toThrow(/non-loopback bind '0\.0\.0\.0'/);
+    });
+
+    it('refuses bind to a public IP with trivial-consent', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '203.0.113.5';
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+      })).rejects.toThrow(/non-loopback bind/);
+    });
+
+    it('refuses publicBaseUrl=https://public.example.com with trivial-consent (proxy-fronted loopback bind is still externally reachable)', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+        publicBaseUrl: 'https://public.example.com',
+      })).rejects.toThrow(/non-loopback public URL/);
+    });
+
+    it('accepts bind to 127.0.0.1 with trivial-consent', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+        publicBaseUrl: 'http://127.0.0.1:65530',
+      });
+      expect(provider).toBeDefined();
+    });
+
+    it('accepts bind to 127.0.0.2 with trivial-consent (covers 127.0.0.0/8)', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.2';
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+        publicBaseUrl: 'http://127.0.0.2:65530',
+      });
+      expect(provider).toBeDefined();
+    });
+
+    it('accepts bind to ::1 with trivial-consent', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '::1';
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['trivial-consent'],
+        publicBaseUrl: 'http://[::1]:65530',
+      });
+      expect(provider).toBeDefined();
+    });
+
+    it('does NOT trip the guard for non-trivial-consent methods on any bind', async () => {
+      // github method on 0.0.0.0 — method-specific config is missing so
+      // the GH constructor will throw, but it must throw with the GitHub
+      // env-var message, not the trivial-consent guard.
+      process.env.DOLLHOUSE_HTTP_HOST = '0.0.0.0';
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['github'],
+      })).rejects.toThrow(/DOLLHOUSE_GITHUB_CLIENT_ID/);
     });
   });
 });

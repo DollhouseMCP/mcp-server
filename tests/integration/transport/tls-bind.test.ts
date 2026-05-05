@@ -89,4 +89,22 @@ describe('createHttpOrHttpsServer bind guard', () => {
     expect(isLoopbackHost('192.168.1.1')).toBe(false);
     expect(isLoopbackHost('example.com')).toBe(false);
   });
+
+  it('classifies the entire 127.0.0.0/8 block as loopback (must-fix #8)', () => {
+    expect(isLoopbackHost('127.0.0.2')).toBe(true);
+    expect(isLoopbackHost('127.0.0.255')).toBe(true);
+    expect(isLoopbackHost('127.1.2.3')).toBe(true);
+    expect(isLoopbackHost('127.255.255.254')).toBe(true);
+  });
+
+  it('handles bracketed IPv6 form returned by URL.hostname', () => {
+    // new URL('http://[::1]/').hostname returns '[::1]' in WHATWG.
+    expect(isLoopbackHost('[::1]')).toBe(true);
+  });
+
+  it('does NOT mis-classify near-loopback hostnames as loopback', () => {
+    expect(isLoopbackHost('128.0.0.1')).toBe(false);
+    expect(isLoopbackHost('localhost.evil.com')).toBe(false);
+    expect(isLoopbackHost('not-localhost')).toBe(false);
+  });
 });

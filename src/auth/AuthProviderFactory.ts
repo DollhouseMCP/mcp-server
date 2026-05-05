@@ -132,7 +132,52 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
   if (config.provider === 'embedded') {
     const { EmbeddedAuthorizationServer } = await import('./embedded-as/EmbeddedAuthorizationServer.js');
     const { createAuthStorage } = await import('./embedded-as/storage/createAuthStorage.js');
+    const { isLoopbackHost } = await import('./oauth/url.js');
     const { env } = await import('../config/env.js');
+
+    // must-fix #8: trivial-consent is the zero-config local-dev experience
+    // and ONLY safe on a loopback bind with a loopback public URL. A
+    // public HTTPS deployment running with no auth method configured
+    // would default to trivial-consent — anyone clicking "Approve" would
+    // walk away with a token. Refuse the construction up-front.
+    //
+    // Both checks: (a) the bind host (where the socket actually binds);
+    // (b) the publicBaseUrl hostname (what callers reach the AS as,
+    // which can be a public DNS name even when bind is loopback behind
+    // a TLS-terminating proxy). Either being non-loopback in trivial-
+    // consent mode is a misconfiguration.
+    if (methods.includes('trivial-consent')) {
+      // Read process.env directly rather than the cached env snapshot —
+      // env is parsed at module load, so mutations after import (notably
+      // in tests) wouldn't be visible. The default mirrors env.ts.
+      const bindHost = process.env.DOLLHOUSE_HTTP_HOST?.trim() || env.DOLLHOUSE_HTTP_HOST;
+      if (!isLoopbackHost(bindHost)) {
+        throw new Error(
+          `trivial-consent auth method refuses to start with non-loopback bind ` +
+          `'${bindHost}'. Set DOLLHOUSE_AUTH_METHODS to a real method ` +
+          `(github, local-password, magic-link) or bind to localhost / 127.0.0.0/8 / ::1.`,
+        );
+      }
+      if (config.publicBaseUrl) {
+        let publicHost: string;
+        try {
+          publicHost = new URL(config.publicBaseUrl).hostname;
+        } catch {
+          throw new Error(
+            `trivial-consent auth method cannot validate publicBaseUrl ` +
+            `'${config.publicBaseUrl}' — must be a parseable URL.`,
+          );
+        }
+        if (!isLoopbackHost(publicHost)) {
+          throw new Error(
+            `trivial-consent auth method refuses to start with non-loopback ` +
+            `public URL '${config.publicBaseUrl}'. A reverse-proxy fronting ` +
+            `loopback is still externally reachable; configure a real auth ` +
+            `method via DOLLHOUSE_AUTH_METHODS.`,
+          );
+        }
+      }
+    }
 
     // Storage is the substrate the embedded AS, all methods, and the
     // oidc-provider K/V adapter share. Tests inject InMemoryAuthStorageLayer

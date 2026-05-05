@@ -18,9 +18,8 @@ import { createServer as createHttpsServer, type Server as HttpsServer } from 'n
 import type { Express } from 'express';
 import { env } from '../config/env.js';
 import { logger } from '../utils/logger.js';
+import { isLoopbackHost as isLoopbackHostInternal } from '../auth/oauth/url.js';
 import { TlsConfig } from './TlsConfig.js';
-
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export interface CreateHttpServerOptions {
   /** Bind host. Used by the non-loopback guard. */
@@ -60,7 +59,7 @@ export async function createHttpOrHttpsServer(
   const tlsOptions = tlsConfig?.toServerOptions() ?? null;
   const isHttps = tlsOptions !== null;
 
-  if (!isHttps && !isLoopbackHost(host)) {
+  if (!isHttps && !isLoopbackHostInternal(host)) {
     if (!allowUnsafe) {
       throw new Error(
         `Refusing to bind to non-loopback host '${host}' without TLS. ` +
@@ -89,6 +88,6 @@ export async function createHttpOrHttpsServer(
   return { server, isHttps };
 }
 
-export function isLoopbackHost(host: string): boolean {
-  return LOOPBACK_HOSTS.has(host) || host.endsWith('.localhost');
-}
+// Re-export the canonical predicate from auth/oauth/url so server code and
+// auth code agree on what counts as loopback (must-fix #8 unification).
+export { isLoopbackHost } from '../auth/oauth/url.js';
