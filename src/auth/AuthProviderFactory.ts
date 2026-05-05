@@ -30,6 +30,7 @@ import {
   createDefaultAuthMethodFactory,
   type AuthMethodId,
 } from './embedded-as/AuthMethodFactory.js';
+import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 
 export type AuthProviderMode = 'embedded' | 'oidc-bridge';
 
@@ -51,6 +52,12 @@ export interface AuthConfig {
   methods?: AuthMethodId[];
   /** Inner factory; defaults to createDefaultAuthMethodFactory(). Tests inject. */
   methodFactory?: AuthMethodFactory;
+  /**
+   * Pre-constructed auth storage backend. Tests inject `InMemoryAuthStorageLayer`;
+   * production wiring leaves this undefined and lets `createAuthStorage` pick
+   * a backend based on `DOLLHOUSE_AUTH_STORAGE_BACKEND` (default: filesystem).
+   */
+  storage?: IAuthStorageLayer;
 }
 
 /**
@@ -124,10 +131,15 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
 
   if (config.provider === 'embedded') {
     const { EmbeddedAuthorizationServer } = await import('./embedded-as/EmbeddedAuthorizationServer.js');
-    const { InMemoryAuthStorageLayer } = await import('./embedded-as/storage/InMemoryAuthStorageLayer.js');
+    const { createAuthStorage } = await import('./embedded-as/storage/createAuthStorage.js');
     const { env } = await import('../config/env.js');
 
-    const storage = new InMemoryAuthStorageLayer();
+    // Storage is the substrate the embedded AS, all methods, and the
+    // oidc-provider K/V adapter share. Tests inject InMemoryAuthStorageLayer
+    // directly; production resolves the backend via env (default filesystem)
+    // and refuses memory storage with durable-data methods unless
+    // DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true is explicitly set.
+    const storage = config.storage ?? await createAuthStorage({ methods });
 
     // Take the first configured method as the active IAuthMethod. Multi-
     // method chooser UI is future work; for §8.1 the AS exposes one method.
