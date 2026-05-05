@@ -40,6 +40,9 @@ describe('MagicLinkMethod', () => {
       invites,
       emailSender,
       verifyUrl: 'http://app/auth/email/verify',
+      // Default suite uses 0ms floor for speed; the dedicated timing test
+      // below builds its own MagicLinkMethod with the production default.
+      requestResponseFloorMs: 0,
     });
   });
 
@@ -174,6 +177,102 @@ describe('MagicLinkMethod', () => {
       const replay = await method.consumeMagicLink(token);
       expect(replay.kind).toBe('error');
     });
+  });
+
+  describe('handleRequestLink — must-fix #2 + #3', () => {
+    it('always returns the same generic check-email page (no enumeration)', async () => {
+      const known = await method.completeInteraction(CTX, {
+        formBody: { action: 'request-link', email: 'known@example.com' },
+        ip: '10.0.0.1',
+      });
+      const unknown = await method.completeInteraction(CTX, {
+        formBody: { action: 'request-link', email: 'unknown@example.com' },
+        ip: '10.0.0.2',
+      });
+      const malformed = await method.completeInteraction(CTX, {
+        formBody: { action: 'request-link', email: 'not-an-email' },
+        ip: '10.0.0.3',
+      });
+      // All three must produce the identical generic check-email response.
+      const responses = [known, unknown, malformed].map((r) =>
+        r.kind === 'next-step' && r.step.kind === 'render-html' ? r.step.html : 'NOT-HTML',
+      );
+      expect(new Set(responses).size).toBe(1);
+      expect(responses[0]).toContain('Check your email');
+    });
+
+    it('response time is padded to a floor regardless of state (must-fix #2)', async () => {
+      // Build a dedicated method with a small but observable floor so
+      // the assertion isn't sensitive to scheduler jitter. Production
+      // floor is 250ms; 100ms here is plenty of signal for the test
+      // without slowing CI.
+      const timingMethod = new MagicLinkMethod({
+        storage,
+        invites,
+        emailSender,
+        verifyUrl: 'http://app/auth/email/verify',
+        requestResponseFloorMs: 100,
+      });
+
+      const t0 = Date.now();
+      await timingMethod.completeInteraction(CTX, {
+        formBody: { action: 'request-link', email: 'malformed' },
+        ip: '10.0.0.1',
+      });
+      const elapsedMalformed = Date.now() - t0;
+
+      const t1 = Date.now();
+      await timingMethod.completeInteraction(CTX, {
+        formBody: { action: 'request-link', email: 'real@example.com' },
+        ip: '10.0.0.1',
+      });
+      const elapsedReal = Date.now() - t1;
+
+      expect(elapsedMalformed).toBeGreaterThanOrEqual(80);
+      expect(elapsedReal).toBeGreaterThanOrEqual(80);
+    }, 5_000);
+
+    it('emits auth.magic_link.flood_suspected audit on first per-email threshold cross', async () => {
+      for (let i = 0; i < 3 + 1; i += 1) {
+        await method.completeInteraction(CTX, {
+          formBody: { action: 'request-link', email: 'flood@example.com' },
+          ip: `10.0.0.${i}`,
+        });
+      }
+      const events = await storage.listIdentityEvents({ type: 'auth.magic_link.flood_suspected' });
+      const emailEvents = events.filter(
+        (e) => (e.details as Record<string, unknown> | undefined)?.dimension === 'email',
+      );
+      expect(emailEvents).toHaveLength(1);
+    }, 30_000);
+
+    it('emits at most ONE audit event per window despite continued flood', async () => {
+      for (let i = 0; i < 3 + 5; i += 1) {
+        await method.completeInteraction(CTX, {
+          formBody: { action: 'request-link', email: 'flood@example.com' },
+          ip: `10.0.0.${i}`,
+        });
+      }
+      const events = await storage.listIdentityEvents({ type: 'auth.magic_link.flood_suspected' });
+      const emailEvents = events.filter(
+        (e) => (e.details as Record<string, unknown> | undefined)?.dimension === 'email',
+      );
+      expect(emailEvents).toHaveLength(1);
+    }, 30_000);
+
+    it('emits per-IP audit independently of per-email audit', async () => {
+      for (let i = 0; i < 5 + 1; i += 1) {
+        await method.completeInteraction(CTX, {
+          formBody: { action: 'request-link', email: `user${i}@example.com` },
+          ip: '10.0.0.99',
+        });
+      }
+      const events = await storage.listIdentityEvents({ type: 'auth.magic_link.flood_suspected' });
+      const ipEvents = events.filter(
+        (e) => (e.details as Record<string, unknown> | undefined)?.dimension === 'ip',
+      );
+      expect(ipEvents).toHaveLength(1);
+    }, 30_000);
   });
 
   describe('hashEmail (must-fix #18 — opaque, irreversible externalSub)', () => {

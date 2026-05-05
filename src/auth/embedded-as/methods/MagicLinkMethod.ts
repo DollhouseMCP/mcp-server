@@ -46,6 +46,26 @@ const PROVIDER_NAME = 'magic-link';
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const REQUEST_RATE_LIMIT_PER_EMAIL = 3;
 const REQUEST_RATE_LIMIT_PER_IP = 5;
+/**
+ * Bound the rate-limit Maps to prevent memory-exhaustion DoS via flooding
+ * with unique emails / IPs. When a Map grows past the cap we drop the
+ * oldest tracked entry — the rate-limited keys (those at-or-past the
+ * limit) survive eviction longer because they're touched more recently
+ * by repeated incoming requests.
+ *
+ * 10k matches LocalLoginRateLimiter's MAX_TRACKED_* — same shape, same
+ * memory budget. Phase 5 H10 migrates this state to IAuthStorageLayer
+ * for multi-instance correctness; until then it's process-local.
+ */
+const MAX_TRACKED_REQUEST_BUCKETS = 10_000;
+/**
+ * Floor for /auth/email/request response time (must-fix #2). Total
+ * handle time pads up to this floor before returning, so an observer
+ * cannot distinguish "email known" vs "email unknown" by response
+ * latency. 250ms is well above SMTP RTT variance and comfortably above
+ * the rate-limit-rejected (no-send) path's near-zero cost.
+ */
+const REQUEST_RESPONSE_FLOOR_MS = 250;
 /** Single error reason returned to users; precise causes go to logs only. */
 const GENERIC_LINK_INVALID = 'this link is no longer valid';
 
@@ -73,11 +93,19 @@ export interface MagicLinkMethodOptions {
   emailSender: EmailSender;
   /** Absolute URL the magic link should point at. e.g. https://app/auth/email/verify */
   verifyUrl: string;
+  /**
+   * Override the constant-time response floor (must-fix #2). Defaults to
+   * `REQUEST_RESPONSE_FLOOR_MS` (250 ms). Tests dial it down to 0 to keep
+   * the suite fast; production should never override.
+   */
+  requestResponseFloorMs?: number;
 }
 
 interface RequestRateBucket {
   count: number;
   windowStart: number;
+  /** True after the audit event for this window has been emitted; reset on window-roll. */
+  alarmFired: boolean;
 }
 
 export class MagicLinkMethod implements IAuthMethod {
@@ -263,85 +291,150 @@ export class MagicLinkMethod implements IAuthMethod {
     };
   }
 
+  /**
+   * Handle POST /auth/email/request.
+   *
+   * Account-enumeration safety (must-fix #2): the response shape is
+   * identical (`renderCheckEmailPage`) regardless of whether the email is
+   * known, malformed, or rate-limited. Total handle time is padded to a
+   * fixed floor (`REQUEST_RESPONSE_FLOOR_MS`) so an observer cannot
+   * distinguish the underlying state by latency. Floor is well above the
+   * SMTP RTT variance and above the rate-limit-rejected (no-send) path.
+   *
+   * Rate limit (must-fix #3): per-email and per-IP bounded buckets — see
+   * `noteRequestRate`. State is process-local; multi-instance migration
+   * to IAuthStorageLayer is Phase 5 H10.
+   */
   private async handleRequestLink(
     form: Record<string, string>,
     ip: string,
     interactionId: string,
   ): Promise<InteractionResult> {
-    const email = String(form.email ?? '').trim().toLowerCase();
-
-    if (!email || !email.includes('@')) {
-      // Don't reveal validation error shape; render the same generic response.
-      return {
-        kind: 'next-step',
-        step: { kind: 'render-html', html: renderCheckEmailPage(), csrfToken: '' },
-      };
-    }
-
-    // Per-email + per-IP rate limit (must-fix #3 from the existing list).
-    if (!this.checkRequestRate(this.perEmailRequests, email, REQUEST_RATE_LIMIT_PER_EMAIL)) {
-      // Generic response — don't reveal that this email is being throttled.
-      return {
-        kind: 'next-step',
-        step: { kind: 'render-html', html: renderCheckEmailPage(), csrfToken: '' },
-      };
-    }
-    if (!this.checkRequestRate(this.perIpRequests, ip, REQUEST_RATE_LIMIT_PER_IP)) {
-      return {
-        kind: 'next-step',
-        step: { kind: 'render-html', html: renderCheckEmailPage(), csrfToken: '' },
-      };
-    }
-
-    // Issue token + send. Always issue (and send if account exists) so the
-    // timing of "exists vs not" is roughly equivalent. We do NOT look up
-    // the account before issuing — we issue the token, attempt to send, and
-    // if the email isn't on file the upstream will silently swallow it.
-    // Stamp the interactionId into the token so the /auth/email/verify
-    // route can find the right interaction to complete after consumption.
-    const sub = `${PROVIDER_NAME}_${hashEmail(email)}`;
-    const token = this.options.invites.issue({
-      sub,
-      email,
-      purpose: 'magic-link',
-      interactionId,
-    });
-    const url = new URL(this.options.verifyUrl);
-    url.searchParams.set('token', token);
-
-    try {
-      await this.options.emailSender.sendMagicLink({ to: email, url: url.toString() });
-    } catch (err) {
-      // The user-facing response stays generic (must-fix #2 enumeration
-      // prevention) — but the operator needs to see relay outages, so log
-      // server-side. Email is omitted to avoid joining log + audit trails
-      // by email; sub is the safer audit handle.
-      logger.warn('[MagicLinkMethod] sendMagicLink failed', {
-        sub,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    return {
+    const startTime = Date.now();
+    const generic = (): InteractionResult => ({
       kind: 'next-step',
       step: { kind: 'render-html', html: renderCheckEmailPage(), csrfToken: '' },
-    };
+    });
+
+    try {
+      const email = String(form.email ?? '').trim().toLowerCase();
+      if (!email || !email.includes('@')) {
+        return generic();
+      }
+
+      // Per-email + per-IP rate limit. `noteRequestRate` is async to leave
+      // room for the storage-backed migration in Phase 5; today it's a
+      // sync Map operation under an async signature.
+      const emailOk = await this.noteRequestRate(this.perEmailRequests, email, REQUEST_RATE_LIMIT_PER_EMAIL, 'email');
+      if (!emailOk) return generic();
+      const ipOk = await this.noteRequestRate(this.perIpRequests, ip, REQUEST_RATE_LIMIT_PER_IP, 'ip');
+      if (!ipOk) return generic();
+
+      // Issue token + send. Always issue and always attempt send so the
+      // SMTP code path is taken regardless of whether the email is on
+      // file. The user-facing response stays generic on send failure.
+      const sub = `${PROVIDER_NAME}_${hashEmail(email)}`;
+      const token = this.options.invites.issue({
+        sub,
+        email,
+        purpose: 'magic-link',
+        interactionId,
+      });
+      const url = new URL(this.options.verifyUrl);
+      url.searchParams.set('token', token);
+
+      try {
+        await this.options.emailSender.sendMagicLink({ to: email, url: url.toString() });
+      } catch (err) {
+        // The user-facing response stays generic (must-fix #2 enumeration
+        // prevention) — but the operator needs to see relay outages, so log
+        // server-side. Email is omitted to avoid joining log + audit trails
+        // by email; sub is the safer audit handle.
+        logger.warn('[MagicLinkMethod] sendMagicLink failed', {
+          sub,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      return generic();
+    } finally {
+      // must-fix #2: pad total handle time to a fixed floor so a timing
+      // observer can't distinguish "email known + SMTP succeeded" from
+      // "email rejected at validation" or "rate-limited (no SMTP)".
+      const floor = this.options.requestResponseFloorMs ?? REQUEST_RESPONSE_FLOOR_MS;
+      const elapsed = Date.now() - startTime;
+      if (floor > 0 && elapsed < floor) {
+        await new Promise((resolve) => setTimeout(resolve, floor - elapsed));
+      }
+    }
   }
 
-  private checkRequestRate(
+  /**
+   * Bounded fixed-window rate limiter (must-fix #3).
+   *
+   * Returns true when the request is allowed, false when the bucket has
+   * crossed the limit for its current window. Bucket counter is capped
+   * at `limit + 1` so under sustained flood the value stays bounded
+   * (no overflow concern, no integer growth).
+   *
+   * The first request to cross the threshold within a window emits an
+   * `auth.magic_link.flood_suspected` audit event so operators can see
+   * abuse without being spammed every request. The flag resets on
+   * window-roll.
+   *
+   * Map size is capped at `MAX_TRACKED_REQUEST_BUCKETS`; eviction prefers
+   * non-rate-limited entries (count <= limit) before touching active
+   * limiters. Mirrors the `LocalLoginRateLimiter` lock-aware bound.
+   */
+  private async noteRequestRate(
     bucketMap: Map<string, RequestRateBucket>,
     key: string,
     limit: number,
-  ): boolean {
+    dimension: 'email' | 'ip',
+  ): Promise<boolean> {
     const now = Date.now();
-    const bucket = bucketMap.get(key) ?? { count: 0, windowStart: now };
+    const bucket = bucketMap.get(key) ?? { count: 0, windowStart: now, alarmFired: false };
     if (now - bucket.windowStart > REQUEST_RATE_LIMIT_WINDOW_MS) {
       bucket.count = 0;
       bucket.windowStart = now;
+      bucket.alarmFired = false;
     }
-    bucket.count += 1;
+    if (bucket.count <= limit) bucket.count += 1;
     bucketMap.set(key, bucket);
+
+    this.boundRequestMap(bucketMap, limit);
+
+    if (bucket.count > limit && !bucket.alarmFired) {
+      bucket.alarmFired = true;
+      await this.options.storage.recordIdentityEvent({
+        type: 'auth.magic_link.flood_suspected',
+        details: { dimension, limit, windowMs: REQUEST_RATE_LIMIT_WINDOW_MS },
+        timestamp: now,
+      });
+    }
+
     return bucket.count <= limit;
+  }
+
+  /**
+   * Cap the rate-limit Map size. Pass 1 evicts entries below the limit
+   * (their lockout window has either expired or never fired). Pass 2 is
+   * a FIFO fallback only used at sustained saturation; preserving rate-
+   * limited entries is the security-meaningful invariant.
+   */
+  private boundRequestMap(bucketMap: Map<string, RequestRateBucket>, limit: number): void {
+    if (bucketMap.size <= MAX_TRACKED_REQUEST_BUCKETS) return;
+
+    for (const [key, rec] of bucketMap) {
+      if (bucketMap.size <= MAX_TRACKED_REQUEST_BUCKETS) return;
+      if (rec.count <= limit) bucketMap.delete(key);
+    }
+
+    while (bucketMap.size > MAX_TRACKED_REQUEST_BUCKETS) {
+      const oldest = bucketMap.keys().next().value;
+      if (oldest === undefined) break;
+      bucketMap.delete(oldest);
+    }
   }
 }
 
