@@ -8,23 +8,28 @@
  *
  *   1. Mismatch / missing-cookie errors render an explainable page,
  *      not the opaque "invalid_request" oidc-provider returns.
- *   2. If oidc-provider's cookie-binding behavior ever loosens, our
- *      callback routes still refuse to drive interactionFinished against
- *      an interaction the calling browser doesn't own.
+ *   2. The check independently verifies the keygrip signature against
+ *      the AS's cookie signing keys — so even if oidc-provider's cookie-
+ *      binding behavior ever loosens, our callback routes refuse to
+ *      drive interactionFinished against a forged or unsigned cookie.
+ *      (H12 hardening: an attacker who plants `_interaction=<victim-uid>`
+ *      without a valid `.sig` companion cookie is rejected here.)
  *
  * Threat model: an attacker who obtains a magic-link token (forwarded
  * email, leaked URL) or a GitHub `state` value cannot complete the
  * interaction in their own browser because they lack the original
- * session's `_interaction` cookie. Without this check, oidc-provider
- * would still throw — but routing through this helper makes the
- * intent explicit and the failure UX better.
+ * session's `_interaction` cookie + matching `_interaction.sig`. The
+ * keygrip signature is HMAC-SHA1 of the cookie value under one of the
+ * AS's cookie signing keys (oidc-provider's `cookies.keys`).
  *
  * @module auth/embedded-as/interactionCookieBinding
  */
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 
 const INTERACTION_COOKIE_NAME = '_interaction';
+const INTERACTION_SIG_COOKIE_NAME = '_interaction.sig';
 
 /**
  * Shared HTML error page rendered when the cookie-binding check fails.
@@ -46,34 +51,63 @@ export function renderInteractionBindingError(flowLabel: string): string {
 
 export type CookieBindingResult =
   | { ok: true }
-  | { ok: false; reason: 'missing-cookie' | 'cookie-mismatch' };
+  | { ok: false; reason: 'missing-cookie' | 'cookie-mismatch' | 'invalid-signature' };
 
 /**
- * Verify the request's `_interaction` cookie value matches the expected
- * interaction uid. The cookie format oidc-provider uses is `value.signature`;
- * we compare only the value portion. Signature verification happens later
- * inside provider.interactionDetails(req, res).
+ * Verify the request's `_interaction` cookie matches the expected
+ * interaction uid AND carries a valid keygrip signature.
+ *
+ * oidc-provider uses cookies-keygrip: the cookie value is the raw uid
+ * and a sibling `<name>.sig` cookie holds the HMAC-SHA1 signature
+ * (base64url-encoded) of `<name>=<value>` under one of the configured
+ * `cookies.keys`. We sign with each key in turn (rotation grace) and
+ * accept the first match, comparing in constant time.
  */
 export function verifyInteractionCookieMatches(
   req: Request,
   expectedInteractionId: string,
+  cookieKeys: readonly string[],
 ): CookieBindingResult {
   const raw = req.headers.cookie;
   if (!raw) return { ok: false, reason: 'missing-cookie' };
 
   const cookieValue = parseCookieValue(raw, INTERACTION_COOKIE_NAME);
   if (!cookieValue) return { ok: false, reason: 'missing-cookie' };
+  const sigValue = parseCookieValue(raw, INTERACTION_SIG_COOKIE_NAME);
+  if (!sigValue) return { ok: false, reason: 'missing-cookie' };
 
-  // Cookie value is `<uid>.<signature>` when signed; sometimes the signature
-  // is stored in a sibling `_interaction.sig` cookie. Either way, the part
-  // before the first dot (or the whole value when unsigned) is the uid.
-  const uid = cookieValue.split('.')[0];
-
-  if (uid !== expectedInteractionId) {
+  // value-portion check: strict uid match.
+  if (cookieValue !== expectedInteractionId) {
     return { ok: false, reason: 'cookie-mismatch' };
   }
 
-  return { ok: true };
+  // H12: independently verify the keygrip signature so a forged
+  // _interaction=<victim-uid> without a valid signature companion is
+  // rejected here, not at oidc-provider's downstream check.
+  const signedData = `${INTERACTION_COOKIE_NAME}=${cookieValue}`;
+  const sigBuf = Buffer.from(sigValue);
+  for (const key of cookieKeys) {
+    const expected = keygripSign(signedData, key);
+    const expectedBuf = Buffer.from(expected);
+    if (sigBuf.length === expectedBuf.length && timingSafeEqual(sigBuf, expectedBuf)) {
+      return { ok: true };
+    }
+  }
+  return { ok: false, reason: 'invalid-signature' };
+}
+
+/**
+ * keygrip's signing algorithm: HMAC-SHA1 of the data, base64-encoded,
+ * then converted to base64url-without-padding (the "/" → "_", "+" → "-",
+ * "=" stripped).
+ */
+function keygripSign(data: string, key: string): string {
+  return createHmac('sha1', key)
+    .update(data)
+    .digest('base64')
+    .replace(/\//g, '_')
+    .replace(/\+/g, '-')
+    .replace(/=+$/, '');
 }
 
 /**

@@ -102,11 +102,18 @@ export type InteractionResult =
 export interface ContributeRoutesDeps {
   storage: IAuthStorageLayer;
   /**
-   * Resolves to the initialized oidc-provider instance the AS owns.
-   * Methods call this lazily inside route handlers (not at registration
-   * time) because init is asynchronous and runs after createRouter.
+   * Resolves to the initialized oidc-provider instance the AS owns +
+   * the cookie signing keys currently active. Methods call this lazily
+   * inside route handlers (not at registration time) because init is
+   * asynchronous and runs after createRouter. cookieKeys is included
+   * so the cookie-binding helper (H12) can verify the keygrip
+   * signature of `_interaction.sig` against the same keys oidc-provider
+   * uses to sign cookies.
    */
-  ensureInitialized: () => Promise<{ provider: OidcProviderForInteractions }>;
+  ensureInitialized: () => Promise<{
+    provider: OidcProviderForInteractions;
+    cookieKeys: readonly string[];
+  }>;
 }
 
 export interface IAuthMethod {

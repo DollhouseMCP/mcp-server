@@ -79,6 +79,8 @@ interface InitializedState {
   keyset: SigningKeyset;
   publicSigningKey: CryptoKey;
   privateSigningKey: CryptoKey;
+  /** Cookie signing keys oidc-provider received; methods need them for H12 binding verify. */
+  cookieKeys: readonly string[];
   /** Pre-built interaction middleware bound to the initialized provider. */
   interactionMiddleware: Router;
 }
@@ -258,7 +260,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // needs to know which concrete method classes are active.
     const contributeDeps = {
       storage: this.storage,
-      ensureInitialized: () => this.ensureInitialized().then((s) => ({ provider: s.provider })),
+      ensureInitialized: () => this.ensureInitialized().then((s) => ({
+        provider: s.provider,
+        cookieKeys: s.cookieKeys,
+      })),
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);
@@ -619,7 +624,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       storage: this.storage,
     });
 
-    return { provider, keyset, publicSigningKey, privateSigningKey, interactionMiddleware };
+    return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };
   }
 }
 

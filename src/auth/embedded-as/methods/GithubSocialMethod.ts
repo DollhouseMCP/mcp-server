@@ -191,12 +191,12 @@ export class GithubSocialMethod implements IAuthMethod {
           // calling browser holds the same interaction cookie. Same threat
           // model as the magic-link route — the GitHub `state` could be
           // stolen + replayed; the interaction cookie is the binding.
-          const binding = verifyInteractionCookieMatches(req, result.interactionId);
+          const { provider, cookieKeys } = await deps.ensureInitialized();
+          const binding = verifyInteractionCookieMatches(req, result.interactionId, cookieKeys);
           if (!binding.ok) {
             res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
             return;
           }
-          const { provider } = await deps.ensureInitialized();
           // Restore the request URL to the interaction so oidc-provider's
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;

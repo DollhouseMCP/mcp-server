@@ -207,12 +207,12 @@ export class MagicLinkMethod implements IAuthMethod {
           // Defense in depth: refuse to drive interactionFinished unless the
           // calling browser holds the same interaction cookie that started
           // the OAuth flow.
-          const binding = verifyInteractionCookieMatches(req, consume.interactionId);
+          const { provider, cookieKeys } = await deps.ensureInitialized();
+          const binding = verifyInteractionCookieMatches(req, consume.interactionId, cookieKeys);
           if (!binding.ok) {
             res.status(400).type('html').send(renderInteractionBindingError('magic link'));
             return;
           }
-          const { provider } = await deps.ensureInitialized();
           // Restore the request URL to the interaction so oidc-provider's
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${consume.interactionId}`;
