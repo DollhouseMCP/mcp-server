@@ -325,7 +325,22 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // call will start a new initialize() against the new generation.
     const startedAt = this.generation;
     if (!this.initPromise) {
-      this.initPromise = this.initialize();
+      // H15: clear initPromise on rejection so a transient init failure
+      // (corrupt key file, disk full, DB unreachable) doesn't poison
+      // every subsequent request. Without this clear, a single failed
+      // init left initPromise holding a rejected promise and every
+      // future ensureInitialized awaited the same rejection — the AS
+      // was permanently dead until process restart.
+      const launched = this.initialize();
+      this.initPromise = launched;
+      // Attach an error-side-effect handler. `void` swallows this catch
+      // chain — the original `launched` promise's rejection still
+      // reaches awaiters via this.initPromise above. The check
+      // `this.initPromise === launched` avoids clearing a fresh promise
+      // installed by a concurrent setPublicBaseUrl reset.
+      void launched.catch(() => {
+        if (this.initPromise === launched) this.initPromise = null;
+      });
     }
     const inFlight = this.initPromise;
     const result = await inFlight;
