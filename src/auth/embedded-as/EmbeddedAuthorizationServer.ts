@@ -438,12 +438,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       },
       features: {
         // RFC 7591 Dynamic Client Registration. initialAccessToken: true
-        // means /reg requires an InitialAccessToken bearer issued out-of-band
-        // by the operator (CLI: `dollhouse-issue-dcr-token`). Without this
+        // means /reg requires an InitialAccessToken bearer. Without this
         // gate, any unauthenticated client on the network could register
-        // with arbitrary redirect_uris, defeating the redirect-URI exact-match
-        // guarantee. The pre-registered DEFAULT_CLIENT_ID below works without
-        // DCR; only third-party / dynamically-discovered clients need a token.
+        // with arbitrary redirect_uris, defeating the redirect-URI exact-
+        // match guarantee. The pre-registered DEFAULT_CLIENT_ID below
+        // works without DCR; only third-party / dynamically-discovered
+        // clients need a token.
+        //
+        // **No working token issuance path today.** The earlier
+        // dollhouse-issue-dcr-token CLI minted tokens against a
+        // throwaway provider that the running AS could not validate;
+        // it was removed (B2). A real admin-channel endpoint that
+        // issues IATs against this AS instance is follow-up work.
+        // Until that lands, native MCP clients must use the pre-
+        // registered DEFAULT_CLIENT_ID (loopback redirect_uris only).
         registration: { enabled: true, initialAccessToken: true },
         // Disable oidc-provider's developer-only built-in interaction page;
         // we own /interaction/:uid via InteractionRouter.
