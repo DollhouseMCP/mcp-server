@@ -16,6 +16,7 @@
  */
 
 import nodemailer, { type Transporter } from 'nodemailer';
+import { logger } from '../../../utils/logger.js';
 import type { EmailSender, SendMagicLinkInput } from './MagicLinkMethod.js';
 
 export interface NodemailerEmailSenderOptions {
@@ -26,11 +27,15 @@ export interface NodemailerEmailSenderOptions {
   from: string;
   /** Implicit TLS (true for port 465). Defaults based on port. */
   secure?: boolean;
+  /** Connect timeout in ms (default 30s). Tests dial it down for fast failure. */
+  connectionTimeoutMs?: number;
 }
 
 export class NodemailerEmailSender implements EmailSender {
   private readonly transporter: Transporter;
   private readonly from: string;
+  private readonly host: string;
+  private readonly port: number;
 
   constructor(options: NodemailerEmailSenderOptions) {
     const secure = options.secure ?? options.port === 465;
@@ -48,8 +53,44 @@ export class NodemailerEmailSender implements EmailSender {
       secure,
       requireTLS: !secure, // force STARTTLS upgrade on 587
       auth: { user: options.user, pass: options.password },
+      connectionTimeout: options.connectionTimeoutMs ?? 30_000,
     });
     this.from = options.from;
+    this.host = options.host;
+    this.port = options.port;
+  }
+
+  /**
+   * Confirm the transporter can connect, negotiate TLS, and authenticate.
+   * Called at startup by `AuthProviderFactory` so a misconfigured SMTP
+   * server (refused STARTTLS, bad credentials, no DNS) fails fast with a
+   * clear error rather than silently producing failed magic-link emails
+   * later (must-fix #10).
+   *
+   * Wraps `nodemailer.Transporter.verify()`, which performs:
+   *   - TCP connect + STARTTLS upgrade (or implicit TLS on 465)
+   *   - AUTH probe with the configured credentials
+   *
+   * Failures bubble up as a single labelled `Error` the operator can act
+   * on. Successful verify is logged at info so the operator sees the
+   * SMTP connection working without enabling debug logs.
+   */
+  async verify(): Promise<void> {
+    try {
+      await this.transporter.verify();
+      logger.info('[NodemailerEmailSender] SMTP connection verified', {
+        host: this.host,
+        port: this.port,
+      });
+    } catch (err) {
+      throw new Error(
+        `SMTP verify failed for ${this.host}:${this.port}. ` +
+        `Confirm the server supports STARTTLS (port 587) or implicit TLS (port 465), ` +
+        `and that DOLLHOUSE_SMTP_USER/PASSWORD authenticate successfully. ` +
+        `Underlying error: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
+      );
+    }
   }
 
   async sendMagicLink(input: SendMagicLinkInput): Promise<void> {

@@ -279,6 +279,11 @@ async function buildAuthMethod(
         password: env.DOLLHOUSE_SMTP_PASSWORD,
         from: env.DOLLHOUSE_SMTP_FROM,
       });
+      // must-fix #10: confirm the transporter can connect + STARTTLS-
+      // upgrade + authenticate before the AS finishes starting. Failing
+      // late (on first user request) leaves operators chasing magic-link
+      // emails that silently never arrive.
+      await emailSender.verify();
       const invites = await ensureInvites();
       const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
       return new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
