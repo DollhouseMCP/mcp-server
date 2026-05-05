@@ -251,7 +251,7 @@ function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferI
     emailVerified: account.emailVerified,
     displayName: account.displayName ?? null,
     rawProfile: (account.rawProfile ?? null) as typeof authAccounts.$inferInsert['rawProfile'],
-    passwordHash: extractPasswordHash(account.rawProfile),
+    passwordHash: account.credentials?.passwordHash ?? null,
     lastAuthAt: account.lastAuthAt ?? null,
     createdAt: new Date(account.createdAt),
     updatedAt: new Date(account.updatedAt),
@@ -270,6 +270,7 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
   if (row.email !== null) account.email = row.email;
   if (row.displayName !== null) account.displayName = row.displayName;
   if (row.rawProfile !== null) account.rawProfile = row.rawProfile as Record<string, unknown>;
+  if (row.passwordHash !== null) account.credentials = { passwordHash: row.passwordHash };
   if (row.lastAuthAt !== null) account.lastAuthAt = row.lastAuthAt;
   return account;
 }
@@ -286,15 +287,3 @@ function rowToIdentityEvent(row: IdentityEventRow): IdentityAuditEvent {
   return event;
 }
 
-/**
- * Phase 1.4 transitional: LocalAccountMethod stores the argon2 hash inside
- * `rawProfile.passwordHash`. The schema reserves a typed `password_hash`
- * column for the Phase 4 BLOCKER (B4) move-credentials-off-rawProfile
- * work; populating it now keeps both shapes consistent so that Phase 4
- * is a one-place edit.
- */
-function extractPasswordHash(rawProfile: Record<string, unknown> | undefined): string | null {
-  if (!rawProfile) return null;
-  const hash = rawProfile['passwordHash'];
-  return typeof hash === 'string' ? hash : null;
-}

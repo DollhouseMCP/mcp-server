@@ -33,6 +33,28 @@
  * @module auth/embedded-as/storage/IAuthStorageLayer
  */
 
+/**
+ * Account credentials. **Never** include this in any serialization that
+ * leaves the storage layer — it carries password hashes and other
+ * authentication-bearing material. The field is typed as a typed shape
+ * (not `unknown` / `Record<string, unknown>`) precisely so static
+ * analysis can flag accidental inclusion in JSON dumps, audit log
+ * payloads, or upstream-profile responses.
+ *
+ * Earlier code stored `passwordHash` inside `rawProfile`, which had two
+ * problems:
+ *   1. `rawProfile` was documented as "audit-only snapshot" — a future
+ *      audit-export or operator-tooling path would have leaked the hash.
+ *   2. The field type was `Record<string, unknown>`, so writing the hash
+ *      here was syntactically indistinguishable from any other profile
+ *      attribute. Splitting it onto its own typed field makes the
+ *      "credential" boundary structural rather than convention-based.
+ */
+export interface StoredAccountCredentials {
+  /** Argon2id hash for local-password method. Never included in tokens or audit. */
+  passwordHash?: string;
+}
+
 export interface StoredAccount {
   /** `${provider}_${externalSub}` — the account identity in JWT `sub`. */
   sub: string;
@@ -41,8 +63,14 @@ export interface StoredAccount {
   email?: string;
   emailVerified: boolean;
   displayName?: string;
-  /** Audit-only snapshot of the most recent upstream profile. */
+  /**
+   * Audit-only snapshot of the most recent upstream profile. Never
+   * carries credentials — those go on `credentials` below. Safe to
+   * include in audit-event payloads + operator dumps.
+   */
   rawProfile?: Record<string, unknown>;
+  /** Authentication-bearing material. Must not leak into audit / claims / logs. */
+  credentials?: StoredAccountCredentials;
   createdAt: number;
   updatedAt: number;
   /**

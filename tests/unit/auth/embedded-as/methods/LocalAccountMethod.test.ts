@@ -48,7 +48,9 @@ describe('LocalAccountMethod', () => {
 
     const stored = await storage.getAccount('local_alice');
     expect(stored?.email).toBe('alice@example.com');
-    expect((stored?.rawProfile as { passwordHash?: string } | undefined)?.passwordHash).toBeTruthy();
+    expect(stored?.credentials?.passwordHash).toBeTruthy();
+    // Critically: rawProfile must NOT carry the credential (B4).
+    expect((stored?.rawProfile as { passwordHash?: string } | undefined)?.passwordHash).toBeUndefined();
   });
 
   it('rejects passwords shorter than 12 characters', async () => {
@@ -185,6 +187,49 @@ describe('LocalAccountMethod', () => {
       expect(retried.kind).toBe('ok');
       const stored = await storage.getAccount('local_carol');
       expect(stored?.email).toBe('carol@example.com');
+    });
+  });
+
+  describe('credential isolation (B4 — passwordHash off rawProfile)', () => {
+    it('writes the argon2 hash to credentials.passwordHash, NOT rawProfile', async () => {
+      const url = method.issueInvite('local_dave', 'dave@example.com', 'http://app/i/x');
+      const inviteToken = new URL(url).searchParams.get('invite')!;
+      await method.completeInteraction(CTX, {
+        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      });
+      const stored = await storage.getAccount('local_dave');
+      expect(stored?.credentials?.passwordHash).toMatch(/^\$argon2id\$/);
+      expect(stored?.rawProfile).toBeUndefined();
+    });
+
+    it('JSON.stringify({...account, credentials: undefined}) does NOT contain the hash', async () => {
+      // Operator-tooling export pattern: dump the account record with
+      // credentials masked. Asserts the credential is on a typed sibling
+      // field that's straightforward to redact, rather than buried inside
+      // an opaque rawProfile blob.
+      const url = method.issueInvite('local_eve', 'eve@example.com', 'http://app/i/x');
+      const inviteToken = new URL(url).searchParams.get('invite')!;
+      await method.completeInteraction(CTX, {
+        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      });
+      const stored = await storage.getAccount('local_eve');
+      const masked = { ...stored, credentials: undefined };
+      const json = JSON.stringify(masked);
+      expect(json).not.toContain('argon2id');
+      expect(json).not.toContain('passwordHash');
+    });
+
+    it('login still verifies against credentials.passwordHash', async () => {
+      const url = method.issueInvite('local_finn', 'finn@example.com', 'http://app/i/x');
+      const inviteToken = new URL(url).searchParams.get('invite')!;
+      await method.completeInteraction(CTX, {
+        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      });
+      const result = await method.completeInteraction(CTX, {
+        formBody: { action: 'login', username: 'finn', password: 'a-very-long-password' },
+        ip: '10.0.0.1',
+      });
+      expect(result.kind).toBe('authenticated');
     });
   });
 });

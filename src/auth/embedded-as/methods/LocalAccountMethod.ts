@@ -49,13 +49,6 @@ export interface LocalAccountMethodOptions {
   rateLimiter: LocalLoginRateLimiter;
 }
 
-interface LocalAccountExtras {
-  passwordHash?: string;
-}
-
-/** A StoredAccount with the local-account password-hash extension on rawProfile. */
-type LocalStoredAccount = StoredAccount & { rawProfile?: LocalAccountExtras };
-
 export class LocalAccountMethod implements IAuthMethod {
   readonly id = 'local-password' as const;
   readonly displayName = 'Local Account';
@@ -197,15 +190,17 @@ export class LocalAccountMethod implements IAuthMethod {
     const externalSub = sub.replace(/^local_/, '');
     const now = Date.now();
 
-    const existing = (await this.options.storage.getAccount(sub)) as LocalStoredAccount | null;
-    const account: LocalStoredAccount = {
+    const existing = await this.options.storage.getAccount(sub);
+    const account: StoredAccount = {
       sub,
       provider: LOCAL_PROVIDER,
       externalSub,
       email: consume.payload.email,
       emailVerified: false, // local accounts don't verify email
       displayName: existing?.displayName ?? consume.payload.email,
-      rawProfile: { passwordHash },
+      // Credentials live on a typed sibling field, NOT inside rawProfile.
+      // rawProfile is documented as audit-safe; the password hash is not.
+      credentials: { passwordHash },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -321,8 +316,8 @@ export class LocalAccountMethod implements IAuthMethod {
       return { kind: 'denied', reason: check.reason ?? 'rate limited' };
     }
 
-    const account = (await this.options.storage.getAccount(sub)) as LocalStoredAccount | null;
-    const passwordHash = account?.rawProfile?.passwordHash;
+    const account = await this.options.storage.getAccount(sub);
+    const passwordHash = account?.credentials?.passwordHash;
 
     let verified = false;
     if (passwordHash) {
