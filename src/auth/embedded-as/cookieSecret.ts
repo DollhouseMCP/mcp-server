@@ -28,31 +28,44 @@ export function defaultCookieSecretFilePath(): string {
 }
 
 /**
- * Returns two base64-encoded keys: the active signing key and a previous
- * one for rotation grace. The two are equal at first generation; a future
- * rotation procedure prepends a fresh key and demotes the existing one.
+ * Returns the keygrip key array oidc-provider's `cookies.keys` config
+ * accepts. **One key only** — see "Rotation" below for why the prior
+ * `[primary, primary]` shape was misleading.
  *
  * If the env var `DOLLHOUSE_COOKIE_SIGNING_SECRET` is set (hex-encoded,
  * ≥32 bytes) it overrides the file — useful for multi-instance deploys
  * where every instance needs the same key.
+ *
+ * **Rotation.** keygrip is structured for rotation: keys.keys[0] signs
+ * new cookies; keys.keys[1..] verify legacy cookies during a rolling
+ * transition. The earlier implementation returned `[primary, primary]`
+ * (the same key in both slots), which advertised rotation support
+ * without delivering it — operators following the comment would have
+ * been surprised on rotation day. The honest position today is:
+ *
+ *   - There is exactly one cookie signing key in scope at any time.
+ *   - Rotation happens via `rotateCookieSecret()` from the mode-switch
+ *     path (must-fix #14): the file is unlinked, the next AS init
+ *     regenerates it, and all prior cookies are invalidated atomically.
+ *   - Multi-key keygrip (rolling rotation without invalidation) would
+ *     require reading N keys from disk + a separate "promote a new key"
+ *     CLI; tracked as a follow-up, not §8.1 scope.
  */
-export function loadOrGenerateCookieSigningKeys(filePath?: string): [string, string] {
+export function loadOrGenerateCookieSigningKeys(filePath?: string): [string] {
   const envSecret = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim();
   if (envSecret && envSecret.length > 0) {
     const buf = Buffer.from(envSecret, 'hex');
     if (buf.length < 32) {
       throw new Error('DOLLHOUSE_COOKIE_SIGNING_SECRET must decode to at least 32 bytes (hex)');
     }
-    const primary = buf.toString('base64');
-    return [primary, primary];
+    return [buf.toString('base64')];
   }
 
   const target = filePath ?? defaultCookieSecretFilePath();
   try {
     const buf = fs.readFileSync(target);
     if (buf.length >= 32) {
-      const primary = buf.toString('base64');
-      return [primary, primary];
+      return [buf.toString('base64')];
     }
     // Operator-deployed file is too short to be safe; replacing it is
     // correct but a silent overwrite would leave them wondering why
@@ -68,8 +81,7 @@ export function loadOrGenerateCookieSigningKeys(filePath?: string): [string, str
   const fresh = randomBytes(32);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, fresh, { mode: 0o600 });
-  const primary = fresh.toString('base64');
-  return [primary, primary];
+  return [fresh.toString('base64')];
 }
 
 /**
