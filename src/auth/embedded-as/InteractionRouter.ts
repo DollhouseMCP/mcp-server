@@ -33,6 +33,8 @@ import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
+const METHOD_CHOICE_MODEL = 'InteractionMethodChoice';
+const METHOD_CHOICE_TTL_SECONDS = 600; // matches CSRF + Interaction TTL
 
 export interface OidcInteractionDetails {
   uid: string;
@@ -84,36 +86,73 @@ export function createInteractionRouter(deps: InteractionRouterDeps): Router {
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json({ limit: '32kb' }));
 
-  // Until Phase 2.3 lands the chooser + per-method dispatch, the router
-  // only handles single-method deployments. Multi-method input throws so
-  // operators don't get a silent first-method-only behavior.
-  const resolveMethod = (): IAuthMethod => {
-    if (methods.length !== 1) {
-      throw new Error(
-        `InteractionRouter received ${methods.length} methods. ` +
-        `Multi-method dispatch requires the LoginChooser (Phase 2.3); ` +
-        `single-method deployments pass exactly one method.`,
-      );
-    }
-    return methods[0]!;
-  };
-
   router.get('/:uid', (req, res) => {
-    void handleGet(req, res, provider, resolveMethod, storage);
+    void handleGet(req, res, provider, methods, storage);
   });
 
   router.post('/:uid', (req, res) => {
-    void handlePost(req, res, provider, resolveMethod, storage);
+    void handlePost(req, res, provider, methods, storage);
   });
 
   return router;
+}
+
+type MethodResolution =
+  | { kind: 'method'; method: IAuthMethod }
+  | { kind: 'chooser' };
+
+/**
+ * Decide which method handles this interaction.
+ *
+ * Single-method deployments always return that method.
+ *
+ * Multi-method deployments:
+ *   1. If the request carries `?method=<id>` (chooser link clicked),
+ *      validate against the configured set, persist the choice for the
+ *      subsequent POST, and return that method.
+ *   2. Else if a prior choice was persisted (e.g. POST after GET render),
+ *      look it up.
+ *   3. Else return `{ kind: 'chooser' }` — caller renders the chooser.
+ */
+async function resolveMethodForRequest(
+  req: Request,
+  details: OidcInteractionDetails,
+  methods: readonly IAuthMethod[],
+  storage: IAuthStorageLayer,
+): Promise<MethodResolution> {
+  if (methods.length === 1) return { kind: 'method', method: methods[0]! };
+
+  const queryMethod = typeof req.query.method === 'string' ? req.query.method : null;
+  if (queryMethod) {
+    const found = methods.find((m) => m.id === queryMethod);
+    if (found) {
+      await storage.genericSet(
+        METHOD_CHOICE_MODEL,
+        details.uid,
+        { methodId: found.id },
+        METHOD_CHOICE_TTL_SECONDS,
+      );
+      return { kind: 'method', method: found };
+    }
+    // Invalid id falls through to either a stored choice or the chooser.
+  }
+
+  const stored = (await storage.genericGet(METHOD_CHOICE_MODEL, details.uid)) as
+    | { methodId?: string }
+    | null;
+  if (stored?.methodId) {
+    const found = methods.find((m) => m.id === stored.methodId);
+    if (found) return { kind: 'method', method: found };
+  }
+
+  return { kind: 'chooser' };
 }
 
 async function handleGet(
   req: Request,
   res: Response,
   provider: OidcProviderForInteractions,
-  resolveMethod: () => IAuthMethod,
+  methods: readonly IAuthMethod[],
   storage: IAuthStorageLayer,
 ): Promise<void> {
   let details;
@@ -124,7 +163,13 @@ async function handleGet(
     return;
   }
 
-  const method = resolveMethod();
+  const resolution = await resolveMethodForRequest(req, details, methods, storage);
+  if (resolution.kind === 'chooser') {
+    res.type('html').send(renderLoginChooser(methods, details.uid));
+    return;
+  }
+
+  const method = resolution.method;
   const ctx = makeContext(details, req);
 
   const step = await method.beginInteraction(ctx);
@@ -146,7 +191,7 @@ async function handlePost(
   req: Request,
   res: Response,
   provider: OidcProviderForInteractions,
-  resolveMethod: () => IAuthMethod,
+  methods: readonly IAuthMethod[],
   storage: IAuthStorageLayer,
 ): Promise<void> {
   let details;
@@ -154,6 +199,15 @@ async function handlePost(
     details = await provider.interactionDetails(req, res);
   } catch (err) {
     sendError(res, 400, 'invalid_interaction', describeError(err));
+    return;
+  }
+
+  const resolution = await resolveMethodForRequest(req, details, methods, storage);
+  if (resolution.kind === 'chooser') {
+    // POST without a stored method choice — the user submitted the
+    // interaction form before picking a method. Tell them to restart
+    // rather than silently picking one.
+    sendError(res, 400, 'invalid_interaction', 'no auth method selected; restart sign-in');
     return;
   }
 
@@ -172,7 +226,7 @@ async function handlePost(
     await storage.genericDestroy(CSRF_MODEL, details.uid);
   }
 
-  const method = resolveMethod();
+  const method = resolution.method;
   const ctx = makeContext(details, req);
 
   const result = await method.completeInteraction(ctx, {
@@ -345,4 +399,35 @@ function sendError(res: Response, status: number, error: string, description: st
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Method chooser shown when more than one auth method is configured and
+ * the user hasn't yet picked one. Each option is a GET link to the same
+ * interaction URL with `?method=<id>` appended; clicking persists the
+ * choice and dispatches to that method's beginInteraction.
+ *
+ * Kept inline (rather than in each method) because the chooser is a
+ * cross-method concern — it knows about the menu, not any particular
+ * method's render behavior.
+ */
+function renderLoginChooser(methods: readonly IAuthMethod[], interactionId: string): string {
+  const safeUid = escapeHtmlAttr(interactionId);
+  const items = methods.map((m) => {
+    const safeId = escapeHtmlAttr(m.id);
+    const safeLabel = m.displayName
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `      <li><a href="/interaction/${safeUid}?method=${safeId}">${safeLabel}</a></li>`;
+  }).join('\n');
+
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sign in to DollhouseMCP</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}ul{list-style:none;padding:0;margin:24px 0}li{margin:8px 0}a{display:block;padding:12px 16px;background:#185c37;color:white;text-decoration:none;border-radius:6px;font-weight:700}a:hover{background:#143f25}</style>
+</head><body><main>
+<h1>Sign in to DollhouseMCP</h1>
+<p>Choose how to sign in:</p>
+<ul>
+${items}
+    </ul>
+</main></body></html>`;
 }
