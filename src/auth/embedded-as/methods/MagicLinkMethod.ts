@@ -25,6 +25,7 @@
  * @module auth/embedded-as/methods/MagicLinkMethod
  */
 
+import { createHash } from 'node:crypto';
 import express, { type Router } from 'express';
 import { logger } from '../../../utils/logger.js';
 import type {
@@ -344,11 +345,23 @@ export class MagicLinkMethod implements IAuthMethod {
   }
 }
 
-function hashEmail(email: string): string {
-  // Deterministic short hash for use as the externalSub. The email itself
-  // is also stored (it's the user-visible identity); this is just to avoid
-  // putting raw email strings into the sub claim.
-  return Buffer.from(email).toString('base64url').slice(0, 32);
+/**
+ * Derive an opaque, irreversible externalSub from the user's email
+ * (must-fix #18 — account key is `(provider, external_sub)`, not email).
+ *
+ * Lowercased + trimmed before hashing so `Alice@Example.com` and
+ * `alice@example.com` collide on the same account. SHA-256 then base64url
+ * gives 43 chars of entropy — well within the auth_accounts.external_sub
+ * VARCHAR(255) limit and far beyond the prior reversible-base64
+ * implementation that fit the email itself into 32 chars.
+ *
+ * Earlier code used `Buffer.from(email).toString('base64url').slice(0, 32)`
+ * which was reversible (`Buffer.from(externalSub, 'base64url').toString('utf8')`
+ * recovered the email prefix) and collision-prone (any two emails sharing
+ * a 24-byte UTF-8 prefix mapped to the same sub).
+ */
+export function hashEmail(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase()).digest('base64url');
 }
 
 function renderRequestPage(): string {

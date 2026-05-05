@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
 import {
   MagicLinkMethod,
+  hashEmail,
   type EmailSender,
   type SendMagicLinkInput,
 } from '../../../../../src/auth/embedded-as/methods/MagicLinkMethod.js';
@@ -172,6 +173,45 @@ describe('MagicLinkMethod', () => {
       await method.consumeMagicLink(token);
       const replay = await method.consumeMagicLink(token);
       expect(replay.kind).toBe('error');
+    });
+  });
+
+  describe('hashEmail (must-fix #18 — opaque, irreversible externalSub)', () => {
+    it('produces a 43-char base64url string (32-byte SHA-256)', () => {
+      const hash = hashEmail('alice@example.com');
+      expect(hash).toHaveLength(43);
+      expect(hash).toMatch(/^[A-Za-z0-9_-]+$/);
+    });
+
+    it('is irreversible — base64url-decoding does not yield the email', () => {
+      const email = 'alice@example.com';
+      const hash = hashEmail(email);
+      expect(Buffer.from(hash, 'base64url').toString('utf8')).not.toContain(email);
+      expect(Buffer.from(hash, 'base64url').toString('utf8')).not.toContain('alice');
+    });
+
+    it('is deterministic — same email always hashes to the same value', () => {
+      expect(hashEmail('alice@example.com')).toBe(hashEmail('alice@example.com'));
+    });
+
+    it('normalizes case — Alice@Example.com and alice@example.com share a sub', () => {
+      expect(hashEmail('Alice@Example.com')).toBe(hashEmail('alice@example.com'));
+    });
+
+    it('normalizes whitespace — leading/trailing trim applied', () => {
+      expect(hashEmail('  alice@example.com  ')).toBe(hashEmail('alice@example.com'));
+    });
+
+    it('emails with shared 24-byte prefixes do NOT collide', () => {
+      // Earlier reversible-truncation implementation collapsed any two emails
+      // sharing the first 24 bytes onto the same sub. SHA-256 doesn't.
+      const a = hashEmail('alice.somebody.long-tag-1@biglongcorp.example.com');
+      const b = hashEmail('alice.somebody.long-tag-2@biglongcorp.example.com');
+      expect(a).not.toBe(b);
+    });
+
+    it('different emails produce different hashes', () => {
+      expect(hashEmail('alice@example.com')).not.toBe(hashEmail('bob@example.com'));
     });
   });
 });
