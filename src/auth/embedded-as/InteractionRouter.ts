@@ -28,7 +28,12 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import express, { type Router, type Request, type Response } from 'express';
 import { logger } from '../../utils/logger.js';
-import type { IAuthMethod, InteractionContext } from './IAuthMethod.js';
+import type {
+  IAuthMethod,
+  InteractionContext,
+  InteractionResult,
+  InteractionStep,
+} from './IAuthMethod.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const CSRF_MODEL = 'InteractionCsrf';
@@ -86,12 +91,15 @@ export function createInteractionRouter(deps: InteractionRouterDeps): Router {
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json({ limit: '32kb' }));
 
-  router.get('/:uid', (req, res) => {
-    void handleGet(req, res, provider, methods, storage);
+  // H8: route handlers forward errors to Express's `next` so unhandled
+  // rejections in handleGet/handlePost surface as a real 500 instead of
+  // a hung request (the prior `void` discard swallowed the rejection).
+  router.get('/:uid', (req, res, next) => {
+    handleGet(req, res, provider, methods, storage).catch(next);
   });
 
-  router.post('/:uid', (req, res) => {
-    void handlePost(req, res, provider, methods, storage);
+  router.post('/:uid', (req, res, next) => {
+    handlePost(req, res, provider, methods, storage).catch(next);
   });
 
   return router;
@@ -172,7 +180,20 @@ async function handleGet(
   const method = resolution.method;
   const ctx = makeContext(details, req);
 
-  const step = await method.beginInteraction(ctx);
+  // H8: catch beginInteraction throws so a method bug surfaces as a
+  // structured 500 instead of a silent hang.
+  let step: InteractionStep;
+  try {
+    step = await method.beginInteraction(ctx);
+  } catch (err) {
+    logger.error('[InteractionRouter] beginInteraction threw', {
+      methodId: method.id,
+      interactionId: details.uid,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendError(res, 500, 'server_error', 'method beginInteraction failed');
+    return;
+  }
 
   if (step.kind === 'redirect') {
     res.redirect(303, step.url);
@@ -211,29 +232,52 @@ async function handlePost(
     return;
   }
 
-  // CSRF (must-fix #6): a render-html step from the GET handler stored a token
-  // in IAuthStorageLayer. Methods that begin via a redirect (social login) don't
-  // store a CSRF token here — their callback verification lives in their own
-  // completeInteraction (e.g. OAuth `state` for GitHub).
+  // CSRF (must-fix #6 + H13): require a CSRF record for every POST to
+  // /interaction/:uid. A POST without a record is either:
+  //   (a) Submission before any GET render-html step — illegitimate.
+  //   (b) Replay after a previous successful POST consumed the token —
+  //       attacker re-submitting a back-button form.
+  // The earlier shape (`if (persistedCsrf?.token) verify; else fall
+  // through`) silently bypassed CSRF in case (b). Methods that begin
+  // via a redirect (social login) handle their callback on their own
+  // contributeRoutes path, NOT on /interaction/:uid POST — so any
+  // redirect-flow request reaching this handler without a CSRF record
+  // is also illegitimate.
   const persistedCsrf = await storage.genericGet(CSRF_MODEL, details.uid) as { token?: string } | null;
-  if (persistedCsrf?.token) {
-    const submitted = bodyValue(req, 'csrf_token');
-    if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
-      sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
-      return;
-    }
-    // Single-use: destroy regardless of method outcome.
-    await storage.genericDestroy(CSRF_MODEL, details.uid);
+  if (!persistedCsrf?.token) {
+    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    return;
   }
+  const submitted = bodyValue(req, 'csrf_token');
+  if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
+    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    return;
+  }
+  // Single-use: destroy regardless of method outcome. A subsequent
+  // next-step render-html stamps a fresh record before the user sees
+  // the next form.
+  await storage.genericDestroy(CSRF_MODEL, details.uid);
 
   const method = resolution.method;
   const ctx = makeContext(details, req);
 
-  const result = await method.completeInteraction(ctx, {
-    formBody: req.body && typeof req.body === 'object' ? (req.body as Record<string, string>) : undefined,
-    query: req.query as Record<string, string>,
-    ip: req.ip ?? 'unknown',
-  });
+  // H8: catch completeInteraction throws.
+  let result: InteractionResult;
+  try {
+    result = await method.completeInteraction(ctx, {
+      formBody: req.body && typeof req.body === 'object' ? (req.body as Record<string, string>) : undefined,
+      query: req.query as Record<string, string>,
+      ip: req.ip ?? 'unknown',
+    });
+  } catch (err) {
+    logger.error('[InteractionRouter] completeInteraction threw', {
+      methodId: method.id,
+      interactionId: details.uid,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    sendError(res, 500, 'server_error', 'method completeInteraction failed');
+    return;
+  }
 
   if (result.kind === 'denied') {
     sendError(res, 400, 'access_denied', result.reason);

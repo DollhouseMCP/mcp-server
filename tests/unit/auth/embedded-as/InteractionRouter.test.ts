@@ -203,4 +203,127 @@ describe('InteractionRouter — multi-method dispatch', () => {
       await h.close();
     }
   });
+
+  describe('H8: throws in method calls become structured 500', () => {
+    it('beginInteraction throw yields 500 server_error (no hung request)', async () => {
+      const throwing: IAuthMethod = {
+        id: 'trivial-consent',
+        displayName: 'Trivial',
+        async beginInteraction() { throw new Error('method blew up'); },
+        async completeInteraction() { return { kind: 'denied', reason: 'never' }; },
+        async findAccount() { return null; },
+      };
+      const h = await startHarness([throwing], storage, details);
+      try {
+        const res = await fetch(`${h.url}/interaction/${details.uid}`);
+        expect(res.status).toBe(500);
+        const body = await res.json() as { error: string };
+        expect(body.error).toBe('server_error');
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('completeInteraction throw yields 500 server_error', async () => {
+      const throwing: IAuthMethod = {
+        id: 'trivial-consent',
+        displayName: 'Trivial',
+        async beginInteraction(): Promise<InteractionStep> {
+          return { kind: 'render-html', html: '<form method="post"></form>', csrfToken: '' };
+        },
+        async completeInteraction() { throw new Error('completion blew up'); },
+        async findAccount() { return null; },
+      };
+      const h = await startHarness([throwing], storage, details);
+      try {
+        // GET to render-html (stamps CSRF).
+        const getRes = await fetch(`${h.url}/interaction/${details.uid}`);
+        const getBody = await getRes.text();
+        const csrfMatch = getBody.match(/name="csrf_token"\s+value="([^"]+)"/);
+        const csrfToken = csrfMatch![1]!;
+        // POST with valid CSRF — completeInteraction throws.
+        const postRes = await fetch(`${h.url}/interaction/${details.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ csrf_token: csrfToken }),
+        });
+        expect(postRes.status).toBe(500);
+        const body = await postRes.json() as { error: string };
+        expect(body.error).toBe('server_error');
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  describe('H13: CSRF required on every POST (no missing-record bypass)', () => {
+    it('POST without prior render-html GET (no CSRF record) returns 403', async () => {
+      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Trivial' });
+      const h = await startHarness([method], storage, details);
+      try {
+        // POST without ever GETting the render-html step.
+        const res = await fetch(`${h.url}/interaction/${details.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: 'action=approve',
+        });
+        expect(res.status).toBe(403);
+        const body = await res.json() as { error: string };
+        expect(body.error).toBe('invalid_csrf');
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('replay (back-button) after consumed CSRF returns 403, not silent bypass', async () => {
+      const method = fakeMethod({
+        id: 'trivial-consent', displayName: 'Trivial',
+        identity: { sub: 'local_alice', emailVerified: false },
+      });
+      const h = await startHarness([method], storage, details);
+      try {
+        // GET → render-html stamps CSRF.
+        const getRes = await fetch(`${h.url}/interaction/${details.uid}`);
+        const getBody = await getRes.text();
+        const csrfMatch = getBody.match(/name="csrf_token"\s+value="([^"]+)"/);
+        const csrfToken = csrfMatch![1]!;
+        // First POST consumes the CSRF. May 200/302/303 on success or
+        // 500 if interactionFinished mock doesn't drive a real redirect;
+        // either way it MUST NOT be 403 (CSRF was accepted).
+        const firstPost = await fetch(`${h.url}/interaction/${details.uid}`, {
+          method: 'POST', redirect: 'manual',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
+        });
+        expect(firstPost.status).not.toBe(403);
+        // Second POST replays the same token (back-button); record is gone.
+        const replayPost = await fetch(`${h.url}/interaction/${details.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
+        });
+        expect(replayPost.status).toBe(403);
+        const body = await replayPost.json() as { error: string };
+        expect(body.error).toBe('invalid_csrf');
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('POST with mismatched CSRF token returns 403', async () => {
+      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Trivial' });
+      const h = await startHarness([method], storage, details);
+      try {
+        await fetch(`${h.url}/interaction/${details.uid}`); // GET to stamp CSRF
+        const res = await fetch(`${h.url}/interaction/${details.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ csrf_token: 'totally-wrong-token' }),
+        });
+        expect(res.status).toBe(403);
+      } finally {
+        await h.close();
+      }
+    });
+  });
 });
