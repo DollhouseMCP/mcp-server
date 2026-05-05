@@ -104,7 +104,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       publicBaseUrl,
       mcpPath: '/mcp',
       keyFilePath: path.join(testDir, 'oauth-key.json'),
-      method: new TrivialConsentMethod({ defaultSubject: 'oauth-http-user' }),
+      methods: [new TrivialConsentMethod({ defaultSubject: 'oauth-http-user' })],
       storage: new InMemoryAuthStorageLayer(),
     });
 
@@ -289,5 +289,49 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       await transport.terminateSession().catch(() => {});
       await client.close().catch(() => {});
     }
+  }, 30_000);
+
+  it('B7: ephemeral-port loopback redirect_uri is accepted (RFC 8252 §7.3)', async () => {
+    // Native MCP clients (Claude Desktop, Claude Code, etc.) bind
+    // ephemeral loopback ports for the OAuth callback. The pre-
+    // registered DEFAULT_CLIENT_ID has bare-host loopback redirect_uris;
+    // oidc-provider 9.x performs RFC 8252 §7.3 loopback-port relaxation
+    // by default for `application_type: 'native'` clients — an arbitrary
+    // port is accepted as long as host + path match a registered
+    // redirect_uri. This test pins that behavior so an upstream
+    // regression breaks loud rather than silently breaking every
+    // native client connect.
+    //
+    // If this assertion ever fails, native clients with ephemeral ports
+    // require DCR — making the admin-endpoint follow-up (referenced in
+    // B2) a prerequisite for multi-user native deployments.
+    const baseUrl = runtime.url.replace('/mcp', '');
+    const verifier = randomBytes(32).toString('base64url');
+    const ephemeralRedirect = 'http://127.0.0.1:54321/callback';
+
+    const authorizeParams = new URLSearchParams({
+      response_type: 'code',
+      client_id: 'dollhouse-claude-connector',
+      redirect_uri: ephemeralRedirect,
+      code_challenge: pkceS256(verifier),
+      code_challenge_method: 'S256',
+      resource: runtime.url,
+      scope: 'mcp offline_access',
+    });
+
+    const oasMetadata = await fetch(`${baseUrl}/.well-known/oauth-authorization-server`);
+    const authServer = await oasMetadata.json() as { authorization_endpoint: string };
+
+    const authorize = await fetch(`${authServer.authorization_endpoint}?${authorizeParams}`, {
+      method: 'GET',
+      redirect: 'manual',
+    });
+
+    // Acceptance shape: 302/303 to /interaction/<uid>. Reject would be
+    // 400 outright or 302 to the client redirect_uri with
+    // error=invalid_request — both miss /interaction/ in Location.
+    expect([302, 303]).toContain(authorize.status);
+    const location = authorize.headers.get('location') ?? '';
+    expect(location).toContain('/interaction/');
   }, 30_000);
 });

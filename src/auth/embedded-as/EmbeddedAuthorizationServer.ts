@@ -411,9 +411,19 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // matches the runtime spec ({ keys: [JWK] }) but the @types/oidc-provider
       // declares a narrower internal type. Cast preserves runtime correctness.
       jwks: keyset.jwks as unknown as Configuration['jwks'],
-      // Pre-register the default Claude connector client so curl-based dev flows
-      // and the integration test work without DCR. id_token_signed_response_alg
-      // must match our keyset (ES256) since oidc-provider defaults to RS256.
+      // Pre-register the default Claude connector client so curl-based dev
+      // flows and native MCP clients work without DCR. The bare-host
+      // loopback redirect_uris below are deliberate: with
+      // `application_type: 'native'`, oidc-provider 9.x applies RFC 8252
+      // §7.3 loopback-port relaxation — an arbitrary port matches as
+      // long as host + path equal a registered URI. This is what makes
+      // Claude Desktop / Claude Code (which bind ephemeral loopback
+      // ports for the callback) work against a fresh install with no
+      // operator setup. The `B7` integration test pins this behavior so
+      // an oidc-provider upstream regression breaks loud.
+      //
+      // id_token_signed_response_alg must match our keyset (ES256) since
+      // oidc-provider defaults to RS256.
       clients: [
         {
           client_id: DEFAULT_CLIENT_ID,
