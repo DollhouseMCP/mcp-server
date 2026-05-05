@@ -65,6 +65,15 @@ export interface IdentityAuditEvent {
   timestamp: number;
 }
 
+export interface IdentityEventFilter {
+  /** Only events of this type. Exact-match. */
+  type?: string;
+  /** Only events for this account sub. Exact-match. */
+  sub?: string;
+  /** Only events at or after this epoch ms. */
+  since?: number;
+}
+
 /**
  * Storage contract. All methods are async. The semantic account methods
  * are owned by the IAuthMethod implementations; the generic methods are
@@ -79,7 +88,31 @@ export interface IAuthStorageLayer {
 
   // --- Audit (must-fix #21) ---
 
+  /**
+   * Append an identity audit event. Storage is append-only by contract; do
+   * not amend or delete events after they land. Backends may rotate or
+   * archive at the operator's discretion outside this interface.
+   */
   recordIdentityEvent(event: IdentityAuditEvent): Promise<void>;
+
+  /**
+   * Query the audit log. Used by tests, operator-facing audit consumption,
+   * and by methods that need to reason about prior events (e.g. anomaly
+   * detection consuming `auth.social.identity_changed`). Filters compose
+   * with AND semantics; returns events sorted by timestamp ascending.
+   */
+  listIdentityEvents(filter?: IdentityEventFilter): Promise<IdentityAuditEvent[]>;
+
+  // --- Grants (Phase 5 H14: revoke-on-identity-change) ---
+
+  /**
+   * Return grant ids associated with the given account sub. Used by the
+   * identity-change handler to revoke stale refresh families when a social
+   * account's verified email mapping moves between logins. Implementations
+   * may scan the Grant model in storage; backends with proper indexes
+   * should query directly.
+   */
+  findGrantsByAccountId(sub: string): Promise<string[]>;
 
   // --- Generic K/V backing oidc-provider's Adapter ---
   // Models routed here: Session, Grant, Interaction, AuthorizationCode,

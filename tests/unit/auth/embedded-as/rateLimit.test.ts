@@ -29,7 +29,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 0; i < 5; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
-    const events = storage.__testGetAuditEvents();
+    const events = await storage.listIdentityEvents();
     const fired = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
         && (e.details as Record<string, unknown> | undefined)?.dimension === 'account',
@@ -43,7 +43,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 0; i < 8; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
-    const events = storage.__testGetAuditEvents();
+    const events = await storage.listIdentityEvents();
     const accountFires = events.filter(
       e => e.type === 'auth.local.brute_force_suspected'
         && (e.details as Record<string, unknown> | undefined)?.dimension === 'account',
@@ -60,7 +60,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     expect(check.allowed).toBe(false);
     expect(check.reason).toMatch(/ip locked/);
 
-    const events = storage.__testGetAuditEvents();
+    const events = await storage.listIdentityEvents();
     const ipFire = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
         && (e.details as Record<string, unknown> | undefined)?.dimension === 'ip',
@@ -88,7 +88,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     const check = limiter.check('local_someone_else', 'unknown');
     expect(check.allowed).toBe(true);
 
-    const events = storage.__testGetAuditEvents();
+    const events = await storage.listIdentityEvents();
     const ipFire = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
         && (e.details as Record<string, unknown> | undefined)?.dimension === 'ip',

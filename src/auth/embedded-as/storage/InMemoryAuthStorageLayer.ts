@@ -17,6 +17,7 @@ import { logger } from '../../../utils/logger.js';
 import type {
   IAuthStorageLayer,
   IdentityAuditEvent,
+  IdentityEventFilter,
   StoredAccount,
 } from './IAuthStorageLayer.js';
 
@@ -59,9 +60,34 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
-  /** Test/inspection helper. Not part of the IAuthStorageLayer contract. */
-  __testGetAuditEvents(): IdentityAuditEvent[] {
-    return [...this.auditEvents];
+  async listIdentityEvents(filter?: IdentityEventFilter): Promise<IdentityAuditEvent[]> {
+    let events = this.auditEvents;
+    if (filter?.type) events = events.filter(e => e.type === filter.type);
+    if (filter?.sub) events = events.filter(e => e.sub === filter.sub);
+    if (filter?.since !== undefined) {
+      const since = filter.since;
+      events = events.filter(e => e.timestamp >= since);
+    }
+    // Defensive copy + stable sort; auditEvents is push-ordered so timestamps
+    // are usually monotonic, but recordIdentityEvent permits caller-supplied
+    // timestamps so a sort guards against out-of-order writes.
+    return [...events].sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  // ---- Grants (Phase 5 H14 support) ----
+
+  async findGrantsByAccountId(sub: string): Promise<string[]> {
+    const grants: string[] = [];
+    const now = Date.now();
+    for (const [key, record] of this.genericStore.entries()) {
+      if (!key.startsWith('Grant|')) continue;
+      if (record.expiresAt && record.expiresAt <= now) continue;
+      const payload = record.payload as { accountId?: string } | null;
+      if (payload && payload.accountId === sub) {
+        grants.push(key.slice('Grant|'.length));
+      }
+    }
+    return grants;
   }
 
   // ---- Generic K/V (oidc-provider adapter sink) ----

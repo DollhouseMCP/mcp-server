@@ -169,7 +169,7 @@ describe('GithubSocialMethod', () => {
       const result = await method.processCallback({ code: 'c', state: 'i' });
       expect(result.kind).toBe('ok');
 
-      const events = storage.__testGetAuditEvents();
+      const events = await storage.listIdentityEvents();
       const change = events.find(e => e.type === 'auth.social.identity_changed');
       expect(change).toBeDefined();
       expect(change?.externalSub).toBe('42');
@@ -207,7 +207,7 @@ describe('GithubSocialMethod', () => {
 
       await method.processCallback({ code: 'c', state: 'i' });
 
-      const events = storage.__testGetAuditEvents();
+      const events = await storage.listIdentityEvents();
       expect(events.find(e => e.type === 'auth.social.identity_changed')).toBeUndefined();
     });
 

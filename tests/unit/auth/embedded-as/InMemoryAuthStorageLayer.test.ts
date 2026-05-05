@@ -56,8 +56,63 @@ describe('InMemoryAuthStorageLayer', () => {
     it('records identity events in order', async () => {
       await store.recordIdentityEvent({ type: 'auth.test.one', timestamp: 1 });
       await store.recordIdentityEvent({ type: 'auth.test.two', timestamp: 2 });
-      const events = store.__testGetAuditEvents();
+      const events = await store.listIdentityEvents();
       expect(events.map(e => e.type)).toEqual(['auth.test.one', 'auth.test.two']);
+    });
+
+    it('listIdentityEvents filters by type', async () => {
+      await store.recordIdentityEvent({ type: 'auth.test.one', timestamp: 1 });
+      await store.recordIdentityEvent({ type: 'auth.test.two', timestamp: 2 });
+      const events = await store.listIdentityEvents({ type: 'auth.test.two' });
+      expect(events.map(e => e.type)).toEqual(['auth.test.two']);
+    });
+
+    it('listIdentityEvents filters by sub', async () => {
+      await store.recordIdentityEvent({ type: 'auth.x', sub: 'a', timestamp: 1 });
+      await store.recordIdentityEvent({ type: 'auth.x', sub: 'b', timestamp: 2 });
+      const events = await store.listIdentityEvents({ sub: 'a' });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.sub).toBe('a');
+    });
+
+    it('listIdentityEvents filters by since (inclusive)', async () => {
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 100 });
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 200 });
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 300 });
+      const events = await store.listIdentityEvents({ since: 200 });
+      expect(events.map(e => e.timestamp)).toEqual([200, 300]);
+    });
+
+    it('listIdentityEvents returns events sorted by timestamp', async () => {
+      // Push out-of-order to confirm the sort.
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 300 });
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 100 });
+      await store.recordIdentityEvent({ type: 'auth.x', timestamp: 200 });
+      const events = await store.listIdentityEvents();
+      expect(events.map(e => e.timestamp)).toEqual([100, 200, 300]);
+    });
+  });
+
+  describe('grant lookup (Phase 5 H14)', () => {
+    it('findGrantsByAccountId returns ids of grants owned by the sub', async () => {
+      await store.genericSet('Grant', 'g1', { accountId: 'github_42', clientId: 'c1' });
+      await store.genericSet('Grant', 'g2', { accountId: 'github_42', clientId: 'c2' });
+      await store.genericSet('Grant', 'g3', { accountId: 'github_99', clientId: 'c1' });
+      await store.genericSet('Session', 'session-not-grant', { accountId: 'github_42' });
+      const grants = await store.findGrantsByAccountId('github_42');
+      expect(new Set(grants)).toEqual(new Set(['g1', 'g2']));
+    });
+
+    it('findGrantsByAccountId skips expired Grant entries', async () => {
+      await store.genericSet('Grant', 'g-expired', { accountId: 'github_42' }, -1);
+      await store.genericSet('Grant', 'g-live', { accountId: 'github_42' });
+      const grants = await store.findGrantsByAccountId('github_42');
+      expect(grants).toEqual(['g-live']);
+    });
+
+    it('findGrantsByAccountId returns empty array when no grants exist for sub', async () => {
+      const grants = await store.findGrantsByAccountId('local_unknown');
+      expect(grants).toEqual([]);
     });
   });
 
