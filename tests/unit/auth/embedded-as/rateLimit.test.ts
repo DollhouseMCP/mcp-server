@@ -68,14 +68,33 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     expect(ipFire).toBeDefined();
   });
 
-  it('clears account failures on noteSuccess', async () => {
+  it('preserves account failure record across noteSuccess (H9: credential-stuffing carryover)', async () => {
+    // H9: a successful login does NOT clear the failure counter. An
+    // attacker who succeeded with a stolen credential after several
+    // failures cannot use that success to reset the threshold for a
+    // fresh probe round on the same account.
     const sub = 'local_alice';
     const ip = '10.0.0.1';
     for (let i = 0; i < 4; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
     await limiter.noteSuccess(sub, ip);
-    // After a success, the account counter resets — next failure starts fresh.
+    // 5th failure must hit the threshold even though a success happened
+    // in between. With the prior delete-on-success behavior the counter
+    // was 0 after success and 5 more attempts were available.
+    await limiter.noteFailure(sub, ip);
+    expect(limiter.check(sub, ip).allowed).toBe(false);
+  });
+
+  it('still allows the legitimate user immediate access after success when sub-threshold', async () => {
+    const sub = 'local_alice';
+    const ip = '10.0.0.1';
+    await limiter.noteFailure(sub, ip);
+    await limiter.noteFailure(sub, ip);
+    await limiter.noteSuccess(sub, ip);
+    // Two prior failures + success — well under threshold (5). The
+    // record persists but the user is not locked out; the next check
+    // is allowed because the count is below the threshold.
     expect(limiter.check(sub, ip).allowed).toBe(true);
   });
 

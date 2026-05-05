@@ -127,17 +127,35 @@ export class LocalLoginRateLimiter {
   }
 
   /**
-   * Record a successful login; clears any failure state for the account.
+   * Record a successful login.
    *
-   * IP bucket intentionally NOT reset on success: an attacker who
-   * succeeds once (e.g. via a stolen credential or after a partial
-   * compromise) should not be able to clear the IP-level lockout state
-   * accumulated by their failed probes against other usernames. The
-   * per-account counter resets so a legitimate user who eventually got
-   * the password right doesn't stay rate-limited.
+   * H9: success does NOT clear the per-account failure record. The
+   * earlier shape deleted the record on success, which let an attacker
+   * who eventually succeeded (stolen credential, password-spray hit)
+   * reset the threshold for a fresh probe round on the same account.
+   *
+   * Now: we drop the record only when there are zero failures in the
+   * current window OR when the window has fully elapsed. Active failure
+   * records persist past success and age out via the natural window
+   * decay in noteFailure. The IP bucket is also untouched on success —
+   * same threat model: a successful single login can't clear cross-
+   * username probe state from the same source.
+   *
+   * For a legitimate user who typo'd a couple times before getting in:
+   * the window is ACCOUNT_WINDOW_MS (60 s by default), so the record
+   * decays on its own well before their next session.
    */
   async noteSuccess(account: string, _ip: string): Promise<void> {
-    this.accounts.delete(account);
+    const rec = this.accounts.get(account);
+    if (!rec) return;
+    const now = Date.now();
+    const elapsed = now - rec.firstFailureAt;
+    if (elapsed > ACCOUNT_WINDOW_MS) {
+      // Window already expired; the record adds no value. Drop it.
+      this.accounts.delete(account);
+    }
+    // Otherwise: leave the failure record in place. It will decay
+    // naturally via the window-elapsed check in noteFailure.
   }
 
   /** Record a failed login; updates counters and may emit the audit event. */
