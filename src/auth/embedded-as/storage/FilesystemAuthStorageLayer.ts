@@ -1,0 +1,332 @@
+/**
+ * FilesystemAuthStorageLayer
+ *
+ * Durable file-system backed implementation of IAuthStorageLayer.
+ * Survives process restart. Default backend for non-DB deployments.
+ *
+ * **Path resolution is the caller's responsibility** — this class is
+ * pure: it knows nothing about `~/.dollhouse/`, XDG, legacy detection,
+ * or env var precedence. The factory (`createAuthStorage`) injects an
+ * absolute `rootDir` resolved via `PathService.resolveDataDir('state')`
+ * so the layer participates correctly in the legacy-vs-platform-default
+ * scheme that `resolveDataDirectory` implements (see paths/PathService).
+ *
+ * Layout under `<rootDir>/`:
+ *
+ *   accounts.json           — JSON array of StoredAccount
+ *   audit.jsonl             — newline-delimited IdentityAuditEvent (append-only)
+ *   kv/<Model>/<id>.json    — one file per oidc-provider K/V entry,
+ *                             payload shape `{ exp: number|null, value: unknown }`
+ *
+ * Concurrency:
+ *   - Account read-modify-write protected by a file-resource lock keyed
+ *     `auth:accounts`. Other readers see consistent snapshots between
+ *     atomic-rename writes.
+ *   - Audit appends use `fs.appendFile`, naturally append-only; we still
+ *     hold a lock to prevent interleaved partial writes from concurrent
+ *     callers.
+ *   - K/V writes use `atomicWriteFile` (write-temp + rename); reads are
+ *     plain reads. A torn read manifests as JSON parse failure → treat as
+ *     missing, which matches the in-memory backend's "expired record"
+ *     contract.
+ *
+ * Filename safety:
+ *   - `model` is restricted to oidc-provider's known set (Session, Grant,
+ *     Interaction, etc.) — we still sanitize to alphanumeric to refuse
+ *     anything unexpected.
+ *   - `id` is sanitized to base64url-compatible chars; oidc-provider
+ *     generates these from `randomBytes`, but any caller-supplied string
+ *     is rejected if it would write outside the kv/<Model>/ directory.
+ *
+ * @module auth/embedded-as/storage/FilesystemAuthStorageLayer
+ */
+
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import { logger } from '../../../utils/logger.js';
+import { FileLockManager } from '../../../security/fileLockManager.js';
+import type {
+  IAuthStorageLayer,
+  IdentityAuditEvent,
+  IdentityEventFilter,
+  StoredAccount,
+} from './IAuthStorageLayer.js';
+
+const SAFE_ID_RE = /^[A-Za-z0-9_\-]+$/;
+const SAFE_MODEL_RE = /^[A-Za-z][A-Za-z0-9]*$/;
+
+interface KvRecord {
+  /** Epoch ms; null = no TTL. */
+  exp: number | null;
+  value: unknown;
+}
+
+export interface FilesystemAuthStorageLayerOptions {
+  /**
+   * Absolute path to the auth-storage root. The factory layer is
+   * expected to compute this via `PathService.resolveDataDir('state')`
+   * (typically yielding `<state>/auth/`); tests pass a tmpdir.
+   */
+  rootDir: string;
+}
+
+export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
+  readonly rootDir: string;
+  private readonly accountsPath: string;
+  private readonly auditPath: string;
+  private readonly kvDir: string;
+  private readonly locks = new FileLockManager();
+  private initialized = false;
+
+  constructor(options: FilesystemAuthStorageLayerOptions) {
+    if (!path.isAbsolute(options.rootDir)) {
+      throw new Error(
+        `FilesystemAuthStorageLayer rootDir must be absolute, got: ${options.rootDir}`,
+      );
+    }
+    this.rootDir = options.rootDir;
+    this.accountsPath = path.join(this.rootDir, 'accounts.json');
+    this.auditPath = path.join(this.rootDir, 'audit.jsonl');
+    this.kvDir = path.join(this.rootDir, 'kv');
+  }
+
+  // ---- Accounts (must-fix #18) ----
+
+  async findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null> {
+    const accounts = await this.readAccounts();
+    return accounts.find(a => a.provider === provider && a.externalSub === externalSub) ?? null;
+  }
+
+  async upsertAccount(account: StoredAccount): Promise<void> {
+    await this.locks.withLock(`auth:accounts:${this.accountsPath}`, async () => {
+      const accounts = await this.readAccountsRaw();
+      const idx = accounts.findIndex(a => a.sub === account.sub);
+      if (idx >= 0) accounts[idx] = account;
+      else accounts.push(account);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
+    });
+  }
+
+  async getAccount(sub: string): Promise<StoredAccount | null> {
+    const accounts = await this.readAccounts();
+    return accounts.find(a => a.sub === sub) ?? null;
+  }
+
+  // ---- Audit (must-fix #21) ----
+
+  async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
+    await this.locks.withLock(`auth:audit:${this.auditPath}`, async () => {
+      await this.ensureRoot();
+      await fs.appendFile(this.auditPath, `${JSON.stringify(event)}\n`, 'utf8');
+    });
+    logger.info('[AuthStorage:fs] identity event', {
+      type: event.type,
+      sub: event.sub,
+      provider: event.provider,
+    });
+  }
+
+  async listIdentityEvents(filter?: IdentityEventFilter): Promise<IdentityAuditEvent[]> {
+    const events = await this.readAudit();
+    let filtered = events;
+    if (filter?.type) filtered = filtered.filter(e => e.type === filter.type);
+    if (filter?.sub) filtered = filtered.filter(e => e.sub === filter.sub);
+    if (filter?.since !== undefined) {
+      const since = filter.since;
+      filtered = filtered.filter(e => e.timestamp >= since);
+    }
+    return filtered.slice().sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  // ---- Grants (Phase 5 H14) ----
+
+  async findGrantsByAccountId(sub: string): Promise<string[]> {
+    const grantDir = this.modelDir('Grant');
+    let entries: string[];
+    try {
+      entries = await fs.readdir(grantDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    const ids: string[] = [];
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const id = entry.slice(0, -'.json'.length);
+      const record = await this.readKv('Grant', id);
+      if (!record) continue;
+      if (record.exp !== null && record.exp <= now) continue;
+      const payload = record.value as { accountId?: string } | null;
+      if (payload && payload.accountId === sub) ids.push(id);
+    }
+    return ids;
+  }
+
+  // ---- Generic K/V (oidc-provider adapter sink) ----
+
+  async genericGet(model: string, id: string): Promise<unknown | null> {
+    const record = await this.readKv(model, id);
+    if (!record) return null;
+    if (record.exp !== null && record.exp <= Date.now()) {
+      // Lazy expiry: clean up while we're here. Best-effort.
+      void this.unlinkKv(model, id);
+      return null;
+    }
+    return record.value;
+  }
+
+  async genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    const record: KvRecord = {
+      exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
+      value: payload,
+    };
+    const filePath = this.kvPath(model, id);
+    await this.locks.withLock(`auth:kv:${filePath}`, async () => {
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await this.locks.atomicWriteFile(filePath, JSON.stringify(record));
+    });
+  }
+
+  async genericDestroy(model: string, id: string): Promise<void> {
+    await this.unlinkKv(model, id);
+  }
+
+  /**
+   * Linear scan over the Session model. Tolerated cost given solo/team
+   * deployment volumes; the Postgres backend should index `uid`.
+   */
+  async genericFindByUid(uid: string): Promise<unknown | null> {
+    const sessionDir = this.modelDir('Session');
+    let entries: string[];
+    try {
+      entries = await fs.readdir(sessionDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+    const now = Date.now();
+    for (const entry of entries) {
+      if (!entry.endsWith('.json')) continue;
+      const id = entry.slice(0, -'.json'.length);
+      const record = await this.readKv('Session', id);
+      if (!record) continue;
+      if (record.exp !== null && record.exp <= now) continue;
+      const payload = record.value as { uid?: string } | null;
+      if (payload && payload.uid === uid) return record.value;
+    }
+    return null;
+  }
+
+  // ---- internals ----
+
+  /**
+   * Public for tests + factory diagnostics; idempotent.
+   */
+  async ensureInitialized(): Promise<void> {
+    if (this.initialized) return;
+    await this.ensureRoot();
+    this.initialized = true;
+  }
+
+  private async ensureRoot(): Promise<void> {
+    await fs.mkdir(this.rootDir, { recursive: true, mode: 0o700 });
+  }
+
+  private async readAccounts(): Promise<StoredAccount[]> {
+    return this.locks.withLock(`auth:accounts:${this.accountsPath}`, () => this.readAccountsRaw());
+  }
+
+  private async readAccountsRaw(): Promise<StoredAccount[]> {
+    try {
+      const raw = await fs.readFile(this.accountsPath, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        logger.warn('[AuthStorage:fs] accounts.json is not an array; treating as empty', {
+          path: this.accountsPath,
+        });
+        return [];
+      }
+      return parsed as StoredAccount[];
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return [];
+      if (err instanceof SyntaxError) {
+        logger.warn('[AuthStorage:fs] accounts.json failed to parse; treating as empty', {
+          path: this.accountsPath,
+          error: err.message,
+        });
+        return [];
+      }
+      throw err;
+    }
+  }
+
+  private async readAudit(): Promise<IdentityAuditEvent[]> {
+    let raw: string;
+    try {
+      raw = await fs.readFile(this.auditPath, 'utf8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    const events: IdentityAuditEvent[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line) continue;
+      try {
+        events.push(JSON.parse(line) as IdentityAuditEvent);
+      } catch {
+        // Tolerate a torn last-line write; ignore and continue.
+      }
+    }
+    return events;
+  }
+
+  private async readKv(model: string, id: string): Promise<KvRecord | null> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    try {
+      const raw = await fs.readFile(this.kvPath(model, id), 'utf8');
+      return JSON.parse(raw) as KvRecord;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      // Treat parse error as missing — same contract as expired entries.
+      if (err instanceof SyntaxError) return null;
+      throw err;
+    }
+  }
+
+  private async unlinkKv(model: string, id: string): Promise<void> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    try {
+      await fs.unlink(this.kvPath(model, id));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+  }
+
+  private kvPath(model: string, id: string): string {
+    return path.join(this.kvDir, model, `${id}.json`);
+  }
+
+  private modelDir(model: string): string {
+    return path.join(this.kvDir, model);
+  }
+}
+
+function assertSafeModel(model: string): void {
+  if (!SAFE_MODEL_RE.test(model)) {
+    throw new Error(`unsafe model name: ${JSON.stringify(model)}`);
+  }
+}
+
+function assertSafeId(id: string): void {
+  if (!SAFE_ID_RE.test(id)) {
+    throw new Error(`unsafe id: ${JSON.stringify(id)}`);
+  }
+}
