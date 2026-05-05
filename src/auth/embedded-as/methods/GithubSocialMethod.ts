@@ -28,6 +28,7 @@
  */
 
 import type { Router } from 'express';
+import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
   ContributeRoutesDeps,
@@ -271,51 +272,106 @@ export class GithubSocialMethod implements IAuthMethod {
     return { kind: 'ok', interactionId: input.state, identity };
   }
 
+  /**
+   * Wrap network failures (DNS, connection refused, timeout) and JSON
+   * parse failures (GitHub returning HTML on a 5xx) into the structured
+   * `null` return path. Without this guard the unhandled rejection
+   * bubbles through processCallback into the AS callback handler's
+   * generic 500, losing the diagnostic.
+   */
   private async exchangeCodeForToken(code: string): Promise<string | null> {
-    const response = await this.fetchImpl(GITHUB_TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: this.options.clientId,
-        client_secret: this.options.clientSecret,
-        code,
-        redirect_uri: this.options.callbackUrl,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(GITHUB_TOKEN_URL, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: new URLSearchParams({
+          client_id: this.options.clientId,
+          client_secret: this.options.clientSecret,
+          code,
+          redirect_uri: this.options.callbackUrl,
+        }),
+      });
+    } catch (err) {
+      logger.warn('[GithubSocialMethod] token exchange network error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
     if (!response.ok) return null;
-    const body = (await response.json()) as { access_token?: string; error?: string };
+    let body: { access_token?: string; error?: string };
+    try {
+      body = (await response.json()) as { access_token?: string; error?: string };
+    } catch (err) {
+      logger.warn('[GithubSocialMethod] token exchange returned non-JSON body', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
     return body.access_token ?? null;
   }
 
+  /**
+   * Same wrap pattern as exchangeCodeForToken. Two GitHub API calls
+   * (`/user`, `/user/emails`); either can fail with a network error or
+   * return malformed JSON. Each is caught into a structured `{ error }`
+   * return.
+   */
   private async fetchProfile(
     accessToken: string,
   ): Promise<GithubProfile | { error: string }> {
-    const userResp = await this.fetchImpl(GITHUB_API_USER_URL, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${accessToken}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
+    let userResp: Response;
+    try {
+      userResp = await this.fetchImpl(GITHUB_API_USER_URL, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${accessToken}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+    } catch (err) {
+      logger.warn('[GithubSocialMethod] /user network error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { error: 'github user fetch failed' };
+    }
     if (!userResp.ok) return { error: 'github user fetch failed' };
-    const user = (await userResp.json()) as { id: number; login: string; name: string | null };
+    let user: { id: number; login: string; name: string | null };
+    try {
+      user = (await userResp.json()) as { id: number; login: string; name: string | null };
+    } catch {
+      return { error: 'github user fetch failed' };
+    }
 
-    const emailsResp = await this.fetchImpl(GITHUB_API_EMAILS_URL, {
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${accessToken}`,
-        'X-GitHub-Api-Version': '2022-11-28',
-      },
-    });
+    let emailsResp: Response;
+    try {
+      emailsResp = await this.fetchImpl(GITHUB_API_EMAILS_URL, {
+        headers: {
+          Accept: 'application/vnd.github+json',
+          Authorization: `Bearer ${accessToken}`,
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+      });
+    } catch (err) {
+      logger.warn('[GithubSocialMethod] /user/emails network error', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return { error: 'github emails fetch failed' };
+    }
     if (!emailsResp.ok) return { error: 'github emails fetch failed' };
-    const emails = (await emailsResp.json()) as Array<{
-      email: string;
-      verified: boolean;
-      primary: boolean;
-    }>;
+    let emails: Array<{ email: string; verified: boolean; primary: boolean }>;
+    try {
+      emails = (await emailsResp.json()) as Array<{
+        email: string;
+        verified: boolean;
+        primary: boolean;
+      }>;
+    } catch {
+      return { error: 'github emails fetch failed' };
+    }
     const verifiedPrimary = emails.find(e => e.verified && e.primary);
     if (!verifiedPrimary) {
       return { error: 'github account has no verified primary email' };

@@ -236,6 +236,81 @@ describe('GithubSocialMethod', () => {
       expect((await method.processCallback({ code: '', state: 'x' })).kind).toBe('error');
       expect((await method.processCallback({ code: 'x', state: '' })).kind).toBe('error');
     });
+
+    it('returns structured error when token-exchange fetch throws (network failure) — H7', async () => {
+      const fetchImpl = (async () => {
+        throw new TypeError('fetch failed: ECONNREFUSED');
+      }) as unknown as typeof fetch;
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl,
+      });
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('error');
+      if (result.kind !== 'error') return;
+      expect(result.reason).toMatch(/token exchange/);
+    });
+
+    it('returns structured error when token-exchange returns non-JSON body — H7', async () => {
+      // GitHub has been observed returning HTML on 5xx; .json() throws.
+      const fetchImpl = (async () => new Response('<html>oops</html>', {
+        status: 200, headers: { 'Content-Type': 'text/html' },
+      })) as unknown as typeof fetch;
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl,
+      });
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('error');
+    });
+
+    it('returns structured error when /user fetch throws — H7', async () => {
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+      });
+      // Wrap to throw on /user
+      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('api.github.com/user') && !url.includes('/emails')) {
+          throw new TypeError('fetch failed: ETIMEDOUT');
+        }
+        return fetch(input, init);
+      }) as unknown as typeof fetch;
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl: wrapped,
+      });
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('error');
+      if (result.kind !== 'error') return;
+      expect(result.reason).toMatch(/github user/);
+    });
+
+    it('returns structured error when /user/emails fetch throws — H7', async () => {
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+        'api.github.com/user': () => jsonResponse({ id: 42, login: 'octo', name: 'Octo' }),
+      });
+      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString();
+        if (url.includes('api.github.com/user/emails')) {
+          throw new TypeError('fetch failed: ETIMEDOUT');
+        }
+        return fetch(input, init);
+      }) as unknown as typeof fetch;
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl: wrapped,
+      });
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('error');
+      if (result.kind !== 'error') return;
+      expect(result.reason).toMatch(/emails/);
+    });
   });
 
   describe('findAccount', () => {

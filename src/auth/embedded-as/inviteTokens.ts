@@ -37,6 +37,18 @@ const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
 // last-resort backstop — when reached without any expirable entries, the
 // new consume is rejected rather than evicting a still-replayable jti.
 const MAX_CONSUMED = 10_000;
+/**
+ * Maximum length of a token string accepted by verify/consume (H11).
+ *
+ * Without this cap an attacker can send an arbitrarily large blob to the
+ * /auth/email/verify or /auth/local/invite routes and the server will
+ * HMAC-SHA256 the entire payload before noticing the signature doesn't
+ * match. 4096 chars is comfortably above the largest legitimate token
+ * (≈250 chars for a payload with provider, email, jti, exp, optional
+ * interactionId — base64url-encoded — plus the 43-char signature) and
+ * cuts off the cheap-DoS amplification.
+ */
+const MAX_TOKEN_LENGTH = 4096;
 
 export type InviteTokenPurpose = 'invite' | 'magic-link' | 'password-reset';
 
@@ -116,6 +128,10 @@ export class InviteTokenStore {
    * for the anti-pre-fetch confirmation page (must-fix #1).
    */
   verify(token: string): { ok: true; payload: InviteTokenPayload } | { ok: false; reason: 'invalid' | 'expired' } {
+    // H11: reject oversize input before paying the HMAC cost. Otherwise
+    // an attacker could send a 100MB token and force the server to HMAC
+    // the entire blob before discovering the signature is wrong.
+    if (token.length > MAX_TOKEN_LENGTH) return { ok: false, reason: 'invalid' };
     const parts = token.split('.');
     if (parts.length !== 2) return { ok: false, reason: 'invalid' };
     const [payloadEncoded, signature] = parts;

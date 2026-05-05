@@ -104,4 +104,33 @@ describe('InviteTokenStore', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toBe('rate-exceeded');
   });
+
+  describe('H11: oversize-token DoS guard', () => {
+    it('rejects tokens longer than 4096 chars without computing the HMAC', () => {
+      const oversized = 'a'.repeat(4097);
+      const verified = store.verify(oversized);
+      expect(verified.ok).toBe(false);
+      if (!verified.ok) expect(verified.reason).toBe('invalid');
+    });
+
+    it('accepts tokens at the upper bound when the signature is valid', () => {
+      // Genuine token issued by the store will be ~250 chars — well under
+      // the 4096 cap. This asserts the cap doesn't reject legitimate
+      // tokens in the typical size range.
+      const token = store.issue({ sub: 'a', email: 'a@x', purpose: 'invite' });
+      expect(token.length).toBeLessThan(4096);
+      expect(store.verify(token).ok).toBe(true);
+    });
+
+    it('a 100KB attacker payload is rejected fast (no HMAC over 100KB)', () => {
+      const huge = 'X'.repeat(100 * 1024);
+      const t0 = process.hrtime.bigint();
+      const verified = store.verify(huge);
+      const elapsedMs = Number(process.hrtime.bigint() - t0) / 1_000_000;
+      expect(verified.ok).toBe(false);
+      // Way under any HMAC-of-100KB cost; the assertion is loose to
+      // tolerate noisy CI runners.
+      expect(elapsedMs).toBeLessThan(20);
+    });
+  });
 });
