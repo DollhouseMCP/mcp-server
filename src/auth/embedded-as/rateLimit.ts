@@ -8,7 +8,9 @@
  * Two layers:
  *   - Account: each failed login increments a counter for that sub. After
  *     N consecutive failures, the next attempt is delayed by an exponential
- *     backoff window. Successful login resets the counter.
+ *     backoff window. A successful login does NOT reset the counter (H9 —
+ *     prevents an attacker who succeeds with stolen credentials from
+ *     resetting the threshold for a fresh probe round).
  *   - IP: each failed login also increments a per-IP bucket. After N
  *     failures from the same IP, all subsequent attempts from that IP are
  *     rejected for a window. Catches credential-stuffing across many
@@ -16,6 +18,17 @@
  *
  * `auth.local.brute_force_suspected` audit event fires the first time a
  * given account or IP crosses the threshold.
+ *
+ * **Multi-instance limitation (D2 follow-up).** State lives in process-
+ * local Maps. A multi-instance deployment behind a load balancer has
+ * per-instance thresholds — an attacker cycling backends gets Nx the
+ * lockout ceiling. The fix is to migrate state to IAuthStorageLayer
+ * with TTL'd K/V entries: each backend reads/writes the same record,
+ * so thresholds apply globally. That migration is a focused follow-up
+ * because it rewires `check()` to be async (touching every caller's
+ * signature) and needs careful race-handling for concurrent failures.
+ * Single-instance deployments are unaffected — current behavior is
+ * correct for that topology, which is the §8.1 default.
  *
  * @module auth/embedded-as/rateLimit
  */
