@@ -90,6 +90,12 @@ export interface ASHarness {
 export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicBaseUrl' | 'keyFilePath'> & {
   /** Override publicBaseUrl. Default: `http://127.0.0.1:<port>`. */
   publicBaseUrl?: string;
+  /**
+   * Listen on this pre-allocated port. Use when callers need to know the
+   * URL (and thus port) before constructing the AS — e.g. MagicLinkMethod
+   * needs `verifyUrl` to point back at the AS at construction time.
+   */
+  port?: number;
 };
 
 /**
@@ -98,7 +104,7 @@ export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicB
  */
 export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'as-e2e-'));
-  const port = await getFreePort();
+  const port = opts.port ?? (await getFreePort());
   const publicBaseUrl = opts.publicBaseUrl ?? `http://127.0.0.1:${port}`;
 
   // Required by the trivial-consent guard if any method is trivial-consent.
