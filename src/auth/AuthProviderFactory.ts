@@ -141,70 +141,40 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     // DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true is explicitly set.
     const storage = config.storage ?? await createAuthStorage({ methods });
 
-    // Take the first configured method as the active IAuthMethod. Multi-
-    // method chooser UI is future work; for §8.1 the AS exposes one method.
-    const activeMethodId = methods[0];
-
-    let method;
     const baseUrl = config.publicBaseUrl
       ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
 
-    if (activeMethodId === 'github') {
-      const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
-      const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      const clientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
-      if (!clientId || !clientSecret) {
-        throw new Error(
-          'GitHub social login requires DOLLHOUSE_GITHUB_CLIENT_ID and DOLLHOUSE_GITHUB_CLIENT_SECRET. ' +
-          'Set both env vars or remove "github" from DOLLHOUSE_AUTH_METHODS.',
-        );
+    // Construct each configured method. Build ALL of them — multi-method
+    // deployments (e.g. "GitHub + magic link") expose every method
+    // simultaneously and let the LoginChooser pick at /interaction time
+    // (per spec §8.1 line 912e).
+    //
+    // Shared resources:
+    //   - InviteTokenStore: lazy-built, shared by local-password and
+    //     magic-link so that an invite issued by either method is
+    //     verifiable by both. Closes the architect's "two stores"
+    //     finding (single shared instance, single consumed-set).
+    //   - LocalLoginRateLimiter: lazy-built, used only by local-password
+    //     today; would extend to other password-bearing methods if added.
+    let sharedInvites: import('./embedded-as/inviteTokens.js').InviteTokenStore | undefined;
+    const ensureInvites = async () => {
+      if (!sharedInvites) {
+        const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
+        sharedInvites = new InviteTokenStore(loadOrGenerateInviteSecret());
       }
-      method = new GithubSocialMethod({
-        clientId,
-        clientSecret,
-        callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
-        storage,
-      });
-    } else if (activeMethodId === 'local-password') {
-      const { LocalAccountMethod } = await import('./embedded-as/methods/LocalAccountMethod.js');
-      const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
-      const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
-      // Persisted secret so CLI-issued invites verify against the runtime
-      // and tokens survive process restart.
-      const invites = new InviteTokenStore(loadOrGenerateInviteSecret());
-      const rateLimiter = new LocalLoginRateLimiter({ storage });
-      method = new LocalAccountMethod({ storage, invites, rateLimiter });
-    } else if (activeMethodId === 'magic-link') {
-      const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
-      const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
-      const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
-      if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
-        || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
-        throw new Error(
-          'Magic link requires DOLLHOUSE_SMTP_HOST/USER/PASSWORD/FROM. ' +
-          'Configure SMTP or pick a different method via DOLLHOUSE_AUTH_METHODS.',
-        );
-      }
-      const emailSender = new NodemailerEmailSender({
-        host: env.DOLLHOUSE_SMTP_HOST,
-        port: env.DOLLHOUSE_SMTP_PORT,
-        user: env.DOLLHOUSE_SMTP_USER,
-        password: env.DOLLHOUSE_SMTP_PASSWORD,
-        from: env.DOLLHOUSE_SMTP_FROM,
-      });
-      const invites = new InviteTokenStore(loadOrGenerateInviteSecret());
-      const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
-      method = new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
-    } else {
-      const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
-      method = new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });
+      return sharedInvites;
+    };
+
+    const builtMethods: import('./embedded-as/IAuthMethod.js').IAuthMethod[] = [];
+    for (const id of methods) {
+      builtMethods.push(await buildAuthMethod(id, { storage, baseUrl, ensureInvites, config }));
     }
 
     return new EmbeddedAuthorizationServer({
       publicBaseUrl: config.publicBaseUrl,
       mcpPath: config.mcpPath,
       keyFilePath: config.localKeyFile,
-      method,
+      methods: builtMethods,
       storage,
     });
   }
@@ -242,5 +212,81 @@ function getDefaultSub(): string {
     return os.userInfo().username || 'local-user';
   } catch {
     return 'local-user';
+  }
+}
+
+interface BuildAuthMethodCtx {
+  storage: IAuthStorageLayer;
+  baseUrl: string;
+  ensureInvites: () => Promise<import('./embedded-as/inviteTokens.js').InviteTokenStore>;
+  config: AuthConfig;
+}
+
+/**
+ * Per-method constructor dispatch. Replaces the prior monolithic
+ * if/else chain so multi-method deployments build each method in turn
+ * without arity-fragility, and so each method's required-config check
+ * stays scoped to its own branch.
+ */
+async function buildAuthMethod(
+  id: AuthMethodId,
+  ctx: BuildAuthMethodCtx,
+): Promise<import('./embedded-as/IAuthMethod.js').IAuthMethod> {
+  const { storage, baseUrl, ensureInvites, config } = ctx;
+  const { env } = await import('../config/env.js');
+
+  switch (id) {
+    case 'github': {
+      const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
+      const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      const clientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        throw new Error(
+          'GitHub social login requires DOLLHOUSE_GITHUB_CLIENT_ID and DOLLHOUSE_GITHUB_CLIENT_SECRET. ' +
+          'Set both env vars or remove "github" from DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      return new GithubSocialMethod({
+        clientId,
+        clientSecret,
+        callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
+        storage,
+      });
+    }
+
+    case 'local-password': {
+      const { LocalAccountMethod } = await import('./embedded-as/methods/LocalAccountMethod.js');
+      const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
+      const invites = await ensureInvites();
+      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      return new LocalAccountMethod({ storage, invites, rateLimiter });
+    }
+
+    case 'magic-link': {
+      const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
+      const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
+      if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
+        || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
+        throw new Error(
+          'Magic link requires DOLLHOUSE_SMTP_HOST/USER/PASSWORD/FROM. ' +
+          'Configure SMTP or pick a different method via DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      const emailSender = new NodemailerEmailSender({
+        host: env.DOLLHOUSE_SMTP_HOST,
+        port: env.DOLLHOUSE_SMTP_PORT,
+        user: env.DOLLHOUSE_SMTP_USER,
+        password: env.DOLLHOUSE_SMTP_PASSWORD,
+        from: env.DOLLHOUSE_SMTP_FROM,
+      });
+      const invites = await ensureInvites();
+      const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
+      return new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
+    }
+
+    case 'trivial-consent': {
+      const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
+      return new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });
+    }
   }
 }

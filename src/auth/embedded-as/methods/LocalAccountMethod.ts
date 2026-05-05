@@ -18,9 +18,11 @@
  */
 
 import argon2 from 'argon2';
+import express, { type Router } from 'express';
 import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
+  ContributeRoutesDeps,
   IAuthMethod,
   InteractionContext,
   InteractionInput,
@@ -251,6 +253,54 @@ export class LocalAccountMethod implements IAuthMethod {
     return renderInviteSuccess(email);
   }
 
+  /**
+   * Mounts the standalone CLI-issued invite redemption flow:
+   *   GET  /auth/local/invite?invite=<token>   — renders password-set form
+   *   POST /auth/local/invite                  — consumes invite, creates account
+   *
+   * This flow is independent of an active OAuth interaction. After the
+   * password is set, the user signs in via their MCP client which starts
+   * the normal OAuth flow.
+   */
+  contributeRoutes(router: Router, _deps: ContributeRoutesDeps): void {
+    // Limit POST body to 4 KB so unauthenticated requests can't flood memory.
+    const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
+
+    router.get('/auth/local/invite', (req, res, next) => {
+      void (async () => {
+        try {
+          const token = typeof req.query.invite === 'string' ? req.query.invite : '';
+          const verified = this.verifyInvite(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderInviteError(verified.reason));
+            return;
+          }
+          res.type('html').send(this.renderInviteForm(token, verified.email));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+
+    router.post('/auth/local/invite', bodyParser, (req, res, next) => {
+      void (async () => {
+        try {
+          const body = req.body as Record<string, string> | undefined;
+          const token = typeof body?.invite === 'string' ? body.invite : '';
+          const password = typeof body?.password === 'string' ? body.password : '';
+          const result = await this.consumeInvite(token, password);
+          if (result.kind === 'error') {
+            res.status(400).type('html').send(renderInviteError(result.reason));
+            return;
+          }
+          res.type('html').send(this.renderInviteSuccess(result.email));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+  }
+
   private async handleLogin(
     form: Record<string, string>,
     ip: string,
@@ -366,6 +416,21 @@ function renderLoginOrInvitePage(): string {
 
 function renderError(message: string): string {
   return `<!doctype html><html><body><main><h1>Error</h1><p>${escapeHtml(message)}</p></main></body></html>`;
+}
+
+/**
+ * Styled error page for invite-redemption failures (CLI-issued URL clicked
+ * after the token expired or was already consumed). Distinct from
+ * `renderError` (used inside the OAuth interaction flow for recoverable
+ * input errors) — invite errors are terminal and the operator must
+ * issue a fresh invite.
+ */
+function renderInviteError(reason: string): string {
+  const safe = escapeHtml(reason);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Invite invalid</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Invite invalid</h1><p>${safe}</p><p>Ask your operator to issue a new invite.</p></main></body></html>`;
 }
 
 function renderInvitePage(token: string, email: string): string {

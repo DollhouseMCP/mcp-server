@@ -27,14 +27,18 @@
  * @module auth/embedded-as/methods/GithubSocialMethod
  */
 
+import type { Router } from 'express';
 import type {
   AuthenticatedIdentity,
+  ContributeRoutesDeps,
   IAuthMethod,
   InteractionContext,
   InteractionInput,
   InteractionResult,
   InteractionStep,
 } from '../IAuthMethod.js';
+import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
+import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import {
   GITHUB_API_EMAILS_URL,
@@ -167,10 +171,48 @@ export class GithubSocialMethod implements IAuthMethod {
   }
 
   /**
-   * Called by EmbeddedAuthorizationServer's /auth/social/github/callback
-   * handler. Exchanges the GitHub code for a token, fetches the verified
-   * primary email, persists the account, and returns the identity for the
-   * caller to drive provider.interactionFinished with.
+   * Mounts GET /auth/social/github/callback. The interaction-cookie binding
+   * + interactionFinished orchestration moves here from the AS — the AS no
+   * longer needs to know GitHub-specific routes exist.
+   */
+  contributeRoutes(router: Router, deps: ContributeRoutesDeps): void {
+    router.get('/auth/social/github/callback', (req, res, next) => {
+      void (async () => {
+        try {
+          const code = typeof req.query.code === 'string' ? req.query.code : '';
+          const state = typeof req.query.state === 'string' ? req.query.state : '';
+          const result = await this.processCallback({ code, state });
+          if (result.kind === 'error') {
+            res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
+            return;
+          }
+          // Defense in depth: refuse to drive interactionFinished unless the
+          // calling browser holds the same interaction cookie. Same threat
+          // model as the magic-link route — the GitHub `state` could be
+          // stolen + replayed; the interaction cookie is the binding.
+          const binding = verifyInteractionCookieMatches(req, result.interactionId);
+          if (!binding.ok) {
+            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
+            return;
+          }
+          const { provider } = await deps.ensureInitialized();
+          // Restore the request URL to the interaction so oidc-provider's
+          // interactionDetails reads the correct interaction record.
+          req.url = `/interaction/${result.interactionId}`;
+          const details = await provider.interactionDetails(req, res);
+          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage);
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+  }
+
+  /**
+   * Called by the github callback handler (registered via contributeRoutes).
+   * Exchanges the GitHub code for a token, fetches the verified primary
+   * email, persists the account, and returns the identity for the caller
+   * to drive provider.interactionFinished with.
    */
   async processCallback(input: { code: string; state: string }): Promise<GithubCallbackResult> {
     if (!input.code || !input.state) {

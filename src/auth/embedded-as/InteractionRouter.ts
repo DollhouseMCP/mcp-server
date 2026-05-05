@@ -68,16 +68,35 @@ export interface OidcProviderForInteractions {
 
 export interface InteractionRouterDeps {
   provider: OidcProviderForInteractions;
-  /** Resolves the IAuthMethod to use for an interaction. */
-  resolveMethod: (interactionParams: Record<string, unknown>) => IAuthMethod;
+  /**
+   * Configured auth methods for this AS. Single-method deployments pass
+   * one element; multi-method deployments pass several. The router's
+   * dispatch logic (see Phase 2.3 — LoginChooser) decides which method
+   * handles an incoming interaction.
+   */
+  methods: readonly IAuthMethod[];
   storage: IAuthStorageLayer;
 }
 
 export function createInteractionRouter(deps: InteractionRouterDeps): Router {
-  const { provider, resolveMethod, storage } = deps;
+  const { provider, methods, storage } = deps;
   const router = express.Router();
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json({ limit: '32kb' }));
+
+  // Until Phase 2.3 lands the chooser + per-method dispatch, the router
+  // only handles single-method deployments. Multi-method input throws so
+  // operators don't get a silent first-method-only behavior.
+  const resolveMethod = (): IAuthMethod => {
+    if (methods.length !== 1) {
+      throw new Error(
+        `InteractionRouter received ${methods.length} methods. ` +
+        `Multi-method dispatch requires the LoginChooser (Phase 2.3); ` +
+        `single-method deployments pass exactly one method.`,
+      );
+    }
+    return methods[0]!;
+  };
 
   router.get('/:uid', (req, res) => {
     void handleGet(req, res, provider, resolveMethod, storage);
@@ -94,7 +113,7 @@ async function handleGet(
   req: Request,
   res: Response,
   provider: OidcProviderForInteractions,
-  resolveMethod: (params: Record<string, unknown>) => IAuthMethod,
+  resolveMethod: () => IAuthMethod,
   storage: IAuthStorageLayer,
 ): Promise<void> {
   let details;
@@ -105,7 +124,7 @@ async function handleGet(
     return;
   }
 
-  const method = resolveMethod(details.params);
+  const method = resolveMethod();
   const ctx = makeContext(details, req);
 
   const step = await method.beginInteraction(ctx);
@@ -127,7 +146,7 @@ async function handlePost(
   req: Request,
   res: Response,
   provider: OidcProviderForInteractions,
-  resolveMethod: (params: Record<string, unknown>) => IAuthMethod,
+  resolveMethod: () => IAuthMethod,
   storage: IAuthStorageLayer,
 ): Promise<void> {
   let details;
@@ -153,7 +172,7 @@ async function handlePost(
     await storage.genericDestroy(CSRF_MODEL, details.uid);
   }
 
-  const method = resolveMethod(details.params);
+  const method = resolveMethod();
   const ctx = makeContext(details, req);
 
   const result = await method.completeInteraction(ctx, {

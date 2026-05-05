@@ -25,15 +25,19 @@
  * @module auth/embedded-as/methods/MagicLinkMethod
  */
 
+import express, { type Router } from 'express';
 import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
+  ContributeRoutesDeps,
   IAuthMethod,
   InteractionContext,
   InteractionInput,
   InteractionResult,
   InteractionStep,
 } from '../IAuthMethod.js';
+import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
+import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 
@@ -124,6 +128,72 @@ export class MagicLinkMethod implements IAuthMethod {
   /** GET handler for the email-link landing page (anti-pre-fetch confirmation). */
   renderConfirmationPage(token: string): string {
     return renderConfirmationPage(token);
+  }
+
+  /**
+   * Mounts the magic-link callback flow:
+   *   GET  /auth/email/verify?token=<token>   — anti-pre-fetch confirmation page (must-fix #1)
+   *   POST /auth/email/verify                 — consume token + complete OAuth interaction
+   *
+   * The POST handler restores the original interaction URL and drives
+   * provider.interactionFinished after verifying the calling browser
+   * holds the same `_interaction` cookie that started the flow.
+   */
+  contributeRoutes(router: Router, deps: ContributeRoutesDeps): void {
+    const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
+
+    router.get('/auth/email/verify', (req, res, next) => {
+      void (async () => {
+        try {
+          const token = typeof req.query.token === 'string' ? req.query.token : '';
+          const verified = this.verifyMagicLink(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
+            return;
+          }
+          res.type('html').send(this.renderConfirmationPage(token));
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
+
+    router.post('/auth/email/verify', bodyParser, (req, res, next) => {
+      void (async () => {
+        try {
+          const body = req.body as Record<string, string> | undefined;
+          const token = typeof body?.token === 'string' ? body.token : '';
+          const consume = await this.consumeMagicLink(token);
+          if (consume.kind === 'error') {
+            res.status(400).type('html').send(renderMagicLinkError(consume.reason));
+            return;
+          }
+          if (!consume.interactionId) {
+            // Token was issued without an interactionId (CLI-issued, or an
+            // older client that didn't stamp it). The user is authenticated
+            // but we have no OAuth flow to complete; show a friendly page.
+            res.type('html').send(renderMagicLinkSuccessNoInteraction(consume.identity.email ?? ''));
+            return;
+          }
+          // Defense in depth: refuse to drive interactionFinished unless the
+          // calling browser holds the same interaction cookie that started
+          // the OAuth flow.
+          const binding = verifyInteractionCookieMatches(req, consume.interactionId);
+          if (!binding.ok) {
+            res.status(400).type('html').send(renderInteractionBindingError('magic link'));
+            return;
+          }
+          const { provider } = await deps.ensureInitialized();
+          // Restore the request URL to the interaction so oidc-provider's
+          // interactionDetails reads the correct interaction record.
+          req.url = `/interaction/${consume.interactionId}`;
+          const details = await provider.interactionDetails(req, res);
+          await finishInteractionWithIdentity(req, res, provider, details, consume.identity.sub, deps.storage);
+        } catch (err) {
+          next(err);
+        }
+      })();
+    });
   }
 
   /**
@@ -306,4 +376,24 @@ function renderConfirmationPage(token: string): string {
 </head><body><main><h1>Confirm sign-in</h1><p>Click below to complete sign-in.</p>
 <form method="post"><input type="hidden" name="token" value="${safeToken}">
 <button type="submit">Sign in</button></form></main></body></html>`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderMagicLinkError(reason: string): string {
+  const safe = escapeHtml(reason);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Sign-in failed</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Sign-in failed</h1><p>${safe}</p><p>Request a new link from the application.</p></main></body></html>`;
+}
+
+function renderMagicLinkSuccessNoInteraction(email: string): string {
+  const safe = escapeHtml(email);
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Signed in</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main><h1>Signed in as ${safe}</h1><p>This link wasn't bound to an active sign-in flow. Return to the application to continue.</p></main></body></html>`;
 }

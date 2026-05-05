@@ -35,14 +35,9 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import type { IAuthMethod } from './IAuthMethod.js';
-import { verifyInteractionCookieMatches } from './interactionCookieBinding.js';
 import {
   createInteractionRouter,
-  finishInteractionWithIdentity,
 } from './InteractionRouter.js';
-import { GithubSocialMethod } from './methods/GithubSocialMethod.js';
-import { LocalAccountMethod } from './methods/LocalAccountMethod.js';
-import { MagicLinkMethod } from './methods/MagicLinkMethod.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
@@ -61,8 +56,16 @@ export interface EmbeddedAuthorizationServerOptions {
   publicBaseUrl?: string;
   mcpPath?: string;
   keyFilePath?: string;
-  /** The single active auth method at C4 (multi-method chooser is a future commit). */
-  method: IAuthMethod;
+  /**
+   * Auth methods exposed by this AS. Single-method deployments pass a
+   * one-element array; multi-method deployments pass several. Each method
+   * owns its own standalone routes via contributeRoutes; findAccount is
+   * dispatched by iterating this list (first non-null wins).
+   *
+   * Accepts a non-empty array — the AS refuses construction with an empty
+   * methods list because there'd be nothing to authenticate against.
+   */
+  methods: readonly IAuthMethod[];
   /** Backing storage for oidc-provider's Adapter and our semantic operations. */
   storage: IAuthStorageLayer;
 }
@@ -79,7 +82,7 @@ interface InitializedState {
 export class EmbeddedAuthorizationServer implements IAuthProvider {
   readonly name = 'embedded-oauth';
 
-  private readonly method: IAuthMethod;
+  private readonly methods: readonly IAuthMethod[];
   private readonly storage: IAuthStorageLayer;
   private readonly mcpPath: string;
   private readonly keyFilePath: string;
@@ -100,7 +103,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private generation = 0;
 
   constructor(options: EmbeddedAuthorizationServerOptions) {
-    this.method = options.method;
+    if (options.methods.length === 0) {
+      throw new Error('EmbeddedAuthorizationServer requires at least one IAuthMethod');
+    }
+    // Defensive copy — caller may mutate the source array later (e.g. tests
+    // that build the method list per-test). The AS holds a stable view.
+    this.methods = [...options.methods];
     this.storage = options.storage;
     this.mcpPath = normalizePath(options.mcpPath ?? env.DOLLHOUSE_HTTP_MCP_PATH);
     this.publicBaseUrl = resolvePublicBaseUrl({ publicBaseUrl: options.publicBaseUrl });
@@ -240,163 +248,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       void this.handleAuthorizationServerMetadata(req, res);
     });
 
-    // /auth/email/verify and /auth/local/invite need to parse POST bodies.
-    // Limit to 4 KB so unauthenticated POSTs can't flood memory.
-    const inviteBodyParser = express.urlencoded({ extended: false, limit: '4kb' });
-
-    // CLI-issued local-account invite landing page. The user clicks the URL
-    // printed by `dollhouse-create-user`, hits GET to see the password-set
-    // form, submits to consume the invite + create the account. The flow is
-    // standalone — not part of an active OAuth interaction. After setting
-    // the password, the user signs in via their MCP client which starts the
-    // normal OAuth flow.
-    router.get('/auth/local/invite', (req, res, next) => {
-      void (async () => {
-        try {
-          if (!(this.method instanceof LocalAccountMethod)) {
-            res.status(404).json({ error: 'local accounts not configured' });
-            return;
-          }
-          const token = typeof req.query.invite === 'string' ? req.query.invite : '';
-          const verified = this.method.verifyInvite(token);
-          if (!verified.ok) {
-            res.status(400).type('html').send(renderInviteError(verified.reason));
-            return;
-          }
-          res.type('html').send(this.method.renderInviteForm(token, verified.email));
-        } catch (err) {
-          next(err);
-        }
-      })();
-    });
-
-    router.post('/auth/local/invite', inviteBodyParser, (req, res, next) => {
-      void (async () => {
-        try {
-          if (!(this.method instanceof LocalAccountMethod)) {
-            res.status(404).json({ error: 'local accounts not configured' });
-            return;
-          }
-          const body = req.body as Record<string, string> | undefined;
-          const token = typeof body?.invite === 'string' ? body.invite : '';
-          const password = typeof body?.password === 'string' ? body.password : '';
-          const result = await this.method.consumeInvite(token, password);
-          if (result.kind === 'error') {
-            res.status(400).type('html').send(renderInviteError(result.reason));
-            return;
-          }
-          res.type('html').send(this.method.renderInviteSuccess(result.email));
-        } catch (err) {
-          next(err);
-        }
-      })();
-    });
-
-    // Magic-link callback. The user clicks the link in their email; GET
-    // shows a confirmation form (anti-pre-fetch — must-fix #1), POST consumes
-    // the token + completes the original interaction the link was issued for.
-    // Mounted only when MagicLinkMethod is the active method.
-    router.get('/auth/email/verify', (req, res, next) => {
-      void (async () => {
-        try {
-          if (!(this.method instanceof MagicLinkMethod)) {
-            res.status(404).json({ error: 'magic link not configured' });
-            return;
-          }
-          const token = typeof req.query.token === 'string' ? req.query.token : '';
-          const verified = this.method.verifyMagicLink(token);
-          if (!verified.ok) {
-            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
-            return;
-          }
-          // Render the confirmation page; POST will consume the token.
-          res.type('html').send(this.method.renderConfirmationPage(token));
-        } catch (err) {
-          next(err);
-        }
-      })();
-    });
-
-    router.post('/auth/email/verify', inviteBodyParser, (req, res, next) => {
-      void (async () => {
-        try {
-          if (!(this.method instanceof MagicLinkMethod)) {
-            res.status(404).json({ error: 'magic link not configured' });
-            return;
-          }
-          const token = typeof req.body?.token === 'string' ? req.body.token : '';
-          const consume = await this.method.consumeMagicLink(token);
-          if (consume.kind === 'error') {
-            res.status(400).type('html').send(renderMagicLinkError(consume.reason));
-            return;
-          }
-          if (!consume.interactionId) {
-            // Token was issued without an interactionId (CLI-issued, or an
-            // older client that didn't stamp it). The user is authenticated
-            // but we have no OAuth flow to complete; show a friendly page.
-            res.type('html').send(renderMagicLinkSuccessNoInteraction(consume.identity.email ?? ''));
-            return;
-          }
-          // Defense in depth: refuse to drive interactionFinished unless the
-          // calling browser holds the same interaction cookie that started
-          // the OAuth flow. Prevents an attacker who obtains a magic-link
-          // token (forwarded email, leaked URL) from completing the
-          // interaction in a browser that didn't open it.
-          const binding = verifyInteractionCookieMatches(req, consume.interactionId);
-          if (!binding.ok) {
-            res.status(400).type('html').send(renderInteractionBindingError('magic link'));
-            return;
-          }
-          const state = await this.ensureInitialized();
-          // Restore the request URL to the interaction so oidc-provider's
-          // interactionDetails reads the correct interaction record.
-          req.url = `/interaction/${consume.interactionId}`;
-          const details = await state.provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, state.provider, details, consume.identity.sub, this.storage);
-        } catch (err) {
-          next(err);
-        }
-      })();
-    });
-
-    // GitHub social-login callback. The active IAuthMethod owns the OAuth
-    // exchange + identity fetch; this route just orchestrates the response
-    // (call interactionFinished with the resolved identity). Unmounted /
-    // 404 unless a GitHub method is active.
-    router.get('/auth/social/github/callback', (req, res, next) => {
-      void (async () => {
-        try {
-          if (!(this.method instanceof GithubSocialMethod)) {
-            res.status(404).json({ error: 'github social not configured' });
-            return;
-          }
-          const code = typeof req.query.code === 'string' ? req.query.code : '';
-          const state = typeof req.query.state === 'string' ? req.query.state : '';
-          const result = await this.method.processCallback({ code, state });
-          if (result.kind === 'error') {
-            res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
-            return;
-          }
-          // Defense in depth: refuse to drive interactionFinished unless the
-          // calling browser holds the same interaction cookie. Same threat
-          // model as the magic-link route — the GitHub `state` could be
-          // stolen + replayed; the interaction cookie is the binding.
-          const binding = verifyInteractionCookieMatches(req, result.interactionId);
-          if (!binding.ok) {
-            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
-            return;
-          }
-          const state2 = await this.ensureInitialized();
-          // Restore the request URL to the interaction so oidc-provider's
-          // interactionDetails reads the correct interaction record.
-          req.url = `/interaction/${result.interactionId}`;
-          const details = await state2.provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, state2.provider, details, result.identity.sub, this.storage);
-        } catch (err) {
-          next(err);
-        }
-      })();
-    });
+    // Each method owns its own standalone routes (callbacks, invite-redemption
+    // pages, etc.) and registers them via contributeRoutes. Replaces the
+    // earlier instanceof-checks-per-method dispatch — the AS no longer
+    // needs to know which concrete method classes are active.
+    const contributeDeps = {
+      storage: this.storage,
+      ensureInitialized: () => this.ensureInitialized().then((s) => ({ provider: s.provider })),
+    };
+    for (const method of this.methods) {
+      method.contributeRoutes?.(router, contributeDeps);
+    }
 
     // Mount oidc-provider's full OAuth/OIDC surface (/auth, /token, /jwks,
     // /reg for DCR, /me, etc.) and our interaction handlers under the same
@@ -488,7 +350,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     const keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
 
     const adapterFactory = createOidcAdapterFactory(this.storage);
-    const method = this.method;
+    const methods = this.methods;
 
     const config: Configuration = {
       // adapter: oidc-provider's TypeScript type expects a function-shape
@@ -598,19 +460,26 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
       },
       async findAccount(_ctx, sub) {
-        const identity = await method.findAccount(sub);
-        if (!identity) return undefined;
-        return {
-          accountId: identity.sub,
-          async claims() {
-            return {
-              sub: identity.sub,
-              name: identity.displayName,
-              email: identity.email,
-              email_verified: identity.emailVerified,
-            };
-          },
-        };
+        // Each method returns null for subs it doesn't own; iterate in the
+        // configured order and take the first non-null match. This is how
+        // multi-method deployments dispatch token-issue findAccount lookups
+        // without an explicit method ID on the sub.
+        for (const m of methods) {
+          const identity = await m.findAccount(sub);
+          if (!identity) continue;
+          return {
+            accountId: identity.sub,
+            async claims() {
+              return {
+                sub: identity.sub,
+                name: identity.displayName,
+                email: identity.email,
+                email_verified: identity.emailVerified,
+              };
+            },
+          };
+        }
+        return undefined;
       },
       // Cookie signing + transport defaults. The signing keys come from a
       // dedicated secret file (see cookieSecret.ts) — earlier code reused
@@ -655,7 +524,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     logger.info('[EmbeddedAuthorizationServer] initialized', {
       issuer: this.issuer,
       resource: this.resource,
-      method: this.method.id,
+      methods: this.methods.map((m) => m.id),
       kid: keyset.kid,
     });
 
@@ -664,7 +533,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // avoids reaching into private members from a free function.
     const interactionMiddleware = createInteractionRouter({
       provider,
-      resolveMethod: () => this.method,
+      methods: this.methods,
       storage: this.storage,
     });
 
@@ -695,38 +564,3 @@ function normalizePath(rawPath: string): string {
   return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 }
 
-function renderMagicLinkError(reason: string): string {
-  const safe = reason.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Sign-in failed</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
-</head><body><main><h1>Sign-in failed</h1><p>${safe}</p><p>Request a new link from the application.</p></main></body></html>`;
-}
-
-function renderInviteError(reason: string): string {
-  const safe = reason.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Invite invalid</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
-</head><body><main><h1>Invite invalid</h1><p>${safe}</p><p>Ask your operator to issue a new invite.</p></main></body></html>`;
-}
-
-function renderInteractionBindingError(flowLabel: string): string {
-  const safe = flowLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Continue in your original browser</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
-</head><body><main>
-<h1>Continue in your original browser</h1>
-<p>This ${safe} link must be opened in the same browser where you started the sign-in flow.</p>
-<p>Return to that browser and re-open the link, or restart sign-in from your application.</p>
-</main></body></html>`;
-}
-
-function renderMagicLinkSuccessNoInteraction(email: string): string {
-  const safe = email.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Signed in</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
-</head><body><main><h1>Signed in as ${safe}</h1><p>This link wasn't bound to an active sign-in flow. Return to the application to continue.</p></main></body></html>`;
-}

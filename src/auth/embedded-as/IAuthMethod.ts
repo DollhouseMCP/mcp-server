@@ -18,7 +18,10 @@
  * @module auth/embedded-as/IAuthMethod
  */
 
+import type { Router } from 'express';
 import type { AuthMethodId } from './AuthMethodFactory.js';
+import type { OidcProviderForInteractions } from './InteractionRouter.js';
+import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 /**
  * The identity returned by a successful interaction (or by findAccount on
@@ -89,6 +92,23 @@ export type InteractionResult =
   | { kind: 'next-step'; step: InteractionStep }
   | { kind: 'denied'; reason: string };
 
+/**
+ * Runtime injected when EmbeddedAuthorizationServer wires a method's
+ * standalone routes (callbacks, invite-redemption pages, etc.). Methods
+ * import the helper functions they need (`finishInteractionWithIdentity`,
+ * `verifyInteractionCookieMatches`) directly; deps carry runtime state
+ * the AS owns.
+ */
+export interface ContributeRoutesDeps {
+  storage: IAuthStorageLayer;
+  /**
+   * Resolves to the initialized oidc-provider instance the AS owns.
+   * Methods call this lazily inside route handlers (not at registration
+   * time) because init is asynchronous and runs after createRouter.
+   */
+  ensureInitialized: () => Promise<{ provider: OidcProviderForInteractions }>;
+}
+
 export interface IAuthMethod {
   readonly id: AuthMethodId;
   /** Human-readable name for chooser UI / consent screen ("Sign in with GitHub"). */
@@ -116,7 +136,23 @@ export interface IAuthMethod {
    * token is issued or refreshed. Returns the current identity for `sub`,
    * re-validating verification state on each call (must-fix #20).
    * Returns null when the account is no longer valid (deleted, suspended,
-   * upstream verification revoked).
+   * upstream verification revoked) OR when the sub is owned by a
+   * different method (so EmbeddedAuthorizationServer can iterate the
+   * method list and take the first non-null match).
    */
   findAccount(sub: string): Promise<AuthenticatedIdentity | null>;
+
+  /**
+   * Optional. Methods that own standalone HTTP routes outside the
+   * /interaction/:uid flow (e.g. social-callback, invite-redemption,
+   * magic-link-verify) implement this to register them on the AS router.
+   *
+   * Why this exists: prior to multi-method support, the AS used a chain
+   * of `instanceof` checks to mount each method's standalone routes
+   * conditionally. That coupled the AS to every concrete method class.
+   * Methods now own their own routes, and the AS just iterates and
+   * dispatches — closing the IAuthMethod contract drift the architect
+   * flagged at "5 instanceof checks in createRouter".
+   */
+  contributeRoutes?(router: Router, deps: ContributeRoutesDeps): void;
 }

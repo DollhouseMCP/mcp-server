@@ -26,6 +26,24 @@ import type { Request } from 'express';
 
 const INTERACTION_COOKIE_NAME = '_interaction';
 
+/**
+ * Shared HTML error page rendered when the cookie-binding check fails.
+ * Lives alongside `verifyInteractionCookieMatches` because the page text
+ * directly maps to that helper's failure modes — keep the message in
+ * sync with the threat model documented at the top of this file.
+ */
+export function renderInteractionBindingError(flowLabel: string): string {
+  const safe = flowLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Continue in your original browser</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
+</head><body><main>
+<h1>Continue in your original browser</h1>
+<p>This ${safe} link must be opened in the same browser where you started the sign-in flow.</p>
+<p>Return to that browser and re-open the link, or restart sign-in from your application.</p>
+</main></body></html>`;
+}
+
 export type CookieBindingResult =
   | { ok: true }
   | { ok: false; reason: 'missing-cookie' | 'cookie-mismatch' };
