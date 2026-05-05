@@ -219,6 +219,18 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     return result.length;
   }
 
+  async genericRevokeByGrantId(grantId: string): Promise<void> {
+    // Delete both the Grant row itself (model='Grant', id=grantId) and
+    // every entry whose payload.grantId references it (tokens, sessions,
+    // codes). Single statement via OR.
+    await withSystemContext(this.db, async (tx) => {
+      await tx.delete(authKv).where(or(
+        and(eq(authKv.model, 'Grant'), eq(authKv.id, grantId)),
+        sql`${authKv.payload}->>'grantId' = ${grantId}`,
+      )!);
+    });
+  }
+
   /** Uses idx_auth_kv_session_uid partial expression index. */
   async genericFindByUid(uid: string): Promise<unknown | null> {
     const rows = await withSystemContext(this.db, (tx) =>

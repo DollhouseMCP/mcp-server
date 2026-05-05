@@ -243,6 +243,21 @@ export class GithubSocialMethod implements IAuthMethod {
       String(profile.id),
     );
     if (existing && existing.email && existing.email !== profile.verifiedPrimaryEmail) {
+      // H14: when the upstream identity-to-email mapping moves, revoke
+      // any active grants for this sub. Without this, refresh tokens
+      // issued before the change keep working until natural TTL expiry
+      // (30 days), letting an attacker who took over the upstream
+      // account ride existing sessions long after the rebind. The
+      // genericRevokeByGrantId flow deletes every K/V entry referencing
+      // each grantId — Sessions, AccessTokens, RefreshTokens, etc.
+      const grants = await this.options.storage.findGrantsByAccountId(identity.sub);
+      let revoked = 0;
+      for (const grantId of grants) {
+        if (this.options.storage.genericRevokeByGrantId) {
+          await this.options.storage.genericRevokeByGrantId(grantId);
+          revoked += 1;
+        }
+      }
       await this.options.storage.recordIdentityEvent({
         type: 'auth.social.identity_changed',
         sub: identity.sub,
@@ -251,6 +266,7 @@ export class GithubSocialMethod implements IAuthMethod {
         details: {
           previousEmail: existing.email,
           newEmail: profile.verifiedPrimaryEmail,
+          grantsRevoked: revoked,
         },
         timestamp: Date.now(),
       });

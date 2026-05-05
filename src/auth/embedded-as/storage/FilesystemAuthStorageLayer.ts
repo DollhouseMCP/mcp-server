@@ -195,6 +195,43 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     await this.unlinkKv(model, id);
   }
 
+  async genericRevokeByGrantId(grantId: string): Promise<void> {
+    // Delete the Grant entry itself. Then scan every model directory
+    // and remove entries whose payload references grantId. Tokens,
+    // sessions, and codes can all reference a grant.
+    if (SAFE_ID_RE.test(grantId)) {
+      await this.unlinkKv('Grant', grantId);
+    }
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.kvDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+    for (const model of entries) {
+      // Skip non-directory entries defensively.
+      if (!SAFE_MODEL_RE.test(model)) continue;
+      let ids: string[];
+      try {
+        ids = await fs.readdir(path.join(this.kvDir, model));
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const idFile of ids) {
+        if (!idFile.endsWith('.json')) continue;
+        const id = idFile.slice(0, -'.json'.length);
+        const record = await this.readKv(model, id);
+        if (!record) continue;
+        const payload = record.value as { grantId?: string } | null;
+        if (payload && payload.grantId === grantId) {
+          await this.unlinkKv(model, id);
+        }
+      }
+    }
+  }
+
   async clearGenericByModels(models: readonly string[]): Promise<number> {
     let deleted = 0;
     for (const model of models) {

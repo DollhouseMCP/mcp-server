@@ -147,6 +147,23 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     }
     return null;
   }
+
+  /**
+   * Delete the Grant entry itself (model='Grant', id=grantId) AND every
+   * K/V entry whose payload references this grantId. Used by oidc-
+   * provider's revoke flow and by H14's identity-change handler: an
+   * account whose upstream identity moved must have its prior grant +
+   * tokens + sessions invalidated atomically.
+   */
+  async genericRevokeByGrantId(grantId: string): Promise<void> {
+    this.genericStore.delete(genericKey('Grant', grantId));
+    for (const [key, record] of this.genericStore.entries()) {
+      const payload = record.payload as { grantId?: string } | null;
+      if (payload && payload.grantId === grantId) {
+        this.genericStore.delete(key);
+      }
+    }
+  }
 }
 
 function externalKey(provider: string, externalSub: string): string {

@@ -179,6 +179,55 @@ describe('GithubSocialMethod', () => {
       });
     });
 
+    it('revokes active grants on identity_changed (H14)', async () => {
+      // Seed an existing account whose email is about to move.
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: 'old@example.com',
+        emailVerified: true,
+        displayName: 'Octo Cat',
+        createdAt: 1000, updatedAt: 1000,
+      });
+      // Seed two grants for this sub plus a grant for a different sub
+      // (must NOT be revoked) and a token referencing one of the grants
+      // (must be revoked via genericRevokeByGrantId).
+      await storage.genericSet('Grant', 'g-affected-1', { accountId: 'github_42', clientId: 'c1' });
+      await storage.genericSet('Grant', 'g-affected-2', { accountId: 'github_42', clientId: 'c2' });
+      await storage.genericSet('Grant', 'g-other', { accountId: 'github_99', clientId: 'c1' });
+      await storage.genericSet('AccessToken', 't-affected', { grantId: 'g-affected-1', accountId: 'github_42' });
+      await storage.genericSet('AccessToken', 't-other', { grantId: 'g-other', accountId: 'github_99' });
+
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+        'api.github.com/user/emails': () => jsonResponse([
+          { email: 'new@example.com', verified: true, primary: true },
+        ]),
+        'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl: fetch,
+      });
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('ok');
+
+      // Both affected grants and the token referencing one of them are gone.
+      expect(await storage.genericGet('Grant', 'g-affected-1')).toBeNull();
+      expect(await storage.genericGet('Grant', 'g-affected-2')).toBeNull();
+      expect(await storage.genericGet('AccessToken', 't-affected')).toBeNull();
+      // Untouched.
+      expect(await storage.genericGet('Grant', 'g-other')).not.toBeNull();
+      expect(await storage.genericGet('AccessToken', 't-other')).not.toBeNull();
+
+      // Audit event records the revocation count.
+      const events = await storage.listIdentityEvents({ type: 'auth.social.identity_changed' });
+      expect(events).toHaveLength(1);
+      expect(events[0]!.details).toMatchObject({ grantsRevoked: 2 });
+    });
+
     it('does NOT emit identity_changed when the email is unchanged', async () => {
       await storage.upsertAccount({
         sub: 'github_42',

@@ -181,6 +181,24 @@ function runContractSuite(
       const found = await storage.genericFindByUid?.('nonexistent');
       expect(found).toBeNull();
     });
+
+    it('genericRevokeByGrantId removes every entry referencing the grant id (H14)', async () => {
+      await storage.genericSet('Grant', 'g-revoke', { accountId: 'sub-1' });
+      await storage.genericSet('AccessToken', 't-1', { grantId: 'g-revoke', sub: 'sub-1' });
+      await storage.genericSet('RefreshToken', 'r-1', { grantId: 'g-revoke', sub: 'sub-1' });
+      await storage.genericSet('Session', 's-1', { grantId: 'g-revoke', uid: 's-uid-1' });
+      // Different grant, must survive.
+      await storage.genericSet('AccessToken', 't-2', { grantId: 'g-other', sub: 'sub-2' });
+
+      await storage.genericRevokeByGrantId?.('g-revoke');
+
+      expect(await storage.genericGet('Grant', 'g-revoke')).toBeNull();
+      expect(await storage.genericGet('AccessToken', 't-1')).toBeNull();
+      expect(await storage.genericGet('RefreshToken', 'r-1')).toBeNull();
+      expect(await storage.genericGet('Session', 's-1')).toBeNull();
+      // Untouched.
+      expect(await storage.genericGet('AccessToken', 't-2')).not.toBeNull();
+    });
   });
 }
 
