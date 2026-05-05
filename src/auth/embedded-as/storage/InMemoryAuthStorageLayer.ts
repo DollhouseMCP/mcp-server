@@ -111,6 +111,21 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     this.genericStore.delete(genericKey(model, id));
   }
 
+  async clearGenericByModels(models: readonly string[]): Promise<number> {
+    const prefixes = new Set(models.map((m) => `${m}|`));
+    let deleted = 0;
+    for (const key of this.genericStore.keys()) {
+      const sep = key.indexOf('|');
+      if (sep < 0) continue;
+      const model = key.slice(0, sep + 1);
+      if (prefixes.has(model)) {
+        this.genericStore.delete(key);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
   /**
    * oidc-provider's Session model carries a `uid` field separate from the
    * adapter id; AccessToken / AuthorizationCode reference Session by uid.

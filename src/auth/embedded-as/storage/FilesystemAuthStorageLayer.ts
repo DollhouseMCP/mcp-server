@@ -195,6 +195,31 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     await this.unlinkKv(model, id);
   }
 
+  async clearGenericByModels(models: readonly string[]): Promise<number> {
+    let deleted = 0;
+    for (const model of models) {
+      assertSafeModel(model);
+      const dir = this.modelDir(model);
+      let entries: string[];
+      try {
+        entries = await fs.readdir(dir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith('.json')) continue;
+        try {
+          await fs.unlink(path.join(dir, entry));
+          deleted += 1;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+      }
+    }
+    return deleted;
+  }
+
   /**
    * Linear scan over the Session model. Tolerated cost given solo/team
    * deployment volumes; the Postgres backend should index `uid`.

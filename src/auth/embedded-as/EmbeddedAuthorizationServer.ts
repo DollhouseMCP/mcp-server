@@ -44,7 +44,11 @@ import {
   loadOrGenerateSigningJwks,
   type SigningKeyset,
 } from './persistKeys.js';
-import { loadOrGenerateCookieSigningKeys } from './cookieSecret.js';
+import { loadOrGenerateCookieSigningKeys, rotateCookieSecret } from './cookieSecret.js';
+import {
+  computeFingerprint,
+  OAUTH_STATE_MODELS,
+} from './modeFingerprint.js';
 import { createOidcAdapterFactory } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
@@ -349,6 +353,51 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     //   spec'd in PRODUCTION-AUTH-ARCHITECTURE.md §5.2a.
     const keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
 
+    // must-fix #14: mode-switch invalidation. Compute a fingerprint of the
+    // current operating mode and compare to the persisted one. On mismatch,
+    // wipe OAuth-state K/V (sessions, tokens, codes, interactions) so prior
+    // tokens cannot be reused, and rotate the cookie signing secret. The
+    // first run (no persisted fingerprint) is not a mode switch.
+    let cookieKeys = loadOrGenerateCookieSigningKeys();
+    const fingerprintInputs = {
+      provider: 'embedded',
+      methodIds: this.methods.map((m) => m.id),
+      issuer: this.issuer,
+      primaryKid: keyset.kid,
+      primaryCookieKey: cookieKeys[0]!,
+    };
+    const candidateFingerprint = computeFingerprint(fingerprintInputs);
+    const persistedFingerprint = (await this.storage.genericGet(
+      'AuthModeFingerprint',
+      'current',
+    )) as { fingerprint?: string } | null;
+    const previous = persistedFingerprint?.fingerprint;
+
+    if (previous && previous !== candidateFingerprint) {
+      const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
+      rotateCookieSecret();
+      cookieKeys = loadOrGenerateCookieSigningKeys();
+      const finalFingerprint = computeFingerprint({
+        ...fingerprintInputs,
+        primaryCookieKey: cookieKeys[0]!,
+      });
+      await this.storage.genericSet('AuthModeFingerprint', 'current', {
+        fingerprint: finalFingerprint,
+      });
+      await this.storage.recordIdentityEvent({
+        type: 'auth.mode_switch_invalidation',
+        details: { cleared, previous, current: finalFingerprint },
+        timestamp: Date.now(),
+      });
+      logger.warn('[EmbeddedAuthorizationServer] mode-switch detected; OAuth state cleared, cookie secret rotated', {
+        cleared,
+      });
+    } else if (!previous) {
+      await this.storage.genericSet('AuthModeFingerprint', 'current', {
+        fingerprint: candidateFingerprint,
+      });
+    }
+
     const adapterFactory = createOidcAdapterFactory(this.storage);
     const methods = this.methods;
 
@@ -491,7 +540,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // loopback dev. With TLS terminated upstream the AS sees http but the
       // public base URL is still https, which is the right signal here.
       cookies: {
-        keys: loadOrGenerateCookieSigningKeys(),
+        keys: cookieKeys,
         long: {
           signed: true,
           secure: this.isHttpsPublicBaseUrl(),

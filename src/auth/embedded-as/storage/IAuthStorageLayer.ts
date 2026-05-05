@@ -123,6 +123,18 @@ export interface IAuthStorageLayer {
   genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void>;
   genericDestroy(model: string, id: string): Promise<void>;
 
+  /**
+   * Bulk-delete all entries for the given models. Used on mode-switch
+   * invalidation (must-fix #14): when the AS detects its operating mode
+   * has changed since last run, it clears OAuth-state models so prior
+   * tokens / sessions / interactions cannot be reused.
+   *
+   * Returns the number of entries deleted. Backends with native bulk
+   * delete (Postgres `DELETE WHERE model IN (...)`) should issue one
+   * statement; in-memory and filesystem backends iterate.
+   */
+  clearGenericByModels(models: readonly string[]): Promise<number>;
+
   /** Optional secondary indexes oidc-provider expects when those features are enabled. */
   genericFindByUserCode?(userCode: string): Promise<unknown | null>;
   genericFindByUid?(uid: string): Promise<unknown | null>;

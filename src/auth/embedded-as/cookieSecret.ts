@@ -71,3 +71,26 @@ export function loadOrGenerateCookieSigningKeys(filePath?: string): [string, str
   const primary = fresh.toString('base64');
   return [primary, primary];
 }
+
+/**
+ * Force-rotate the cookie signing secret (must-fix #14 mode-switch).
+ *
+ * Removes the persisted secret file so the next call to
+ * `loadOrGenerateCookieSigningKeys` will mint a fresh key. All cookies
+ * signed with the prior key become invalid on next request — exactly
+ * the desired behavior when the AS detects its operating mode has
+ * changed since last run.
+ *
+ * Idempotent: missing file is not an error. Honors the
+ * DOLLHOUSE_COOKIE_SIGNING_SECRET env override by NOT touching the file
+ * (an env-supplied secret is the operator's responsibility to rotate).
+ */
+export function rotateCookieSecret(filePath?: string): void {
+  if (process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim()) return;
+  const target = filePath ?? defaultCookieSecretFilePath();
+  try {
+    fs.unlinkSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+}

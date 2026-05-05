@@ -26,7 +26,7 @@
  * @module auth/embedded-as/storage/PostgresAuthStorageLayer
  */
 
-import { and, eq, gte, or, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { withSystemContext } from '../../../database/admin.js';
 import {
@@ -209,6 +209,14 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     await withSystemContext(this.db, async (tx) => {
       await tx.delete(authKv).where(and(eq(authKv.model, model), eq(authKv.id, id)));
     });
+  }
+
+  async clearGenericByModels(models: readonly string[]): Promise<number> {
+    if (models.length === 0) return 0;
+    const result = await withSystemContext(this.db, (tx) =>
+      tx.delete(authKv).where(inArray(authKv.model, [...models])).returning({ id: authKv.id }),
+    );
+    return result.length;
   }
 
   /** Uses idx_auth_kv_session_uid partial expression index. */
