@@ -64,6 +64,13 @@
       "when": 1776900000000,
       "tag": "0008_shared_pool_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778198400000,
+      "tag": "0009_auth_tables",
+      "breakpoints": true
     }
   ]
 }

@@ -28,6 +28,7 @@
 import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { resolveDataDirectory } from '../../../paths/resolveDataDirectory.js';
+import type { DatabaseInstance } from '../../../database/connection.js';
 import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
 import { InMemoryAuthStorageLayer } from './InMemoryAuthStorageLayer.js';
 import { FilesystemAuthStorageLayer } from './FilesystemAuthStorageLayer.js';
@@ -54,6 +55,12 @@ export interface CreateAuthStorageOptions {
   methods?: readonly string[];
   /** Test/operator escape for the safety guard. Logged at warn. */
   allowMemoryWithDurableMethods?: boolean;
+  /**
+   * Drizzle DB instance, required when backend='postgres'. Resolved from
+   * the DI container ('Database') in production wiring; tests pass a
+   * scratch instance.
+   */
+  database?: DatabaseInstance;
 }
 
 /** Methods whose data must survive a restart for the deployment to be sane. */
@@ -98,11 +105,20 @@ export async function createAuthStorage(
       return new FilesystemAuthStorageLayer({ rootDir });
     }
 
-    case 'postgres':
-      throw new Error(
-        'PostgresAuthStorageLayer is not yet wired. The auth_* schema PR is pending; ' +
-        'use DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem until it lands.',
-      );
+    case 'postgres': {
+      if (!options.database) {
+        throw new Error(
+          'PostgresAuthStorageLayer requires a Drizzle database instance. ' +
+          'Set DOLLHOUSE_DATABASE_URL and ensure DatabaseServiceRegistrar runs ' +
+          'before AuthServiceRegistrar, or pass `database` explicitly in tests.',
+        );
+      }
+      // Lazy import so the postgres dependency isn't pulled into bundles
+      // for filesystem/memory deployments.
+      const { PostgresAuthStorageLayer } = await import('./PostgresAuthStorageLayer.js');
+      logger.info('[AuthStorage] backend=postgres');
+      return new PostgresAuthStorageLayer({ db: options.database });
+    }
   }
 }
 

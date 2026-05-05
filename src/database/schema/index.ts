@@ -15,3 +15,4 @@ export { memoryEntries } from './memories.js';
 export { ensembleMembers } from './ensembles.js';
 export { agentStates } from './agents.js';
 export { sessions } from './sessions.js';
+export { authAccounts, authIdentityEvents, authKv } from './auth.js';

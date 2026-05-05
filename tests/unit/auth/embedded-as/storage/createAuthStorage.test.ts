@@ -58,9 +58,9 @@ describe('createAuthStorage', () => {
       await expect(createAuthStorage()).rejects.toThrow(/must be one of memory\|filesystem\|postgres/);
     });
 
-    it('refuses postgres with a clear "pending schema" message', async () => {
+    it('postgres backend without database injection throws actionable error', async () => {
       await expect(createAuthStorage({ backend: 'postgres' })).rejects.toThrow(
-        /PostgresAuthStorageLayer is not yet wired/,
+        /PostgresAuthStorageLayer requires a Drizzle database instance/,
       );
     });
   });

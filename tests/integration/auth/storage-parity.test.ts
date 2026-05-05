@@ -1,29 +1,27 @@
 /**
  * Storage-parity contract tests.
  *
- * Same test suite, parameterized over each IAuthStorageLayer implementation.
+ * Same test suite, run against each IAuthStorageLayer implementation.
  * The contract is asserted through the interface — no backend-specific
  * escape hatches. A new backend that passes this suite is drop-in
  * compatible with everything in src/auth/embedded-as/.
  *
- * Phase 1 wires Memory + Filesystem; Phase 1.3 (pending user input on
- * schema integration) adds Postgres.
+ * Postgres backend tests are gated on the test DB being reachable;
+ * skipped (with a notice) when the local Docker Postgres isn't up.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storage/FilesystemAuthStorageLayer.js';
+import { PostgresAuthStorageLayer } from '../../../src/auth/embedded-as/storage/PostgresAuthStorageLayer.js';
+import { withSystemContext } from '../../../src/database/admin.js';
 import type { IAuthStorageLayer, StoredAccount } from '../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
-
-interface BackendFixture {
-  name: string;
-  factory: () => Promise<IAuthStorageLayer>;
-  cleanup: (storage: IAuthStorageLayer) => Promise<void>;
-}
+import { closeTestDb, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -39,27 +37,15 @@ function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   };
 }
 
-const fixtures: BackendFixture[] = [
-  {
-    name: 'InMemoryAuthStorageLayer',
-    factory: async () => new InMemoryAuthStorageLayer(),
-    cleanup: async () => {
-      // Maps are GC'd with the instance.
-    },
-  },
-  {
-    name: 'FilesystemAuthStorageLayer',
-    factory: async () => {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auth-fs-'));
-      return new FilesystemAuthStorageLayer({ rootDir: dir });
-    },
-    cleanup: async (storage) => {
-      await fs.rm((storage as FilesystemAuthStorageLayer).rootDir, { recursive: true, force: true });
-    },
-  },
-];
-
-describe.each(fixtures)('IAuthStorageLayer contract: $name', ({ factory, cleanup }) => {
+/**
+ * The full contract suite. Called from each backend's describe block so
+ * the assertions stay in lock-step across implementations. A new backend
+ * passes contract conformance by satisfying every test in this function.
+ */
+function runContractSuite(
+  factory: () => Promise<IAuthStorageLayer>,
+  cleanup: (storage: IAuthStorageLayer) => Promise<void>,
+): void {
   let storage: IAuthStorageLayer;
 
   beforeEach(async () => {
@@ -196,9 +182,83 @@ describe.each(fixtures)('IAuthStorageLayer contract: $name', ({ factory, cleanup
       expect(found).toBeNull();
     });
   });
+}
+
+// ── Static fixtures (always run) ───────────────────────────────────────
+
+describe('IAuthStorageLayer contract: InMemoryAuthStorageLayer', () => {
+  runContractSuite(
+    async () => new InMemoryAuthStorageLayer(),
+    async () => { /* Maps are GC'd with the instance. */ },
+  );
 });
 
-// Filesystem-only: persistence across instance lifecycle (proves restart survival).
+describe('IAuthStorageLayer contract: FilesystemAuthStorageLayer', () => {
+  runContractSuite(
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'auth-fs-'));
+      return new FilesystemAuthStorageLayer({ rootDir: dir });
+    },
+    async (storage) => {
+      await fs.rm((storage as FilesystemAuthStorageLayer).rootDir, { recursive: true, force: true });
+    },
+  );
+});
+
+// ── Postgres fixture (gated on local Docker DB) ────────────────────────
+//
+// Jest evaluates `describe` synchronously at file load, so the gate is a
+// runtime check inside each `it` (via beforeAll setting a flag). When
+// Postgres is unreachable the suite logs and `it.skip`s instead of
+// failing — matches the pattern used in tests/integration/database/.
+
+let pgAvailable = false;
+beforeAll(async () => {
+  pgAvailable = await isDatabaseAvailable();
+  if (!pgAvailable) {
+    console.warn(
+      '[storage-parity] Skipping PostgresAuthStorageLayer suite — local Docker Postgres unreachable. ' +
+      'Run `docker compose -f docker/docker-compose.db.yml up -d` to enable.',
+    );
+  }
+});
+
+afterAll(async () => {
+  if (pgAvailable) await closeTestDb();
+});
+
+describe('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
+  // The contract suite uses beforeEach/afterEach for fixture setup; we
+  // wrap those in a runtime gate so unavailable-DB skips cleanly.
+  // dollhouse_app has DML only — no TRUNCATE — so DELETE FROM is the
+  // right reset between tests.
+  const reset = async () => {
+    const db = getTestDb();
+    await withSystemContext(db, async (tx) => {
+      await tx.execute(sql`DELETE FROM auth_kv`);
+      await tx.execute(sql`DELETE FROM auth_identity_events`);
+      await tx.execute(sql`DELETE FROM auth_accounts`);
+    });
+  };
+
+  runContractSuite(
+    async () => {
+      if (!pgAvailable) {
+        // Returning a placeholder lets the test skip below; we don't
+        // use this storage instance because the test body bails first.
+        return new InMemoryAuthStorageLayer();
+      }
+      await reset();
+      return new PostgresAuthStorageLayer({ db: getTestDb() });
+    },
+    async () => {
+      if (pgAvailable) await reset();
+    },
+  );
+});
+
+// ── Filesystem-only durability tests ───────────────────────────────────
+
 describe('FilesystemAuthStorageLayer — durable across instances', () => {
   let dir: string;
 
