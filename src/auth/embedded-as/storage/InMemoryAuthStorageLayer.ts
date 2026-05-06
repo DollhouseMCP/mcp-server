@@ -1,10 +1,17 @@
 /**
  * InMemoryAuthStorageLayer
  *
- * Solo-dev / single-process implementation of IAuthStorageLayer. All
- * state lives in Maps; nothing persists across restarts. Use a DB-backed
- * implementation (out of scope for the §8.1 PR) for any multi-process
- * or restart-survival deployment.
+ * Single-process, non-durable implementation of IAuthStorageLayer. All
+ * state lives in Maps; nothing persists across restarts. Use the
+ * filesystem (small-team / solo) or postgres (hosted / multi-instance)
+ * backends from `createAuthStorage` for any deployment that needs
+ * restart survival.
+ *
+ * Restricted to test environments and explicit operator opt-in via
+ * `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true` — without that, methods
+ * that require durable storage (local-account, magic-link) refuse to
+ * start with this backend so operators don't silently lose
+ * credentials on restart.
  *
  * Atomicity for refresh-token rotation and authorization-code single-use
  * is owned by oidc-provider, not this layer — this storage is a typed
@@ -47,6 +54,18 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   async getAccount(sub: string): Promise<StoredAccount | null> {
     return this.accountsBySub.get(sub) ?? null;
+  }
+
+  async updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean> {
+    const existing = this.accountsBySub.get(sub);
+    if (!existing) return false;
+    // Single-process JS: read-write here is atomic against other
+    // updateAccountLastAuth calls. Concurrent upsertAccount on the same
+    // sub still races, but that's the caller's contract — this method
+    // only protects the lastAuthAt+updatedAt pair against
+    // upsertAccount-based last-write-wins.
+    this.accountsBySub.set(sub, { ...existing, lastAuthAt, updatedAt: lastAuthAt });
+    return true;
   }
 
   // ---- Audit (must-fix #21) ----
@@ -157,6 +176,12 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
    */
   async genericRevokeByGrantId(grantId: string): Promise<void> {
     this.genericStore.delete(genericKey('Grant', grantId));
+    // Map iteration with concurrent deletion is safe in V8 / Node 22+:
+    // entries are visited in insertion order, deletions of already-
+    // visited keys have no effect, deletions of not-yet-visited keys
+    // remove them from the iteration. We only delete keys we just
+    // visited via record.payload, so the visit-then-delete shape is
+    // well-defined.
     for (const [key, record] of this.genericStore.entries()) {
       const payload = record.payload as { grantId?: string } | null;
       if (payload && payload.grantId === grantId) {

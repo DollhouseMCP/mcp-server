@@ -69,7 +69,12 @@ const DEFAULT_EMAIL_VERIFIED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 export interface GithubSocialMethodOptions {
   /** GitHub OAuth app client ID. Reuses DOLLHOUSE_GITHUB_CLIENT_ID. */
   clientId: string;
-  /** GitHub OAuth app client secret. From DOLLHOUSE_GITHUB_CLIENT_SECRET. */
+  /**
+   * GitHub OAuth app client secret. From DOLLHOUSE_GITHUB_CLIENT_SECRET.
+   * Read once at construction; rotating the secret requires an AS
+   * restart. A hot-rotation hook would need a config-watch path that
+   * isn't §8.1 scope.
+   */
   clientSecret: string;
   /** Absolute callback URL registered on the GitHub OAuth app. */
   callbackUrl: string;
@@ -398,7 +403,12 @@ export class GithubSocialMethod implements IAuthMethod {
       login: user.login,
       name: user.name,
       verifiedPrimaryEmail: verifiedPrimary.email,
-      raw: { user, emails },
+      // Don't store the full /user/emails array on rawProfile: it
+      // contains non-primary, non-verified addresses which are PII and
+      // contradict IAuthStorageLayer's documented "safe to include in
+      // audit-event payloads and operator dumps" contract for this
+      // field. Keep just the /user payload + the chosen email.
+      raw: { user, verifiedPrimaryEmail: verifiedPrimary.email },
     };
   }
 }

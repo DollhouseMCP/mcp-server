@@ -125,6 +125,19 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     return rows.length > 0 ? rowToStoredAccount(rows[0] as AuthAccountRow) : null;
   }
 
+  async updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean> {
+    // Single-statement UPDATE under row-level locking by Postgres; can't
+    // race against concurrent upserts the way a get-then-upsert would.
+    const result = await withSystemContext(this.db, (tx) =>
+      tx
+        .update(authAccounts)
+        .set({ lastAuthAt, updatedAt: new Date(lastAuthAt) })
+        .where(eq(authAccounts.sub, sub))
+        .returning({ sub: authAccounts.sub }),
+    );
+    return result.length > 0;
+  }
+
   // ---- Audit (must-fix #21) ----
 
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {

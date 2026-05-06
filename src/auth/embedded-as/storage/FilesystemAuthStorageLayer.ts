@@ -113,6 +113,21 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     return accounts.find(a => a.sub === sub) ?? null;
   }
 
+  async updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean> {
+    return this.locks.withLock(`auth:accounts:${this.accountsPath}`, async () => {
+      const accounts = await this.readAccountsRaw();
+      const idx = accounts.findIndex(a => a.sub === sub);
+      if (idx < 0) return false;
+      // Surgical update under the same lock that guards upsertAccount —
+      // protects the lastAuthAt write from being clobbered by a
+      // concurrent upsert that re-writes the row from a stale read.
+      accounts[idx] = { ...accounts[idx]!, lastAuthAt, updatedAt: lastAuthAt };
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
+      return true;
+    });
+  }
+
   // ---- Audit (must-fix #21) ----
 
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
@@ -167,6 +182,11 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
   async genericGet(model: string, id: string): Promise<unknown | null> {
+    // Defense in depth: assert at the public surface in addition to the
+    // internal `readKv` check. Keeps the path-traversal guarantee from
+    // depending on a private helper a future refactor might bypass.
+    assertSafeModel(model);
+    assertSafeId(id);
     const record = await this.readKv(model, id);
     if (!record) return null;
     if (record.exp !== null && record.exp <= Date.now()) {
@@ -192,6 +212,8 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async genericDestroy(model: string, id: string): Promise<void> {
+    assertSafeModel(model);
+    assertSafeId(id);
     await this.unlinkKv(model, id);
   }
 
@@ -222,7 +244,19 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       for (const idFile of ids) {
         if (!idFile.endsWith('.json')) continue;
         const id = idFile.slice(0, -'.json'.length);
-        const record = await this.readKv(model, id);
+        // A single malformed/orphan file in the kv directory must not
+        // abort the entire revoke — without this guard, one bad file
+        // permanently blocks H14 grant revocation. assertSafeId throws
+        // in readKv on suspicious names; readJSON throws on parse fail.
+        let record;
+        try {
+          record = await this.readKv(model, id);
+        } catch (err) {
+          logger.warn('[FilesystemAuthStorageLayer] skipping unreadable kv file during grant revoke', {
+            model, id, error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
         if (!record) continue;
         const payload = record.value as { grantId?: string } | null;
         if (payload && payload.grantId === grantId) {

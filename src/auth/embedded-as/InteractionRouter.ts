@@ -349,13 +349,13 @@ export async function finishInteractionWithIdentity(
 
     // Stamp lastAuthAt before interactionFinished so the redirect-to-token
     // round-trip that follows can read a fresh value via extraTokenClaims.
-    // Best-effort: a missing account row (race / new account) is logged but
-    // not fatal — the auth_time claim will simply be omitted.
-    const existing = await storage.getAccount(accountId);
-    if (existing) {
-      const now = Date.now();
-      await storage.upsertAccount({ ...existing, lastAuthAt: now, updatedAt: now });
-    } else {
+    // Use the targeted updateAccountLastAuth so we don't race a concurrent
+    // upsert (e.g. a fresh GitHub login on another tab) and clobber its
+    // freshly-fetched displayName/rawProfile via the read-modify-write
+    // path. Best-effort: a missing account row (new account / race) just
+    // logs — the auth_time claim is omitted.
+    const stamped = await storage.updateAccountLastAuth(accountId, Date.now());
+    if (!stamped) {
       logger.warn('[InteractionRouter] no account row to stamp lastAuthAt', { accountId });
     }
 

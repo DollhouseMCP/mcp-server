@@ -23,6 +23,7 @@ import type {
   InteractionResult,
   InteractionStep,
 } from '../IAuthMethod.js';
+import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 
 const LOCAL_PROVIDER = 'local';
 
@@ -31,6 +32,14 @@ export interface TrivialConsentMethodOptions {
   defaultSubject?: string;
   /** Display name shown on the consent page. */
   defaultDisplayName?: string;
+  /**
+   * Storage layer used to stamp `lastAuthAt` on every approval, so the
+   * AS's `extraTokenClaims` hook can emit the `auth_time` claim required
+   * by spec line 927 ("every issued access token carries auth_time").
+   * Optional only because some unit tests construct the method standalone;
+   * production wiring through AuthProviderFactory always supplies it.
+   */
+  storage?: IAuthStorageLayer;
 }
 
 export class TrivialConsentMethod implements IAuthMethod {
@@ -39,10 +48,12 @@ export class TrivialConsentMethod implements IAuthMethod {
 
   private readonly externalSub: string;
   private readonly displayNameForUser: string;
+  private readonly storage: IAuthStorageLayer | undefined;
 
   constructor(options: TrivialConsentMethodOptions = {}) {
     this.externalSub = options.defaultSubject ?? defaultLocalSubject();
     this.displayNameForUser = options.defaultDisplayName ?? this.externalSub;
+    this.storage = options.storage;
   }
 
   /**
@@ -68,6 +79,25 @@ export class TrivialConsentMethod implements IAuthMethod {
     // Trivial consent has no real form fields to validate; clicking
     // "Approve Connector" is the consent. CSRF is verified by the
     // InteractionRouter before calling completeInteraction.
+    //
+    // Ensure the account row exists so `finishInteractionWithIdentity`
+    // can stamp `lastAuthAt` and `extraTokenClaims` can emit `auth_time`
+    // (spec line 927). Without this row trivial-consent tokens silently
+    // omit the claim, leaving the contract unconditionally violated.
+    if (this.storage) {
+      const existing = await this.storage.getAccount(this.sub);
+      const now = Date.now();
+      await this.storage.upsertAccount({
+        sub: this.sub,
+        provider: LOCAL_PROVIDER,
+        externalSub: this.externalSub,
+        displayName: this.displayNameForUser,
+        emailVerified: false,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        // lastAuthAt left for the router to stamp atomically post-consent.
+      });
+    }
     return {
       kind: 'authenticated',
       identity: this.makeIdentity(),

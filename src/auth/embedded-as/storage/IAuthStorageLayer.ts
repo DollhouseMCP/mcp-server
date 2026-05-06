@@ -25,10 +25,18 @@
  * methods (C9) eliminated dead code that misleadingly advertised
  * atomicity guarantees the runtime did not provide.
  *
- * Implementations:
- *   - InMemoryAuthStorageLayer (C3) — solo-dev default
- *   - SqliteAuthStorageLayer / PostgresAuthStorageLayer — when the auth
- *     schema lands; out of scope for the §8.1 PR
+ * Implementations (all three ship in §8.1):
+ *   - InMemoryAuthStorageLayer — non-durable; tests + the explicit
+ *     "I know what I'm doing" dev opt-in.
+ *   - FilesystemAuthStorageLayer — durable JSON + JSONL under the
+ *     platform-correct state dir, atomic writes via fileLockManager.
+ *     The default for solo / small-team deployments.
+ *   - PostgresAuthStorageLayer — Drizzle-backed; recommended for
+ *     hosted / multi-instance deployments.
+ *
+ * Backends are selected via `createAuthStorage` and exercised by an
+ * identical contract test (`tests/integration/auth/storage-parity.test.ts`)
+ * to guarantee substitutability.
  *
  * @module auth/embedded-as/storage/IAuthStorageLayer
  */
@@ -113,6 +121,23 @@ export interface IAuthStorageLayer {
   findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null>;
   upsertAccount(account: StoredAccount): Promise<void>;
   getAccount(sub: string): Promise<StoredAccount | null>;
+
+  /**
+   * Atomically stamp `lastAuthAt` (and `updatedAt`) on the account row
+   * without re-writing the rest of it. Used by the InteractionRouter on
+   * every successful login so that `extraTokenClaims` can emit the
+   * `auth_time` claim (spec L927).
+   *
+   * Why a dedicated method: a `getAccount → upsertAccount(...existing,
+   * lastAuthAt)` round-trip races against concurrent logins for the same
+   * sub (two browser tabs, parallel OAuth flows). Lost-update on
+   * `lastAuthAt` is benign — both writes land on now-ish — but the
+   * round-trip also re-writes `displayName` and `rawProfile`, which a
+   * fresh GitHub login may have just updated. A targeted update avoids
+   * that hazard. Returns true if a row was found and updated, false if
+   * the sub did not exist.
+   */
+  updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean>;
 
   // --- Audit (must-fix #21) ---
 

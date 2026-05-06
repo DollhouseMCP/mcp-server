@@ -46,7 +46,7 @@ import {
 } from './persistKeys.js';
 import { loadOrGenerateCookieSigningKeys, rotateCookieSecret } from './cookieSecret.js';
 import {
-  computeFingerprint,
+  checkAndPersistModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
 import { createOidcAdapterFactory } from './storage/OidcProviderAdapter.js';
@@ -195,7 +195,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         return { ok: false, reason: 'token expired' };
       }
       if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        const claim = (error as { claim?: string }).claim;
+        const claim = error.claim;
         if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
         if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
         if (claim === 'typ') return { ok: false, reason: 'wrong token type' };
@@ -359,25 +359,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   private async initialize(): Promise<InitializedState> {
-    // jwks rotation procedure (must-fix #15 forward-compat):
-    //   Today the AS publishes a single ES256 key under one kid loaded from
-    //   the persistKeys file. To rotate without invalidating in-flight tokens:
-    //     1. Generate a new ES256 keypair, append it to the JWKS keyset.
-    //     2. Restart the AS — JWKS endpoint now publishes both keys.
-    //     3. Update persistKeys to mark the new kid as the SIGNING kid; the
-    //        old kid stays in the keyset for verification only.
-    //     4. After the access-token TTL window passes (1h default), drop the
-    //        old kid from the JWKS keyset and the file.
-    //   The SqliteAuthStorageLayer (out-of-scope for §8.1) will replace this
-    //   procedure with the multi-instance encrypted-JWK-in-database approach
-    //   spec'd in PRODUCTION-AUTH-ARCHITECTURE.md §5.2a.
+    // Single-key JWKS keyset. The AS publishes one ES256 key under one
+    // kid loaded from the persistKeys file. A multi-key rotation
+    // procedure (so existing tokens stay valid through a key swap) is a
+    // follow-up runbook — `persistKeys.ts` would need to grow multi-key
+    // support, and an admin endpoint would need to drive the promotion.
+    // The current shape is "rotate by restart with token invalidation,"
+    // which is honest but not zero-downtime.
     const keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
 
-    // must-fix #14: mode-switch invalidation. Compute a fingerprint of the
-    // current operating mode and compare to the persisted one. On mismatch,
-    // wipe OAuth-state K/V (sessions, tokens, codes, interactions) so prior
-    // tokens cannot be reused, and rotate the cookie signing secret. The
-    // first run (no persisted fingerprint) is not a mode switch.
+    // must-fix #14: mode-switch invalidation. Delegate the read-compare-
+    // persist dance to checkAndPersistModeFingerprint so this AS and any
+    // out-of-band tooling (the dashboard, ops scripts) compute "did the
+    // mode change?" the same way. On mismatch we still need to rotate
+    // the cookie secret + re-persist with the post-rotation fingerprint;
+    // the helper handles the no-change and first-run paths atomically.
     let cookieKeys = loadOrGenerateCookieSigningKeys();
     const fingerprintInputs = {
       provider: 'embedded',
@@ -386,35 +382,31 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       primaryKid: keyset.kid,
       primaryCookieKey: cookieKeys[0]!,
     };
-    const candidateFingerprint = computeFingerprint(fingerprintInputs);
-    const persistedFingerprint = (await this.storage.genericGet(
-      'AuthModeFingerprint',
-      'current',
-    )) as { fingerprint?: string } | null;
-    const previous = persistedFingerprint?.fingerprint;
+    const fingerprintResult = await checkAndPersistModeFingerprint(this.storage, fingerprintInputs);
 
-    if (previous && previous !== candidateFingerprint) {
+    if (fingerprintResult.changed) {
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
       rotateCookieSecret();
       cookieKeys = loadOrGenerateCookieSigningKeys();
-      const finalFingerprint = computeFingerprint({
+      // Re-persist with the post-rotation cookie key so the next boot
+      // sees a stable fingerprint that already reflects the new key.
+      // Without this, every boot after a mode-switch would detect
+      // "another change" because cookieKeys[0] regenerated on rotation.
+      await checkAndPersistModeFingerprint(this.storage, {
         ...fingerprintInputs,
         primaryCookieKey: cookieKeys[0]!,
       });
-      await this.storage.genericSet('AuthModeFingerprint', 'current', {
-        fingerprint: finalFingerprint,
-      });
       await this.storage.recordIdentityEvent({
         type: 'auth.mode_switch_invalidation',
-        details: { cleared, previous, current: finalFingerprint },
+        details: {
+          cleared,
+          previous: fingerprintResult.previous,
+          current: fingerprintResult.current,
+        },
         timestamp: Date.now(),
       });
       logger.warn('[EmbeddedAuthorizationServer] mode-switch detected; OAuth state cleared, cookie secret rotated', {
         cleared,
-      });
-    } else if (!previous) {
-      await this.storage.genericSet('AuthModeFingerprint', 'current', {
-        fingerprint: candidateFingerprint,
       });
     }
 
@@ -518,6 +510,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         if (!accountId) return undefined;
         const account = await this.storage.getAccount(accountId);
         if (!account?.lastAuthAt) return undefined;
+        // Defense in depth: refuse to emit auth_time if the row's sub
+        // doesn't match the token's accountId. A bug elsewhere that lets
+        // a token carry a foreign accountId would otherwise propagate
+        // someone else's auth_time onto it. Today this is unreachable
+        // (oidc-provider sets accountId from the Grant we minted) but
+        // making it a no-op rather than trusting the lookup keeps the
+        // claim honest if the surrounding code ever changes shape.
+        if (account.sub !== accountId) return undefined;
         return { auth_time: Math.floor(account.lastAuthAt / 1000) };
       },
       // Only OIDC standard scopes here. The `mcp` resource scope is declared
@@ -535,9 +535,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         Interaction: 10 * 60,
         Session: 14 * 24 * 3600,
       },
-      // must-fix #11: rotate the refresh token on every refresh and reject any
-      // attempt to reuse a previously-rotated token. oidc-provider revokes the
-      // entire refresh family on reuse-detection.
+      // must-fix #11 (partially): enable rotation + reuse-detection;
+      // oidc-provider revokes the entire refresh family on detection.
+      // The spec line 926 atomicity contract — "DB row lock or
+      // compare-and-swap" — is met only on the Postgres backend (row-
+      // level locking via Drizzle). Filesystem and in-memory backends
+      // provide single-process atomicity but not multi-instance.
+      // Dashboard row #11 reflects this as DEFERRED.
       rotateRefreshToken: true,
       issueRefreshToken: async (_ctx, client, code) => {
         // Only issue a refresh token when offline_access was granted.
@@ -604,9 +608,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // a redirect-with-error in dev; this also surfaces config issues early.
     provider.proxy = false;
 
-    const publicJwk = keyset.jwks.keys[0];
-    const publicSigningKey = (await importJWK(stripPrivate(publicJwk), ALGORITHM)) as CryptoKey;
-    const privateSigningKey = (await importJWK(publicJwk, ALGORITHM)) as CryptoKey;
+    // privateJwk carries `d`/`p`/`q`/etc; strip those for the public key
+    // import so signature verification can't accidentally use the private
+    // half. The earlier shape called this `publicJwk`, which was
+    // misleading — anyone reading the private-import line couldn't tell
+    // it was the full private JWK. The names now match what each value is.
+    const privateJwk = keyset.jwks.keys[0];
+    const publicSigningKey = (await importJWK(stripPrivate(privateJwk), ALGORITHM)) as CryptoKey;
+    const privateSigningKey = (await importJWK(privateJwk, ALGORITHM)) as CryptoKey;
 
     logger.info('[EmbeddedAuthorizationServer] initialized', {
       issuer: this.issuer,
