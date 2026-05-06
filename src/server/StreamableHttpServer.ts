@@ -566,24 +566,7 @@ export async function createStreamableHttpRuntime(
           return;
         }
 
-        // H7: dispatch must come from the same authenticated subject that
-        // initialized the session. Without this check, any valid bearer
-        // token + a leaked or guessed session id reaches this session's
-        // user-scoped DI container. `ownerSub` is undefined for sessions
-        // created without auth (auth disabled or pooled-unclaimed) — those
-        // pass through, preserving existing no-auth behavior.
-        if (existingSession.ownerSub !== undefined) {
-          const callerSub = (res.locals.authClaims as { sub?: string } | undefined)?.sub;
-          if (callerSub !== existingSession.ownerSub) {
-            logger.warn('[StreamableHTTP] Session ownership mismatch — rejecting dispatch', {
-              sessionId,
-              ownerSub: existingSession.ownerSub,
-              callerSub: callerSub ?? '(none)',
-            });
-            respondWithJsonRpcError(res, 403, 'Session does not belong to the authenticated user', getRequestId(req));
-            return;
-          }
-        }
+        if (!assertSessionOwner(req, res, sessionId, existingSession)) return;
 
         touchSession(sessionId);
         await existingSession.transport.handleRequest(req, res, req.body);
@@ -614,6 +597,37 @@ export async function createStreamableHttpRuntime(
       handleRequestFailure(req, res, 'POST', error, sessionId);
     }
   });
+
+  /**
+   * H7 ownership gate. Used by both the POST dispatch path and the
+   * GET/DELETE lifecycle path so the same check applies to all three
+   * verbs. An earlier shape only guarded POST — a valid bearer + a
+   * leaked session id could still SSE-attach (GET) or terminate
+   * (DELETE) someone else's session through the lifecycle helper.
+   *
+   * Returns true when the request is allowed to proceed; on false it
+   * has already written the 403 response. `ownerSub: undefined`
+   * (auth-disabled or pooled-unclaimed sessions) bypasses the check
+   * to preserve existing no-auth behavior.
+   */
+  const assertSessionOwner = (
+    req: Request,
+    res: Response,
+    sessionId: string,
+    session: ActiveSessionRecord,
+  ): boolean => {
+    if (session.ownerSub === undefined) return true;
+    const callerSub = (res.locals.authClaims as { sub?: string } | undefined)?.sub;
+    if (callerSub === session.ownerSub) return true;
+    logger.warn('[StreamableHTTP] Session ownership mismatch — rejecting dispatch', {
+      sessionId,
+      method: req.method,
+      ownerSub: session.ownerSub,
+      callerSub: callerSub ?? '(none)',
+    });
+    respondWithJsonRpcError(res, 403, 'Session does not belong to the authenticated user', getRequestId(req));
+    return false;
+  };
 
   const handleSessionLifecycleRequest = async (
     req: Request,
@@ -648,6 +662,11 @@ export async function createStreamableHttpRuntime(
       respondWithJsonRpcError(res, 404, 'Unknown MCP session');
       return;
     }
+
+    // H7: lifecycle (GET/DELETE) must enforce the same ownership gate
+    // as POST. A valid bearer + leaked session id could otherwise SSE-
+    // attach to someone else's session (GET) or terminate it (DELETE).
+    if (!assertSessionOwner(req, res, sessionId, session)) return;
 
     try {
       touchSession(sessionId);

@@ -124,8 +124,11 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
       },
     );
 
-    tokenForUserA = await provider.issue('local_user-a');
-    tokenForUserB = await provider.issue('local_user-b');
+    // Phase 9 M3/Q6: tokens must carry the `mcp` scope to pass
+    // validate(); otherwise both users get rejected before the
+    // session-ownership check runs.
+    tokenForUserA = await provider.issue('local_user-a', { scopes: ['mcp'] });
+    tokenForUserB = await provider.issue('local_user-b', { scopes: ['mcp'] });
   }, 20_000);
 
   afterEach(async () => {
@@ -165,6 +168,47 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
     expect(dispatchResp.status).toBe(403);
     const body = await dispatchResp.json() as { error?: { message?: string } };
     expect(body.error?.message ?? '').toMatch(/Session does not belong to the authenticated user/);
+  }, 20_000);
+
+  it('user B cannot SSE-attach (GET) to user A\'s session', async () => {
+    // H1 (Phase 9 review): the GET handler shares a lifecycle helper with
+    // DELETE; the earlier shape skipped the ownership check there, so a
+    // valid bearer + leaked session id could attach to someone else's
+    // SSE stream and observe their server→client notifications.
+    const aSession = await initializeWithToken(tokenForUserA);
+    const sessionId = aSession.sessionId!;
+    const attachResp = await fetch(mcpUrl, {
+      method: 'GET',
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${tokenForUserB}`,
+        'mcp-session-id': sessionId,
+      },
+    });
+    expect(attachResp.status).toBe(403);
+  }, 20_000);
+
+  it('user B cannot terminate (DELETE) user A\'s session', async () => {
+    // H1: same shared lifecycle helper; DELETE without the ownership
+    // check let an attacker drop someone else's session.
+    const aSession = await initializeWithToken(tokenForUserA);
+    const sessionId = aSession.sessionId!;
+    const deleteResp = await fetch(mcpUrl, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${tokenForUserB}`,
+        'mcp-session-id': sessionId,
+      },
+    });
+    expect(deleteResp.status).toBe(403);
+
+    // Confirm A's session survived B's failed attempt: A can still
+    // dispatch a tools/list against the same session id.
+    const stillAlive = await postJson(mcpUrl, TOOL_LIST_BODY, {
+      Authorization: `Bearer ${tokenForUserA}`,
+      'mcp-session-id': sessionId,
+    });
+    expect(stillAlive.status).not.toBe(404);
   }, 20_000);
 
   it('user A can dispatch their own session normally', async () => {
