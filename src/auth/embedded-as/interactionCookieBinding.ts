@@ -60,8 +60,11 @@ export type CookieBindingResult =
  * oidc-provider uses cookies-keygrip: the cookie value is the raw uid
  * and a sibling `<name>.sig` cookie holds the HMAC-SHA1 signature
  * (base64url-encoded) of `<name>=<value>` under one of the configured
- * `cookies.keys`. We sign with each key in turn (rotation grace) and
- * accept the first match, comparing in constant time.
+ * `cookies.keys`. We try each configured key in turn and accept the
+ * first signature match, comparing in constant time. The verify-loop
+ * is multi-key by design even though `cookies.keys` is currently
+ * single-key (Phase 4 B6) — keeping the loop ready for a future
+ * rotation runbook avoids a structural change at that point.
  */
 export function verifyInteractionCookieMatches(
   req: Request,
@@ -100,6 +103,17 @@ export function verifyInteractionCookieMatches(
  * keygrip's signing algorithm: HMAC-SHA1 of the data, base64-encoded,
  * then converted to base64url-without-padding (the "/" → "_", "+" → "-",
  * "=" stripped).
+ *
+ * SHA-1 here is dictated by keygrip's wire format — oidc-provider's
+ * cookie signatures use the keygrip npm package, which has emitted
+ * HMAC-SHA1 since version 1.x; we have to match that to verify
+ * cookies it produces. HMAC-SHA1 is not affected by the SHA-1
+ * collision attacks (HMAC's security depends on the key, not the
+ * collision-resistance of the underlying hash), so this is acceptable
+ * here, but a third-party audit will flag the algorithm name. Upgrading
+ * would require coordinating a keygrip wire-format change upstream
+ * AND a synchronized rotation across all running instances; not §8.1
+ * scope. See `package.json` for the pinned keygrip dependency.
  */
 function keygripSign(data: string, key: string): string {
   return createHmac('sha1', key)

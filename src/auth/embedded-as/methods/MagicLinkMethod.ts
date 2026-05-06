@@ -406,9 +406,22 @@ export class MagicLinkMethod implements IAuthMethod {
 
     if (bucket.count > limit && !bucket.alarmFired) {
       bucket.alarmFired = true;
+      // Include the offending key in the audit event so an operator
+      // chasing an abuse report can identify which email or IP tripped
+      // the limit. The email dimension records its sha256 hash rather
+      // than the raw address (less PII to leak from audit dumps); IP is
+      // recorded as-is, matching LocalLoginRateLimiter's convention.
+      const keyForAudit = dimension === 'email'
+        ? createHash('sha256').update(key).digest('base64url')
+        : key;
       await this.options.storage.recordIdentityEvent({
         type: 'auth.magic_link.flood_suspected',
-        details: { dimension, limit, windowMs: REQUEST_RATE_LIMIT_WINDOW_MS },
+        details: {
+          dimension,
+          key: keyForAudit,
+          limit,
+          windowMs: REQUEST_RATE_LIMIT_WINDOW_MS,
+        },
         timestamp: now,
       });
     }

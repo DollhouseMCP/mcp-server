@@ -22,8 +22,8 @@
 import { createHash } from 'node:crypto';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
-const FINGERPRINT_MODEL = 'AuthModeFingerprint';
-const FINGERPRINT_KEY = 'current';
+export const FINGERPRINT_MODEL = 'AuthModeFingerprint';
+export const FINGERPRINT_KEY = 'current';
 
 /** OAuth-state K/V models that get wiped on mode change. */
 export const OAUTH_STATE_MODELS: readonly string[] = [

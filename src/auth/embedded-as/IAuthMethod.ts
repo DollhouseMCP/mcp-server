@@ -96,8 +96,14 @@ export type InteractionResult =
  * Runtime injected when EmbeddedAuthorizationServer wires a method's
  * standalone routes (callbacks, invite-redemption pages, etc.). Methods
  * import the helper functions they need (`finishInteractionWithIdentity`,
- * `verifyInteractionCookieMatches`) directly; deps carry runtime state
- * the AS owns.
+ * `verifyInteractionCookieMatches`) directly from peer modules — these
+ * are pure helpers, not deps the AS owns or that vary per deployment.
+ * `ContributeRoutesDeps` carries runtime state only: the storage layer
+ * and the lazily-initialized oidc-provider instance + active cookie
+ * keys. Routing the helpers through deps would add ceremony without
+ * meaningful test-isolation benefit, since methods are exercised end-
+ * to-end through the AS in their integration tests rather than against
+ * a mocked router.
  */
 export interface ContributeRoutesDeps {
   storage: IAuthStorageLayer;

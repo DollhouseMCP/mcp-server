@@ -157,6 +157,12 @@ export class LocalLoginRateLimiter {
    * For a legitimate user who typo'd a couple times before getting in:
    * the window is ACCOUNT_WINDOW_MS (60 s by default), so the record
    * decays on its own well before their next session.
+   *
+   * The `ip` parameter is currently unused (the IP bucket logic above
+   * keeps it untouched on success deliberately). Kept on the signature
+   * to stay symmetric with `noteFailure(account, ip)` and to leave room
+   * for future IP-correlation analysis (e.g. flagging "successful
+   * login from an IP that just exhausted its budget").
    */
   async noteSuccess(account: string, _ip: string): Promise<void> {
     const rec = this.accounts.get(account);
