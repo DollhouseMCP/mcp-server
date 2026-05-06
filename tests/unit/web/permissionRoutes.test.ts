@@ -55,6 +55,9 @@ describe('permissionRoutes', () => {
   });
 
   afterEach(async () => {
+    delete process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED;
+    delete process.env.DOLLHOUSE_PERMISSION_AUDIT_DESTINATION_TYPE;
+    delete process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH;
     _resetPermissionHookStartupRepairSummaryForTests();
     await unlink(latestPortFile).catch(() => {});
     await rm(tempHome, { recursive: true, force: true });
@@ -323,6 +326,14 @@ describe('permissionRoutes', () => {
       expect(res.body.enforcementReady).toBe(false);
       expect(res.body.advisory).toContain('NOT enforced');
       expect(Array.isArray(res.body.recentDecisions)).toBe(true);
+      expect(res.body.permissionAuditArtifact).toEqual(expect.objectContaining({
+        enabled: false,
+        available: false,
+        destination: {
+          type: 'localFile',
+          path: join(tempHome, '.dollhouse', 'audit', 'permission-audit.md'),
+        },
+      }));
       expect(handler.handleRead).toHaveBeenCalledWith({
         operation: 'get_effective_cli_policies',
         params: {
@@ -837,6 +848,104 @@ describe('permissionRoutes', () => {
         { label: 'File', value: '/opt/dollhouse/example.txt', monospace: true },
         { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
       ]));
+    });
+
+    it('should generate an admin-enabled local permission audit artifact', async () => {
+      const auditPath = join(tempHome, '.dollhouse', 'audit', 'permission-decisions.md');
+      process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED = 'true';
+      process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH = auditPath;
+
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              decision: 'deny',
+              reason: 'Blocked by policy',
+              matched_pattern: 'Bash:git push --force*',
+            },
+          }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const evaluate = await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'git push --force' },
+          platform: 'codex',
+          session_id: 'session-audit-file',
+        });
+      expect(evaluate.status).toBe(200);
+
+      const artifact = await readFile(auditPath, 'utf-8');
+      expect(artifact).toContain('# DollhouseMCP Permissions Audit');
+      expect(artifact).toContain('## 1. Bash');
+      expect(artifact).toContain('- Decision: DENY');
+      expect(artifact).toContain('- Reason: Blocked by policy');
+      expect(artifact).toContain('- Session: session-audit-file');
+      expect(artifact).toContain('- Matched Pattern: Bash:git push --force*');
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.permissionAuditArtifact).toEqual(expect.objectContaining({
+        enabled: true,
+        available: true,
+        destination: { type: 'localFile', path: auditPath },
+        lastDecisionId: 'd-1',
+        lastWriteAt: expect.any(String),
+      }));
+    });
+
+    it('should report audit artifact configuration errors without blocking permission evaluation', async () => {
+      const invalidAuditPath = join(tempHome, '.dollhouse', 'audit', 'permission-decisions.txt');
+      process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED = 'true';
+      process.env.DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH = invalidAuditPath;
+
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{ success: true, data: { decision: 'allow' } }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler, { homeDir: tempHome });
+
+      const evaluate = await request(app)
+        .post('/api/evaluate_permission')
+        .send({ tool_name: 'Read', input: { file_path: './README.md' }, platform: 'codex' });
+      expect(evaluate.status).toBe(200);
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions).toHaveLength(1);
+      expect(status.body.permissionAuditArtifact).toEqual(expect.objectContaining({
+        enabled: true,
+        available: false,
+        destination: { type: 'localFile', path: invalidAuditPath },
+        lastError: expect.stringContaining('.md or .markdown'),
+      }));
     });
   });
 

@@ -31,6 +31,10 @@ import {
   readPermissionAuthorityState,
   setPermissionAuthorityMode,
 } from '../../utils/permissionAuthority.js';
+import {
+  loadPermissionAuditArtifactConfig,
+  PermissionAuditArtifactWriter,
+} from '../../utils/permissionAuditArtifacts.js';
 
 // ── Permission Decision Tracking ─────────────────────────────────────────────
 // Ring buffer of recent permission decisions for the live dashboard feed.
@@ -126,7 +130,7 @@ interface PermissionDecisionTracker {
     input: PermissionDecisionInput,
     result: Record<string, unknown>,
     platform: string,
-  ): void;
+  ): PermissionDecision;
   getRecentDecisions(): PermissionDecision[];
 }
 
@@ -303,7 +307,7 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
       input: PermissionDecisionInput,
       result: Record<string, unknown>,
       platform: string,
-    ): void {
+    ): PermissionDecision {
       const detailState = buildDecisionDetails(toolName, input, result, platform, metadata);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
@@ -327,6 +331,7 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
       if (recentDecisions.length > bufferSize) {
         recentDecisions.length = bufferSize;
       }
+      return entry;
     },
     getRecentDecisions(): PermissionDecision[] {
       return recentDecisions;
@@ -449,6 +454,9 @@ export function registerPermissionRoutes(
   const authorityHomeDir = options.homeDir ?? homedir();
   const autoRepairHookAssets = options.autoRepairHookAssets ?? process.env.NODE_ENV !== 'test';
   const decisionTracker = createPermissionDecisionTracker();
+  const auditArtifactWriter = new PermissionAuditArtifactWriter(
+    loadPermissionAuditArtifactConfig(authorityHomeDir),
+  );
   /**
    * POST /api/evaluate_permission
    * Permission evaluation endpoint for PreToolUse hooks.
@@ -526,8 +534,9 @@ export function registerPermissionRoutes(
       const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
-      // Track decision for live dashboard feed
+      // Track decision for live dashboard feed and optional admin-configured artifact generation.
       decisionTracker.trackDecision(requestMetadata, tool_name, input || {}, trackedResult, platform);
+      await auditArtifactWriter.write(decisionTracker.getRecentDecisions());
 
       res.json(responseData);
     } catch (err) {
@@ -630,6 +639,7 @@ export function registerPermissionRoutes(
         authoritySupportedHosts: installedAuthorityHosts,
         authoritySupportedModes: [...PERMISSION_AUTHORITY_MODES],
         authorityAiMutable: false,
+        permissionAuditArtifact: auditArtifactWriter.getStatus(),
         enforcementReady: data.enforcementReady,
         invalidPolicyElementCount: data.invalidPolicyElementCount ?? 0,
         advisory: data.advisory,

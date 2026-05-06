@@ -69,6 +69,12 @@ display:
     include_emoji: true
   verbose_logging: false
   show_progress: true
+permissionAudit:
+  artifactGeneration:
+    enabled: false
+    destination:
+      type: localFile
+      path: ~/.dollhouse/audit/permission-audit.md
 wizard:
   completed: false
   dismissed: false
@@ -124,6 +130,12 @@ wizard:
 ### `display`
 - `persona_indicators` – toggles and styles for the active persona banner.
 - `verbose_logging`, `show_progress` – adjust console output verbosity.
+
+### `permissionAudit`
+- `artifactGeneration.enabled` – opt-in admin/operator setting for generating persistent permission audit artifacts. Environment override: `DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED`.
+- `artifactGeneration.destination.type` – destination type for generated artifacts. `localFile` is supported now; the shape is reserved for future cloud or enterprise audit sinks. Environment override: `DOLLHOUSE_PERMISSION_AUDIT_DESTINATION_TYPE`.
+- `artifactGeneration.destination.path` – local Markdown path for `localFile` destinations. Use an admin-controlled path. Environment override: `DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH`.
+- Generated artifacts can contain sensitive commands, paths, transcript references, model names, session IDs, and policy matches, so generation is disabled by default.
 
 ### `wizard`
 - Records wizard completion state. The wizard uses this to decide whether to prompt again.

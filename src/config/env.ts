@@ -252,6 +252,17 @@ const envSchema = z.object({
    */
   DOLLHOUSE_POLICY_EXPORT_ENABLED: z.coerce.boolean().default(true),
 
+  /**
+   * Opt-in admin-controlled permission audit artifact generation (#2188).
+   * When enabled, permission decisions can be mirrored to an admin-configured
+   * destination for governance review. The first supported destination is a
+   * local Markdown file; the destination shape is intentionally extensible for
+   * future cloud or enterprise audit sinks.
+   */
+  DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED: z.coerce.boolean().default(false),
+  DOLLHOUSE_PERMISSION_AUDIT_DESTINATION_TYPE: z.string().default('localFile'),
+  DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH: z.string().optional(),
+
   // ============================================================================
   // Storage Layer Configuration
   // ============================================================================

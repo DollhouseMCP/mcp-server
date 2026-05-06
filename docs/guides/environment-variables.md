@@ -55,6 +55,7 @@ That's it! The `.env` file already has all the defaults configured.
   - [Server Configuration](#server-configuration)
   - [MCP Interface Configuration](#mcp-interface-configuration)
   - [Security & Gatekeeper](#security--gatekeeper)
+  - [Permission Audit Artifacts](#permission-audit-artifacts)
   - [Permission Prompt Configuration](#permission-prompt-configuration)
   - [Encryption & Memory Security](#encryption--memory-security)
   - [Activation Persistence](#activation-persistence)
@@ -343,6 +344,26 @@ These variables control the Gatekeeper policy enforcement engine that protects a
 | `DOLLHOUSE_POLICY_EXPORT_ENABLED` | `true` | Policy export opt-in. When `true`, `PolicyExportService` writes the security policy blueprint to `~/.dollhouse/bridge/imports/policies/` on activation changes. The DollhouseBridge permission-prompt server watches this file to evaluate permissions locally. Set to `false` to disable policy file export. |
 | `DOLLHOUSE_DANGER_ZONE_ADMIN_TOKEN` | _(none)_ | Admin token for DangerZone operations. When set, provides an alternative authentication path for danger zone verification. |
 | `DOLLHOUSE_SECURITY_ALERTS` | `false` | When `true`, enables security alert notifications in the security monitor. |
+
+### Permission Audit Artifacts
+
+These admin/operator variables control opt-in permission audit artifact generation. This is disabled by default because permission decisions can include commands, local paths, transcript references, model names, session IDs, and policy matches.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED` | `false` | Enables admin-controlled permission audit artifact generation. When `true`, captured permission decisions are mirrored to the configured destination. |
+| `DOLLHOUSE_PERMISSION_AUDIT_DESTINATION_TYPE` | `localFile` | Destination type for audit artifacts. `localFile` is supported now; this setting is intentionally extensible for future cloud or enterprise audit sinks. Unsupported values are reported in permissions status without blocking permission decisions. |
+| `DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH` | `~/.dollhouse/audit/permission-audit.md` | Local Markdown file path used when destination type is `localFile`. Use an admin-controlled path. The path must resolve to an absolute `.md` or `.markdown` file. |
+
+Example:
+
+```bash
+DOLLHOUSE_PERMISSION_AUDIT_FILE_ENABLED=true
+DOLLHOUSE_PERMISSION_AUDIT_DESTINATION_TYPE=localFile
+DOLLHOUSE_PERMISSION_AUDIT_FILE_PATH=/var/log/dollhouse/permission-audit.md
+```
+
+The permissions dashboard and `/api/permissions/status` expose whether artifact generation is enabled, where it writes, and the latest write/error state.
 
 ### Permission Prompt Configuration
 
