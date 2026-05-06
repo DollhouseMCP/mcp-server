@@ -910,6 +910,17 @@ async function startHttpConsole(
   let mcpAqlHandler: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler | undefined;
   try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (e) { logger.debug('[HTTP Console] MCPAQLHandler not registered', { error: (e as Error).message }); }
 
+  // Wire unified auth into the console when DOLLHOUSE_AUTH_ENABLED is on
+  // (Phase 9 M4/Q7). Without this, MCP transport routes are protected
+  // by the unified middleware but /api console routes fall back to the
+  // separate console-token surface. Pulling AuthMiddleware from the DI
+  // container keeps both surfaces on the same identity. Optional —
+  // when auth isn't registered (auth disabled), startWebServer keeps
+  // its existing console-token-only behavior.
+  const unifiedAuthMiddleware = container.hasRegistration('AuthMiddleware')
+    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    : undefined;
+
   // Start the web server
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
@@ -921,6 +932,7 @@ async function startHttpConsole(
     metricsSink,
     additionalRouters: [ingestResult.router],
     tokenStore,
+    unifiedAuthMiddleware,
   });
 
   // Wire WebSSELogSink so live log entries reach the browser
@@ -1136,7 +1148,7 @@ async function startWebStandaloneMode(): Promise<void> {
     console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const { mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
+  const { container, mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
 
   const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
   const ingestResult = createIngestRoutes({
@@ -1156,6 +1168,14 @@ async function startWebStandaloneMode(): Promise<void> {
 
   const resolvedPort = cliPort || await resolvePortFromConfig();
   const sessionIdentity = resolveSessionIdentity();
+  // Phase 9 M4/Q7: same wiring as startHttpConsole — pull AuthMiddleware
+  // from the container so /api routes share the unified-auth surface
+  // when DOLLHOUSE_AUTH_ENABLED is on. Without this, standalone web mode
+  // would protect MCP routes (if any) but leave /api on the console
+  // token only.
+  const unifiedAuthMiddleware = container?.hasRegistration('AuthMiddleware')
+    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    : undefined;
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
     portfolioDir,
@@ -1168,6 +1188,7 @@ async function startWebStandaloneMode(): Promise<void> {
     tokenStore,
     sessionId: sessionIdentity.sessionId,
     runtimeSessionId: sessionIdentity.runtimeSessionId,
+    unifiedAuthMiddleware,
   });
 
   if (webResult.logBroadcast && logManager) {
