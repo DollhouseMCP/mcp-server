@@ -92,3 +92,24 @@ export async function loadOrGenerateSigningJwks(keyFilePath: string): Promise<Si
     jwks: { keys: [{ ...stored.privateKey }] },
   };
 }
+
+/**
+ * Delete the persisted signing keyfile so the next
+ * `loadOrGenerateSigningJwks` call mints a fresh keypair under a new
+ * kid. Used by the mode-switch invalidation path (must-fix #14): when
+ * the AS detects its operating mode has changed, JWT access tokens
+ * issued under the OLD kid become unverifiable on the next boot
+ * because their kid no longer resolves in the JWKS — completing the
+ * "prior tokens must stop working" contract that was previously only
+ * partially enforced (K/V state was cleared + cookie secret rotated,
+ * but stateless JWTs kept verifying until natural exp).
+ */
+export async function rotateSigningKey(keyFilePath: string): Promise<void> {
+  try {
+    await fs.unlink(keyFilePath);
+    logger.warn(`[persistKeys] Rotated signing key — old kid invalidated; next load will mint fresh`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    // Already absent — nothing to rotate. Next load mints fresh anyway.
+  }
+}

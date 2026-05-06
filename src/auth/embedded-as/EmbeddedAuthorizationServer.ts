@@ -42,6 +42,7 @@ import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
   loadOrGenerateSigningJwks,
+  rotateSigningKey,
   type SigningKeyset,
 } from './persistKeys.js';
 import { loadOrGenerateCookieSigningKeys, rotateCookieSecret } from './cookieSecret.js';
@@ -377,14 +378,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // support, and an admin endpoint would need to drive the promotion.
     // The current shape is "rotate by restart with token invalidation,"
     // which is honest but not zero-downtime.
-    const keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
+    let keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
 
     // must-fix #14: mode-switch invalidation. Delegate the read-compare-
     // persist dance to checkAndPersistModeFingerprint so this AS and any
     // out-of-band tooling (the dashboard, ops scripts) compute "did the
-    // mode change?" the same way. On mismatch we still need to rotate
-    // the cookie secret + re-persist with the post-rotation fingerprint;
-    // the helper handles the no-change and first-run paths atomically.
+    // mode change?" the same way. On mismatch we rotate three things —
+    // K/V state, cookie secret, AND the JWKS signing key — then re-
+    // persist the fingerprint reflecting the post-rotation state.
     let cookieKeys = loadOrGenerateCookieSigningKeys();
     const fingerprintInputs = {
       provider: 'embedded',
@@ -399,12 +400,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
       rotateCookieSecret();
       cookieKeys = loadOrGenerateCookieSigningKeys();
-      // Re-persist with the post-rotation cookie key so the next boot
-      // sees a stable fingerprint that already reflects the new key.
-      // Without this, every boot after a mode-switch would detect
-      // "another change" because cookieKeys[0] regenerated on rotation.
+      // Phase 9 H2/Q2: rotate the JWKS signing key too. Without this,
+      // stateless JWT access tokens issued before the mode change keep
+      // verifying until natural exp (1h), even though K/V was cleared
+      // and the cookie secret rotated. Deleting the keyfile + reloading
+      // mints a fresh kid; old tokens fail kid-match in validate().
+      await rotateSigningKey(this.keyFilePath);
+      keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
+      // Re-persist with the post-rotation cookie key + new kid so the
+      // next boot sees a stable fingerprint that already reflects the
+      // rotation. Without this, every boot after a mode-switch would
+      // detect "another change" because cookieKeys[0] and primaryKid
+      // both moved on rotation.
       await checkAndPersistModeFingerprint(this.storage, {
         ...fingerprintInputs,
+        primaryKid: keyset.kid,
         primaryCookieKey: cookieKeys[0]!,
       });
       await this.storage.recordIdentityEvent({
