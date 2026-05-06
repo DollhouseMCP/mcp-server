@@ -75,11 +75,25 @@ interface ActiveSessionRecord {
   transport: StreamableHTTPServerTransport;
   expirationTimer: NodeJS.Timeout | null;
   lastTouchedAt: number;
+  /**
+   * Authenticated subject of the user that initialized this session.
+   * Set when auth is enabled and a bearer token authenticated the
+   * `initialize` request; undefined otherwise (auth disabled, or
+   * pooled session that was never claimed).
+   *
+   * Subsequent requests on the same `mcp-session-id` MUST come from
+   * the same `sub` — without this binding, anyone with a valid bearer
+   * token plus a leaked session id can dispatch tools against this
+   * session's user-scoped DI container (H7).
+   */
+  ownerSub: string | undefined;
 }
 
 interface PreparedSessionRecord {
   attachment: StreamableHttpSessionAttachment;
   transport: StreamableHTTPServerTransport;
+  /** See ActiveSessionRecord.ownerSub. */
+  ownerSub: string | undefined;
   dispose(): Promise<void>;
 }
 
@@ -420,6 +434,7 @@ export async function createStreamableHttpRuntime(
           transport,
           expirationTimer: null,
           lastTouchedAt: Date.now(),
+          ownerSub: authClaims?.sub,
         });
         sessionTelemetry.created += 1;
         touchSession(sessionId);
@@ -449,6 +464,7 @@ export async function createStreamableHttpRuntime(
     return {
       attachment,
       transport,
+      ownerSub: authClaims?.sub,
       dispose: async () => {
         await transport.close().catch(() => {
           /* pooled transport shutdown is best-effort */
@@ -548,6 +564,25 @@ export async function createStreamableHttpRuntime(
         if (!existingSession) {
           respondWithJsonRpcError(res, 404, 'Unknown MCP session', getRequestId(req));
           return;
+        }
+
+        // H7: dispatch must come from the same authenticated subject that
+        // initialized the session. Without this check, any valid bearer
+        // token + a leaked or guessed session id reaches this session's
+        // user-scoped DI container. `ownerSub` is undefined for sessions
+        // created without auth (auth disabled or pooled-unclaimed) — those
+        // pass through, preserving existing no-auth behavior.
+        if (existingSession.ownerSub !== undefined) {
+          const callerSub = (res.locals.authClaims as { sub?: string } | undefined)?.sub;
+          if (callerSub !== existingSession.ownerSub) {
+            logger.warn('[StreamableHTTP] Session ownership mismatch — rejecting dispatch', {
+              sessionId,
+              ownerSub: existingSession.ownerSub,
+              callerSub: callerSub ?? '(none)',
+            });
+            respondWithJsonRpcError(res, 403, 'Session does not belong to the authenticated user', getRequestId(req));
+            return;
+          }
         }
 
         touchSession(sessionId);
