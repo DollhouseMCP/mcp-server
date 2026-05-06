@@ -218,6 +218,58 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
+  async genericInsertIfAbsent(
+    model: string,
+    id: string,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const expiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
+    // INSERT ... ON CONFLICT DO NOTHING RETURNING is the canonical
+    // atomic primitive for "create if not present." Two concurrent
+    // inserts with the same (model, id) cannot both return a row;
+    // exactly one wins. Drizzle's .onConflictDoNothing emits the same
+    // shape and binds the values safely.
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.insert(authKv)
+        .values({
+          model,
+          id,
+          payload: payload as AuthKvRow['payload'],
+          expiresAt,
+        })
+        .onConflictDoNothing({ target: [authKv.model, authKv.id] })
+        .returning({ id: authKv.id }),
+    );
+    return rows.length > 0;
+  }
+
+  async genericConsume(model: string, id: string): Promise<boolean> {
+    // Single-statement CAS: jsonb_set the `consumed` field only when the
+    // row exists, isn't expired, and isn't already consumed. RETURNING
+    // tells us whether a row was actually marked. Two concurrent
+    // consume() calls cannot both report true because Postgres
+    // serializes the row update at the page level — one wins, the
+    // other's WHERE clause now sees consumed != null and matches no
+    // rows.
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.execute<{ id: string }>(sql`
+        UPDATE auth_kv
+           SET payload = jsonb_set(
+             payload,
+             '{consumed}',
+             to_jsonb((EXTRACT(EPOCH FROM NOW()) * 1000)::bigint)
+           )
+         WHERE model = ${model}
+           AND id = ${id}
+           AND (expires_at IS NULL OR expires_at > NOW())
+           AND NOT (payload ? 'consumed')
+        RETURNING id
+      `),
+    );
+    return rows.length > 0;
+  }
+
   async genericDestroy(model: string, id: string): Promise<void> {
     await withSystemContext(this.db, async (tx) => {
       await tx.delete(authKv).where(and(eq(authKv.model, model), eq(authKv.id, id)));

@@ -39,13 +39,15 @@ export class OidcProviderAdapter {
   }
 
   async consume(id: string): Promise<void> {
-    // oidc-provider calls consume() when a token has been used and should
-    // become unusable on subsequent finds. The earlier soft-marker
-    // implementation wrote `consumed: <ts>` into the payload but find()
-    // never honored it — so a previously-consumed token would still
-    // resolve. We destroy outright; oidc-provider's contract is that find
-    // returning undefined is the "consumed" signal it acts on.
-    await this.storage.genericDestroy(this.model, id);
+    // oidc-provider's Adapter contract: consume marks the record as used
+    // BUT keeps it findable. The grant handlers detect replay by
+    // checking `payload.consumed` on a subsequent find() — and on
+    // detection trigger `revokeByGrantId` to invalidate the entire
+    // refresh family. An earlier shape called genericDestroy here, which
+    // made replays return `not found` and silently disabled OAuth 2.1
+    // §6.1 reuse-detection. genericConsume on our storage layer marks
+    // the payload while leaving the record findable.
+    await this.storage.genericConsume(this.model, id);
   }
 
   async findByUserCode(userCode: string): Promise<Record<string, unknown> | undefined> {

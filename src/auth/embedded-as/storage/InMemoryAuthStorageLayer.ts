@@ -174,6 +174,43 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
    * account whose upstream identity moved must have its prior grant +
    * tokens + sessions invalidated atomically.
    */
+  async genericInsertIfAbsent(
+    model: string,
+    id: string,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const key = genericKey(model, id);
+    const existing = this.genericStore.get(key);
+    if (existing && (existing.expiresAt === undefined || existing.expiresAt > Date.now())) {
+      return false;
+    }
+    this.genericStore.set(key, {
+      payload,
+      expiresAt: expiresInSec ? Date.now() + expiresInSec * 1000 : undefined,
+    });
+    return true;
+  }
+
+  async genericConsume(model: string, id: string): Promise<boolean> {
+    const key = genericKey(model, id);
+    const record = this.genericStore.get(key);
+    if (!record) return false;
+    if (record.expiresAt !== undefined && record.expiresAt <= Date.now()) {
+      this.genericStore.delete(key);
+      return false;
+    }
+    const payload = record.payload as Record<string, unknown> & { consumed?: number };
+    if (payload && typeof payload.consumed === 'number') return false;
+    // Single-process JS: this read-write pair is atomic against other
+    // genericConsume calls on the same key. Two truly-concurrent
+    // genericConsume awaits resolve in submission order; only the first
+    // sees `consumed` undefined and returns true.
+    const next = { ...payload, consumed: Date.now() };
+    this.genericStore.set(key, { ...record, payload: next });
+    return true;
+  }
+
   async genericRevokeByGrantId(grantId: string): Promise<void> {
     this.genericStore.delete(genericKey('Grant', grantId));
     // Map iteration with concurrent deletion is safe in V8 / Node 22+:

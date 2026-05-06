@@ -217,6 +217,69 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     await this.unlinkKv(model, id);
   }
 
+  async genericInsertIfAbsent(
+    model: string,
+    id: string,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    const filePath = this.kvPath(model, id);
+    return this.locks.withLock(`auth:kv:${filePath}`, async () => {
+      try {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        const existing = JSON.parse(raw) as KvRecord;
+        if (existing.exp === null || existing.exp > Date.now()) {
+          return false;
+        }
+        // Expired record present — fall through to overwrite.
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        // Not present — proceed with insert.
+      }
+      const record: KvRecord = {
+        exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
+        value: payload,
+      };
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await this.locks.atomicWriteFile(filePath, JSON.stringify(record));
+      return true;
+    });
+  }
+
+  async genericConsume(model: string, id: string): Promise<boolean> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    const filePath = this.kvPath(model, id);
+    return this.locks.withLock(`auth:kv:${filePath}`, async () => {
+      let record: KvRecord;
+      try {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        record = JSON.parse(raw) as KvRecord;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
+      if (record.exp !== null && record.exp <= Date.now()) {
+        return false;
+      }
+      const value = record.value as Record<string, unknown> & { consumed?: number };
+      if (value && typeof value.consumed === 'number') return false;
+      // Same lock that guards genericSet — this read-modify-write is
+      // serialized against any concurrent set/destroy/consume on the
+      // same record. Two simultaneous consume() calls cannot both
+      // observe an unconsumed record and both report success.
+      const next: KvRecord = {
+        exp: record.exp,
+        value: { ...(value ?? {}), consumed: Date.now() },
+      };
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await this.locks.atomicWriteFile(filePath, JSON.stringify(next));
+      return true;
+    });
+  }
+
   async genericRevokeByGrantId(grantId: string): Promise<void> {
     // Delete the Grant entry itself. Then scan every model directory
     // and remove entries whose payload references grantId. Tokens,

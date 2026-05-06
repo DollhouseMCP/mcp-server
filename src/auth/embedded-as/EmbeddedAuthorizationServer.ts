@@ -185,6 +185,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         return { ok: false, reason: 'token missing sub claim' };
       }
 
+      // Defense in depth (H6): require the `mcp` scope on the token.
+      // Tokens we issue always carry it (resource server scope wired in
+      // the resourceIndicators config), but a key-rotation bug or a
+      // future code path that accidentally minted a token without scope
+      // would otherwise pass everything else here. Reject unconditionally.
+      const scopeClaim = typeof payload.scope === 'string' ? payload.scope : '';
+      const scopes = new Set(scopeClaim.split(/\s+/).filter(Boolean));
+      if (!scopes.has('mcp')) {
+        return { ok: false, reason: 'token missing mcp scope' };
+      }
+
       return { ok: true, claims: claimsFromPayload(payload) };
     } catch (error) {
       // Use jose's typed errors instead of substring-matching .message —
@@ -535,13 +546,25 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         Interaction: 10 * 60,
         Session: 14 * 24 * 3600,
       },
-      // must-fix #11 (partially): enable rotation + reuse-detection;
-      // oidc-provider revokes the entire refresh family on detection.
-      // The spec line 926 atomicity contract — "DB row lock or
-      // compare-and-swap" — is met only on the Postgres backend (row-
-      // level locking via Drizzle). Filesystem and in-memory backends
-      // provide single-process atomicity but not multi-instance.
-      // Dashboard row #11 reflects this as DEFERRED.
+      // must-fix #11: enable refresh-token rotation + replay detection.
+      // oidc-provider tags consumed records with `consumed: <ts>` (via
+      // the Adapter's consume(); see OidcProviderAdapter + storage's
+      // genericConsume) and triggers `revokeByGrantId` on the next find
+      // that returns a consumed payload — this is the §6.1 family-
+      // revocation path.
+      //
+      // Atomicity nuance: oidc-provider's Adapter contract is
+      // find-then-consume, not transactional find-and-consume. Two
+      // truly-concurrent token exchanges can both `find` an unconsumed
+      // record before either calls `consume`. The CAS in
+      // `genericConsume` (single-statement UPDATE WHERE NOT consumed
+      // on Postgres; lock-protected RMW on filesystem; single-process
+      // serialization on memory) guarantees only ONE caller marks the
+      // record consumed — the other's consume returns false. That's
+      // sufficient to detect a third use (which sees consumed: true and
+      // triggers revoke), but does NOT prevent a single double-redeem
+      // window. A truly-atomic solution would require an upstream
+      // contract change in oidc-provider; out of §8.1 scope.
       rotateRefreshToken: true,
       issueRefreshToken: async (_ctx, client, code) => {
         // Only issue a refresh token when offline_access was granted.

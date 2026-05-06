@@ -200,6 +200,51 @@ function runContractSuite(
       expect(await storage.genericGet('AccessToken', 't-2')).not.toBeNull();
     });
   });
+
+  describe('genericConsume — replay detection (OAuth 2.1 §6.1)', () => {
+    it('first consume marks the payload and returns true; the record stays findable', async () => {
+      await storage.genericSet('AuthorizationCode', 'c1', { grantId: 'g-c1', sub: 'sub' });
+      const first = await storage.genericConsume('AuthorizationCode', 'c1');
+      expect(first).toBe(true);
+      // Record is still findable so oidc-provider's grant handlers can
+      // detect the replay and trigger family revocation.
+      const found = await storage.genericGet('AuthorizationCode', 'c1') as
+        Record<string, unknown> & { consumed?: number };
+      expect(found).not.toBeNull();
+      expect(typeof found.consumed).toBe('number');
+      expect((found.consumed as number)).toBeGreaterThan(0);
+    });
+
+    it('second consume returns false (already consumed)', async () => {
+      await storage.genericSet('RefreshToken', 'r1', { grantId: 'g-r1', sub: 'sub' });
+      expect(await storage.genericConsume('RefreshToken', 'r1')).toBe(true);
+      expect(await storage.genericConsume('RefreshToken', 'r1')).toBe(false);
+    });
+
+    it('consume on a missing record returns false', async () => {
+      expect(await storage.genericConsume('AuthorizationCode', 'never-existed')).toBe(false);
+    });
+
+    it('consume on an expired record returns false', async () => {
+      // Set with a 1-second expiry; sleep past it; consume should refuse.
+      await storage.genericSet('AuthorizationCode', 'expired', { grantId: 'g-exp' }, 1);
+      await new Promise((resolve) => setTimeout(resolve, 1100));
+      expect(await storage.genericConsume('AuthorizationCode', 'expired')).toBe(false);
+    });
+
+    it('consume preserves the existing payload fields plus the consumed marker', async () => {
+      await storage.genericSet('AuthorizationCode', 'c-payload', {
+        grantId: 'g-c2', sub: 'alice', clientId: 'client-a',
+      });
+      await storage.genericConsume('AuthorizationCode', 'c-payload');
+      const found = await storage.genericGet('AuthorizationCode', 'c-payload') as
+        Record<string, unknown>;
+      expect(found.grantId).toBe('g-c2');
+      expect(found.sub).toBe('alice');
+      expect(found.clientId).toBe('client-a');
+      expect(typeof found.consumed).toBe('number');
+    });
+  });
 }
 
 // ── Static fixtures (always run) ───────────────────────────────────────
@@ -223,7 +268,13 @@ describe('IAuthStorageLayer contract: FilesystemAuthStorageLayer', () => {
   );
 });
 
-// ── Postgres fixture (gated on local Docker DB) ────────────────────────
+// ── Postgres fixture (gated on local Docker DB + CI env) ──────────────
+//
+// CI sets `DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1` so the absence of Postgres
+// is a hard failure (catches a deployment that THINKS it's testing
+// Postgres parity but isn't). Local dev without Docker: the suite is
+// `describe.skip`-ed entirely so the run is green and the dev sees a
+// single visible skip line per the standard jest output.
 //
 // Jest evaluates `describe` synchronously at file load, so the gate is a
 // runtime check inside each `it` (via beforeAll setting a flag). When
@@ -245,9 +296,15 @@ afterAll(async () => {
   if (pgAvailable) await closeTestDb();
 });
 
-describe('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
-  // The contract suite uses beforeEach/afterEach for fixture setup; we
-  // wrap those in a runtime gate so unavailable-DB skips cleanly.
+// CI sets DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1 → describe runs and fails if
+// Postgres isn't reachable. Local dev without it → describe.skip so the
+// skip is visible in the jest output instead of silently substituting
+// InMemoryAuthStorageLayer (which is what the previous shape did, hiding
+// "Postgres parity ✓ green" without actually testing Postgres).
+const pgRequired = process.env.DOLLHOUSE_REQUIRE_PG_AUTH_TESTS === '1';
+const describePg = pgRequired ? describe : describe.skip;
+
+describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
   // dollhouse_app has DML only — no TRUNCATE — so DELETE FROM is the
   // right reset between tests.
   const reset = async () => {
@@ -259,13 +316,21 @@ describe('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
     });
   };
 
+  // Hard-fail the entire suite if pg isn't actually reachable while
+  // DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1. This is the safety net: we
+  // already chose to run because the env says we should.
+  beforeAll(() => {
+    if (!pgAvailable) {
+      throw new Error(
+        'PostgresAuthStorageLayer parity tests required ' +
+        '(DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1) but Postgres was not reachable. ' +
+        'Run `docker compose -f docker/docker-compose.db.yml up -d` first.',
+      );
+    }
+  });
+
   runContractSuite(
     async () => {
-      if (!pgAvailable) {
-        // Returning a placeholder lets the test skip below; we don't
-        // use this storage instance because the test body bails first.
-        return new InMemoryAuthStorageLayer();
-      }
       await reset();
       return new PostgresAuthStorageLayer({ db: getTestDb() });
     },

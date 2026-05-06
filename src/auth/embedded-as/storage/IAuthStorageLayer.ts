@@ -177,6 +177,46 @@ export interface IAuthStorageLayer {
   genericDestroy(model: string, id: string): Promise<void>;
 
   /**
+   * Mark a record consumed by stamping `consumed: <epochMillis>` on its
+   * payload while keeping the record findable. oidc-provider's Adapter
+   * contract distinguishes consume from destroy: consumed records MUST
+   * stay returnable from `find()` so the grant handlers can detect
+   * replay (`payload.consumed`) and trigger family revocation per
+   * OAuth 2.1 §6.1. An earlier shape that delete-on-consume bypassed
+   * this entirely — replays returned `not found` and the family-revoke
+   * path was never reached.
+   *
+   * Behavior: read-modify-write of the existing payload, preserving
+   * the original TTL. Returns true when this call performed the mark
+   * (first consume), false when the record was already consumed or
+   * does not exist. Backends with row-level CAS (Postgres) implement
+   * this as a single statement so two concurrent consumes can't both
+   * report success.
+   */
+  genericConsume(model: string, id: string): Promise<boolean>;
+
+  /**
+   * Atomic "insert if not present" — returns true when a new record was
+   * created, false when one already existed at the given (model, id).
+   * Used by InviteTokenStore to enforce single-use across restart and
+   * across processes (the in-memory consumed-Set evaporates on restart,
+   * letting captured invites replay within their TTL).
+   *
+   * Backends:
+   *   - InMemory: single-thread atomic check-and-set on the Map.
+   *   - Filesystem: under the same lock that guards genericSet.
+   *   - Postgres: INSERT ... ON CONFLICT DO NOTHING RETURNING id.
+   *     Two concurrent inserts with the same id cannot both report
+   *     success.
+   */
+  genericInsertIfAbsent(
+    model: string,
+    id: string,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean>;
+
+  /**
    * Bulk-delete all entries for the given models. Used on mode-switch
    * invalidation (must-fix #14): when the AS detects its operating mode
    * has changed since last run, it clears OAuth-state models so prior
