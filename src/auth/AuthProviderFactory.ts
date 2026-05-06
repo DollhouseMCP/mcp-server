@@ -34,6 +34,7 @@ import {
   type AuthMethodId,
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
+import type { DatabaseInstance } from '../database/connection.js';
 
 export type AuthProviderMode = 'embedded' | 'oidc-bridge';
 
@@ -61,6 +62,14 @@ export interface AuthConfig {
    * a backend based on `DOLLHOUSE_AUTH_STORAGE_BACKEND` (default: filesystem).
    */
   storage?: IAuthStorageLayer;
+  /**
+   * Drizzle DatabaseInstance, required when
+   * `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres`. Forwarded to
+   * `createAuthStorage` so the Postgres backend can be instantiated.
+   * The DI registrar pulls this from the container; tests pass undefined
+   * unless they specifically exercise the Postgres backend.
+   */
+  database?: DatabaseInstance;
 }
 
 /**
@@ -189,7 +198,7 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     // directly; production resolves the backend via env (default filesystem)
     // and refuses memory storage with durable-data methods unless
     // DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true is explicitly set.
-    const storage = config.storage ?? await createAuthStorage({ methods });
+    const storage = config.storage ?? await createAuthStorage({ methods, database: config.database });
 
     const baseUrl = config.publicBaseUrl
       ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
@@ -210,7 +219,10 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     const ensureInvites = async () => {
       if (!sharedInvites) {
         const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
-        sharedInvites = new InviteTokenStore(loadOrGenerateInviteSecret());
+        // Storage-backed consumed-jti enforcement (H5): pass the same
+        // storage layer the AS uses so single-use survives restart on
+        // durable backends.
+        sharedInvites = new InviteTokenStore(loadOrGenerateInviteSecret(), storage);
       }
       return sharedInvites;
     };

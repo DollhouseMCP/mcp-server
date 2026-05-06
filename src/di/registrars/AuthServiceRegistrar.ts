@@ -16,6 +16,7 @@ import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { IAuthProvider } from '../../auth/IAuthProvider.js';
+import type { DatabaseInstance } from '../../database/connection.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -35,6 +36,16 @@ export class AuthServiceRegistrar {
     const { createAuthProvider } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
 
+    // Pull DatabaseInstance from the container if it has one. Required
+    // when DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; the Postgres backend's
+    // factory throws without it. DatabaseServiceRegistrar runs before
+    // AuthServiceRegistrar in Container bootstrap, so when DB-mode is
+    // configured the registration is present. Filesystem and in-memory
+    // backends ignore the value.
+    const database = container.hasRegistration('DatabaseInstance')
+      ? container.resolve<DatabaseInstance>('DatabaseInstance')
+      : undefined;
+
     const provider = await createAuthProvider({
       enabled: true,
       provider: env.DOLLHOUSE_AUTH_PROVIDER,
@@ -46,6 +57,7 @@ export class AuthServiceRegistrar {
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
       methods: env.DOLLHOUSE_AUTH_METHODS as import('../../auth/AuthProviderFactory.js').AuthConfig['methods'],
+      database,
     });
 
     if (!provider) return;
