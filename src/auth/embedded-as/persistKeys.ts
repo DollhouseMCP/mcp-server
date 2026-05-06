@@ -18,10 +18,10 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { exportJWK, generateKeyPair, type JWK } from 'jose';
 import { logger } from '../../utils/logger.js';
+import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 
 const ALGORITHM = 'ES256';
 
@@ -39,9 +39,17 @@ export interface SigningKeyset {
   kid: string;
 }
 
-export function defaultKeyFilePath(): string {
-  const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-  return path.join(homeDir, '.dollhouse', 'run', 'oauth-signing-key.json');
+/**
+ * Resolves to `<run-dir>/oauth-signing-key.json`. The run directory is
+ * platform-correct (XDG / Library / LOCALAPPDATA) and respects
+ * `DOLLHOUSE_RUN_DIR` / `DOLLHOUSE_HOME_DIR` env overrides via the central
+ * resolver — no hardcoded `~/.dollhouse/` paths.
+ */
+export function defaultKeyFilePath(legacyRoot?: string): string {
+  return path.join(
+    resolveDataDirectory('run', legacyRoot ? { legacyRoot } : {}),
+    'oauth-signing-key.json',
+  );
 }
 
 /**

@@ -18,13 +18,21 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { logger } from '../../utils/logger.js';
+import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 
-export function defaultCookieSecretFilePath(): string {
-  const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-  return path.join(homeDir, '.dollhouse', 'run', 'cookie-signing-secret.bin');
+/**
+ * Resolves to `<run-dir>/cookie-signing-secret.bin`. The run directory is
+ * platform-correct (XDG / Library / LOCALAPPDATA) and respects
+ * `DOLLHOUSE_RUN_DIR` / `DOLLHOUSE_HOME_DIR` env overrides via the central
+ * resolver — no hardcoded `~/.dollhouse/` paths.
+ */
+export function defaultCookieSecretFilePath(legacyRoot?: string): string {
+  return path.join(
+    resolveDataDirectory('run', legacyRoot ? { legacyRoot } : {}),
+    'cookie-signing-secret.bin',
+  );
 }
 
 /**

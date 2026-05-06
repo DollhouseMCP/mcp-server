@@ -6,12 +6,14 @@
  *
  * Two-level structure (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
  *   1. Outer: select the auth mode (embedded AS vs OIDC bridge) from
- *      DOLLHOUSE_AUTH_PROVIDER. The legacy 'local' value is treated as
- *      'embedded' for mode purposes; the underlying construction stays
- *      LocalDevAuthProvider until C4 collapses both into the embedded AS.
- *   2. Inner: AuthMethodFactory selects which IAuthMethod implementations
- *      the embedded AS exposes (trivial-consent today; github, local,
- *      magic-link, oidc-bridge as later commits land them).
+ *      DOLLHOUSE_AUTH_PROVIDER. The legacy 'local' value remains as a
+ *      separate dev-token issuer (LocalDevAuthProvider) — it prints a
+ *      Bearer token to stderr at startup for non-OAuth clients. It is
+ *      not a transitional state; embedded and oidc are the OAuth-shaped
+ *      providers, local is the no-OAuth dev shortcut.
+ *   2. Inner: a list of IAuthMethod implementations the embedded AS
+ *      exposes — any combination of trivial-consent, local-account,
+ *      magic-link, github (Phase 2 multi-method shipped).
  *
  * Provider selection:
  *   DOLLHOUSE_AUTH_PROVIDER=local     → LocalDevAuthProvider (dev-only JWT issuer)
@@ -24,6 +26,7 @@
 import * as path from 'node:path';
 import os from 'node:os';
 import { logger } from '../utils/logger.js';
+import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 import type { IAuthProvider } from './IAuthProvider.js';
 import {
   AuthMethodFactory,
@@ -85,8 +88,10 @@ export function resolveAuthMethods(config: AuthConfig): AuthMethodId[] {
 }
 
 function resolveDefaultKeyFilePath(): string {
-  const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-  return path.join(homeDir, '.dollhouse', 'run', 'auth-keypair.json');
+  // Use the canonical run-dir resolver (XDG / Library / LOCALAPPDATA)
+  // rather than hardcoding `~/.dollhouse/run/`. Honors the env-override
+  // chain (DOLLHOUSE_RUN_DIR, DOLLHOUSE_HOME_DIR) consistently.
+  return path.join(resolveDataDirectory('run'), 'auth-keypair.json');
 }
 
 /**
@@ -336,7 +341,12 @@ async function buildAuthMethod(
 
     case 'trivial-consent': {
       const { TrivialConsentMethod } = await import('./embedded-as/methods/TrivialConsentMethod.js');
-      return new TrivialConsentMethod({ defaultSubject: config.localDefaultSub });
+      // Pass storage so the method can upsert its account row on first
+      // approval — required for `auth_time` claim emission (spec L927).
+      return new TrivialConsentMethod({
+        defaultSubject: config.localDefaultSub,
+        storage,
+      });
     }
   }
 }

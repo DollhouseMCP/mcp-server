@@ -27,8 +27,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import os from 'node:os';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
 // Bound the consumed-set memory. Eviction is TTL-driven (see consume): once a
@@ -199,9 +199,17 @@ function sign(secret: Buffer, payload: string): string {
   return createHmac('sha256', secret).update(payload).digest('base64url');
 }
 
-export function defaultInviteSecretFilePath(): string {
-  const homeDir = process.env.DOLLHOUSE_HOME_DIR || os.homedir();
-  return path.join(homeDir, '.dollhouse', 'run', 'invite-secret.bin');
+/**
+ * Resolves to `<run-dir>/invite-secret.bin`. The run directory is
+ * platform-correct (XDG / Library / LOCALAPPDATA) and respects
+ * `DOLLHOUSE_RUN_DIR` / `DOLLHOUSE_HOME_DIR` env overrides via the central
+ * resolver — no hardcoded `~/.dollhouse/` paths.
+ */
+export function defaultInviteSecretFilePath(legacyRoot?: string): string {
+  return path.join(
+    resolveDataDirectory('run', legacyRoot ? { legacyRoot } : {}),
+    'invite-secret.bin',
+  );
 }
 
 /**
