@@ -135,6 +135,47 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     if (!result.ok) expect(result.reason).toMatch(/key id|kid/);
   });
 
+  it('rejects token with alg: HS256 (algorithm-confusion attack)', async () => {
+    // Classic alg-confusion: an attacker takes the AS's published public
+    // key and uses its bytes as an HMAC-SHA256 secret to sign a forged
+    // token. A naive validator that doesn't pin the algorithm allow-list
+    // would accept the HMAC signature, since the same key material
+    // satisfies both 'algorithms' inputs to jose.jwtVerify. The hardened
+    // validator rejects any alg outside the configured ES256-only list.
+    const { createHmac } = await import('node:crypto');
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: 'HS256', typ: 'at+jwt', kid };
+    const payload = {
+      iss: ISSUER, aud: RESOURCE, sub: 'attacker',
+      iat: now, exp: now + 3600,
+    };
+    const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig = createHmac('sha256', 'arbitrary-secret-bytes')
+      .update(`${headerB64}.${payloadB64}`)
+      .digest('base64url');
+    const result = await as.validate(`${headerB64}.${payloadB64}.${sig}`);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects token with alg: none (RFC 8725 §3.1)', async () => {
+    // The "no signature" attack: an attacker submits an unsigned token
+    // and hopes the validator skips signature verification when alg=none.
+    // The hardened validator rejects the alg before reaching the
+    // signature check.
+    const now = Math.floor(Date.now() / 1000);
+    const header = { alg: 'none', typ: 'at+jwt', kid };
+    const payload = {
+      iss: ISSUER, aud: RESOURCE, sub: 'attacker',
+      iat: now, exp: now + 3600,
+    };
+    const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    // Per RFC 7515 §6.1, alg:none tokens have an empty signature segment.
+    const result = await as.validate(`${headerB64}.${payloadB64}.`);
+    expect(result.ok).toBe(false);
+  });
+
   it('rejects token with non-empty crit header (unrecognized extension)', async () => {
     // jose's signer refuses to emit an unrecognized crit header — which
     // is itself a useful safety property — so we construct the JWS bytes

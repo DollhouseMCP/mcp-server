@@ -71,14 +71,24 @@ describe('InviteTokenStore', () => {
     // Consume a short-TTL token, wait for it to expire, then consume a
     // long-TTL one — the expired jti should be evicted from the
     // consumed-set as part of the second consume.
-    const shortToken = store.issue({ sub: 'a', email: 'a@x', purpose: 'invite', ttlMs: 1 });
+    //
+    // TTL is deliberately wider than the obvious "ttlMs: 1" choice: the
+    // assertion at line `expect(store.consume(shortToken).ok).toBe(true)`
+    // requires the consume to fall inside the token's lifetime, and a
+    // 1 ms window races with V8 GC pauses + jest parallel-worker
+    // scheduling under heavy CPU pressure (e.g. when other test files in
+    // the suite are pegging cores with argon2 work). 50 ms is well past
+    // any plausible GC pause yet still fast for the wait-for-expiry busy-
+    // loop below.
+    const shortTtlMs = 50;
+    const shortToken = store.issue({ sub: 'a', email: 'a@x', purpose: 'invite', ttlMs: shortTtlMs });
     expect(store.consume(shortToken).ok).toBe(true);
 
     // @ts-expect-error reach into private state for the assertion
     expect(store['consumed'].size).toBe(1);
 
     const start = Date.now();
-    while (Date.now() === start) { /* spin past 1 ms TTL */ }
+    while (Date.now() - start <= shortTtlMs) { /* spin past TTL */ }
 
     const longToken = store.issue({ sub: 'b', email: 'b@x', purpose: 'invite' });
     expect(store.consume(longToken).ok).toBe(true);

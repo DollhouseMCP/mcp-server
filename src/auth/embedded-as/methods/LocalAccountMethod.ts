@@ -9,15 +9,18 @@
  * Login attempts go through LocalLoginRateLimiter (must-fix #16):
  * per-account exponential backoff after 5 failures, per-IP lockout after 20.
  *
- * The single-method-per-AS limitation of §8.1 means LocalAccountMethod
- * exposes both the invite-acceptance flow AND the login flow on the same
- * /interaction/:uid endpoint. The render-html step keys off whether an
- * `invite=` query parameter is present.
+ * Both the invite-acceptance flow AND the login flow are served on the
+ * same /interaction/:uid endpoint — the render-html step branches on
+ * whether an `invite=` query parameter is present. This was originally
+ * a workaround for single-method-per-AS, kept after Phase 2 multi-
+ * method shipped because the two sub-flows belong on the same form for
+ * the user (one URL, no extra hop).
  *
  * @module auth/embedded-as/methods/LocalAccountMethod
  */
 
 import argon2 from 'argon2';
+import { randomBytes } from 'node:crypto';
 import express, { type Router } from 'express';
 import { logger } from '../../../utils/logger.js';
 import type {
@@ -42,6 +45,30 @@ const ARGON2_OPTIONS: argon2.Options = {
   timeCost: 2,
   parallelism: 1,
 };
+
+/**
+ * Lazy-initialised reference hash for the unknown-account login path.
+ *
+ * Without it `argon2.verify` on a malformed hash string throws in
+ * microseconds, while a real verify takes ~30 ms — leaking
+ * username existence via timing (CWE-208). Generating a real argon2
+ * hash here ensures the unknown-account branch pays the same cost as
+ * the wrong-password branch.
+ *
+ * Cached as a promise so we pay the ~30 ms hash cost once per process,
+ * not once per failed login. The random input is never used for
+ * verification — verify always fails — so its value is irrelevant.
+ */
+let dummyPasswordHashPromise: Promise<string> | null = null;
+function getDummyPasswordHash(): Promise<string> {
+  if (!dummyPasswordHashPromise) {
+    dummyPasswordHashPromise = argon2.hash(
+      randomBytes(16).toString('hex'),
+      ARGON2_OPTIONS,
+    );
+  }
+  return dummyPasswordHashPromise;
+}
 
 export interface LocalAccountMethodOptions {
   storage: IAuthStorageLayer;
@@ -327,15 +354,15 @@ export class LocalAccountMethod implements IAuthMethod {
         verified = false;
       }
     } else {
-      // Constant-time-ish: dummy verify to keep timing similar between
-      // unknown-account and wrong-password cases.
+      // Constant-time-ish: real argon2.verify against a real hash so the
+      // unknown-account path pays the same ~30 ms cost as the
+      // wrong-password path. A malformed hash string throws in
+      // microseconds and would leak username existence via timing.
       try {
-        await argon2.verify(
-          '$argon2id$v=19$m=19456,t=2,p=1$dummy$dummy',
-          password,
-        );
+        await argon2.verify(await getDummyPasswordHash(), password);
       } catch {
-        // expected
+        // verify returns false on mismatch; throw is the malformed-input
+        // path, which we never enter now that the hash is real.
       }
     }
 

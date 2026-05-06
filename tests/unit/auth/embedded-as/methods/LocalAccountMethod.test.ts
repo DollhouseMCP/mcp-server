@@ -119,6 +119,41 @@ describe('LocalAccountMethod', () => {
     expect(result.kind).toBe('denied');
   });
 
+  it('unknown-account login pays the same argon2 cost as wrong-password (CWE-208 timing parity)', async () => {
+    // Pin the rationale of the reference-hash: an earlier shape called
+    // argon2.verify with a malformed hash string, which throws in
+    // microseconds and leaks username existence by latency. The fix
+    // verifies against a real argon2 hash so both branches pay ~30 ms.
+    // A malformed dummy would give unknownMs <1 ms while wrongPasswordMs
+    // stays ~30 ms; the assertion catches that regression.
+    //
+    // No separate warmup login: dropping it saves ~30 ms of argon2.verify
+    // work per run (matters for jest parallel-worker CPU pressure across
+    // the rest of the suite) and any lazy-init cost on the unknown branch
+    // only makes the `unknownMs >= wrongPasswordMs/2` assertion easier
+    // to satisfy.
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const inviteToken = new URL(url).searchParams.get('invite')!;
+    await method.completeInteraction(CTX, {
+      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+    });
+
+    const wrongPasswordStart = Date.now();
+    await method.completeInteraction(CTX, {
+      formBody: { action: 'login', username: 'alice', password: 'incorrect' }, ip: '10.0.0.2',
+    });
+    const wrongPasswordMs = Date.now() - wrongPasswordStart;
+
+    const unknownStart = Date.now();
+    await method.completeInteraction(CTX, {
+      formBody: { action: 'login', username: 'nobody', password: 'whatever' }, ip: '10.0.0.3',
+    });
+    const unknownMs = Date.now() - unknownStart;
+
+    // Both branches should be in the same order of magnitude.
+    expect(unknownMs).toBeGreaterThanOrEqual(Math.floor(wrongPasswordMs / 2));
+  }, 30_000);
+
   describe('consumeInvite (out-of-band CLI invite redemption)', () => {
     it('verifies + creates the account when called directly (used by /auth/local/invite POST)', async () => {
       const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
