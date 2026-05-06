@@ -7,20 +7,22 @@
  *   3. `NODE_ENV === 'test'` → memory (no disk artifacts during tests).
  *   4. Default: `filesystem`.
  *
- * Path resolution for the filesystem backend goes through
- * `resolveDataDirectory('state')` so existing `~/.dollhouse/state/auth/`
- * installs (legacy mode) and fresh installs (XDG/Library/LOCALAPPDATA)
- * both resolve correctly. Tests pass an explicit `rootDir` (tmpdir).
+ * Three backends ship in §8.1:
+ *   - InMemoryAuthStorageLayer — solo dev / tests; non-durable.
+ *   - FilesystemAuthStorageLayer — atomic-write + lock under
+ *     `resolveDataDirectory('state')` (XDG / Library / LOCALAPPDATA, with
+ *     legacy `~/.dollhouse/state/auth/` honored when `legacyRoot` is
+ *     supplied). The default for solo / small-team deployments.
+ *   - PostgresAuthStorageLayer — Drizzle-backed; the recommended choice
+ *     for hosted / multi-instance deployments. Reuses the Phase 4
+ *     database connection injected by the caller; this factory imports
+ *     it lazily so memory/filesystem callers don't pay the Drizzle cost.
  *
- * Safety guard: methods that require durable storage (local-password,
+ * Safety guard: methods that require durable storage (local-account,
  * magic-link) refuse to start with the in-memory backend in non-test
  * environments unless `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true` is
  * explicitly set. The intent is to prevent operators from silently
  * losing user credentials on restart.
- *
- * Postgres backend is not yet wired (pending the `auth_*` schema PR);
- * selecting it throws with a clear "use filesystem until that lands"
- * message rather than silently degrading.
  *
  * @module auth/embedded-as/storage/createAuthStorage
  */

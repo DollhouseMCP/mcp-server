@@ -1,24 +1,18 @@
 /**
  * AuthMethodFactory
  *
- * Inner factory for the two-level AuthProviderFactory structure (per
- * docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1). Registers the auth method
- * implementations that the embedded authorization server can drive its
- * /interaction/:uid handlers from.
+ * Method-ID allowlist for the embedded AS. Validates that
+ * `DOLLHOUSE_AUTH_METHODS` (and the `methods` config option) only
+ * references known method IDs before AuthProviderFactory dispatches to
+ * concrete IAuthMethod constructors. The construction itself lives in
+ * `AuthProviderFactory.buildAuthMethod` — this factory does not own
+ * constructors today.
  *
- * Method IDs:
- *   - 'trivial-consent' — solo localhost auto-consent; the only method
- *     registered until C4 (oidc-provider migration) lands the real
- *     IAuthMethod interface and TrivialConsentMethod implementation.
- *   - 'github'           — Stage B (C7), reuses DOLLHOUSE_GITHUB_CLIENT_ID
- *   - 'local-password'   — Stage C (C8), argon2 + invite token
- *   - 'magic-link'       — Stage C (C8), SMTP-required
- *   - 'oidc-bridge'      — Stage C (C8), wraps OidcAuthProvider
- *
- * At C2 this file establishes the registry shape only; method
- * implementations and the IAuthMethod interface land in subsequent
- * commits. The shape itself is validated by AuthProviderFactory so the
- * `methods` config option starts being honored from C2 forward.
+ * Method IDs (all four ship in §8.1):
+ *   - 'trivial-consent' — solo localhost auto-consent
+ *   - 'github'          — Stage B social, reuses DOLLHOUSE_GITHUB_CLIENT_ID
+ *   - 'local-password'  — argon2id + invite token (CLI-issued)
+ *   - 'magic-link'      — SMTP-required, requires durable storage
  *
  * @module auth/embedded-as/AuthMethodFactory
  */
@@ -47,17 +41,20 @@ export const ALL_AUTH_METHOD_IDS: readonly AuthMethodId[] = [
 ];
 
 /**
- * Registry of auth methods available to EmbeddedAuthorizationServer.
+ * Tracks which method IDs the running AS accepts. Construction of the
+ * concrete IAuthMethod instances lives in `AuthProviderFactory.buildAuthMethod`
+ * because the constructor needs deps (storage, invites, SMTP config,
+ * GitHub client creds) that this factory has no business knowing about.
  *
- * At C2 the registry tracks which method IDs are recognized; concrete
- * IAuthMethod constructors plug in starting at C4. This minimal surface
- * lets AuthProviderFactory validate `methods` config without depending
- * on the not-yet-existing IAuthMethod interface.
+ * Functionally this is a typed `Set<AuthMethodId>` with a clearer error
+ * message; promotion to a constructor-bearing factory is a future
+ * refactor that would require pushing those construction-time deps
+ * through this surface.
  */
 export class AuthMethodFactory {
   private readonly registered = new Set<AuthMethodId>();
 
-  /** Register a method ID as available. C4+ will widen this to also accept a constructor. */
+  /** Register a method ID as available. */
   register(id: AuthMethodId): void {
     this.registered.add(id);
   }
@@ -83,9 +80,9 @@ export class AuthMethodFactory {
 }
 
 /**
- * Build the default factory with all methods that ship today: trivial-consent
- * (C2/C4), github (C7), local-password and magic-link (C8). When future
- * commits add new methods, register them here.
+ * Build the default factory with all methods that ship today.
+ * Add new methods here when they land; AuthProviderFactory's
+ * `buildAuthMethod` is the matching dispatch site.
  */
 export function createDefaultAuthMethodFactory(): AuthMethodFactory {
   const factory = new AuthMethodFactory();
