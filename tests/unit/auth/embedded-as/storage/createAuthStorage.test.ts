@@ -59,8 +59,11 @@ describe('createAuthStorage', () => {
     });
 
     it('postgres backend without database injection throws actionable error', async () => {
+      // Phase 9 M2/Q5: message rewritten to spell out the cross-config
+      // dependency on DOLLHOUSE_STORAGE_BACKEND=database instead of
+      // just naming the missing constructor param.
       await expect(createAuthStorage({ backend: 'postgres' })).rejects.toThrow(
-        /PostgresAuthStorageLayer requires a Drizzle database instance/,
+        /DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires a database connection/,
       );
     });
   });

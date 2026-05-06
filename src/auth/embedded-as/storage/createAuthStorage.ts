@@ -109,10 +109,22 @@ export async function createAuthStorage(
 
     case 'postgres': {
       if (!options.database) {
+        // Phase 9 M2/Q5: spell out the cross-config dependency. The
+        // Postgres auth backend reuses the same DatabaseInstance that
+        // DatabaseServiceRegistrar registers, which only runs when
+        // DOLLHOUSE_STORAGE_BACKEND=database. Selecting auth=postgres
+        // without portfolio=database silently failed before this fix —
+        // now operators get a single clear startup error pointing at
+        // the configuration mismatch instead of "database option
+        // required" with no context.
         throw new Error(
-          'PostgresAuthStorageLayer requires a Drizzle database instance. ' +
-          'Set DOLLHOUSE_DATABASE_URL and ensure DatabaseServiceRegistrar runs ' +
-          'before AuthServiceRegistrar, or pass `database` explicitly in tests.',
+          'DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires a database connection ' +
+          'that the auth registrar can resolve from the DI container. Today the only ' +
+          'registrant is DatabaseServiceRegistrar, which only runs when ' +
+          'DOLLHOUSE_STORAGE_BACKEND=database. Either set both env vars to use the ' +
+          'shared connection, or use DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem (the ' +
+          'default for non-DB deployments). A standalone auth-only Postgres pool is ' +
+          'a follow-up; not §8.1 scope.',
         );
       }
       // Lazy import so the postgres dependency isn't pulled into bundles
