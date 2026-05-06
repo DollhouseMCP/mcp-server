@@ -63,12 +63,22 @@ export class OidcAuthProvider implements IAuthProvider {
         return { ok: false, reason: 'token missing sub claim' };
       }
 
+      const scopes = extractScopes(payload);
+      // Defense in depth: the bridge must enforce the same `mcp` scope
+      // requirement as the embedded AS — an external IdP token issued
+      // for our audience but lacking `mcp` represents a different
+      // permission surface (e.g. an admin console token) and must not
+      // satisfy the resource-server check here.
+      if (!scopes || !scopes.includes('mcp')) {
+        return { ok: false, reason: 'token missing mcp scope' };
+      }
+
       const claims: AuthClaims = {
         sub: payload.sub,
         displayName: extractStringClaim(payload, 'name', 'display_name', 'preferred_username'),
         email: extractStringClaim(payload, 'email'),
         tenantId: extractStringClaim(payload, 'tenant_id', 'org_id') ?? null,
-        scopes: extractScopes(payload),
+        scopes,
         exp: payload.exp,
       };
 

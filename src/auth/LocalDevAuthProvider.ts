@@ -61,12 +61,22 @@ export class LocalDevAuthProvider implements IAuthProvider {
         return { ok: false, reason: 'token missing sub claim' };
       }
 
+      const scopes = Array.isArray(payload.scopes) ? payload.scopes as string[] : undefined;
+      // Defense in depth: same `mcp` scope requirement as the embedded
+      // AS and the OIDC bridge. The dev startup token is issued with
+      // `scopes: ['mcp']` by AuthProviderFactory; a token issued
+      // elsewhere (e.g. an old token from before the scope was added,
+      // or a stray token from another flow) is rejected here.
+      if (!scopes || !scopes.includes('mcp')) {
+        return { ok: false, reason: 'token missing mcp scope' };
+      }
+
       const claims: AuthClaims = {
         sub: payload.sub,
         displayName: typeof payload.display_name === 'string' ? payload.display_name : undefined,
         email: typeof payload.email === 'string' ? payload.email : undefined,
         tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
-        scopes: Array.isArray(payload.scopes) ? payload.scopes as string[] : undefined,
+        scopes,
         exp: payload.exp,
       };
 

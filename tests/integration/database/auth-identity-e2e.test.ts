@@ -238,7 +238,7 @@ describe('Auth Identity E2E Tests', () => {
   it('should authenticate with a valid token and create a DB user', async () => {
     if (!dbAvailable) return;
 
-    const token = await authProvider.issue('alice-auth-test', { displayName: 'Alice' });
+    const token = await authProvider.issue('alice-auth-test', { displayName: 'Alice', scopes: ['mcp'] });
     const { client, transport } = await connectWithToken(serverUrl, token, 'auth-e2e-alice');
 
     try {
@@ -257,7 +257,7 @@ describe('Auth Identity E2E Tests', () => {
   it('should scope element CRUD to the authenticated user via RLS', async () => {
     if (!dbAvailable) return;
 
-    const aliceToken = await authProvider.issue('alice-auth-test');
+    const aliceToken = await authProvider.issue('alice-auth-test', { scopes: ['mcp'] });
     const { client: alice, transport: aliceTransport } = await connectWithToken(serverUrl, aliceToken, 'auth-e2e-alice-crud');
 
     try {
@@ -302,8 +302,8 @@ describe('Auth Identity E2E Tests', () => {
   it('should isolate data between different authenticated users', async () => {
     if (!dbAvailable) return;
 
-    const aliceToken = await authProvider.issue('alice-auth-test');
-    const bobToken = await authProvider.issue('bob-auth-test');
+    const aliceToken = await authProvider.issue('alice-auth-test', { scopes: ['mcp'] });
+    const bobToken = await authProvider.issue('bob-auth-test', { scopes: ['mcp'] });
 
     const { client: alice, transport: aliceT } = await connectWithToken(serverUrl, aliceToken, 'auth-e2e-alice-iso');
     const { client: bob, transport: bobT } = await connectWithToken(serverUrl, bobToken, 'auth-e2e-bob-iso');

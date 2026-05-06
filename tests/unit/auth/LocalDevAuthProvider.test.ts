@@ -41,8 +41,11 @@ describe('LocalDevAuthProvider', () => {
   });
 
   describe('issue and validate round-trip', () => {
+    // mcp scope is mandatory at validate (M3/Q6); positive-control tests
+    // pass it explicitly. The negative-path test below pins the rejection
+    // when it's missing.
     it('should issue a valid JWT that validates successfully', async () => {
-      const token = await provider.issue('alice');
+      const token = await provider.issue('alice', { scopes: ['mcp'] });
       const result = await provider.validate(token);
 
       expect(result.ok).toBe(true);
@@ -55,6 +58,7 @@ describe('LocalDevAuthProvider', () => {
       const token = await provider.issue('bob', {
         displayName: 'Bob Smith',
         email: 'bob@example.com',
+        scopes: ['mcp'],
       });
       const result = await provider.validate(token);
 
@@ -68,18 +72,18 @@ describe('LocalDevAuthProvider', () => {
 
     it('should include scopes in claims', async () => {
       const token = await provider.issue('admin', {
-        scopes: ['read', 'write', 'admin'],
+        scopes: ['mcp', 'read', 'write', 'admin'],
       });
       const result = await provider.validate(token);
 
       expect(result.ok).toBe(true);
       if (result.ok) {
-        expect(result.claims.scopes).toEqual(['read', 'write', 'admin']);
+        expect(result.claims.scopes).toEqual(['mcp', 'read', 'write', 'admin']);
       }
     });
 
     it('should set expiration from ttlSeconds', async () => {
-      const token = await provider.issue('user', { ttlSeconds: 3600 });
+      const token = await provider.issue('user', { ttlSeconds: 3600, scopes: ['mcp'] });
       const result = await provider.validate(token);
 
       expect(result.ok).toBe(true);
@@ -89,6 +93,17 @@ describe('LocalDevAuthProvider', () => {
         expect(result.claims.exp!).toBeGreaterThan(nowSecs);
         expect(result.claims.exp!).toBeLessThanOrEqual(nowSecs + 3601);
       }
+    });
+
+    it('rejects a token that lacks the mcp scope (M3/Q6)', async () => {
+      const token = await provider.issue('user', { scopes: ['read', 'write'] });
+      const result = await provider.validate(token);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toMatch(/mcp scope/);
+
+      const noScopes = await provider.issue('user');
+      const noScopesResult = await provider.validate(noScopes);
+      expect(noScopesResult.ok).toBe(false);
     });
   });
 

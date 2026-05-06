@@ -246,10 +246,13 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
   const { LocalDevAuthProvider } = await import('./LocalDevAuthProvider.js');
   const provider = new LocalDevAuthProvider({ keyFilePath });
 
-  // Auto-generate a startup token for convenience
+  // Auto-generate a startup token for convenience. Stamp the `mcp` scope
+  // explicitly — both LocalDevAuthProvider.validate and the embedded-AS
+  // path require `mcp` for the resource-server check (Phase 9 M3 / Q6).
+  // Without it the printed token would fail validation immediately.
   const defaultSub = config.localDefaultSub || getDefaultSub();
   try {
-    const token = await provider.issue(defaultSub, { ttlSeconds: 86400 });
+    const token = await provider.issue(defaultSub, { ttlSeconds: 86400, scopes: ['mcp'] });
     logger.info(`[AuthProviderFactory] Local dev auth enabled. Default token for '${defaultSub}':`);
     // Print to stderr so it's visible in the terminal but not captured by MCP stdio
     process.stderr.write(
