@@ -192,6 +192,34 @@ export class MagicLinkMethod implements IAuthMethod {
         try {
           const body = req.body as Record<string, string> | undefined;
           const token = typeof body?.token === 'string' ? body.token : '';
+
+          // Verify-without-consume FIRST so a captured-without-cookie
+          // attacker can't burn the legitimate user's single-use token by
+          // posting it without the matching interaction cookie. The
+          // earlier order (consume → cookie-check) was a DoS on the
+          // legitimate user: cookie failure left the token marked
+          // already-consumed, so the real user's subsequent POST got
+          // rejected with no path forward. Verify now, do cookie check
+          // against the verified interactionId, and only THEN consume.
+          const verified = this.verifyMagicLink(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
+            return;
+          }
+
+          const { provider, cookieKeys } = await deps.ensureInitialized();
+          if (verified.interactionId) {
+            const binding = verifyInteractionCookieMatches(req, verified.interactionId, cookieKeys);
+            if (!binding.ok) {
+              // Token NOT consumed — the legitimate user can re-click
+              // their email link from the original browser context.
+              res.status(400).type('html').send(renderInteractionBindingError('magic link'));
+              return;
+            }
+          }
+
+          // Cookie matched (or token has no interactionId — CLI-issued
+          // case below). Now mark consumed; subsequent replays fail.
           const consume = await this.consumeMagicLink(token);
           if (consume.kind === 'error') {
             res.status(400).type('html').send(renderMagicLinkError(consume.reason));
@@ -202,15 +230,6 @@ export class MagicLinkMethod implements IAuthMethod {
             // older client that didn't stamp it). The user is authenticated
             // but we have no OAuth flow to complete; show a friendly page.
             res.type('html').send(renderMagicLinkSuccessNoInteraction(consume.identity.email ?? ''));
-            return;
-          }
-          // Defense in depth: refuse to drive interactionFinished unless the
-          // calling browser holds the same interaction cookie that started
-          // the OAuth flow.
-          const { provider, cookieKeys } = await deps.ensureInitialized();
-          const binding = verifyInteractionCookieMatches(req, consume.interactionId, cookieKeys);
-          if (!binding.ok) {
-            res.status(400).type('html').send(renderInteractionBindingError('magic link'));
             return;
           }
           // Restore the request URL to the interaction so oidc-provider's
@@ -255,7 +274,7 @@ export class MagicLinkMethod implements IAuthMethod {
     | { kind: 'ok'; interactionId: string | undefined; identity: AuthenticatedIdentity }
     | { kind: 'error'; reason: string }
   > {
-    const consume = this.options.invites.consume(token);
+    const consume = await this.options.invites.consume(token);
     // Generic error reason regardless of cause — see verifyMagicLink rationale.
     if (!consume.ok) {
       if (consume.reason === 'rate-exceeded') {

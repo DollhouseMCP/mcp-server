@@ -88,7 +88,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
 
   beforeEach(async () => {
     storage = new InMemoryAuthStorageLayer();
-    invites = new InviteTokenStore(randomBytes(32));
+    invites = new InviteTokenStore(randomBytes(32), storage);
     emailSender = new CollectingEmailSender();
     // Build the AS first so we know the public base URL for verifyUrl.
     // Listen on a fixed port via the harness; we boot a placeholder method

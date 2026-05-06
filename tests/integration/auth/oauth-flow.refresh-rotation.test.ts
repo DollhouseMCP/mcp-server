@@ -77,7 +77,7 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
 
   beforeEach(async () => {
     storage = new InMemoryAuthStorageLayer();
-    const invites = new InviteTokenStore(randomBytes(32));
+    const invites = new InviteTokenStore(randomBytes(32), storage);
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     method = new LocalAccountMethod({ storage, invites, rateLimiter });
     harness = await startASHarness({ methods: [method], storage });

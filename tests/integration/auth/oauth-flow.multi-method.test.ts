@@ -101,7 +101,7 @@ describe('Multi-method (GitHub + MagicLink) — OAuth E2E', () => {
 
     magicLink = new MagicLinkMethod({
       storage,
-      invites: new InviteTokenStore(randomBytes(32)),
+      invites: new InviteTokenStore(randomBytes(32), storage),
       emailSender,
       verifyUrl: `${publicBaseUrl}/auth/email/verify`,
       requestResponseFloorMs: 0,

@@ -34,7 +34,7 @@ const REDIRECT_URI = 'http://127.0.0.1/callback';
 const CLIENT_ID = 'dollhouse-claude-connector';
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
-  const invites = new InviteTokenStore(randomBytes(32));
+  const invites = new InviteTokenStore(randomBytes(32), storage);
   const rateLimiter = new LocalLoginRateLimiter({ storage });
   return new LocalAccountMethod({ storage, invites, rateLimiter });
 }

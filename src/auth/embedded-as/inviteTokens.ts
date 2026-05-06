@@ -17,10 +17,15 @@
  *   - jti:     unique id (random); used by the consumed-set for single-use
  *   - exp:     expiry epoch ms
  *
- * Single-use enforcement is via an in-memory consumed-set. The token's jti
- * is added to the set when consumed; subsequent consumes for the same jti
- * are rejected. The set is process-local (acceptable for solo / small-team
- * dev; the future SqliteAuthStorageLayer will persist this).
+ * Single-use enforcement is durable: the consumed-jti record is written
+ * via `storage.genericInsertIfAbsent('ConsumedInvite', jti, ...)`, which
+ * is atomic INSERT-IF-NOT-PRESENT on every backend. The earlier shape
+ * used an in-memory Set; after restart the set evaporated, letting a
+ * captured invite URL replay within its TTL — which for local accounts
+ * meant an attacker could re-upsert a fresh password hash. With storage
+ * persistence the consumed marker survives restart on filesystem and
+ * Postgres backends and is lost only on the in-memory backend (which is
+ * dev/test only and gated behind an explicit env opt-in).
  *
  * @module auth/embedded-as/inviteTokens
  */
@@ -29,14 +34,10 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
+import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
-// Bound the consumed-set memory. Eviction is TTL-driven (see consume): once a
-// jti's `exp` has passed the underlying token can no longer pass verify(),
-// so retaining it in the consumed-set is unnecessary. The count cap is a
-// last-resort backstop — when reached without any expirable entries, the
-// new consume is rejected rather than evicting a still-replayable jti.
-const MAX_CONSUMED = 10_000;
+const CONSUMED_INVITE_MODEL = 'ConsumedInvite';
 /**
  * Maximum length of a token string accepted by verify/consume (H11).
  *
@@ -83,25 +84,31 @@ export type ConsumeResult =
   | { ok: false; reason: 'invalid' | 'expired' | 'already-consumed' | 'rate-exceeded' };
 
 /**
- * Token store. Holds the HMAC secret and the consumed-jti set in-memory.
- * One instance per AS deployment; bind via DI.
+ * Token store. Holds the HMAC secret; consumed-jti durability is delegated
+ * to IAuthStorageLayer (`ConsumedInvite` model). One instance per AS
+ * deployment; bind via DI.
  */
 export class InviteTokenStore {
   private readonly secret: Buffer;
-  /** jti → exp epoch ms. Map preserves insertion order for FIFO sweep. */
-  private readonly consumed = new Map<string, number>();
+  private readonly storage: IAuthStorageLayer | undefined;
 
   /**
-   * @param secret Raw HMAC key (≥32 bytes recommended). Caller is responsible
-   *               for persistence — typically the same persisted bytes used
-   *               for other process-local secrets (e.g. derive from the AS
-   *               signing-key file).
+   * @param secret  Raw HMAC key (≥32 bytes recommended). Caller is responsible
+   *                for persistence — typically the same persisted bytes used
+   *                for other process-local secrets (e.g. derive from the AS
+   *                signing-key file).
+   * @param storage Optional storage layer used to record consumed jti markers
+   *                so single-use enforcement survives restart. The CLI
+   *                `dollhousemcp create-user` only issues tokens (the AS
+   *                consumes them) and may construct without storage; the
+   *                running AS always wires storage in via AuthProviderFactory.
    */
-  constructor(secret: Buffer) {
+  constructor(secret: Buffer, storage?: IAuthStorageLayer) {
     if (secret.length < 16) {
       throw new Error('InviteTokenStore requires a secret of at least 16 bytes');
     }
     this.secret = secret;
+    this.storage = storage;
   }
 
   /**
@@ -156,42 +163,37 @@ export class InviteTokenStore {
   }
 
   /**
-   * Verify + atomically mark consumed. Called by the POST handler. Returns
-   * already-consumed if the jti has been seen before, rate-exceeded if the
-   * consumed-set is at capacity with no expired entries to prune (see
-   * MAX_CONSUMED comment).
+   * Verify + atomically mark consumed. Called by the POST handler.
+   * Returns `already-consumed` if the jti has been seen before. The
+   * record is written via `genericInsertIfAbsent` so two concurrent
+   * consumes of the same jti cannot both succeed; the first wins.
+   *
+   * Cleanup of the consumed-jti record is TTL-driven by the underlying
+   * storage backend — once `exp` has passed, verify() rejects the
+   * token before consume even reaches the storage check, so the
+   * persistent record only needs to outlive the token's exp.
    */
-  consume(token: string): ConsumeResult {
+  async consume(token: string): Promise<ConsumeResult> {
+    if (!this.storage) {
+      throw new Error(
+        'InviteTokenStore.consume() requires a storage layer. ' +
+        'Construct with `new InviteTokenStore(secret, storage)`.',
+      );
+    }
     const verified = this.verify(token);
     if (!verified.ok) return verified;
 
-    if (this.consumed.has(verified.payload.jti)) {
+    const ttlSec = Math.max(1, Math.ceil((verified.payload.exp - Date.now()) / 1000));
+    const inserted = await this.storage.genericInsertIfAbsent(
+      CONSUMED_INVITE_MODEL,
+      verified.payload.jti,
+      { exp: verified.payload.exp },
+      ttlSec,
+    );
+    if (!inserted) {
       return { ok: false, reason: 'already-consumed' };
     }
-
-    const now = Date.now();
-    this.pruneExpiredConsumed(now);
-
-    if (this.consumed.size >= MAX_CONSUMED) {
-      // Cap reached and pruning yielded nothing — the only entries left are
-      // still-replayable. Refuse the new consume rather than evict one of
-      // them, which would let the evicted jti be replayed.
-      return { ok: false, reason: 'rate-exceeded' };
-    }
-
-    this.consumed.set(verified.payload.jti, verified.payload.exp);
     return { ok: true, payload: verified.payload };
-  }
-
-  /**
-   * Drop entries whose underlying token has already expired. Once exp has
-   * passed, verify() rejects the token before consume even checks the set,
-   * so the entry is no longer load-bearing.
-   */
-  private pruneExpiredConsumed(now: number): void {
-    for (const [jti, exp] of this.consumed) {
-      if (exp <= now) this.consumed.delete(jti);
-    }
   }
 }
 

@@ -33,7 +33,7 @@ describe('MagicLinkMethod', () => {
 
   beforeEach(() => {
     storage = new InMemoryAuthStorageLayer();
-    invites = new InviteTokenStore(randomBytes(32));
+    invites = new InviteTokenStore(randomBytes(32), storage);
     emailSender = new CollectingEmailSender();
     method = new MagicLinkMethod({
       storage,

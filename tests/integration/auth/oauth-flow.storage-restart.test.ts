@@ -110,7 +110,7 @@ describe('Filesystem storage — AS restart durability', () => {
   async function bootAS(): Promise<{ harness: ASHarness; method: LocalAccountMethod }> {
     const storage = new FilesystemAuthStorageLayer({ rootDir: storageDir });
     const inviteSecretFile = path.join(tmpDir, 'invite-secret.bin');
-    const invites = new InviteTokenStore(loadOrGenerateInviteSecret(inviteSecretFile));
+    const invites = new InviteTokenStore(loadOrGenerateInviteSecret(inviteSecretFile), storage);
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const h = await startASHarness({

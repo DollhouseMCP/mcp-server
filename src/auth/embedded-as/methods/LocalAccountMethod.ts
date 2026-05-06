@@ -198,7 +198,7 @@ export class LocalAccountMethod implements IAuthMethod {
     // by the argon2 hash time; concurrent submits of the same token still
     // resolve via the InviteTokenStore's already-consumed check on the
     // losing call.
-    const consume = this.options.invites.consume(token);
+    const consume = await this.options.invites.consume(token);
     if (!consume.ok) {
       // rate-exceeded is server-side capacity, not a token problem; log so
       // the operator sees the saturation instead of misreading the user-

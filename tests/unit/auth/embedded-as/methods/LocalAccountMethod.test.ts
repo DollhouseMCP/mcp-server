@@ -21,7 +21,7 @@ describe('LocalAccountMethod', () => {
 
   beforeEach(() => {
     storage = new InMemoryAuthStorageLayer();
-    invites = new InviteTokenStore(randomBytes(32));
+    invites = new InviteTokenStore(randomBytes(32), storage);
     rateLimiter = new LocalLoginRateLimiter({ storage });
     method = new LocalAccountMethod({ storage, invites, rateLimiter });
   });
@@ -189,7 +189,7 @@ describe('LocalAccountMethod', () => {
       expect(result.reason).toMatch(/12 characters/);
     });
 
-    it('verifyInvite returns the email without consuming the token', () => {
+    it('verifyInvite returns the email without consuming the token', async () => {
       const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
       const token = new URL(url).searchParams.get('invite')!;
       const verified = method.verifyInvite(token);
@@ -197,7 +197,7 @@ describe('LocalAccountMethod', () => {
       if (!verified.ok) return;
       expect(verified.email).toBe('bob@example.com');
       // Token should still be consumable after verify.
-      expect(invites.consume(token).ok).toBe(true);
+      expect((await invites.consume(token)).ok).toBe(true);
     });
 
     it('does NOT consume the invite when argon2 hashing fails (atomicity)', async () => {
