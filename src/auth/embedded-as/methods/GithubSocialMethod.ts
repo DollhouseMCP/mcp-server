@@ -187,19 +187,34 @@ export class GithubSocialMethod implements IAuthMethod {
         try {
           const code = typeof req.query.code === 'string' ? req.query.code : '';
           const state = typeof req.query.state === 'string' ? req.query.state : '';
+          if (!code || !state) {
+            res.status(400).json({ error: 'github_callback_failed', error_description: 'missing code or state' });
+            return;
+          }
+
+          // Verify cookie binding FIRST, BEFORE exchanging the GitHub
+          // one-time code (Phase 9 L1 / Q8). Earlier shape called
+          // processCallback first — which contacted GitHub's /token
+          // endpoint, burning the one-time code, and called
+          // upsertAccount/recordIdentityEvent — and only then verified
+          // the interaction-cookie binding. An attacker who captured
+          // `code` + `state` without the legitimate user's cookie could
+          // therefore mutate audit state and burn the user's GitHub
+          // code before the binding check rejected the flow.
+          //
+          // `state` IS the interactionId by construction (see
+          // beginInteraction); we use it to look up the cookie binding
+          // without paying any upstream-side-effect cost.
+          const { provider, cookieKeys } = await deps.ensureInitialized();
+          const binding = verifyInteractionCookieMatches(req, state, cookieKeys);
+          if (!binding.ok) {
+            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
+            return;
+          }
+
           const result = await this.processCallback({ code, state });
           if (result.kind === 'error') {
             res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
-            return;
-          }
-          // Defense in depth: refuse to drive interactionFinished unless the
-          // calling browser holds the same interaction cookie. Same threat
-          // model as the magic-link route — the GitHub `state` could be
-          // stolen + replayed; the interaction cookie is the binding.
-          const { provider, cookieKeys } = await deps.ensureInitialized();
-          const binding = verifyInteractionCookieMatches(req, result.interactionId, cookieKeys);
-          if (!binding.ok) {
-            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
             return;
           }
           // Restore the request URL to the interaction so oidc-provider's
