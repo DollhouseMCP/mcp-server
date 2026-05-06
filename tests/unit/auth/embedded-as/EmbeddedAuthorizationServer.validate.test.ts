@@ -33,6 +33,8 @@ interface TokenOpts {
   aud?: string;
   sub?: string;
   exp?: number;
+  /** Override scope claim. Defaults to 'mcp' so the positive controls pass. */
+  scope?: string | null;
 }
 
 describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
@@ -82,7 +84,15 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     else if (opts.kid === undefined && !('kid' in opts)) protectedHeader.kid = kid;
     if (opts.crit) protectedHeader.crit = opts.crit;
 
-    const jwt = new SignJWT({})
+    // scope: 'mcp' by default; null suppresses the claim entirely so the
+    // missing-scope negative-path test can exercise the H6 reject path.
+    const claims: Record<string, unknown> = {};
+    if (opts.scope === undefined) {
+      claims.scope = 'mcp';
+    } else if (opts.scope !== null) {
+      claims.scope = opts.scope;
+    }
+    const jwt = new SignJWT(claims)
       .setProtectedHeader(protectedHeader as Parameters<SignJWT['setProtectedHeader']>[0])
       .setIssuer(opts.iss ?? ISSUER)
       .setAudience(opts.aud ?? RESOURCE)
@@ -206,6 +216,26 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
 
     const result = await as.validate(malicious);
     expect(result.ok).toBe(false);
+  });
+
+  it('rejects token without the mcp scope (H6 defense in depth)', async () => {
+    // Tokens we issue always carry the mcp scope via the resourceIndicators
+    // wiring; this test proves the validator REJECTS a token that somehow
+    // lacks it (e.g. a future code path that mints a token without the
+    // resource-server scope, or a key-rotation bug).
+    const noScope = await mintToken({ scope: null });
+    const noScopeResult = await as.validate(noScope);
+    expect(noScopeResult.ok).toBe(false);
+    if (!noScopeResult.ok) expect(noScopeResult.reason).toMatch(/mcp scope/);
+
+    const wrongScope = await mintToken({ scope: 'openid profile' });
+    const wrongScopeResult = await as.validate(wrongScope);
+    expect(wrongScopeResult.ok).toBe(false);
+
+    // Sanity: the same shape with the mcp scope is accepted.
+    const ok = await mintToken({ scope: 'openid mcp' });
+    const okResult = await as.validate(ok);
+    expect(okResult.ok).toBe(true);
   });
 
   it('rejects token with wrong audience claim', async () => {
