@@ -23,7 +23,6 @@ import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js'
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import {
   type ASHarness,
-  CookieJar,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,

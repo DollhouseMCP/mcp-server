@@ -25,7 +25,6 @@ import { randomBytes } from 'node:crypto';
 import {
   type ASHarness,
   CookieJar,
-  absoluteUrl,
   followToCodeRedirect,
   startAuthorizeFlow,
   startASHarness,

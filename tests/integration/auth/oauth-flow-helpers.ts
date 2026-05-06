@@ -15,7 +15,6 @@ import * as path from 'node:path';
 import * as net from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import express, { type Express } from 'express';
-import type { AddressInfo } from 'node:net';
 import { EmbeddedAuthorizationServer, type EmbeddedAuthorizationServerOptions } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 
 export function pkceS256(verifier: string): string {

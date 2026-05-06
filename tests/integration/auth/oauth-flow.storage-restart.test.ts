@@ -27,10 +27,9 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalAccountMethod.js';
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
-import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
+import { InviteTokenStore, loadOrGenerateInviteSecret } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storage/FilesystemAuthStorageLayer.js';
 import {
   type ASHarness,
@@ -100,10 +99,18 @@ describe('Filesystem storage — AS restart durability', () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  /** Build a fresh AS instance pointing at the same persisted storage + key. */
+  /**
+   * Build a fresh AS instance pointing at the same persisted storage + key.
+   * The invite-token HMAC secret is loaded from a file under tmpDir so it
+   * survives the restart — without that, an invite issued by AS-1 would
+   * be HMAC-invalid on AS-2 (different key) and the restart test wouldn't
+   * model production behavior, where loadOrGenerateInviteSecret() reads
+   * the persisted secret from disk on every boot.
+   */
   async function bootAS(): Promise<{ harness: ASHarness; method: LocalAccountMethod }> {
     const storage = new FilesystemAuthStorageLayer({ rootDir: storageDir });
-    const invites = new InviteTokenStore(randomBytes(32));
+    const inviteSecretFile = path.join(tmpDir, 'invite-secret.bin');
+    const invites = new InviteTokenStore(loadOrGenerateInviteSecret(inviteSecretFile));
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const h = await startASHarness({
