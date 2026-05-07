@@ -87,7 +87,7 @@ describe('Bootstrap gate (must-fix #22)', () => {
       next_step?: string;
     };
     expect(body.error).toBe('bootstrap_required');
-    expect(body.next_step).toMatch(/dollhousemcp create-user/);
+    expect(body.next_step).toMatch(/dollhouse-create-user/);
   });
 
   it('multi-user mode + post-bootstrap → /authorize works normally', async () => {
@@ -197,9 +197,9 @@ describe('Bootstrap gate (must-fix #22)', () => {
     });
     expect(resp.status).toBe(503);
     const body = await resp.json() as { next_step?: string };
-    expect(body.next_step).toMatch(/dollhousemcp create-user/);
-    expect(body.next_step).toMatch(/dollhousemcp admin bootstrap.*magic-link/);
-    expect(body.next_step).toMatch(/dollhousemcp admin bootstrap.*github/);
+    expect(body.next_step).toMatch(/dollhouse-create-user/);
+    expect(body.next_step).toMatch(/dollhouse-admin-bootstrap.*magic-link/);
+    expect(body.next_step).toMatch(/dollhouse-admin-bootstrap.*github/);
   });
 
   it('gate caches positive completion — flips from closed to open without restart', async () => {

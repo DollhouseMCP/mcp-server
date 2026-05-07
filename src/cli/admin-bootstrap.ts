@@ -30,7 +30,7 @@
 
 import { Command } from 'commander';
 import { createHash } from 'node:crypto';
-import { createAuthStorage } from '../auth/embedded-as/storage/createAuthStorage.js';
+import { openCliAuthStorage } from './cliAuthStorage.js';
 
 interface BootstrapOptions {
   method: string;
@@ -169,9 +169,13 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  let storage;
+  // Round 5 post-triage HIGH-1: openCliAuthStorage handles all three
+  // backends including postgres (which the previous direct
+  // createAuthStorage call could not — it requires an injected
+  // DatabaseInstance from the DI container, which CLIs don't have).
+  let handle;
   try {
-    storage = await createAuthStorage({ methods: [adminMethod] });
+    handle = await openCliAuthStorage({ methods: [adminMethod] });
   } catch (err) {
     process.stderr.write(
       `Failed to initialize auth storage: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -180,9 +184,10 @@ async function main(): Promise<void> {
   }
 
   try {
-    await storage.markBootstrapComplete(adminSub, adminMethod);
+    await handle.storage.markBootstrapComplete(adminSub, adminMethod);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    await handle.close();
     if (msg.includes('admin transfer is a separate operation')) {
       process.stderr.write(`${msg}\n`);
       process.exit(3);
@@ -195,6 +200,7 @@ async function main(): Promise<void> {
     `Bootstrap recorded. Admin sub: ${adminSub} (method: ${adminMethod}).\n` +
     `When this user authenticates, they will be granted admin role.\n`,
   );
+  await handle.close();
 }
 
 main().catch((err) => {

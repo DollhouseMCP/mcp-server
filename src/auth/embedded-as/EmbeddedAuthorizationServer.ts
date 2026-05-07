@@ -480,23 +480,29 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * have it Just Work.
    */
   private bootstrapHint(): string {
+    // Round 5 post-triage MEDIUM-2: hint strings name the actual
+    // registered binaries from package.json `bin` (which uses
+    // single-token hyphenated names like `dollhouse-create-user`),
+    // not a `dollhousemcp <subcommand>` form that does NOT exist.
+    // Operators copy-pasting the earlier wording got "command not
+    // found" and the bootstrap path looked broken.
     const ids = this.methods.map((m) => m.id);
     const lines: string[] = [];
     if (ids.includes('local-password')) {
       lines.push(
-        "Run 'dollhousemcp create-user --username <name> --email <addr>' " +
+        "Run 'dollhouse-create-user --username <name> --email <addr>' " +
         "to issue the first invite (this also marks bootstrap complete).",
       );
     }
     if (ids.includes('magic-link')) {
       lines.push(
-        "Run 'dollhousemcp admin bootstrap --method magic-link --email <admin@example.com>' " +
+        "Run 'dollhouse-admin-bootstrap --method magic-link --email <admin@example.com>' " +
         "to claim the admin identity.",
       );
     }
     if (ids.includes('github')) {
       lines.push(
-        "Run 'dollhousemcp admin bootstrap --method github --github-username <gh-username>' " +
+        "Run 'dollhouse-admin-bootstrap --method github --github-username <gh-username>' " +
         "to claim the admin identity.",
       );
     }

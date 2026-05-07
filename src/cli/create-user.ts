@@ -32,7 +32,7 @@ import {
   InviteTokenStore,
   loadOrGenerateInviteSecret,
 } from '../auth/embedded-as/inviteTokens.js';
-import { createAuthStorage } from '../auth/embedded-as/storage/createAuthStorage.js';
+import { openCliAuthStorage } from './cliAuthStorage.js';
 
 interface CreateUserOptions {
   username: string;
@@ -125,9 +125,13 @@ async function main(): Promise<void> {
   // pre-claim (must-fix #22) is durable. The CLI is talking to the same
   // backend the running AS reads from at startup; on next request, the
   // gate sees state.completed === true.
-  let storage;
+  //
+  // Round 5 post-triage HIGH-1: openCliAuthStorage handles all three
+  // backends including postgres. The previous direct createAuthStorage
+  // call could not — postgres requires an injected DatabaseInstance.
+  let handle;
   try {
-    storage = await createAuthStorage({ methods: ['local-password'] });
+    handle = await openCliAuthStorage({ methods: ['local-password'] });
   } catch (err) {
     process.stderr.write(
       `Failed to initialize auth storage: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -135,33 +139,37 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const sub = `local_${opts.username}`;
+  try {
+    const sub = `local_${opts.username}`;
 
-  // Bootstrap pre-claim (must-fix #22 / spec L923): if the AS hasn't
-  // been bootstrapped yet, this first invite IS the admin invite. Mark
-  // the bootstrap state with this sub BEFORE issuing the token so a
-  // crash between the two doesn't leave the operator with an
-  // unbootstrap-able invite they can't replace.
-  const bootstrap = await storage.getBootstrapState();
-  if (!bootstrap.completed) {
-    await storage.markBootstrapComplete(sub, 'local-password');
-    process.stderr.write(
-      `[create-user] Bootstrap pre-claim recorded — '${opts.username}' will be granted admin role on first sign-in.\n`,
-    );
+    // Bootstrap pre-claim (must-fix #22 / spec L923): if the AS hasn't
+    // been bootstrapped yet, this first invite IS the admin invite.
+    // Mark the bootstrap state with this sub BEFORE issuing the token
+    // so a crash between the two doesn't leave the operator with an
+    // unbootstrap-able invite they can't replace.
+    const bootstrap = await handle.storage.getBootstrapState();
+    if (!bootstrap.completed) {
+      await handle.storage.markBootstrapComplete(sub, 'local-password');
+      process.stderr.write(
+        `[create-user] Bootstrap pre-claim recorded — '${opts.username}' will be granted admin role on first sign-in.\n`,
+      );
+    }
+
+    const store = new InviteTokenStore(secret, handle.storage);
+    const token = store.issue({
+      sub,
+      email: opts.email,
+      purpose: 'invite',
+      ttlMs: ttlMin * 60 * 1000,
+    });
+
+    const baseUrl = resolveBaseUrl(opts.baseUrl);
+    const url = buildInviteUrl(baseUrl, token);
+
+    process.stdout.write(`${url}\n`);
+  } finally {
+    await handle.close();
   }
-
-  const store = new InviteTokenStore(secret, storage);
-  const token = store.issue({
-    sub,
-    email: opts.email,
-    purpose: 'invite',
-    ttlMs: ttlMin * 60 * 1000,
-  });
-
-  const baseUrl = resolveBaseUrl(opts.baseUrl);
-  const url = buildInviteUrl(baseUrl, token);
-
-  process.stdout.write(`${url}\n`);
 }
 
 main().catch((err) => {
