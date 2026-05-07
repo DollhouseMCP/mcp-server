@@ -22,6 +22,7 @@
 
 import { logger } from '../../../utils/logger.js';
 import type {
+  BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
   IdentityEventFilter,
@@ -54,6 +55,32 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   async getAccount(sub: string): Promise<StoredAccount | null> {
     return this.accountsBySub.get(sub) ?? null;
+  }
+
+  // ---- Bootstrap state (must-fix #22) ----
+
+  private bootstrapState: BootstrapState = { completed: false };
+
+  async getBootstrapState(): Promise<BootstrapState> {
+    return { ...this.bootstrapState };
+  }
+
+  async markBootstrapComplete(
+    adminSub: string,
+    adminMethod: 'local-password' | 'magic-link' | 'github',
+  ): Promise<void> {
+    if (this.bootstrapState.completed && this.bootstrapState.adminSub !== adminSub) {
+      throw new Error(
+        `bootstrap already completed for admin '${this.bootstrapState.adminSub}'; ` +
+        `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
+      );
+    }
+    this.bootstrapState = {
+      completed: true,
+      adminSub,
+      adminMethod,
+      completedAt: Date.now(),
+    };
   }
 
   async updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean> {

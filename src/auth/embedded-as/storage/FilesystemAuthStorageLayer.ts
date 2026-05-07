@@ -46,6 +46,7 @@ import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
 import type {
+  BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
   IdentityEventFilter,
@@ -75,6 +76,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly accountsPath: string;
   private readonly auditPath: string;
   private readonly kvDir: string;
+  private readonly bootstrapPath: string;
   private readonly locks = new FileLockManager();
   private initialized = false;
 
@@ -88,6 +90,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     this.accountsPath = path.join(this.rootDir, 'accounts.json');
     this.auditPath = path.join(this.rootDir, 'audit.jsonl');
     this.kvDir = path.join(this.rootDir, 'kv');
+    this.bootstrapPath = path.join(this.rootDir, 'bootstrap.json');
   }
 
   // ---- Accounts (must-fix #18) ----
@@ -125,6 +128,61 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       await this.ensureRoot();
       await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
       return true;
+    });
+  }
+
+  // ---- Bootstrap state (must-fix #22) ----
+
+  async getBootstrapState(): Promise<BootstrapState> {
+    return this.locks.withLock(`auth:bootstrap:${this.bootstrapPath}`, async () => {
+      try {
+        const raw = await fs.readFile(this.bootstrapPath, 'utf-8');
+        const parsed = JSON.parse(raw) as BootstrapState;
+        // Defensive: fail to "not bootstrapped" rather than to "open" if the
+        // file is malformed. The gate stays closed, the operator sees the
+        // 503 + actionable message and re-runs the CLI.
+        if (typeof parsed?.completed !== 'boolean') return { completed: false };
+        return parsed;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return { completed: false };
+        }
+        throw err;
+      }
+    });
+  }
+
+  async markBootstrapComplete(
+    adminSub: string,
+    adminMethod: 'local-password' | 'magic-link' | 'github',
+  ): Promise<void> {
+    await this.locks.withLock(`auth:bootstrap:${this.bootstrapPath}`, async () => {
+      // Read-modify-write under the lock so concurrent CLI runs serialize.
+      // (Unlikely in practice — the CLI is a one-shot invocation — but the
+      // lock pattern is consistent with the rest of the layer.)
+      let existing: BootstrapState = { completed: false };
+      try {
+        const raw = await fs.readFile(this.bootstrapPath, 'utf-8');
+        existing = JSON.parse(raw) as BootstrapState;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+
+      if (existing.completed && existing.adminSub !== adminSub) {
+        throw new Error(
+          `bootstrap already completed for admin '${existing.adminSub}'; ` +
+          `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
+        );
+      }
+
+      const next: BootstrapState = {
+        completed: true,
+        adminSub,
+        adminMethod,
+        completedAt: Date.now(),
+      };
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.bootstrapPath, JSON.stringify(next, null, 2));
     });
   }
 

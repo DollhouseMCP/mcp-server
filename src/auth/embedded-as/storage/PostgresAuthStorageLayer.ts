@@ -35,6 +35,7 @@ import {
   authKv,
 } from '../../../database/schema/auth.js';
 import type {
+  BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
   IdentityEventFilter,
@@ -136,6 +137,45 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .returning({ sub: authAccounts.sub }),
     );
     return result.length > 0;
+  }
+
+  // ---- Bootstrap state (must-fix #22) ----
+  //
+  // Stored as a single row in auth_kv with model='AuthBootstrap', id='state'.
+  // Reuses the existing K/V plane rather than introducing a new table for
+  // a single-row resource — schema churn cost > new-table benefit here.
+
+  async getBootstrapState(): Promise<BootstrapState> {
+    const payload = await this.genericGet('AuthBootstrap', 'state') as
+      BootstrapState | null;
+    if (!payload || typeof payload.completed !== 'boolean') {
+      return { completed: false };
+    }
+    return payload;
+  }
+
+  async markBootstrapComplete(
+    adminSub: string,
+    adminMethod: 'local-password' | 'magic-link' | 'github',
+  ): Promise<void> {
+    // Read-modify-write within a single transaction so concurrent CLI
+    // runs (unlikely but possible) don't race past the
+    // already-completed-with-different-admin guard.
+    await withSystemContext(this.db, async () => {
+      const existing = await this.getBootstrapState();
+      if (existing.completed && existing.adminSub !== adminSub) {
+        throw new Error(
+          `bootstrap already completed for admin '${existing.adminSub}'; ` +
+          `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
+        );
+      }
+      await this.genericSet('AuthBootstrap', 'state', {
+        completed: true,
+        adminSub,
+        adminMethod,
+        completedAt: Date.now(),
+      });
+    });
   }
 
   // ---- Audit (must-fix #21) ----

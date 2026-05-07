@@ -89,6 +89,48 @@ export interface StoredAccount {
    * interactionFinished login.
    */
   lastAuthAt?: number;
+  /**
+   * Authorization roles attached to this account. Carried into JWTs as
+   * `roles` claim by `extraTokenClaims`. The bootstrap CLI sets
+   * `['admin']` on the pre-claimed admin identity (must-fix #22, spec
+   * L923). Today nothing in the AS itself privileges admin-role tokens —
+   * the field is forward-compatible infrastructure for the admin-only
+   * routes that future phases will introduce.
+   */
+  roles?: string[];
+}
+
+/**
+ * Bootstrap state for multi-user mode (must-fix #22, spec L923).
+ *
+ * Multi-user methods (local-account, magic-link, github) MUST refuse to
+ * accept authentication traffic until an operator has run the bootstrap
+ * CLI to claim the first admin identity. This eliminates the race where
+ * an attacker who can reach the AS could authenticate before the
+ * legitimate operator and become the admin.
+ *
+ * The bootstrap CLI sets:
+ *   - `completed: true`
+ *   - `adminSub`: the JWT `sub` that will receive `roles: ['admin']`
+ *     when they authenticate (e.g. `github_12345`, `magic-link_<hash>`,
+ *     `local_alice`).
+ *   - `adminMethod`: which IAuthMethod owns the pre-claimed identity.
+ *     Used by the gate middleware to render the right "next step"
+ *     message in the 503 body when bootstrap is incomplete.
+ *
+ * Trivial-consent and OIDC-bridge modes have no bootstrap concept; the
+ * gate is skipped entirely for them.
+ */
+export interface BootstrapState {
+  completed: boolean;
+  adminSub?: string;
+  /**
+   * The IAuthMethod id that owns the pre-claimed admin identity. Matches
+   * the `id` field on the concrete method classes (e.g. `LocalAccountMethod.id`
+   * is `'local-password'`, not `'local-account'`, despite the class name).
+   */
+  adminMethod?: 'local-password' | 'magic-link' | 'github';
+  completedAt?: number;
 }
 
 export interface IdentityAuditEvent {
@@ -121,6 +163,34 @@ export interface IAuthStorageLayer {
   findAccountByExternalId(provider: string, externalSub: string): Promise<StoredAccount | null>;
   upsertAccount(account: StoredAccount): Promise<void>;
   getAccount(sub: string): Promise<StoredAccount | null>;
+
+  // --- Bootstrap state (must-fix #22, spec L923) ---
+
+  /**
+   * Read the multi-user bootstrap state. Returns
+   * `{ completed: false }` when no bootstrap has been recorded;
+   * implementations MUST NOT treat absence as completion.
+   */
+  getBootstrapState(): Promise<BootstrapState>;
+
+  /**
+   * Record that the operator has bootstrapped the AS by claiming the
+   * given admin identity. Idempotent: re-running with the same
+   * `adminSub` is a no-op; running with a DIFFERENT `adminSub` after
+   * the first bootstrap MUST fail (admin transfer is a separate
+   * operation that should leave a clear audit trail and require
+   * explicit force).
+   *
+   * Called by the `dollhousemcp admin bootstrap` CLI. Implementations
+   * persist the state via the same durable storage path as everything
+   * else — filesystem and Postgres survive restart; in-memory does not
+   * (acceptable: in-memory mode is dev-only and re-bootstrapping on
+   * each boot is the expected dev workflow).
+   */
+  markBootstrapComplete(
+    adminSub: string,
+    adminMethod: 'local-password' | 'magic-link' | 'github',
+  ): Promise<void>;
 
   /**
    * Atomically stamp `lastAuthAt` (and `updatedAt`) on the account row

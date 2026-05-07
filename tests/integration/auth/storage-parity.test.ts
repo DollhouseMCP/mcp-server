@@ -201,6 +201,36 @@ function runContractSuite(
     });
   });
 
+  describe('bootstrap state (must-fix #22)', () => {
+    it('default state is not completed', async () => {
+      const state = await storage.getBootstrapState();
+      expect(state).toEqual({ completed: false });
+    });
+
+    it('markBootstrapComplete persists the admin sub + method', async () => {
+      await storage.markBootstrapComplete('github_42', 'github');
+      const state = await storage.getBootstrapState();
+      expect(state.completed).toBe(true);
+      expect(state.adminSub).toBe('github_42');
+      expect(state.adminMethod).toBe('github');
+      expect(typeof state.completedAt).toBe('number');
+    });
+
+    it('re-running with the same admin sub is idempotent', async () => {
+      await storage.markBootstrapComplete('local_alice', 'local-password');
+      await expect(
+        storage.markBootstrapComplete('local_alice', 'local-password'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('re-running with a DIFFERENT admin sub is rejected', async () => {
+      await storage.markBootstrapComplete('github_42', 'github');
+      await expect(
+        storage.markBootstrapComplete('github_99', 'github'),
+      ).rejects.toThrow(/admin transfer is a separate operation/);
+    });
+  });
+
   describe('genericConsume — replay detection (OAuth 2.1 §6.1)', () => {
     it('first consume marks the payload and returns true; the record stays findable', async () => {
       await storage.genericSet('AuthorizationCode', 'c1', { grantId: 'g-c1', sub: 'sub' });
