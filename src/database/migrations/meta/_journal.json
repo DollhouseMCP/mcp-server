@@ -71,6 +71,13 @@
       "when": 1778198400000,
       "tag": "0009_auth_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778544000000,
+      "tag": "0010_auth_accounts_roles",
+      "breakpoints": true
     }
   ]
 }

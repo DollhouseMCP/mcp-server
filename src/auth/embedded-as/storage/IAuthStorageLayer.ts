@@ -164,6 +164,29 @@ export interface IAuthStorageLayer {
   upsertAccount(account: StoredAccount): Promise<void>;
   getAccount(sub: string): Promise<StoredAccount | null>;
 
+  /**
+   * Replace `roles` on the account row identified by `sub` without
+   * rewriting the rest of the row. Round 5 / H5: the previous pattern
+   * spread `roles: ['admin']` into upsertAccount only on the bootstrap-
+   * admin path, which meant every other login's upsert omitted the
+   * field — and full-row replacement clobbered any previously-assigned
+   * roles. setAccountRoles is the role-only write so non-role fields
+   * stay untouched.
+   *
+   * Returns true when a row was found and updated, false when `sub` did
+   * not exist. Implementations:
+   *   - InMemory: atomic Map mutation in-place.
+   *   - Filesystem: locked read-modify-write of the same accounts.json.
+   *   - Postgres: single UPDATE statement. No race with concurrent
+   *     upsertAccount of the rest of the row — Postgres applies the
+   *     two writes serially.
+   *
+   * `roles` is stored verbatim. Pass `[]` to remove all roles. The
+   * mapper-level "empty array round-trips as undefined" symmetry that
+   * upsertAccount/getAccount honour is preserved.
+   */
+  setAccountRoles(sub: string, roles: string[]): Promise<boolean>;
+
   // --- Bootstrap state (must-fix #22, spec L923) ---
 
   /**

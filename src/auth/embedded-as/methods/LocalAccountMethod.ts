@@ -35,6 +35,7 @@ import type {
 import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
+import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 
 const LOCAL_PROVIDER = 'local';
 /** Single error reason returned to users; precise causes go to logs only. */
@@ -224,10 +225,14 @@ export class LocalAccountMethod implements IAuthMethod {
     // received their invite link, so any other identity that somehow
     // redeemed the URL without being the pre-claimed admin would NOT
     // be granted admin (they'd just be a regular account).
-    const bootstrap = await this.options.storage.getBootstrapState();
-    const isBootstrapAdmin = bootstrap.completed
-      && bootstrap.adminSub === sub
-      && bootstrap.adminMethod === 'local-password';
+    //
+    // Round 5 / H5: roles are written via setAccountRoles AFTER
+    // upsertAccount rather than spread into the upsert. Spreading
+    // `...(isAdmin ? { roles: [...] } : {})` quietly clobbered any
+    // previously-assigned roles for non-admin users on every login
+    // (full-row replacement + missing field = roles wiped). Splitting
+    // the writes preserves whatever roles were on the row before.
+    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, 'local-password');
 
     const existing = await this.options.storage.getAccount(sub);
     const account: StoredAccount = {
@@ -242,9 +247,15 @@ export class LocalAccountMethod implements IAuthMethod {
       credentials: { passwordHash },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
+      // Preserve any pre-existing roles across upserts; setAccountRoles
+      // below applies the admin-role write only when this is the
+      // pre-claimed bootstrap admin.
+      ...(existing?.roles ? { roles: existing.roles } : {}),
     };
     await this.options.storage.upsertAccount(account);
+    if (isBootstrapAdmin) {
+      await this.options.storage.setAccountRoles(sub, ['admin']);
+    }
 
     return { kind: 'ok', sub, email: consume.payload.email };
   }

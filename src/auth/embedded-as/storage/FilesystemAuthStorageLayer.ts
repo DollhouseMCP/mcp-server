@@ -131,6 +131,30 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
+  async setAccountRoles(sub: string, roles: string[]): Promise<boolean> {
+    return this.locks.withLock(`auth:accounts:${this.accountsPath}`, async () => {
+      const accounts = await this.readAccountsRaw();
+      const idx = accounts.findIndex(a => a.sub === sub);
+      if (idx < 0) return false;
+      const next: StoredAccount = {
+        ...accounts[idx]!,
+        updatedAt: Date.now(),
+      };
+      // Empty array → drop the field entirely so the on-disk shape
+      // matches what upsertAccount({...account /* no roles */}) would
+      // produce. Keeps round-trip parity with InMemory + Postgres.
+      if (roles.length > 0) {
+        next.roles = [...roles];
+      } else {
+        delete next.roles;
+      }
+      accounts[idx] = next;
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
+      return true;
+    });
+  }
+
   // ---- Bootstrap state (must-fix #22) ----
 
   async getBootstrapState(): Promise<BootstrapState> {

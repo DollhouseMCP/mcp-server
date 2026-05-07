@@ -41,6 +41,7 @@ import type {
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
 import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
+import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_API_USER_URL,
@@ -145,17 +146,28 @@ export class GithubSocialMethod implements IAuthMethod {
    * The fresh email_verified check (must-fix #20) happens at login time
    * inside processCallback(); this method serves the cached attributes.
    *
-   * Defense-in-depth: when the account's lastAuthAt is older than the
-   * configured TTL (default 7 days) we return `null` rather than a
-   * degraded account. oidc-provider treats that as "account not found"
-   * and refuses the in-flight refresh, forcing the client to redirect
-   * back through /authorize — which re-runs processCallback and
-   * re-validates email_verified against current GitHub state.
+   * Round 5 / H6: when `lastAuthAt` is older than the configured TTL
+   * (default 7 days) we DOWNGRADE the cached `emailVerified` claim to
+   * false rather than rejecting the account outright. The earlier
+   * "return null on stale" shape had the right intent (force re-auth
+   * to re-validate against GitHub) but the wrong blast radius:
    *
-   * The earlier shape (return account with emailVerified=false) was
-   * theater for refresh-token clients: most simply accept the degraded
-   * id_token and keep refreshing, never re-prompting. Returning null
-   * actually terminates the session.
+   *   - oidc-provider calls findAccount on every refresh-token redeem,
+   *     not just at login. A null return aborts the redeem path
+   *     entirely with no useful diagnostic for the client and silently
+   *     drops `roles` + `auth_time` from any in-flight token issuance.
+   *     For an admin who's been idle 8 days, the next refresh comes
+   *     back without their admin claim — orthogonal failure.
+   *
+   *   - The actual concern is the stale `email_verified` cache. By
+   *     returning the account with `emailVerified: false`, downstream
+   *     can make scope-aware decisions: scopes that don't depend on
+   *     a verified email (e.g. `openid` alone) keep working;
+   *     verified-email-gated scopes can be denied or step-up'd.
+   *     `roles` and `auth_time` propagate normally.
+   *
+   * `null` is still returned when the account doesn't exist at all —
+   * that's a different shape (no row, no claims).
    */
   async findAccount(sub: string): Promise<AuthenticatedIdentity | null> {
     if (!sub.startsWith(`${GITHUB_PROVIDER}_`)) return null;
@@ -166,13 +178,15 @@ export class GithubSocialMethod implements IAuthMethod {
     const ttl = this.options.emailVerifiedCacheTtlMs ?? DEFAULT_EMAIL_VERIFIED_TTL_MS;
     const stale = ttl > 0
       && (!account.lastAuthAt || (Date.now() - account.lastAuthAt) > ttl);
-    if (stale) return null;
 
     return {
       sub: account.sub,
       displayName: account.displayName,
       email: account.email,
-      emailVerified: account.emailVerified,
+      // Downgrade the cached email_verified claim when the cache is
+      // older than the TTL window. Roles + lastAuthAt-derived
+      // auth_time continue to flow through extraTokenClaims.
+      emailVerified: stale ? false : account.emailVerified,
     };
   }
 
@@ -297,11 +311,9 @@ export class GithubSocialMethod implements IAuthMethod {
     // opened. Admin role is set ONLY when this sub matches AND the
     // pre-claim names github as the method — guards against a magic-
     // link bootstrap admin getting accidentally promoted via a github
-    // login that happens to have the same numeric tail.
-    const bootstrap = await this.options.storage.getBootstrapState();
-    const isBootstrapAdmin = bootstrap.completed
-      && bootstrap.adminSub === identity.sub
-      && bootstrap.adminMethod === 'github';
+    // login that happens to have the same numeric tail. Round 5 / H5 —
+    // see bootstrapAdmin.ts for the upsert/setRoles split.
+    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, identity.sub, 'github');
 
     const now = Date.now();
     await this.options.storage.upsertAccount({
@@ -314,8 +326,13 @@ export class GithubSocialMethod implements IAuthMethod {
       rawProfile: profile.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
+      // Preserve existing roles across the upsert; setAccountRoles
+      // below applies the admin-role write only on the bootstrap path.
+      ...(existing?.roles ? { roles: existing.roles } : {}),
     });
+    if (isBootstrapAdmin) {
+      await this.options.storage.setAccountRoles(identity.sub, ['admin']);
+    }
 
     return { kind: 'ok', interactionId: input.state, identity };
   }

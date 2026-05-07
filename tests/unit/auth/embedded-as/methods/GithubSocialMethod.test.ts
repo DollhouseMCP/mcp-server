@@ -398,14 +398,13 @@ describe('GithubSocialMethod', () => {
       expect(found?.emailVerified).toBe(true);
     });
 
-    it('returns null once lastAuthAt is older than the TTL (forces re-auth)', async () => {
-      // Defense-in-depth: when the cached account is older than the TTL,
-      // findAccount returns null. oidc-provider treats that as "account
-      // not found" and refuses the refresh, forcing the client to redirect
-      // through /authorize — which re-runs processCallback and re-validates
-      // email_verified against current GitHub state. The earlier shape
-      // (return emailVerified=false) was theater because most clients
-      // silently accept the degraded id_token.
+    it('H6: downgrades emailVerified to false once lastAuthAt is older than the TTL', async () => {
+      // Round 5 / H6: stale cache means the email_verified claim is
+      // suspect, NOT that the account doesn't exist. Returning null
+      // would also drop roles + auth_time on every refresh redeem
+      // (oidc-provider calls findAccount on each rotation), losing
+      // an admin's claim mid-session. The current shape preserves
+      // those orthogonal claims and only downgrades email_verified.
       const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
       await storage.upsertAccount({
         sub: 'github_42',
@@ -423,13 +422,17 @@ describe('GithubSocialMethod', () => {
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
-      expect(await method.findAccount('github_42')).toBeNull();
+      const found = await method.findAccount('github_42');
+      expect(found).not.toBeNull();
+      expect(found?.sub).toBe('github_42');
+      expect(found?.email).toBe('a@example.com');
+      expect(found?.emailVerified).toBe(false); // downgraded
     });
 
-    it('returns null when lastAuthAt is undefined under the default TTL (legacy row)', async () => {
-      // Pre-C10 accounts have no lastAuthAt. The staleness check treats
-      // missing lastAuthAt as stale, so a legacy account row forces re-auth
-      // before any token can be issued for it.
+    it('H6: downgrades emailVerified to false when lastAuthAt is undefined (legacy row)', async () => {
+      // Pre-C10 accounts have no lastAuthAt. Legacy rows are treated
+      // as stale-cache, NOT as nonexistent, so the row's other
+      // claims still flow through.
       await storage.upsertAccount({
         sub: 'github_42',
         provider: 'github',
@@ -445,7 +448,9 @@ describe('GithubSocialMethod', () => {
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
-      expect(await method.findAccount('github_42')).toBeNull();
+      const found = await method.findAccount('github_42');
+      expect(found).not.toBeNull();
+      expect(found?.emailVerified).toBe(false);
     });
 
     it('emailVerifiedCacheTtlMs=0 disables the staleness check entirely', async () => {

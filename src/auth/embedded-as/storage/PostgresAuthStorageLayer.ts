@@ -58,6 +58,8 @@ interface AuthAccountRow {
   rawProfile: unknown;
   passwordHash: string | null;
   lastAuthAt: number | null;
+  /** Round 5 / B1: roles claim source for extraTokenClaims. */
+  roles: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -113,6 +115,10 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
           rawProfile: row.rawProfile,
           passwordHash: row.passwordHash,
           lastAuthAt: row.lastAuthAt,
+          // Round 5 / B1: include roles in the conflict-update set or
+          // existing rows would keep their stale roles when an
+          // upsertAccount with new roles is issued.
+          roles: row.roles,
           updatedAt: row.updatedAt,
         },
       });
@@ -139,6 +145,23 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     return result.length > 0;
   }
 
+  async setAccountRoles(sub: string, roles: string[]): Promise<boolean> {
+    // Single-statement UPDATE: same atomicity story as
+    // updateAccountLastAuth — Postgres serialises against concurrent
+    // upsertAccount on the same row. The roles column has a NOT NULL
+    // default of '[]'::jsonb (migration 0010), so we always write a
+    // concrete array; mapper-level "empty array → undefined" stays in
+    // rowToStoredAccount.
+    const result = await withSystemContext(this.db, (tx) =>
+      tx
+        .update(authAccounts)
+        .set({ roles: [...roles], updatedAt: new Date() })
+        .where(eq(authAccounts.sub, sub))
+        .returning({ sub: authAccounts.sub }),
+    );
+    return result.length > 0;
+  }
+
   // ---- Bootstrap state (must-fix #22) ----
   //
   // Stored as a single row in auth_kv with model='AuthBootstrap', id='state'.
@@ -158,24 +181,50 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     adminSub: string,
     adminMethod: 'local-password' | 'magic-link' | 'github',
   ): Promise<void> {
-    // Read-modify-write within a single transaction so concurrent CLI
-    // runs (unlikely but possible) don't race past the
-    // already-completed-with-different-admin guard.
-    await withSystemContext(this.db, async () => {
+    // Round 5 / B2: single atomic UPSERT with a conflict-resolution
+    // WHERE clause. Earlier shape did read-then-write across separate
+    // withSystemContext calls (each opens its own transaction), so two
+    // concurrent CLI runs could both observe completed:false and both
+    // write — last-writer-wins for the bootstrap admin claim.
+    //
+    // The Drizzle `.onConflictDoUpdate({ where })` expression filters
+    // the conflict path at the SQL level: when adminSub matches the
+    // existing row, the UPDATE fires (idempotent re-run). When it
+    // differs, the WHERE blocks the UPDATE and Postgres returns zero
+    // rows from RETURNING — we read existing state for the error
+    // message, but the rejection is already atomic at the DB level.
+    const payload = {
+      completed: true,
+      adminSub,
+      adminMethod,
+      completedAt: Date.now(),
+    };
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.insert(authKv)
+        .values({
+          model: 'AuthBootstrap',
+          id: 'state',
+          payload: payload as AuthKvRow['payload'],
+          expiresAt: null,
+        })
+        .onConflictDoUpdate({
+          target: [authKv.model, authKv.id],
+          set: { payload: payload as AuthKvRow['payload'] },
+          where: sql`auth_kv.payload->>'adminSub' = ${adminSub}`,
+        })
+        .returning({ id: authKv.id }),
+    );
+    if (rows.length === 0) {
+      // The conflict-resolution WHERE filtered out our UPDATE — there's
+      // an existing row with a DIFFERENT adminSub. Read it back for the
+      // error message; the transfer was already rejected atomically by
+      // the SQL above.
       const existing = await this.getBootstrapState();
-      if (existing.completed && existing.adminSub !== adminSub) {
-        throw new Error(
-          `bootstrap already completed for admin '${existing.adminSub}'; ` +
-          `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
-        );
-      }
-      await this.genericSet('AuthBootstrap', 'state', {
-        completed: true,
-        adminSub,
-        adminMethod,
-        completedAt: Date.now(),
-      });
-    });
+      throw new Error(
+        `bootstrap already completed for admin '${existing.adminSub}'; ` +
+        `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
+      );
+    }
   }
 
   // ---- Audit (must-fix #21) ----
@@ -370,6 +419,9 @@ function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferI
     rawProfile: (account.rawProfile ?? null) as typeof authAccounts.$inferInsert['rawProfile'],
     passwordHash: account.credentials?.passwordHash ?? null,
     lastAuthAt: account.lastAuthAt ?? null,
+    // Round 5 / B1: roles must round-trip through Postgres. Empty array
+    // is the column default + the canonical "no roles" sentinel.
+    roles: account.roles ?? [],
     createdAt: new Date(account.createdAt),
     updatedAt: new Date(account.updatedAt),
   };
@@ -389,6 +441,13 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
   if (row.rawProfile !== null) account.rawProfile = row.rawProfile as Record<string, unknown>;
   if (row.passwordHash !== null) account.credentials = { passwordHash: row.passwordHash };
   if (row.lastAuthAt !== null) account.lastAuthAt = row.lastAuthAt;
+  // Round 5 / B1: emit roles only when non-empty so callers checking
+  // `account.roles?.length` get the same shape they would from the
+  // in-memory and filesystem backends (which preserve undefined when
+  // the field was never set).
+  if (Array.isArray(row.roles) && row.roles.length > 0) {
+    account.roles = row.roles as string[];
+  }
   return account;
 }
 

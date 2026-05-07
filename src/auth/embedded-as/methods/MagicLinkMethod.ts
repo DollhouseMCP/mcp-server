@@ -41,6 +41,7 @@ import { renderInteractionBindingError, verifyInteractionCookieMatches } from '.
 import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
+import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 
 const PROVIDER_NAME = 'magic-link';
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -293,11 +294,10 @@ export class MagicLinkMethod implements IAuthMethod {
 
     // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
     // pre-claimed this email's sub before the gate opened. If we match,
-    // grant admin role on the account.
-    const bootstrap = await this.options.storage.getBootstrapState();
-    const isBootstrapAdmin = bootstrap.completed
-      && bootstrap.adminSub === sub
-      && bootstrap.adminMethod === 'magic-link';
+    // grant admin role on the account. Round 5 / H5 — see
+    // bootstrapAdmin.ts for why setAccountRoles is split off from the
+    // upsertAccount payload.
+    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, 'magic-link');
 
     const existing = await this.options.storage.getAccount(sub);
     await this.options.storage.upsertAccount({
@@ -309,8 +309,13 @@ export class MagicLinkMethod implements IAuthMethod {
       displayName: existing?.displayName ?? email,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
+      // Preserve existing roles across the upsert; setAccountRoles
+      // below applies the admin-role write only on the bootstrap path.
+      ...(existing?.roles ? { roles: existing.roles } : {}),
     });
+    if (isBootstrapAdmin) {
+      await this.options.storage.setAccountRoles(sub, ['admin']);
+    }
 
     return {
       kind: 'ok',
