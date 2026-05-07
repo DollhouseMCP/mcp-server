@@ -8,7 +8,8 @@
     "dollhousemcp": "dist/index.js",
     "mcp-server": "dist/index.js",
     "dollhouse-console-token": "dist/cli/console-token.js",
-    "dollhouse-create-user": "dist/cli/create-user.js"
+    "dollhouse-create-user": "dist/cli/create-user.js",
+    "dollhouse-admin-bootstrap": "dist/cli/admin-bootstrap.js"
   },
   "scripts": {
     "prebuild": "npm run build:safety && node scripts/generate-version.js && node scripts/generate-hashes.mjs",

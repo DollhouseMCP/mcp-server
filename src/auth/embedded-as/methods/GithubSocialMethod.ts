@@ -292,6 +292,17 @@ export class GithubSocialMethod implements IAuthMethod {
       });
     }
 
+    // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
+    // pre-claimed this GitHub identity (`github_<id>`) before the gate
+    // opened. Admin role is set ONLY when this sub matches AND the
+    // pre-claim names github as the method — guards against a magic-
+    // link bootstrap admin getting accidentally promoted via a github
+    // login that happens to have the same numeric tail.
+    const bootstrap = await this.options.storage.getBootstrapState();
+    const isBootstrapAdmin = bootstrap.completed
+      && bootstrap.adminSub === identity.sub
+      && bootstrap.adminMethod === 'github';
+
     const now = Date.now();
     await this.options.storage.upsertAccount({
       sub: identity.sub,
@@ -303,6 +314,7 @@ export class GithubSocialMethod implements IAuthMethod {
       rawProfile: profile.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
     });
 
     return { kind: 'ok', interactionId: input.state, identity };

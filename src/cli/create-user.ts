@@ -32,6 +32,7 @@ import {
   InviteTokenStore,
   loadOrGenerateInviteSecret,
 } from '../auth/embedded-as/inviteTokens.js';
+import { createAuthStorage } from '../auth/embedded-as/storage/createAuthStorage.js';
 
 interface CreateUserOptions {
   username: string;
@@ -107,8 +108,36 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const store = new InviteTokenStore(secret);
+  // Connect to the same storage the AS uses so the bootstrap-state
+  // pre-claim (must-fix #22) is durable. The CLI is talking to the same
+  // backend the running AS reads from at startup; on next request, the
+  // gate sees state.completed === true.
+  let storage;
+  try {
+    storage = await createAuthStorage({ methods: ['local-password'] });
+  } catch (err) {
+    process.stderr.write(
+      `Failed to initialize auth storage: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(2);
+  }
+
   const sub = `local_${opts.username}`;
+
+  // Bootstrap pre-claim (must-fix #22 / spec L923): if the AS hasn't
+  // been bootstrapped yet, this first invite IS the admin invite. Mark
+  // the bootstrap state with this sub BEFORE issuing the token so a
+  // crash between the two doesn't leave the operator with an
+  // unbootstrap-able invite they can't replace.
+  const bootstrap = await storage.getBootstrapState();
+  if (!bootstrap.completed) {
+    await storage.markBootstrapComplete(sub, 'local-password');
+    process.stderr.write(
+      `[create-user] Bootstrap pre-claim recorded — '${opts.username}' will be granted admin role on first sign-in.\n`,
+    );
+  }
+
+  const store = new InviteTokenStore(secret, storage);
   const token = store.issue({
     sub,
     email: opts.email,

@@ -217,6 +217,18 @@ export class LocalAccountMethod implements IAuthMethod {
     const externalSub = sub.replace(/^local_/, '');
     const now = Date.now();
 
+    // Bootstrap admin claim (must-fix #22 / spec L923): if the
+    // bootstrap-state pre-claim names this sub as the admin, the
+    // account being created here gets `roles: ['admin']`. The pre-
+    // claim was written by the create-user CLI BEFORE this user
+    // received their invite link, so any other identity that somehow
+    // redeemed the URL without being the pre-claimed admin would NOT
+    // be granted admin (they'd just be a regular account).
+    const bootstrap = await this.options.storage.getBootstrapState();
+    const isBootstrapAdmin = bootstrap.completed
+      && bootstrap.adminSub === sub
+      && bootstrap.adminMethod === 'local-password';
+
     const existing = await this.options.storage.getAccount(sub);
     const account: StoredAccount = {
       sub,
@@ -230,6 +242,7 @@ export class LocalAccountMethod implements IAuthMethod {
       credentials: { passwordHash },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
     };
     await this.options.storage.upsertAccount(account);
 

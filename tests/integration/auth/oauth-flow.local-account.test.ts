@@ -161,6 +161,98 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     expect(stored?.rawProfile).toBeUndefined();
   }, 30_000);
 
+  it('admin claim: pre-claimed sub gets roles:["admin"] on JWT (must-fix #22)', async () => {
+    // Replace the auto-bootstrapped harness with one that skips
+    // auto-bootstrap so we can simulate the create-user CLI's pre-claim
+    // for a specific admin sub. Auto-bootstrap uses a placeholder sub
+    // that doesn't match what we issue here.
+    await harness.close();
+    storage = new InMemoryAuthStorageLayer();
+    method = buildLocalMethod(storage);
+    harness = await startASHarness({ methods: [method], storage, skipAutoBootstrap: true });
+
+    // Simulate the create-user CLI behavior: it pre-claims bootstrap with
+    // the to-be-admin sub BEFORE the invite URL is delivered. Then the
+    // admin redeems the invite, sets a password, completes OAuth — the
+    // access token they receive carries roles:['admin'].
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+
+    const inviteUrl = method.issueInvite('local_admin', 'admin@example.com', REDIRECT_URI);
+    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+
+    const authServer = await fetchAuthServerMetadata(harness.baseUrl);
+    const { interactionUrl, jar, verifier } = await startAuthorizeFlow({
+      baseUrl: harness.baseUrl,
+      authServerMetadata: authServer,
+      clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
+      resource: `${harness.publicBaseUrl}/mcp`,
+      scope: 'mcp',
+    });
+    const consentPost = await postConsentForm(interactionUrl, jar, {
+      action: 'set-password',
+      invite: inviteToken,
+      password: 'a-very-long-password',
+    });
+    expect([302, 303]).toContain(consentPost.status);
+    jar.ingest(consentPost.headers);
+
+    const code = await followToCodeRedirect({
+      baseUrl: harness.baseUrl,
+      start: consentPost.headers.get('location'),
+      jar, redirectUriPrefix: REDIRECT_URI,
+    });
+    const tokenResp = await fetch(authServer.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+        code, code_verifier: verifier,
+        resource: `${harness.publicBaseUrl}/mcp`,
+      }),
+    });
+    expect(tokenResp.status).toBe(200);
+    const tokenBody = await tokenResp.json() as { access_token: string };
+
+    // Validate via AS — claims should include admin role.
+    const validation = await harness.as.validate(tokenBody.access_token);
+    expect(validation.ok).toBe(true);
+    if (validation.ok) {
+      expect(validation.claims.sub).toBe('local_admin');
+      expect(validation.claims.roles).toEqual(['admin']);
+    }
+
+    // Decoded JWT also carries roles claim — what downstream services see.
+    const decoded = decodeJwt(tokenBody.access_token);
+    expect(decoded.roles).toEqual(['admin']);
+
+    // Account in storage has roles persisted (so future logins still
+    // get admin via extraTokenClaims, even after token rotation).
+    const stored = await storage.getAccount('local_admin');
+    expect(stored?.roles).toEqual(['admin']);
+  }, 30_000);
+
+  it('non-admin: invite redeemed by a different sub does NOT get admin role', async () => {
+    // Same harness rebuild as above — clean storage with skip-auto-bootstrap.
+    await harness.close();
+    storage = new InMemoryAuthStorageLayer();
+    method = buildLocalMethod(storage);
+    harness = await startASHarness({ methods: [method], storage, skipAutoBootstrap: true });
+
+    // Pre-claim adminSub = local_admin. Then issue an invite for a
+    // DIFFERENT sub (local_alice) and have her redeem it. Alice should
+    // NOT receive admin role even though bootstrap is complete —
+    // because adminSub doesn't match her sub.
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+
+    const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
+    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    await method.consumeInvite(inviteToken, 'a-very-long-password');
+
+    const stored = await storage.getAccount('local_alice');
+    expect(stored?.roles).toBeUndefined();
+  }, 30_000);
+
   it('login flow with existing account → access token', async () => {
     // First, redeem an invite to set up the account out-of-band.
     const inviteUrl = method.issueInvite('local_bob', 'bob@example.com', REDIRECT_URI);

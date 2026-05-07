@@ -291,6 +291,14 @@ export class MagicLinkMethod implements IAuthMethod {
     const email = consume.payload.email;
     const now = Date.now();
 
+    // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
+    // pre-claimed this email's sub before the gate opened. If we match,
+    // grant admin role on the account.
+    const bootstrap = await this.options.storage.getBootstrapState();
+    const isBootstrapAdmin = bootstrap.completed
+      && bootstrap.adminSub === sub
+      && bootstrap.adminMethod === 'magic-link';
+
     const existing = await this.options.storage.getAccount(sub);
     await this.options.storage.upsertAccount({
       sub,
@@ -301,6 +309,7 @@ export class MagicLinkMethod implements IAuthMethod {
       displayName: existing?.displayName ?? email,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
+      ...(isBootstrapAdmin ? { roles: ['admin'] } : {}),
     });
 
     return {
