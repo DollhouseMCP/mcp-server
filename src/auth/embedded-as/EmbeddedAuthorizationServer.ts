@@ -21,7 +21,7 @@
  * @module auth/embedded-as/EmbeddedAuthorizationServer
  */
 
-import express, { type Router, type Request, type Response } from 'express';
+import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
 import { jwtVerify, importJWK, SignJWT, errors as joseErrors, type JWK } from 'jose';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
@@ -266,6 +266,16 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       void this.handleAuthorizationServerMetadata(req, res);
     });
 
+    // Bootstrap gate (must-fix #22 / spec L923). When configured methods
+    // include a multi-user identity provider, refuse all auth-flow
+    // traffic until the operator has run the admin-bootstrap CLI.
+    // Public discovery routes (/.well-known/* above, /jwks below in the
+    // oidc-provider catch-all) bypass the gate so clients can still find
+    // the AS even when it's closed. Mounted AFTER metadata + BEFORE
+    // method routes / interaction / oidc-provider catch-all so it
+    // intercepts /authorize, /token, /interaction/*, /auth/*.
+    router.use(this.createBootstrapGate());
+
     // Each method owns its own standalone routes (callbacks, invite-redemption
     // pages, etc.) and registers them via contributeRoutes. Replaces the
     // earlier instanceof-checks-per-method dispatch — the AS no longer
@@ -311,6 +321,118 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     });
 
     return router;
+  }
+
+  /**
+   * Multi-user methods (must-fix #22). When ANY of these is configured,
+   * the bootstrap gate is active until the admin-bootstrap CLI runs.
+   * Single-user / external-IdP modes (trivial-consent, oidc-bridge) do
+   * not need a bootstrap step and skip the gate entirely.
+   */
+  private static readonly MULTI_USER_METHODS: ReadonlySet<string> = new Set([
+    'local-password',
+    'magic-link',
+    'github',
+  ]);
+
+  /**
+   * Paths that bypass the bootstrap gate. Discovery + key-distribution
+   * endpoints MUST stay reachable even when the AS is closed so that
+   * clients can find the AS and verify any tokens already in their
+   * possession. The list is path-prefix matched against `req.path`
+   * (route-level path, NOT originalUrl) — when this middleware runs
+   * inside the AS router, `req.path` is already mount-relative.
+   */
+  private static readonly GATE_BYPASS_PREFIXES: readonly string[] = ['/.well-known/', '/jwks'];
+
+  private isMultiUserMode(): boolean {
+    return this.methods.some((m) => EmbeddedAuthorizationServer.MULTI_USER_METHODS.has(m.id));
+  }
+
+  /**
+   * Render a method-specific actionable hint for the 503 body. The
+   * operator should be able to copy-paste the suggested command and
+   * have it Just Work.
+   */
+  private bootstrapHint(): string {
+    const ids = this.methods.map((m) => m.id);
+    const lines: string[] = [];
+    if (ids.includes('local-password')) {
+      lines.push(
+        "Run 'dollhousemcp create-user --username <name> --email <addr>' " +
+        "to issue the first invite (this also marks bootstrap complete).",
+      );
+    }
+    if (ids.includes('magic-link')) {
+      lines.push(
+        "Run 'dollhousemcp admin bootstrap --method magic-link --email <admin@example.com>' " +
+        "to claim the admin identity.",
+      );
+    }
+    if (ids.includes('github')) {
+      lines.push(
+        "Run 'dollhousemcp admin bootstrap --method github --github-username <gh-username>' " +
+        "to claim the admin identity.",
+      );
+    }
+    return lines.join(' OR ');
+  }
+
+  /**
+   * Build the bootstrap-gate Express middleware. Cached as a closure
+   * because (a) `createRouter()` may be called more than once in tests,
+   * (b) the cache flag below is per-middleware-instance.
+   */
+  private createBootstrapGate(): RequestHandler {
+    if (!this.isMultiUserMode()) {
+      // Trivial-consent / oidc-bridge: gate is unconditionally open.
+      return (_req, _res, next) => next();
+    }
+    const bypassPrefixes = EmbeddedAuthorizationServer.GATE_BYPASS_PREFIXES;
+    // Once bootstrap has been observed as complete, latch open. The
+    // markBootstrapComplete contract rejects admin transfer, so going
+    // back from completed→incomplete is impossible — caching is safe.
+    let cachedComplete = false;
+    return async (req, res, next) => {
+      if (cachedComplete) {
+        next();
+        return;
+      }
+      // Mount-relative path: `req.path` is path within this router's
+      // scope, regardless of where the router is mounted in the host app.
+      for (const prefix of bypassPrefixes) {
+        if (req.path === prefix || req.path.startsWith(prefix)) {
+          next();
+          return;
+        }
+      }
+      try {
+        const state = await this.storage.getBootstrapState();
+        if (state.completed) {
+          cachedComplete = true;
+          next();
+          return;
+        }
+        res.status(503).json({
+          error: 'bootstrap_required',
+          error_description:
+            'This authorization server has not been bootstrapped. ' +
+            'An operator must claim the first admin identity before any ' +
+            'authentication flow is accepted.',
+          next_step: this.bootstrapHint(),
+        });
+      } catch (err) {
+        logger.error('[EmbeddedAuthorizationServer] bootstrap-gate storage read failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        // Fail closed: if the gate can't read the state, refuse traffic
+        // rather than open the AS to potential pre-bootstrap auth flow.
+        res.status(503).json({
+          error: 'bootstrap_check_unavailable',
+          error_description: 'Unable to verify bootstrap state. Try again shortly.',
+        });
+      }
+    };
   }
 
   private async handleAuthorizationServerMetadata(_req: Request, res: Response): Promise<void> {
@@ -530,16 +652,26 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         const accountId = (token as { accountId?: string }).accountId;
         if (!accountId) return undefined;
         const account = await this.storage.getAccount(accountId);
-        if (!account?.lastAuthAt) return undefined;
-        // Defense in depth: refuse to emit auth_time if the row's sub
-        // doesn't match the token's accountId. A bug elsewhere that lets
-        // a token carry a foreign accountId would otherwise propagate
-        // someone else's auth_time onto it. Today this is unreachable
-        // (oidc-provider sets accountId from the Grant we minted) but
-        // making it a no-op rather than trusting the lookup keeps the
-        // claim honest if the surrounding code ever changes shape.
+        if (!account) return undefined;
+        // Defense in depth: refuse to emit role/auth_time claims if the
+        // row's sub doesn't match the token's accountId. A bug elsewhere
+        // that lets a token carry a foreign accountId would otherwise
+        // propagate someone else's claims onto it. Today this is
+        // unreachable (oidc-provider sets accountId from the Grant we
+        // minted) but making it a no-op rather than trusting the lookup
+        // keeps the claim honest if the surrounding code ever changes shape.
         if (account.sub !== accountId) return undefined;
-        return { auth_time: Math.floor(account.lastAuthAt / 1000) };
+        const extras: Record<string, unknown> = {};
+        if (account.lastAuthAt) {
+          extras.auth_time = Math.floor(account.lastAuthAt / 1000);
+        }
+        if (account.roles && account.roles.length > 0) {
+          // Roles are sourced from the durable account record set by the
+          // admin-bootstrap CLI (must-fix #22). Emitted on every token
+          // issued for this sub, so the role survives refresh-rotation.
+          extras.roles = account.roles;
+        }
+        return Object.keys(extras).length > 0 ? extras : undefined;
       },
       // Only OIDC standard scopes here. The `mcp` resource scope is declared
       // via resourceIndicators.getResourceServerInfo below — keeping it out of
@@ -678,6 +810,9 @@ function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
     email: typeof payload.email === 'string' ? payload.email : undefined,
     tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
     scopes: typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : undefined,
+    roles: Array.isArray(payload.roles)
+      ? payload.roles.filter((r): r is string => typeof r === 'string')
+      : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined,
   };
 }

@@ -79,6 +79,9 @@ export class OidcAuthProvider implements IAuthProvider {
         email: extractStringClaim(payload, 'email'),
         tenantId: extractStringClaim(payload, 'tenant_id', 'org_id') ?? null,
         scopes,
+        roles: Array.isArray(payload.roles)
+          ? payload.roles.filter((r): r is string => typeof r === 'string')
+          : undefined,
         exp: payload.exp,
       };
 

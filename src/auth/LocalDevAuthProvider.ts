@@ -77,6 +77,9 @@ export class LocalDevAuthProvider implements IAuthProvider {
         email: typeof payload.email === 'string' ? payload.email : undefined,
         tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
         scopes,
+        roles: Array.isArray(payload.roles)
+          ? payload.roles.filter((r): r is string => typeof r === 'string')
+          : undefined,
         exp: payload.exp,
       };
 

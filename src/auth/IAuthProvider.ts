@@ -26,8 +26,17 @@ export interface AuthClaims {
   email?: string;
   /** Tenant ID for multi-tenant deployments. null for single-tenant. */
   tenantId?: string | null;
-  /** Scopes or roles granted by the token. */
+  /** OAuth scopes granted by the token (e.g. `['mcp', 'offline_access']`). */
   scopes?: string[];
+  /**
+   * Authorization roles assigned to the subject. Sourced from
+   * `StoredAccount.roles` and emitted by `extraTokenClaims` as the JWT
+   * `roles` claim. Distinct from `scopes` — scopes describe what the
+   * token CAN do (OAuth permission), roles describe what the user IS
+   * (org-level role assignment). The bootstrap CLI sets `['admin']` on
+   * the pre-claimed admin identity (must-fix #22 / spec L923).
+   */
+  roles?: string[];
   /** Token expiration as Unix epoch seconds, if applicable. */
   exp?: number;
 }
