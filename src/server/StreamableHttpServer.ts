@@ -39,6 +39,13 @@ export interface StreamableHttpRuntimeOptions {
   oauthProvider?: {
     setPublicBaseUrl?: (publicBaseUrl: string) => void;
     createRouter: () => import('express').Router;
+    /**
+     * Round 5 / H3: optional readiness predicate. /readyz returns 503
+     * when this resolves to false (multi-user mode + bootstrap
+     * incomplete) so Kubernetes / load balancers stop routing traffic
+     * to a pod that can't yet serve auth flows.
+     */
+    isReadyForTraffic?: () => Promise<boolean>;
   };
   /**
    * TLS configuration for the HTTP transport. When enabled, the server binds HTTPS.
@@ -234,6 +241,62 @@ async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<vo
   });
 }
 
+/**
+ * Round 5 / H2 + H4: hosted multi-tenant safety guards.
+ *
+ *   H2: refuse to start when bind is non-loopback AND auth is
+ *       disabled AND multi-user methods are configured. The previous
+ *       shape silently shipped an unauthenticated MCP endpoint when
+ *       the operator set up the embedded AS but forgot to flip
+ *       DOLLHOUSE_AUTH_ENABLED=true.
+ *
+ *   H4: refuse to start when bind is non-loopback AND multi-user
+ *       methods are configured AND DOLLHOUSE_TRUSTED_PROXIES is unset.
+ *       Behind any reverse proxy (Cloudflare Tunnel, nginx, Cloud
+ *       Run), `req.ip` collapses to the proxy's IP and per-IP rate
+ *       limits become global — brute-force protection that doesn't
+ *       protect.
+ *
+ * Both checks fire ONLY when multi-user methods are configured;
+ * solo-localhost trivial-consent deployments are unaffected.
+ *
+ * Exported so tests can exercise the guard logic without standing up
+ * an Express server.
+ */
+export async function assertHostedDeploymentSafety(config: {
+  host: string;
+  methods: readonly string[] | undefined;
+  authEnabled: boolean;
+  trustedProxies: readonly string[] | undefined;
+}): Promise<void> {
+  const { isLoopbackHost } = await import('../auth/oauth/url.js');
+  const multiUserMethods = new Set(['github', 'local-password', 'magic-link']);
+  const hasMultiUserMethod = Array.isArray(config.methods)
+    && config.methods.some((m) => multiUserMethods.has(m));
+  if (!hasMultiUserMethod) return;
+  if (isLoopbackHost(config.host)) return;
+
+  if (!config.authEnabled) {
+    throw new Error(
+      `[StreamableHttpServer] Refusing to start: DOLLHOUSE_AUTH_METHODS configures ` +
+      `a multi-user identity method (${config.methods!.join(',')}) on a non-loopback ` +
+      `bind '${config.host}', but DOLLHOUSE_AUTH_ENABLED is false. The MCP endpoint ` +
+      `would accept unauthenticated traffic. Set DOLLHOUSE_AUTH_ENABLED=true (and ` +
+      `ensure the bootstrap-admin CLI has been run) before exposing this deployment.`,
+    );
+  }
+  if (!config.trustedProxies || config.trustedProxies.length === 0) {
+    throw new Error(
+      `[StreamableHttpServer] Refusing to start: DOLLHOUSE_AUTH_METHODS configures ` +
+      `a multi-user identity method on a non-loopback bind '${config.host}', but ` +
+      `DOLLHOUSE_TRUSTED_PROXIES is unset. Per-IP rate limits would collapse to ` +
+      `the proxy's IP and brute-force protection would be ineffective. Set ` +
+      `DOLLHOUSE_TRUSTED_PROXIES to a comma-separated CIDR list (or 'loopback' for ` +
+      `loopback+linklocal+uniquelocal) describing trusted upstream proxies.`,
+    );
+  }
+}
+
 export async function createStreamableHttpRuntime(
   createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: import('../auth/IAuthProvider.js').AuthClaims) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
@@ -254,6 +317,22 @@ export async function createStreamableHttpRuntime(
     assertSafePublicBaseUrl(publicBaseUrl);
   }
   const app = createMcpExpressApp({ host, allowedHosts });
+
+  // Round 5 / H2 + H4: hosted multi-tenant safety guards.
+  // See assertHostedDeploymentSafety for the full rationale; the
+  // function is exported so unit tests can exercise the guard
+  // without standing up an Express server.
+  await assertHostedDeploymentSafety({
+    host,
+    methods: env.DOLLHOUSE_AUTH_METHODS,
+    authEnabled: env.DOLLHOUSE_AUTH_ENABLED,
+    trustedProxies: env.DOLLHOUSE_TRUSTED_PROXIES,
+  });
+
+  // Wire trust proxy from env. Default 'loopback' (Express built-in)
+  // so plain solo deployments behind no proxy still see the right
+  // req.ip. Hosted deployments override via DOLLHOUSE_TRUSTED_PROXIES.
+  app.set('trust proxy', env.DOLLHOUSE_TRUSTED_PROXIES ?? ['loopback']);
   const sessions = new Map<string, ActiveSessionRecord>();
   const rateLimits = new Map<string, RateLimitRecord>();
   const pooledSessions: PreparedSessionRecord[] = [];
@@ -518,15 +597,39 @@ export async function createStreamableHttpRuntime(
     });
   });
 
-  app.get('/readyz', (_req, res) => {
-    res.status(200).json({
-      ready: true,
-      transport: 'streamable-http',
-      activeSessions: sessions.size,
-      pooledSessions: pooledSessions.length,
-      sessionTelemetry,
-      memory: getProcessMemorySnapshot(),
-    });
+  app.get('/readyz', (_req, res, next) => {
+    void (async () => {
+      try {
+        // Round 5 / H3: when the embedded AS is in multi-user mode and
+        // bootstrap is incomplete, /authorize returns 503 from the
+        // bootstrap gate. Without consulting bootstrap state in
+        // /readyz, Kubernetes routes traffic to the pod and operators
+        // see a flood of 503s with no probe signal that something
+        // requires action. Fail-closed shape: bootstrap-incomplete →
+        // 503 with reason='bootstrap_required'.
+        if (options.oauthProvider?.isReadyForTraffic) {
+          const ready = await options.oauthProvider.isReadyForTraffic();
+          if (!ready) {
+            res.status(503).json({
+              ready: false,
+              reason: 'bootstrap_required',
+              transport: 'streamable-http',
+            });
+            return;
+          }
+        }
+        res.status(200).json({
+          ready: true,
+          transport: 'streamable-http',
+          activeSessions: sessions.size,
+          pooledSessions: pooledSessions.length,
+          sessionTelemetry,
+          memory: getProcessMemorySnapshot(),
+        });
+      } catch (err) {
+        next(err);
+      }
+    })();
   });
 
   app.get('/version', (_req, res) => {

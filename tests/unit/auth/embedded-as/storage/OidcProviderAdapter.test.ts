@@ -25,6 +25,8 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import {
   OidcProviderAdapter,
   DEFAULT_REFRESH_ROTATION_GRACE_MS,
+  hashRotationAttribute,
+  withRotationRequestContext,
 } from '../../../../../src/auth/embedded-as/storage/OidcProviderAdapter.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
@@ -142,5 +144,118 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(a?.consumed).toBeUndefined();
     expect(b?.consumed).toBeUndefined();
     expect(c?.consumed).toBeUndefined();
+  });
+
+  // ---- Round 5 / H1: opt-in IP/UA-bound grace window ----
+
+  describe('refreshRotationCheckIpUa: true', () => {
+    const ipA = hashRotationAttribute('203.0.113.1');
+    const uaA = hashRotationAttribute('agent-A');
+    const ipB = hashRotationAttribute('203.0.113.99');
+    const uaB = hashRotationAttribute('agent-B');
+
+    it('upsert stamps ipHash + uaHash from the request context onto the payload', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      await withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, async () => {
+        await adapter.upsert('rt-h1-stamp', { grantId: 'g-1', sub: 'alice' });
+      });
+      // Read the underlying record to confirm the stamp landed.
+      const stored = await storage.genericGet('RefreshToken', 'rt-h1-stamp') as Record<string, unknown>;
+      expect(stored.ipHash).toBe(ipA);
+      expect(stored.uaHash).toBe(uaA);
+    });
+
+    it('grace fires when consume + find share IP/UA', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      await withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, async () => {
+        await adapter.upsert('rt-h1-same', { grantId: 'g-1', sub: 'alice' });
+        await adapter.consume('rt-h1-same');
+        const found = await adapter.find('rt-h1-same');
+        expect(found?.consumed).toBeUndefined();
+      });
+    });
+
+    it('grace does NOT fire when find arrives from a different IP', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      await withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, async () => {
+        await adapter.upsert('rt-h1-diff', { grantId: 'g-1', sub: 'alice' });
+        await adapter.consume('rt-h1-diff');
+      });
+      // Now find from a DIFFERENT IP — simulates a stolen token used
+      // from an unrelated network within the grace window.
+      const found = await withRotationRequestContext(
+        { ipHash: ipB, uaHash: uaA },
+        async () => adapter.find('rt-h1-diff'),
+      );
+      expect(typeof found?.consumed).toBe('number'); // grace skipped → reuse-detection arms
+    });
+
+    it('grace does NOT fire when find arrives from a different UA', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      await withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, async () => {
+        await adapter.upsert('rt-h1-ua', { grantId: 'g-1', sub: 'alice' });
+        await adapter.consume('rt-h1-ua');
+      });
+      const found = await withRotationRequestContext(
+        { ipHash: ipA, uaHash: uaB },
+        async () => adapter.find('rt-h1-ua'),
+      );
+      expect(typeof found?.consumed).toBe('number');
+    });
+
+    it('legacy records without ipHash get the time-only grace (fail-open)', async () => {
+      // Records that pre-date this option must continue to work — the
+      // option turning on after deployment shouldn't lock everyone out.
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      // Upsert WITHOUT a context — no ipHash recorded.
+      await adapter.upsert('rt-h1-legacy', { grantId: 'g-1', sub: 'alice' });
+      await adapter.consume('rt-h1-legacy');
+      // Find inside a context with arbitrary hashes — the legacy record
+      // has no hashes to compare against, so time-only grace applies.
+      const found = await withRotationRequestContext(
+        { ipHash: ipA, uaHash: uaA },
+        async () => adapter.find('rt-h1-legacy'),
+      );
+      expect(found?.consumed).toBeUndefined();
+    });
+  });
+
+  describe('refreshRotationCheckIpUa: false (default)', () => {
+    it('grace fires regardless of IP/UA mismatch', async () => {
+      // Default behavior — industry norm. Time-only window. Stored
+      // hashes (if any) are ignored. This locks the contract that the
+      // option is genuinely opt-in.
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        // refreshRotationCheckIpUa intentionally omitted.
+      });
+      const ip1 = hashRotationAttribute('1.1.1.1');
+      const ip2 = hashRotationAttribute('2.2.2.2');
+      const ua = hashRotationAttribute('test-agent');
+      await withRotationRequestContext({ ipHash: ip1, uaHash: ua }, async () => {
+        await adapter.upsert('rt-default', { grantId: 'g-1', sub: 'alice' });
+        await adapter.consume('rt-default');
+      });
+      const found = await withRotationRequestContext(
+        { ipHash: ip2, uaHash: ua }, // different IP
+        async () => adapter.find('rt-default'),
+      );
+      expect(found?.consumed).toBeUndefined(); // grace still fires
+    });
   });
 });

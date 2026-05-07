@@ -70,7 +70,20 @@ async function main(): Promise<void> {
   const program = new Command();
   program
     .name('dollhouse-create-user')
-    .description('Issue a one-time invite URL for a new local account.')
+    .description(
+      'Issue a one-time invite URL for a new local account.\n\n' +
+      'IMPORTANT — implicit admin bootstrap:\n' +
+      '  When the embedded AS is in multi-user mode and bootstrap has not yet\n' +
+      '  been completed, the FIRST invocation of this command auto-claims the\n' +
+      '  invited user as the admin (must-fix #22 / spec L923). This is by\n' +
+      '  design — the operator running the CLI from the AS host is by\n' +
+      '  definition trusted, so the first invite IS the admin invite. Once\n' +
+      '  bootstrap is complete, subsequent invites issue normal user accounts.\n\n' +
+      'Example — admin first invite:\n' +
+      '  dollhouse-create-user --username admin --email admin@example.com\n\n' +
+      'Example — regular user invite (after admin bootstrap):\n' +
+      '  dollhouse-create-user --username alice --email alice@example.com',
+    )
     .requiredOption('--username <username>', 'username (alphanumeric + _ -, max 64)')
     .requiredOption('--email <email>', 'user email address')
     .option('--base-url <url>', 'public base URL of the running AS (default: env)')

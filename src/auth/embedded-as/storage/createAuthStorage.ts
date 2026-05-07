@@ -131,6 +131,17 @@ export async function createAuthStorage(
       // for filesystem/memory deployments.
       const { PostgresAuthStorageLayer } = await import('./PostgresAuthStorageLayer.js');
       logger.info('[AuthStorage] backend=postgres');
+      // Round 5 / M10: operators selecting postgres usually do so with
+      // HA intent (multi-replica behind a load balancer). The
+      // rate-limit Map in LocalLoginRateLimiter is still process-local,
+      // so brute-force protection is per-replica, not per-cluster. Surface
+      // this as a startup warning so deployments don't silently lose
+      // protection. Distributed rate-limit is a §8.2 follow-up.
+      logger.warn(
+        '[AuthStorage] Postgres backend selected, but rate-limit state is still ' +
+        'process-local. Brute-force protection is per-replica, not per-cluster. A ' +
+        'distributed rate-limit backing store is a §8.2 follow-up.',
+      );
       return new PostgresAuthStorageLayer({ db: options.database });
     }
   }

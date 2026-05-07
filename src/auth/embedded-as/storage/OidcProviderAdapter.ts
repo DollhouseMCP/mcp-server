@@ -31,6 +31,8 @@
  * @module auth/embedded-as/storage/OidcProviderAdapter
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createHash } from 'node:crypto';
 import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
 
 /**
@@ -46,6 +48,51 @@ export const DEFAULT_REFRESH_ROTATION_GRACE_MS = 30_000;
 /** Models that get the rotation grace treatment. RefreshToken only. */
 const GRACE_ELIGIBLE_MODELS = new Set(['RefreshToken']);
 
+/**
+ * Per-request context for the optional IP/UA-bound rotation grace
+ * (Round 5 / H1). Mounted by EmbeddedAuthorizationServer's request
+ * wrapper around oidc-provider's catch-all so the adapter — which sees
+ * find/upsert calls but not the request — can still consult the
+ * originating ip + ua.
+ *
+ * Hashes are stored, not raw values: the payload lives in the same
+ * generic K/V the audit log reads, so plaintext IP/UA would widen the
+ * blast radius of an audit dump. SHA-256 is plenty here — the goal is
+ * "same client?" comparison, not authentication.
+ */
+export interface RotationRequestContext {
+  ipHash: string;
+  uaHash: string;
+}
+
+const requestContextStore = new AsyncLocalStorage<RotationRequestContext>();
+
+/**
+ * Hash a string with SHA-256 hex. Exported for tests + the
+ * EmbeddedAuthorizationServer middleware that builds the context.
+ */
+export function hashRotationAttribute(value: string | undefined | null): string {
+  return createHash('sha256').update(value ?? '').digest('hex');
+}
+
+/**
+ * Run `fn` inside an AsyncLocalStorage context carrying the request's
+ * IP/UA hashes. Used by EmbeddedAuthorizationServer to wrap the
+ * oidc-provider callback so refresh-token find/upsert calls during
+ * that request can consult the context.
+ */
+export function withRotationRequestContext<T>(
+  context: RotationRequestContext,
+  fn: () => T,
+): T {
+  return requestContextStore.run(context, fn);
+}
+
+/** Read the current request context, if any. Returns undefined outside a wrapped call. */
+export function currentRotationRequestContext(): RotationRequestContext | undefined {
+  return requestContextStore.getStore();
+}
+
 export interface OidcProviderAdapterOptions {
   /**
    * Window during which a consumed RefreshToken's `consumed` marker is
@@ -55,6 +102,29 @@ export interface OidcProviderAdapterOptions {
    * Default: 30,000 ms.
    */
   refreshRotationGraceMs?: number;
+
+  /**
+   * Round 5 / H1: opt-in IP/UA gating during the rotation grace window.
+   *
+   * When `false` (default), the grace window applies on time alone —
+   * matching Auth0, better-auth, and Apideck industry norm. NAT,
+   * CGNAT, mobile carrier transitions, and corporate proxies make
+   * per-IP gating unreliable for legitimate users; the structural
+   * answer to sender-binding is DPoP (RFC 9449), planned for §8.2.
+   *
+   * When `true`, the grace window fires only if the new request's
+   * IP+UA hashes match the hashes captured when the original refresh
+   * token was issued. Mismatch = no grace = reuse-detection fires
+   * (revokes the family). For deployments that want spec-strict
+   * behavior at the cost of usability for users behind shifting
+   * proxies/CGNAT.
+   *
+   * Requires `EmbeddedAuthorizationServer` to wrap oidc-provider
+   * requests in `withRotationRequestContext` (it does this when this
+   * option is true). Without the context, the option silently
+   * degrades to the default time-only grace.
+   */
+  refreshRotationCheckIpUa?: boolean;
 }
 
 /**
@@ -65,6 +135,7 @@ export interface OidcProviderAdapterOptions {
  */
 export class OidcProviderAdapter {
   private readonly graceMs: number;
+  private readonly checkIpUa: boolean;
 
   constructor(
     private readonly model: string,
@@ -72,9 +143,29 @@ export class OidcProviderAdapter {
     options: OidcProviderAdapterOptions = {},
   ) {
     this.graceMs = options.refreshRotationGraceMs ?? DEFAULT_REFRESH_ROTATION_GRACE_MS;
+    this.checkIpUa = options.refreshRotationCheckIpUa ?? false;
   }
 
   async upsert(id: string, payload: Record<string, unknown>, expiresIn?: number): Promise<void> {
+    // Round 5 / H1: when the operator opts into IP/UA-bound grace, stamp
+    // the originating request's hashes onto the RefreshToken payload at
+    // issue time. find() compares against the current request's hashes
+    // to decide whether the grace window applies on consume-replay.
+    //
+    // Only stamp on initial issue (no `ipHash` already on the payload)
+    // so a rotated successor records the rotating client's hashes
+    // rather than the previous token's.
+    if (
+      this.checkIpUa
+      && GRACE_ELIGIBLE_MODELS.has(this.model)
+      && payload.ipHash === undefined
+      && payload.uaHash === undefined
+    ) {
+      const ctx = currentRotationRequestContext();
+      if (ctx) {
+        payload = { ...payload, ipHash: ctx.ipHash, uaHash: ctx.uaHash };
+      }
+    }
     await this.storage.genericSet(this.model, id, payload, expiresIn);
   }
 
@@ -88,17 +179,46 @@ export class OidcProviderAdapter {
     // issues new rotated tokens instead of revoking the family. After
     // the window expires, the marker becomes visible and reuse-detection
     // fires normally on the next find().
+    //
+    // Round 5 / H1: when refreshRotationCheckIpUa is true AND the
+    // payload carries ipHash/uaHash from issue time, the grace window
+    // additionally requires the current request's hashes to match.
+    // Mismatch = no grace = reuse-detection fires. When the option is
+    // false (default), the time-only check matches Auth0 / better-auth
+    // / industry norm and avoids false positives from NAT/CGNAT.
     if (
       this.graceMs > 0
       && GRACE_ELIGIBLE_MODELS.has(this.model)
       && typeof record.consumed === 'number'
       && Date.now() - record.consumed < this.graceMs
+      && this.ipUaGraceAllowed(record)
     ) {
       const { consumed: _consumed, ...withoutConsumed } = record;
       return withoutConsumed;
     }
 
     return record;
+  }
+
+  /**
+   * Decide whether the IP/UA portion of the grace check passes for
+   * `record`. Returns true when:
+   *   - the option is off (default), OR
+   *   - the option is on but the record never recorded ipHash/uaHash
+   *     (legacy data — fail open; the time-only window still applies), OR
+   *   - the option is on AND ipHash AND uaHash match the current
+   *     request context.
+   * Returns false only when the option is on, the record carries
+   * hashes, and they don't match.
+   */
+  private ipUaGraceAllowed(record: Record<string, unknown>): boolean {
+    if (!this.checkIpUa) return true;
+    const recordIp = typeof record.ipHash === 'string' ? record.ipHash : undefined;
+    const recordUa = typeof record.uaHash === 'string' ? record.uaHash : undefined;
+    if (!recordIp && !recordUa) return true; // legacy / no context at issue
+    const ctx = currentRotationRequestContext();
+    if (!ctx) return true; // no current context — degrade to time-only
+    return recordIp === ctx.ipHash && recordUa === ctx.uaHash;
   }
 
   async consume(id: string): Promise<void> {

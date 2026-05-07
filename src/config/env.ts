@@ -336,6 +336,27 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB: z.string().optional(),
 
   /**
+   * Round 5 / M4: GitHub OAuth client ID for the embedded AS GitHub
+   * social method. Validated at startup so a misspelled name surfaces
+   * during config check rather than the first /authorize attempt. The
+   * matching secret stays out of the schema by design — secrets are
+   * read at point-of-use to keep them out of debug dumps.
+   */
+  DOLLHOUSE_GITHUB_CLIENT_ID: z.string().optional(),
+
+  /**
+   * Round 5 / H4: trusted-proxy CIDR list for `app.set('trust proxy')`.
+   * Multiple comma-separated values; each is a CIDR or the keyword
+   * `loopback` (expands to loopback + linklocal + uniquelocal). When
+   * unset, the default is `loopback`. Hosted multi-tenant deployments
+   * MUST set this explicitly — the AuthProviderFactory startup-fail
+   * guard refuses to run multi-user methods behind a non-loopback
+   * bind without it (per-IP rate-limit collapse hazard).
+   */
+  DOLLHOUSE_TRUSTED_PROXIES: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
+
+  /**
    * Issue #1780: Optional override for the console token file location.
    * When unset, `ConsoleTokenStore` falls back to its built-in default
    * under `~/.dollhouse/run/`. Mainly useful for tests and for enterprise

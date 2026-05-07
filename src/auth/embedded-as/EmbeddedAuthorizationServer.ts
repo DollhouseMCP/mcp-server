@@ -50,7 +50,12 @@ import {
   checkAndPersistModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
-import { createOidcAdapterFactory } from './storage/OidcProviderAdapter.js';
+import {
+  createOidcAdapterFactory,
+  hashRotationAttribute,
+  withRotationRequestContext,
+  type RotationRequestContext,
+} from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 import { assertHasRole } from '../assertHasRole.js';
 
@@ -84,6 +89,17 @@ export interface EmbeddedAuthorizationServerOptions {
    * Set to 0 to disable (strict consume-then-detect behavior).
    */
   refreshRotationGraceMs?: number;
+
+  /**
+   * Round 5 / H1: opt-in IP/UA gating for the rotation grace window.
+   * When `true`, the grace window applies only when the rotating
+   * request's IP+UA hashes match what was captured at initial token
+   * issue. Mismatch = no grace = reuse-detection fires. Default:
+   * `false` (industry norm — NAT/CGNAT/proxy realities make per-IP
+   * gating unreliable for legitimate users; DPoP in §8.2 is the
+   * structural sender-binding answer).
+   */
+  refreshRotationCheckIpUa?: boolean;
 }
 
 interface InitializedState {
@@ -105,6 +121,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly mcpPath: string;
   private readonly keyFilePath: string;
   private readonly refreshRotationGraceMs: number | undefined;
+  private readonly refreshRotationCheckIpUa: boolean;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -135,6 +152,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.resource = joinUrl(this.publicBaseUrl, this.mcpPath);
     this.keyFilePath = options.keyFilePath ?? defaultKeyFilePath();
     this.refreshRotationGraceMs = options.refreshRotationGraceMs;
+    this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -352,7 +370,24 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       void (async () => {
         try {
           const state = await this.ensureInitialized();
-          state.provider.callback()(req, res);
+          // Round 5 / H1: when IP/UA-bound rotation grace is opted in,
+          // wrap the oidc-provider callback in an AsyncLocalStorage
+          // context carrying the request's IP+UA hashes. The
+          // OidcProviderAdapter reads the context at upsert (to stamp
+          // hashes onto a freshly-issued RefreshToken) and at find (to
+          // gate the grace window on hash match). Without the wrap,
+          // the adapter falls back to time-only grace.
+          if (this.refreshRotationCheckIpUa) {
+            const context: RotationRequestContext = {
+              ipHash: hashRotationAttribute(req.ip),
+              uaHash: hashRotationAttribute(req.headers['user-agent']),
+            };
+            withRotationRequestContext(context, () => {
+              state.provider.callback()(req, res);
+            });
+          } else {
+            state.provider.callback()(req, res);
+          }
         } catch (err) {
           next(err);
         }
@@ -386,6 +421,26 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
   private isMultiUserMode(): boolean {
     return this.methods.some((m) => EmbeddedAuthorizationServer.MULTI_USER_METHODS.has(m.id));
+  }
+
+  /**
+   * Round 5 / H3: public predicate so /readyz can refuse traffic
+   * pre-bootstrap. Returns true when:
+   *   - the AS is not in multi-user mode (no bootstrap concept), OR
+   *   - the AS is in multi-user mode AND bootstrap has been completed.
+   * Returns false when multi-user mode is active and bootstrap is
+   * incomplete, so the readiness probe stays red until the operator
+   * runs the bootstrap CLI. Errors fail closed (returns false) so a
+   * storage outage doesn't pretend the AS is ready.
+   */
+  async isReadyForTraffic(): Promise<boolean> {
+    if (!this.isMultiUserMode()) return true;
+    try {
+      const state = await this.storage.getBootstrapState();
+      return state.completed === true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -666,6 +721,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
     const adapterFactory = createOidcAdapterFactory(this.storage, {
       refreshRotationGraceMs: this.refreshRotationGraceMs,
+      refreshRotationCheckIpUa: this.refreshRotationCheckIpUa,
     });
     const methods = this.methods;
 

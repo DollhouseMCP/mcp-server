@@ -1047,6 +1047,7 @@ async function startStreamableHttpServer(
 function isEmbeddedOAuthProvider(value: unknown): value is {
   setPublicBaseUrl?: (publicBaseUrl: string) => void;
   createRouter: () => import('express').Router;
+  isReadyForTraffic?: () => Promise<boolean>;
 } {
   return typeof value === 'object'
     && value !== null

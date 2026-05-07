@@ -52,14 +52,30 @@ interface GithubUser {
  */
 async function resolveGithubUserId(username: string): Promise<number> {
   const url = `https://api.github.com/users/${encodeURIComponent(username)}`;
+  // Round 5 / M6: bound the network call so a flaky link doesn't hang
+  // the operator's CLI indefinitely. Honour GITHUB_TOKEN if present —
+  // bumps the unauthenticated 60/hr rate limit to 5000/hr and avoids
+  // the noisy 403 path during bursty bootstrap workflows.
+  const headers: Record<string, string> = {
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  const githubToken = process.env.GITHUB_TOKEN?.trim();
+  if (githubToken) {
+    headers.Authorization = `Bearer ${githubToken}`;
+  }
   const resp = await fetch(url, {
-    headers: {
-      Accept: 'application/vnd.github+json',
-      'X-GitHub-Api-Version': '2022-11-28',
-    },
+    headers,
+    signal: AbortSignal.timeout(10_000),
   });
   if (resp.status === 404) {
     throw new Error(`GitHub user '${username}' not found.`);
+  }
+  if (resp.status === 403 || resp.status === 429) {
+    throw new Error(
+      `GitHub API rate-limited (${resp.status}). If you have the numeric GitHub user ID, ` +
+      `pass --github-id <id> to skip this lookup. Or set GITHUB_TOKEN for a higher rate limit.`,
+    );
   }
   if (!resp.ok) {
     throw new Error(

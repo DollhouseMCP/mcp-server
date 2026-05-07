@@ -303,7 +303,10 @@ async function buildAuthMethod(
   switch (id) {
     case 'github': {
       const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
-      const clientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      // Round 5 / M4: read both via the validated env snapshot so a
+      // misspelled DOLLHOUSE_GITHUB_CLIENT_ID surfaces during config
+      // load rather than at first /authorize hit.
+      const clientId = env.DOLLHOUSE_GITHUB_CLIENT_ID;
       const clientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
       if (!clientId || !clientSecret) {
         throw new Error(
