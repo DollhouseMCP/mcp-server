@@ -12,4 +12,4 @@ export { LocalDevAuthProvider } from './LocalDevAuthProvider.js';
 export { EmbeddedAuthorizationServer } from './embedded-as/EmbeddedAuthorizationServer.js';
 export { OidcAuthProvider } from './OidcAuthProvider.js';
 export { createAuthProvider, type AuthConfig } from './AuthProviderFactory.js';
-export { createUnifiedAuthMiddleware, type AuthMiddlewareOptions } from './authMiddleware.js';
+export { createUnifiedAuthMiddleware, withJwtFallthrough, type AuthMiddlewareOptions } from './authMiddleware.js';

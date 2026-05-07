@@ -32,6 +32,7 @@ import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
 import type { ConsoleTokenStore } from './console/consoleToken.js';
 import { createAuthMiddleware } from './middleware/authMiddleware.js';
+import { withJwtFallthrough } from '../auth/authMiddleware.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 
 /**
@@ -279,9 +280,18 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // 2. Console token auth (DOLLHOUSE_WEB_AUTH_ENABLED=true) — validates shared hex tokens
   // Both can coexist: JWT tokens start with "eyJ", console tokens are 64 hex chars.
   // When neither flag is set, the middleware is a pass-through.
+  //
+  // The unified middleware is wrapped with `withJwtFallthrough` so that
+  // requests with no Auth header OR a non-JWT-shaped Bearer (a 64-hex
+  // console token) call next() instead of 401-ing immediately. Without
+  // the wrapper, the unified middleware would reject the legitimate
+  // console token the browser injects per `consoleAuth.js:67` before
+  // the consoleAuthMiddleware ever ran. Forged JWTs (three-segment but
+  // wrong sig) still go through the strict validator and 401 — the
+  // wrapper only short-circuits on tokens that aren't JWT-shaped.
   if (options.unifiedAuthMiddleware) {
-    app.use('/api', options.unifiedAuthMiddleware);
-    logger.info('[WebUI] Unified JWT auth middleware mounted on /api');
+    app.use('/api', withJwtFallthrough(options.unifiedAuthMiddleware));
+    logger.info('[WebUI] Unified JWT auth middleware mounted on /api (with non-JWT fallthrough)');
   }
   if (options.tokenStore) {
     // When unified auth is active, console token auth serves as fallback
