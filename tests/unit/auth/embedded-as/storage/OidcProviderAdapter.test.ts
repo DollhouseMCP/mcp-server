@@ -235,6 +235,78 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     });
   });
 
+  describe('refreshRotationCheckIpUa: true — production shape', () => {
+    // The production code wraps the oidc-provider catch-all in a
+    // synchronous-callback shape: `withRotationRequestContext(ctx, () =>
+    // provider.callback()(req, res))`. provider.callback() returns
+    // synchronously and kicks off async work that the caller does NOT
+    // await. Round 5 reviewer flagged this as potentially losing the
+    // ALS context across the sync→async boundary (the unit tests above
+    // all use `async () => await adapter.upsert(...)` which keeps the
+    // context held across an explicit await).
+    //
+    // AsyncLocalStorage.run() is documented to propagate the store to
+    // any async work created inside the callback — including microtasks
+    // and setImmediate continuations — via async_hooks. This test pins
+    // that contract: a fire-and-forget chain rooted inside the
+    // synchronous run() callback must still see the same store.
+    it('production shape: sync run-callback that fires async upsert without await still sees the context', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      const ipProd = hashRotationAttribute('203.0.113.50');
+      const uaProd = hashRotationAttribute('production-agent');
+
+      // Mirror the production wrap: synchronous arrow callback that
+      // dispatches async work via Promise.resolve().then(...) without
+      // awaiting it. Set up a promise we resolve when the upsert lands
+      // so the test can await completion outside the run() boundary.
+      const upserted = new Promise<void>((resolve) => {
+        withRotationRequestContext({ ipHash: ipProd, uaHash: uaProd }, () => {
+          // No await, no return of the promise — exactly how
+          // EmbeddedAuthorizationServer wraps `provider.callback()(req, res)`.
+          void Promise.resolve().then(async () => {
+            await adapter.upsert('rt-prod-shape', { grantId: 'g-1', sub: 'alice' });
+            resolve();
+          });
+        });
+      });
+      await upserted;
+
+      const stored = await storage.genericGet('RefreshToken', 'rt-prod-shape') as Record<string, unknown>;
+      expect(stored.ipHash).toBe(ipProd);
+      expect(stored.uaHash).toBe(uaProd);
+    });
+
+    it('production shape: setImmediate-scheduled find inside the run callback also sees the context', async () => {
+      // Stronger variant — work scheduled via setImmediate, not just a
+      // microtask. async_hooks must propagate across both task queues.
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      const ipProd = hashRotationAttribute('203.0.113.51');
+      const uaProd = hashRotationAttribute('imm-agent');
+
+      // Seed a record from the matching IP/UA + consume it.
+      await withRotationRequestContext({ ipHash: ipProd, uaHash: uaProd }, async () => {
+        await adapter.upsert('rt-prod-imm', { grantId: 'g-1', sub: 'alice' });
+        await adapter.consume('rt-prod-imm');
+      });
+
+      const found = await new Promise<Record<string, unknown> | undefined>((resolve) => {
+        withRotationRequestContext({ ipHash: ipProd, uaHash: uaProd }, () => {
+          setImmediate(() => {
+            void adapter.find('rt-prod-imm').then(resolve);
+          });
+        });
+      });
+      // Same IP/UA inside grace window — consumed must be hidden.
+      expect(found?.consumed).toBeUndefined();
+    });
+  });
+
   describe('refreshRotationCheckIpUa: false (default)', () => {
     it('grace fires regardless of IP/UA mismatch', async () => {
       // Default behavior — industry norm. Time-only window. Stored

@@ -153,13 +153,49 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
       sub: string;
       roles: string[];
       email: string;
-      bootstrap: { adminSub: string; adminMethod: string; completedAt: number };
+      bootstrap: { adminSub?: string; adminMethod: string; completedAt: number };
     };
     expect(body.sub).toBe('local_admin');
     expect(body.roles).toContain('admin');
     expect(body.email).toBe('admin@example.com');
+    // The bootstrap admin sees their own sub echoed back (MED-6:
+    // restricted to the bootstrap admin only).
     expect(body.bootstrap.adminSub).toBe('local_admin');
     expect(body.bootstrap.adminMethod).toBe('local-password');
+  }, 30_000);
+
+  it('MED-6: bootstrap.adminSub is omitted for non-bootstrap admins', async () => {
+    // Set up the bootstrap admin first so bootstrap state has a real
+    // adminSub on it. Then manually grant a SECOND user the admin role
+    // (simulating a future role-assignment feature). When that other
+    // admin hits /auth/admin/me, the response must NOT echo the
+    // bootstrap admin's sub — only the bootstrap admin sees that field.
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+    // Issue tokens for both users.
+    await loginAsLocalUser(harness, method, 'local_admin', 'admin@example.com');
+    const secondToken = await loginAsLocalUser(harness, method, 'local_other_admin', 'other@example.com');
+    // Grant the second user the admin role directly via storage.
+    await storage.setAccountRoles('local_other_admin', ['admin']);
+    // Re-issue a token for the second user so the new role is on the JWT.
+    const refreshedToken = await loginAsLocalUser(harness, method, 'local_other_admin', 'other@example.com');
+
+    const res = await fetch(`${harness.baseUrl}/auth/admin/me`, {
+      headers: { Authorization: `Bearer ${refreshedToken}` },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      sub: string;
+      roles: string[];
+      bootstrap: { adminSub?: string; adminMethod: string };
+    };
+    expect(body.sub).toBe('local_other_admin');
+    expect(body.roles).toContain('admin');
+    // Bootstrap method still surfaced (operator can verify the AS is
+    // running in the expected mode), but the admin's identity is not.
+    expect(body.bootstrap.adminMethod).toBe('local-password');
+    expect(body.bootstrap.adminSub).toBeUndefined();
+    // Reference the seeded token so the linter doesn't flag it as unused.
+    expect(secondToken).toBeTruthy();
   }, 30_000);
 
   it('non-admin token → 403 with required_role hint', async () => {

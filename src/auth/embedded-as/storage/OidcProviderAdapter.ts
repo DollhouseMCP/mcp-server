@@ -32,7 +32,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
 
 /**
@@ -57,8 +57,16 @@ const GRACE_ELIGIBLE_MODELS = new Set(['RefreshToken']);
  *
  * Hashes are stored, not raw values: the payload lives in the same
  * generic K/V the audit log reads, so plaintext IP/UA would widen the
- * blast radius of an audit dump. SHA-256 is plenty here — the goal is
- * "same client?" comparison, not authentication.
+ * blast radius of an audit dump.
+ *
+ * Round 5 review fixup (MED-2): hashes are now HMAC-SHA256 keyed by a
+ * per-deployment secret (the AS cookie signing key) when a salt is
+ * provided. Plain SHA-256 of an IPv4 + a known user-agent is
+ * rainbow-tableable from an audit dump — IPv4 alone is ~4B entries,
+ * common UAs are a small set. HMAC with a per-deployment key forces
+ * the attacker to also exfiltrate the salt before any pre-computation
+ * helps. For tests that don't have a salt to hand, the plain-SHA256
+ * path remains available (passing salt=undefined).
  */
 export interface RotationRequestContext {
   ipHash: string;
@@ -68,11 +76,26 @@ export interface RotationRequestContext {
 const requestContextStore = new AsyncLocalStorage<RotationRequestContext>();
 
 /**
- * Hash a string with SHA-256 hex. Exported for tests + the
- * EmbeddedAuthorizationServer middleware that builds the context.
+ * Hash a value for use as `ipHash` or `uaHash` in the rotation
+ * request context. When `salt` is provided (production path), uses
+ * HMAC-SHA256 keyed by the salt; otherwise plain SHA-256 (test
+ * convenience). The same `salt` MUST be used across upsert + find on
+ * the same deployment — otherwise stamped hashes won't match
+ * recomputed ones and the grace window will silently fail closed.
+ *
+ * Exported so the EmbeddedAuthorizationServer middleware that builds
+ * the context can pre-compute hashes and tests can construct
+ * deterministic comparisons.
  */
-export function hashRotationAttribute(value: string | undefined | null): string {
-  return createHash('sha256').update(value ?? '').digest('hex');
+export function hashRotationAttribute(
+  value: string | undefined | null,
+  salt?: string,
+): string {
+  const input = value ?? '';
+  if (salt && salt.length > 0) {
+    return createHmac('sha256', salt).update(input).digest('hex');
+  }
+  return createHash('sha256').update(input).digest('hex');
 }
 
 /**

@@ -129,7 +129,10 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       storage,
       fetchImpl: buildFakeFetch(() => profile),
       // Disable the cached emailVerified TTL downgrade so the
-      // identity-change test below doesn't get stale-account null returns.
+      // identity-change test below doesn't get an emailVerified:false
+      // downgrade on its lookup (Round 5 / H6 changed the stale-cache
+      // path from null-return to emailVerified:false; either shape
+      // would interfere with this test's assertions).
       emailVerifiedCacheTtlMs: 0,
     });
     harness = await startASHarness({

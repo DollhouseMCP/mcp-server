@@ -346,15 +346,44 @@ const envSchema = z.object({
 
   /**
    * Round 5 / H4: trusted-proxy CIDR list for `app.set('trust proxy')`.
-   * Multiple comma-separated values; each is a CIDR or the keyword
-   * `loopback` (expands to loopback + linklocal + uniquelocal). When
-   * unset, the default is `loopback`. Hosted multi-tenant deployments
-   * MUST set this explicitly — the AuthProviderFactory startup-fail
-   * guard refuses to run multi-user methods behind a non-loopback
-   * bind without it (per-IP rate-limit collapse hazard).
+   * Multiple comma-separated values; each is a CIDR or one of the
+   * recognized keywords (`loopback`, `linklocal`, `uniquelocal`).
+   * When unset, the default is `loopback`. Hosted multi-tenant
+   * deployments MUST set this explicitly — the
+   * AuthProviderFactory startup-fail guard refuses to run multi-user
+   * methods behind a non-loopback bind without it (per-IP rate-limit
+   * collapse hazard).
+   *
+   * Round 5 review fixup (MED-5): each entry is shape-validated. A
+   * misspelled value (e.g. `DOLLHOUSE_TRUSTED_PROXIES=foo`) used to
+   * pass the H4 startup-fail guard yet silently produce
+   * `app.set('trust proxy', ['foo'])` which Express's proxy-addr
+   * rejects at request time — leaving operators in the proxy-IP-
+   * collapse failure mode the guard was meant to prevent. Now the
+   * env load fails loudly with a clear shape error.
    */
   DOLLHOUSE_TRUSTED_PROXIES: z.string().trim().optional()
-    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
+    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined)
+    .refine(
+      (entries) => {
+        if (entries === undefined) return true;
+        const keyword = /^(loopback|linklocal|uniquelocal)$/;
+        // Match an IPv4 CIDR (e.g. 10.0.0.0/8) or an IPv6 CIDR
+        // (e.g. fd00::/8) or a bare IPv4/IPv6 address. Not a full
+        // RFC-strict parser — proxy-addr does the strict check at
+        // mount time. This guard catches the common typo class
+        // (alphabetic non-keyword strings like 'foo') without
+        // re-implementing IP parsing.
+        const cidrLike = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/;
+        return entries.every((entry) => keyword.test(entry) || cidrLike.test(entry));
+      },
+      {
+        message:
+          "DOLLHOUSE_TRUSTED_PROXIES entries must be CIDR ranges " +
+          "(e.g. '10.0.0.0/8') or one of the keywords " +
+          "'loopback' / 'linklocal' / 'uniquelocal'",
+      },
+    ),
 
   /**
    * Issue #1780: Optional override for the console token file location.

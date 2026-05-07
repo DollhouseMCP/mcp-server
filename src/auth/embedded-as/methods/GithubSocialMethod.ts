@@ -179,6 +179,21 @@ export class GithubSocialMethod implements IAuthMethod {
     const stale = ttl > 0
       && (!account.lastAuthAt || (Date.now() - account.lastAuthAt) > ttl);
 
+    if (stale) {
+      // Round 5 review fixup (LOW backend observability): a
+      // downgraded email_verified looks identical to a user
+      // legitimately having an unverified GitHub email. Operators
+      // investigating "why is email_verified false on this token"
+      // need a signal to distinguish stale-cache from genuine
+      // unverified. Debug-level so it doesn't flood normal logs.
+      logger.debug('[GithubSocialMethod] emailVerified downgraded due to stale cache', {
+        sub: account.sub,
+        lastAuthAt: account.lastAuthAt,
+        staleDeltaMs: account.lastAuthAt ? Date.now() - account.lastAuthAt : null,
+        ttlMs: ttl,
+      });
+    }
+
     return {
       sub: account.sub,
       displayName: account.displayName,

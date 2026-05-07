@@ -58,6 +58,7 @@ import {
 } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 import { assertHasRole } from '../assertHasRole.js';
+import { createUnifiedAuthMiddleware } from '../authMiddleware.js';
 
 const ALGORITHM = 'ES256';
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
@@ -378,9 +379,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           // gate the grace window on hash match). Without the wrap,
           // the adapter falls back to time-only grace.
           if (this.refreshRotationCheckIpUa) {
+            // Round 5 review fixup (MED-2): salt the ip/ua hashes
+            // with the AS cookie signing key. Plain SHA-256 of an
+            // IPv4 + a known user-agent is rainbow-tableable from an
+            // audit dump; HMAC with a per-deployment key forces an
+            // attacker to also exfiltrate the salt. Cookie key is
+            // already deployment-scoped, persisted, and rotated on
+            // mode-switch — exactly the lifecycle we want.
+            const salt = state.cookieKeys[0];
             const context: RotationRequestContext = {
-              ipHash: hashRotationAttribute(req.ip),
-              uaHash: hashRotationAttribute(req.headers['user-agent']),
+              ipHash: hashRotationAttribute(req.ip, salt),
+              uaHash: hashRotationAttribute(req.headers['user-agent'], salt),
             };
             withRotationRequestContext(context, () => {
               state.provider.callback()(req, res);
@@ -424,6 +433,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   /**
+   * Latch flipped once bootstrap is observed as complete. Mirrors the
+   * pattern in `createBootstrapGate`: bootstrap is monotonic (the
+   * atomic `markBootstrapComplete` UPSERT rejects admin transfer), so
+   * once we see `completed: true` we never need to re-read storage.
+   * Without this, /readyz at a 10s probe interval × N replicas
+   * generates sustained read traffic against `auth_kv` indefinitely
+   * even though the answer can never change again.
+   */
+  private bootstrapReadyLatch = false;
+
+  /**
    * Round 5 / H3: public predicate so /readyz can refuse traffic
    * pre-bootstrap. Returns true when:
    *   - the AS is not in multi-user mode (no bootstrap concept), OR
@@ -432,12 +452,23 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * incomplete, so the readiness probe stays red until the operator
    * runs the bootstrap CLI. Errors fail closed (returns false) so a
    * storage outage doesn't pretend the AS is ready.
+   *
+   * Round 5 review fixup (MED-4): once bootstrap completes, latch and
+   * stop hitting storage on subsequent probes. Bootstrap is monotonic
+   * — the atomic UPSERT rejects admin transfer, so a `completed: true`
+   * observation can never revert. Pre-bootstrap probes still hit
+   * storage (we want to see the moment it flips).
    */
   async isReadyForTraffic(): Promise<boolean> {
     if (!this.isMultiUserMode()) return true;
+    if (this.bootstrapReadyLatch) return true;
     try {
       const state = await this.storage.getBootstrapState();
-      return state.completed === true;
+      if (state.completed === true) {
+        this.bootstrapReadyLatch = true;
+        return true;
+      }
+      return false;
     } catch {
       return false;
     }
@@ -540,31 +571,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * "yes, I'm authenticated as the admin".
    */
   private createAdminMeHandler(): RequestHandler[] {
-    const validateBearer: RequestHandler = (req, res, next) => {
-      void (async () => {
-        try {
-          const authHeader = req.headers.authorization;
-          const match = authHeader && /^Bearer\s+(\S+)$/i.exec(authHeader);
-          if (!match) {
-            res.status(401)
-              .setHeader('WWW-Authenticate', 'Bearer')
-              .json({ error: 'Authentication required' });
-            return;
-          }
-          const result = await this.validate(match[1]!);
-          if (!result.ok) {
-            res.status(401)
-              .setHeader('WWW-Authenticate', 'Bearer')
-              .json({ error: `Authentication failed: ${result.reason}` });
-            return;
-          }
-          res.locals.authClaims = result.claims;
-          next();
-        } catch (err) {
-          next(err);
-        }
-      })();
-    };
+    // Compose the same middleware the rest of the codebase uses for
+    // Bearer validation. `EmbeddedAuthorizationServer` IS an
+    // `IAuthProvider` (`this`), so the unified middleware can validate
+    // tokens against it. This way the admin route's 401 body shape,
+    // WWW-Authenticate header, and SecurityMonitor audit events match
+    // every other authenticated route in the codebase. The earlier
+    // shape duplicated the validate-and-set-locals logic inline,
+    // which would silently drift if the unified middleware changed.
+    const validateBearer = createUnifiedAuthMiddleware({
+      provider: this,
+      protectedResourceMetadataUrl: this.getProtectedResourceMetadataUrl(),
+    });
 
     const adminGuard = assertHasRole('admin');
 
@@ -581,15 +599,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           }
           const bootstrap = await this.storage.getBootstrapState();
           const account = await this.storage.getAccount(claims.sub);
+          // Round 5 / MED-6: only echo the bootstrap admin's sub when
+          // the caller IS the bootstrap admin. Other roles=['admin']
+          // accounts (added in the future when role assignment is
+          // wired) get the bootstrap method but not the bootstrap
+          // admin's identifier — avoids cross-admin disclosure.
+          const callerIsBootstrapAdmin = bootstrap.adminSub === claims.sub;
           res.json({
             sub: claims.sub,
             roles: claims.roles ?? [],
             email: account?.email,
             displayName: account?.displayName,
             bootstrap: {
-              adminSub: bootstrap.adminSub,
               adminMethod: bootstrap.adminMethod,
               completedAt: bootstrap.completedAt,
+              ...(callerIsBootstrapAdmin ? { adminSub: bootstrap.adminSub } : {}),
             },
           });
         } catch (err) {

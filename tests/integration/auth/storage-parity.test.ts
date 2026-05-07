@@ -174,6 +174,19 @@ function runContractSuite(
       expect(found?.roles ?? []).toEqual([]);
     });
 
+    it('lastAuthAt round-trips through upsert + getAccount', async () => {
+      // Round 5 review fixup (L-R5-14): the field is read by
+      // extraTokenClaims for the auth_time JWT claim and by
+      // GithubSocialMethod.findAccount for staleness detection. The
+      // updateAccountLastAuth path already had parity coverage; the
+      // read-back-via-getAccount path is what's missing per the
+      // structural rule.
+      const now = Date.now();
+      await storage.upsertAccount(makeAccount({ lastAuthAt: now }));
+      const found = await storage.getAccount('github_42');
+      expect(found?.lastAuthAt).toBe(now);
+    });
+
     it('H5: subsequent upsertAccount without roles preserves roles set via setAccountRoles', async () => {
       // The whole H5 fix: methods that don't know about a user's role
       // (every login except the bootstrap admin's first login) must
