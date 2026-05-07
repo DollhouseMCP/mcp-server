@@ -103,6 +103,17 @@ export type ASHarnessOptions = Omit<EmbeddedAuthorizationServerOptions, 'publicB
    * harness teardown.
    */
   tmpDir?: string;
+  /**
+   * Skip the auto-bootstrap step. Default: false (the harness marks
+   * bootstrap complete with a placeholder admin sub before returning,
+   * so existing E2E tests that drive flows in multi-user mode work
+   * without each test having to know about must-fix #22).
+   *
+   * Set to `true` for tests that explicitly verify gate behavior — they
+   * want the gate CLOSED so they can assert 503 responses on
+   * pre-bootstrap traffic.
+   */
+  skipAutoBootstrap?: boolean;
 };
 
 /**
@@ -126,6 +137,15 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
     methods: opts.methods,
     storage: opts.storage,
   });
+
+  // Auto-bootstrap so existing E2E tests in multi-user mode aren't blocked
+  // by the must-fix #22 gate. Tests that specifically verify gate behavior
+  // pass `skipAutoBootstrap: true` and the gate stays closed.
+  if (!opts.skipAutoBootstrap) {
+    await opts.storage.markBootstrapComplete('test-admin', 'github').catch(() => {
+      // Already bootstrapped — fine.
+    });
+  }
 
   const app = express();
   app.use(as.createRouter());
