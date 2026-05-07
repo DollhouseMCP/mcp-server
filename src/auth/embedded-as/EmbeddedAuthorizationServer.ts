@@ -73,6 +73,16 @@ export interface EmbeddedAuthorizationServerOptions {
   methods: readonly IAuthMethod[];
   /** Backing storage for oidc-provider's Adapter and our semantic operations. */
   storage: IAuthStorageLayer;
+  /**
+   * Refresh-token rotation grace window in milliseconds (R3, spec L926).
+   * After a refresh token is consumed, its `consumed` marker is hidden
+   * from oidc-provider's `find()` for this duration so legitimate
+   * concurrent rotations don't trip reuse-detection. After the window
+   * elapses, the marker becomes visible and reuse-detection fires
+   * normally for actual replays. Default: 30,000 ms (industry standard).
+   * Set to 0 to disable (strict consume-then-detect behavior).
+   */
+  refreshRotationGraceMs?: number;
 }
 
 interface InitializedState {
@@ -93,6 +103,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly storage: IAuthStorageLayer;
   private readonly mcpPath: string;
   private readonly keyFilePath: string;
+  private readonly refreshRotationGraceMs: number | undefined;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -122,6 +133,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.issuer = this.publicBaseUrl;
     this.resource = joinUrl(this.publicBaseUrl, this.mcpPath);
     this.keyFilePath = options.keyFilePath ?? defaultKeyFilePath();
+    this.refreshRotationGraceMs = options.refreshRotationGraceMs;
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -553,7 +565,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       });
     }
 
-    const adapterFactory = createOidcAdapterFactory(this.storage);
+    const adapterFactory = createOidcAdapterFactory(this.storage, {
+      refreshRotationGraceMs: this.refreshRotationGraceMs,
+    });
     const methods = this.methods;
 
     const config: Configuration = {
