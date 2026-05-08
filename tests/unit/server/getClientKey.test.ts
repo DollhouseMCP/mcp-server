@@ -81,4 +81,32 @@ describe('getClientKey', () => {
       forwardedFor: spoofed,
     }))).toBe(tcpPeer);
   });
+
+  // Cycle-11 fix (H11-2): on dual-stack Node, IPv4 connections show
+  // up as `::ffff:1.2.3.4` rather than `1.2.3.4`. Without normalization,
+  // an attacker alternating address families gets 2× the per-IP
+  // rate-limit budget. Same fix shape as cycle-10 H10-2 in MagicLink
+  // — both now use the shared `normalizeIp` helper from rateLimit.ts.
+  it('H11-2: normalizes IPv4-mapped IPv6 (::ffff:1.2.3.4 → 1.2.3.4)', () => {
+    expect(getClientKey(makeReq({ ip: '::ffff:203.0.113.5' }))).toBe('203.0.113.5');
+  });
+
+  it('H11-2: pure IPv4 passes through unchanged', () => {
+    expect(getClientKey(makeReq({ ip: '203.0.113.5' }))).toBe('203.0.113.5');
+  });
+
+  it('H11-2: regression — same v4 attacker cannot get two buckets via dual-stack', () => {
+    // Pin the bypass class: 1.2.3.4 and ::ffff:1.2.3.4 must hash to
+    // the same rate-limit key. Before the fix, an attacker on a
+    // dual-stack bind alternating address families got 2× budget.
+    const v4 = getClientKey(makeReq({ ip: '203.0.113.42' }));
+    const v6Mapped = getClientKey(makeReq({ ip: '::ffff:203.0.113.42' }));
+    expect(v4).toBe(v6Mapped);
+  });
+
+  it('H11-2: pure IPv6 (not v4-mapped) passes through unchanged', () => {
+    // A genuine IPv6 client address (not a v4-mapped form) shouldn't
+    // be modified.
+    expect(getClientKey(makeReq({ ip: '2001:db8::1' }))).toBe('2001:db8::1');
+  });
 });

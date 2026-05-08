@@ -15,7 +15,7 @@
  * @module auth/OidcAuthProvider
  */
 
-import { jwtVerify, createRemoteJWKSet } from 'jose';
+import { jwtVerify, createRemoteJWKSet, errors as joseErrors } from 'jose';
 import type { JWTVerifyGetKey } from 'jose';
 import { logger } from '../utils/logger.js';
 import type { IAuthProvider, AuthResult, AuthClaims } from './IAuthProvider.js';
@@ -27,6 +27,14 @@ export interface OidcAuthProviderOptions {
   audience: string;
   /** JWKS endpoint URL. Defaults to {issuer}/.well-known/jwks.json */
   jwksUri?: string;
+  /**
+   * Test injection point: pre-built JWTVerifyGetKey, used in place of
+   * the remote JWKS fetcher. Production code should never set this —
+   * `jwksUri` is the operator-facing knob. Tests use this to exercise
+   * the validate() error-classification branches without standing up
+   * a JWKS HTTP server.
+   */
+  jwksGetter?: JWTVerifyGetKey;
 }
 
 export class OidcAuthProvider implements IAuthProvider {
@@ -44,11 +52,12 @@ export class OidcAuthProvider implements IAuthProvider {
     const jwksUri = options.jwksUri
       ?? new URL('.well-known/jwks.json', options.issuer).toString();
 
-    this.jwks = createRemoteJWKSet(new URL(jwksUri));
+    this.jwks = options.jwksGetter ?? createRemoteJWKSet(new URL(jwksUri));
 
     logger.info(`[OidcAuthProvider] Configured for issuer ${this.issuer}`, {
       audience: this.audience,
       jwksUri,
+      injected: options.jwksGetter !== undefined,
     });
   }
 
@@ -86,19 +95,30 @@ export class OidcAuthProvider implements IAuthProvider {
       };
 
       return { ok: true, claims };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('exp')) {
+    } catch (error) {
+      // Cycle-11 fix (H11-1 / M11-1): use jose's typed errors instead of
+      // substring-matching on .message. The earlier substring-matching
+      // pattern was a sibling of the same bug class cycle 8 fixed in
+      // EmbeddedAuthorizationServer.validate and cycle 10 fixed in
+      // LocalDevAuthProvider.validate. This is the third site —
+      // missed both times — exactly the recurring drift class user
+      // memory `feedback_scan_for_class_when_fixing` flags.
+      //
+      // Reason text aligned across all three providers (M11-1):
+      // 'token expired', 'invalid signature', 'invalid issuer',
+      // 'invalid audience'. Operator log-grep stays consistent
+      // regardless of which provider is mounted.
+      if (error instanceof joseErrors.JWTExpired) {
         return { ok: false, reason: 'token expired' };
       }
-      if (message.includes('signature')) {
+      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
       }
-      if (message.includes('issuer')) {
-        return { ok: false, reason: 'issuer mismatch' };
-      }
-      if (message.includes('audience')) {
-        return { ok: false, reason: 'audience mismatch' };
+      if (error instanceof joseErrors.JWTClaimValidationFailed) {
+        const claim = error.claim;
+        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
+        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
+        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
       }
       return { ok: false, reason: 'token validation failed' };
     }

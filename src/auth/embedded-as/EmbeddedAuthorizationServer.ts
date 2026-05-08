@@ -262,8 +262,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // substrings like 'iss' or 'typ' collide with unrelated error text
       // ('issuer', 'unexpected', 'cryptographic', 'type'), producing
       // misleading reasons in operator logs.
+      //
+      // Cycle-11 fix (M11-1): added JWSSignatureVerificationFailed
+      // branch for parity with LocalDevAuthProvider and OidcAuthProvider
+      // — without it, tampered tokens fell through to the generic
+      // "token validation failed" reason while the other two providers
+      // returned "invalid signature". Operator log triage now sees
+      // consistent reason text across all three IAuthProvider impls.
       if (error instanceof joseErrors.JWTExpired) {
         return { ok: false, reason: 'token expired' };
+      }
+      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
+        return { ok: false, reason: 'invalid signature' };
       }
       if (error instanceof joseErrors.JWTClaimValidationFailed) {
         const claim = error.claim;

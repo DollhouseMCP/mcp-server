@@ -66,10 +66,13 @@ export interface IAuthProvider {
   validate(token: string): Promise<AuthResult>;
 
   /**
-   * Issue a signed token for a subject. Only implemented by providers
-   * that control their own signing keys (LocalDevAuthProvider).
-   * Production OIDC providers do not implement this — tokens are
-   * issued by the external identity provider.
+   * Issue a signed token for a subject. Implemented by providers that
+   * control their own signing keys: `LocalDevAuthProvider` (dev-only
+   * convenience) and `EmbeddedAuthorizationServer` (the §8.1 on-box
+   * AS — used by the LocalDev startup-token convenience path that
+   * bypasses oidc-provider's accounting). NOT implemented by
+   * `OidcAuthProvider` — bridge mode validates external IdP tokens
+   * but does not issue.
    */
   issue?(sub: string, options?: IssueOptions): Promise<string>;
 }

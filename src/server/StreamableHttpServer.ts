@@ -8,6 +8,7 @@ import type { Express, Request, Response } from 'express';
 import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { normalizeIp } from '../auth/embedded-as/rateLimit.js';
 import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
@@ -183,7 +184,16 @@ export function getClientKey(req: Request): string {
   //     Correct.
   //   - Behind a proxy with trusted proxies UNSET on a non-loopback
   //     bind: blocked at startup by `assertHostedDeploymentSafety`.
-  return normalizeUserInput(req.ip || req.socket.remoteAddress || 'unknown') ?? 'unknown';
+  //
+  // Cycle-11 fix (H11-2): normalize IPv4-mapped IPv6 (`::ffff:1.2.3.4`)
+  // to the v4 form so dual-stack Node deployments don't double-bucket
+  // the same client. Sibling of the cycle-10 H10-2 fix in MagicLink
+  // — same exported helper, same bypass class. Without normalization,
+  // an attacker on a dual-stack bind alternated `::ffff:1.2.3.4` and
+  // `1.2.3.4` for 2× the per-IP rate-limit budget on the MCP transport.
+  const raw = req.ip || req.socket.remoteAddress || 'unknown';
+  const normalized = normalizeIp(raw);
+  return normalizeUserInput(normalized) ?? 'unknown';
 }
 
 function getProcessMemorySnapshot(): Record<string, number> {
