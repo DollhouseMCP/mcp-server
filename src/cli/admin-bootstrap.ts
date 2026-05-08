@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * dollhousemcp admin bootstrap
+ * dollhouse-admin-bootstrap
  *
  * Pre-claims the admin identity for multi-user AS deployments that use
  * magic-link or GitHub for sign-in (must-fix #22 / spec L923). For
- * local-account deployments, the `dollhousemcp create-user` CLI does
+ * local-account deployments, the `dollhouse-create-user` CLI does
  * this implicitly — the first invite issued IS the admin's.
  *
  * Why pre-claim? Without it, an attacker who reaches the AS first
@@ -15,9 +15,9 @@
  * it authenticates. Other identities authenticate as regular users.
  *
  * Usage:
- *   dollhousemcp admin bootstrap --method github --github-username todd
- *   dollhousemcp admin bootstrap --method github --github-id 12345
- *   dollhousemcp admin bootstrap --method magic-link --email todd@example.com
+ *   dollhouse-admin-bootstrap --method github --github-username todd
+ *   dollhouse-admin-bootstrap --method github --github-id 12345
+ *   dollhouse-admin-bootstrap --method magic-link --email todd@example.com
  *
  * Exit codes:
  *   0 — bootstrap recorded
@@ -107,12 +107,12 @@ function isValidEmail(value: string): boolean {
 async function main(): Promise<void> {
   const program = new Command();
   program
-    .name('dollhousemcp admin bootstrap')
+    .name('dollhouse-admin-bootstrap')
     .description('Pre-claim the admin identity for a multi-user AS deployment.')
     .requiredOption(
       '--method <method>',
       "auth method that owns the admin identity: 'github' or 'magic-link' " +
-      "(local-password is bootstrapped implicitly via 'dollhousemcp create-user')",
+      "(local-password is bootstrapped implicitly via 'dollhouse-create-user')",
     )
     .option('--github-username <username>', 'GitHub username (resolved to numeric ID)')
     .option('--github-id <id>', 'GitHub numeric user ID (skip lookup)')
@@ -158,7 +158,7 @@ async function main(): Promise<void> {
     adminSub = magicLinkSubFromEmail(opts.email);
   } else if (opts.method === 'local-password' || opts.method === 'local-account') {
     process.stderr.write(
-      "Local-account deployments bootstrap implicitly via 'dollhousemcp create-user'. " +
+      "Local-account deployments bootstrap implicitly via 'dollhouse-create-user'. " +
       "Run that command instead — the first invite issued is automatically the admin invite.\n",
     );
     process.exit(1);

@@ -3,7 +3,7 @@
  *
  * Single-use, short-TTL signed tokens for two §8.1 flows:
  *   - Local-account first-credential delivery (must-fix #17): operator runs
- *     `dollhousemcp create-user`, gets a one-time URL with a token, hand-
+ *     `dollhouse-create-user`, gets a one-time URL with a token, hand-
  *     delivers it. User clicks, sets their own argon2id password.
  *   - Magic link login (must-fix #1 anti-pre-fetch): user requests a link,
  *     receives email, clicks to confirm (GET shows confirmation page),
@@ -99,7 +99,7 @@ export class InviteTokenStore {
    *                signing-key file).
    * @param storage Optional storage layer used to record consumed jti markers
    *                so single-use enforcement survives restart. The CLI
-   *                `dollhousemcp create-user` only issues tokens (the AS
+   *                `dollhouse-create-user` only issues tokens (the AS
    *                consumes them) and may construct without storage; the
    *                running AS always wires storage in via AuthProviderFactory.
    */
@@ -217,7 +217,7 @@ export function defaultInviteSecretFilePath(legacyRoot?: string): string {
 /**
  * Load an existing invite-token HMAC secret from disk, or generate + persist
  * a new 32-byte one. Mode 0600. Used by both the AS runtime (so all issued
- * tokens stay valid across restarts) and the `dollhousemcp create-user` CLI
+ * tokens stay valid across restarts) and the `dollhouse-create-user` CLI
  * (so CLI-issued invites verify against the runtime's secret).
  *
  * If `DOLLHOUSE_INVITE_TOKEN_SECRET` env var is set (hex-encoded), it

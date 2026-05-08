@@ -99,4 +99,40 @@ describe('assertHasRole', () => {
       required_role: 'admin',
     });
   });
+
+  it('responds 403 when roles claim is a non-array (guard against malformed provider output)', () => {
+    // Round 6 review fixup: the AuthClaims type is string[] | undefined,
+    // but assertHasRole is exported and any future IAuthProvider may
+    // mis-populate. The guard must yield a clean 403, not a 500.
+    const malformed = {
+      sub: 'github_42',
+      iss: 'http://test',
+      aud: 'mcp',
+      iat: 0,
+      exp: 0,
+      // Cast to bypass TS — simulates a runtime mishap.
+      roles: 'admin' as unknown as string[],
+    };
+    const { res, status } = makeRes(malformed);
+    const next = makeNext();
+    assertHasRole('admin')(makeReq(), res, next as unknown as NextFunction);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(403);
+  });
+
+  it('responds 403 when roles claim is an object (guard against malformed provider output)', () => {
+    const malformed = {
+      sub: 'github_42',
+      iss: 'http://test',
+      aud: 'mcp',
+      iat: 0,
+      exp: 0,
+      roles: { admin: true } as unknown as string[],
+    };
+    const { res, status } = makeRes(malformed);
+    const next = makeNext();
+    assertHasRole('admin')(makeReq(), res, next as unknown as NextFunction);
+    expect(next).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith(403);
+  });
 });

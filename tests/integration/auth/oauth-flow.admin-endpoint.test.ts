@@ -239,4 +239,34 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
     });
     expect(res.status).toBe(503);
   }, 30_000);
+
+  it('Round 6: admin account deleted post-issue → 410 Gone (not 200 with nulls)', async () => {
+    // Edge case: a valid admin JWT outlives its backing account row
+    // (operator deleted the account, GDPR-style purge, or storage
+    // corruption). The token still verifies cryptographically. Without
+    // the deleted-account guard, the endpoint returned 200 with
+    // email:undefined, displayName:undefined — operators couldn't
+    // distinguish "I'm the admin but missing a profile" from "my
+    // admin row was wiped." 410 makes the failure mode unambiguous.
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+    const adminToken = await loginAsLocalUser(harness, method, 'local_admin', 'admin@example.com');
+
+    // Delete the account row directly (simulating operator action).
+    // InMemoryAuthStorageLayer doesn't expose a public delete, so we
+    // mutate the underlying Map. This is test-only; the production
+    // delete path would go through a future deleteAccount API
+    // (tracked as L-R5-4 in the dashboard).
+    const accountsField = (storage as unknown as {
+      accountsBySub: Map<string, unknown>;
+    }).accountsBySub;
+    accountsField.delete('local_admin');
+
+    const res = await fetch(`${harness.baseUrl}/auth/admin/me`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    expect(res.status).toBe(410);
+    const body = await res.json() as { error: string; sub: string };
+    expect(body.sub).toBe('local_admin');
+    expect(body.error).toMatch(/no longer exists/i);
+  }, 30_000);
 });

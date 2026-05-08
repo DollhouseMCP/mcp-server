@@ -204,7 +204,7 @@ export interface IAuthStorageLayer {
    * operation that should leave a clear audit trail and require
    * explicit force).
    *
-   * Called by the `dollhousemcp admin bootstrap` CLI. Implementations
+   * Called by the `dollhouse-admin-bootstrap` CLI. Implementations
    * persist the state via the same durable storage path as everything
    * else — filesystem and Postgres survive restart; in-memory does not
    * (acceptable: in-memory mode is dev-only and re-bootstrapping on

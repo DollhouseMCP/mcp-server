@@ -49,7 +49,14 @@ export function assertHasRole(role: string): RequestHandler {
       });
       return;
     }
-    const roles = claims.roles ?? [];
+    // Defense-in-depth: AuthClaims.roles is typed as string[] | undefined
+    // and the canonical claimsFromPayload path filters to strings, but
+    // assertHasRole is exported for any future IAuthProvider to use.
+    // A provider that mis-populates res.locals.authClaims with a
+    // non-array roles field would otherwise cause `.includes(role)` to
+    // throw 500 instead of yielding a clean 403.
+    const rawRoles: unknown = claims.roles;
+    const roles = Array.isArray(rawRoles) ? rawRoles : [];
     if (!roles.includes(role)) {
       res.status(403).json({
         error: 'Forbidden: required role not present',

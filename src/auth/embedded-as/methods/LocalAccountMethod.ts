@@ -3,7 +3,7 @@
  *
  * Stage C auth method: username + argon2id-hashed password. First-credential
  * delivery uses the inviteTokens flow (must-fix #17) — operator runs
- * `dollhousemcp create-user`, gets a one-time URL, hand-delivers; user
+ * `dollhouse-create-user`, gets a one-time URL, hand-delivers; user
  * sets their own password on first visit. Operator never sees a password.
  *
  * Login attempts go through LocalLoginRateLimiter (must-fix #16):
@@ -127,7 +127,7 @@ export class LocalAccountMethod implements IAuthMethod {
   }
 
   /**
-   * Issue an invite for `dollhousemcp create-user`. Returns the URL the
+   * Issue an invite for `dollhouse-create-user`. Returns the URL the
    * operator hand-delivers to the user. The token is single-use.
    */
   issueInvite(sub: string, email: string, callbackUrl: string): string {

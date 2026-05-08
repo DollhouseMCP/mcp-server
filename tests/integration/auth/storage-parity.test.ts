@@ -187,6 +187,43 @@ function runContractSuite(
       expect(found?.lastAuthAt).toBe(now);
     });
 
+    // Round 6 review fixup: updateAccountLastAuth is the targeted-write
+    // path InteractionRouter calls on every login. The earlier comment
+    // in this suite claimed parity coverage that didn't actually exist;
+    // these tests close that gap.
+    it('updateAccountLastAuth: stamps lastAuthAt on an existing account', async () => {
+      await storage.upsertAccount(makeAccount({ lastAuthAt: 1000 }));
+      const t = 9999;
+      const ok = await storage.updateAccountLastAuth('github_42', t);
+      expect(ok).toBe(true);
+      const found = await storage.getAccount('github_42');
+      expect(found?.lastAuthAt).toBe(t);
+    });
+
+    it('updateAccountLastAuth: returns false for an unknown sub (no row created)', async () => {
+      const ok = await storage.updateAccountLastAuth('github_unknown', 1234);
+      expect(ok).toBe(false);
+      const found = await storage.getAccount('github_unknown');
+      expect(found).toBeNull();
+    });
+
+    it('updateAccountLastAuth: preserves the rest of the account row (no clobber)', async () => {
+      // The whole point of the targeted-write API: don't re-write
+      // displayName/email/rawProfile from a stale read. Any backend
+      // that implements this as a row-replace would fail this assertion.
+      await storage.upsertAccount(makeAccount({
+        email: 'lastauth@example.com',
+        displayName: 'Pre-existing',
+        roles: ['admin'],
+      }));
+      await storage.updateAccountLastAuth('github_42', 5555);
+      const found = await storage.getAccount('github_42');
+      expect(found?.email).toBe('lastauth@example.com');
+      expect(found?.displayName).toBe('Pre-existing');
+      expect(found?.roles).toEqual(['admin']);
+      expect(found?.lastAuthAt).toBe(5555);
+    });
+
     it('H5: subsequent upsertAccount without roles preserves roles set via setAccountRoles', async () => {
       // The whole H5 fix: methods that don't know about a user's role
       // (every login except the bootstrap admin's first login) must
@@ -351,6 +388,16 @@ function runContractSuite(
     // level. Test fires N concurrent calls with N different admin subs;
     // exactly one must succeed, the rest must reject with the same
     // admin-transfer error.
+    //
+    // Coverage shape note (Round 6 review): on InMemory and Filesystem
+    // backends this assertion holds vacuously — single-process Node
+    // serializes all promises through the microtask queue, so there's
+    // no real concurrent contention to race. The teeth of this test
+    // are on Postgres, where two transactions can genuinely interleave.
+    // The test still runs across all three backends for parity but the
+    // failure mode it pins is Postgres-specific. Keeping the parity
+    // shape so a regression of the rejection error message on any
+    // backend would still surface here.
     it('B2: concurrent markBootstrapComplete with different subs — exactly one wins', async () => {
       const candidates = ['admin_a', 'admin_b', 'admin_c', 'admin_d', 'admin_e'];
       const results = await Promise.allSettled(

@@ -32,6 +32,53 @@ describe('assertHostedDeploymentSafety', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('Round 6: passes for IPv6 loopback ([::1] and bracketed forms)', async () => {
+    // node:net hands the bind host to listeners as either `::1` or
+    // `[::1]` depending on the path. The isLoopbackHost helper handles
+    // both — the previous test set only covered v4 forms, so a
+    // regression in v6 bracket-stripping would not be caught.
+    await expect(assertHostedDeploymentSafety({
+      host: '::1',
+      methods: ['github'],
+      authEnabled: false,
+      trustedProxies: undefined,
+    })).resolves.toBeUndefined();
+
+    await expect(assertHostedDeploymentSafety({
+      host: '[::1]',
+      methods: ['local-password'],
+      authEnabled: false,
+      trustedProxies: undefined,
+    })).resolves.toBeUndefined();
+  });
+
+  it('Round 6: passes when methods mix trivial-consent with a multi-user method on loopback', async () => {
+    // Mixed mode: operator runs trivial-consent for solo dev plus
+    // github for invited collaborators on the same loopback bind.
+    // The H2/H4 guard considers any multi-user method present;
+    // loopback short-circuits before the multi-user check, so this
+    // must pass.
+    await expect(assertHostedDeploymentSafety({
+      host: '127.0.0.1',
+      methods: ['trivial-consent', 'github'],
+      authEnabled: false,
+      trustedProxies: undefined,
+    })).resolves.toBeUndefined();
+  });
+
+  it('Round 6: throws when methods mix trivial-consent with a multi-user method on non-loopback', async () => {
+    // Same mix, but on 0.0.0.0 — the multi-user method present must
+    // still trip the H2/H4 guards. This pins that the OR-style
+    // "any multi-user method" check is correctly implemented (rather
+    // than e.g. "all methods are multi-user").
+    await expect(assertHostedDeploymentSafety({
+      host: '0.0.0.0',
+      methods: ['trivial-consent', 'github'],
+      authEnabled: false,
+      trustedProxies: ['loopback'],
+    })).rejects.toThrow(/DOLLHOUSE_AUTH_ENABLED is false/);
+  });
+
   it('passes when no multi-user methods are configured (trivial-consent only)', async () => {
     await expect(assertHostedDeploymentSafety({
       host: '0.0.0.0',

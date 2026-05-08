@@ -605,6 +605,24 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           }
           const bootstrap = await this.storage.getBootstrapState();
           const account = await this.storage.getAccount(claims.sub);
+
+          // Round 6 review fixup: when the caller's account row no
+          // longer exists in storage (admin was deleted post-bootstrap;
+          // GDPR delete; manual operator action), refuse to echo a
+          // stub. The token still validates cryptographically, but
+          // the AS has no account-level claims to authoritatively
+          // surface. 410 Gone is the honest answer: the resource
+          // (the account behind this sub) has been deliberately
+          // removed. Operators investigating "why does my admin token
+          // fail?" get a clear signal vs. a 200 with nulls.
+          if (!account) {
+            res.status(410).json({
+              error: 'admin account no longer exists',
+              sub: claims.sub,
+            });
+            return;
+          }
+
           // Round 5 / MED-6: only echo the bootstrap admin's sub when
           // the caller IS the bootstrap admin. Other roles=['admin']
           // accounts (added in the future when role assignment is
@@ -614,8 +632,8 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           res.json({
             sub: claims.sub,
             roles: claims.roles ?? [],
-            email: account?.email,
-            displayName: account?.displayName,
+            email: account.email,
+            displayName: account.displayName,
             bootstrap: {
               adminMethod: bootstrap.adminMethod,
               completedAt: bootstrap.completedAt,
@@ -705,6 +723,33 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // K/V state, cookie secret, AND the JWKS signing key — then re-
     // persist the fingerprint reflecting the post-rotation state.
     let cookieKeys = loadOrGenerateCookieSigningKeys();
+
+    // Round 6 review fixup: when the operator opts into IP/UA-bound
+    // rotation grace, the cookie key doubles as the HMAC salt for the
+    // ip/ua hashes stamped onto refresh tokens. In a multi-replica
+    // HA deployment, replicas that load DIFFERENT cookie keys from
+    // their local files would HMAC the same IP+UA differently — a
+    // refresh token issued by replica A would silently fail the IP/UA
+    // match on replica B and the legitimate session would be revoked.
+    //
+    // The supported HA path is `DOLLHOUSE_COOKIE_SIGNING_SECRET` env
+    // var (every replica reads the same key from env, file is
+    // ignored). If we observe `refreshRotationCheckIpUa=true` AND the
+    // env var is unset, log a warning naming the multi-replica risk.
+    // Single-replica deployments are unaffected — the file-loaded
+    // key stays stable across the AS lifetime.
+    if (this.refreshRotationCheckIpUa && !process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim()) {
+      logger.warn(
+        '[EmbeddedAuthorizationServer] refreshRotationCheckIpUa is enabled but ' +
+        'DOLLHOUSE_COOKIE_SIGNING_SECRET is unset. The cookie signing key — used as ' +
+        'the HMAC salt for IP/UA hashes on refresh tokens — will be loaded from a ' +
+        'local file. In a multi-replica HA deployment, replicas with different ' +
+        'local key files will HMAC IP/UA differently and legitimate refresh ' +
+        'rotations will be revoked. Set DOLLHOUSE_COOKIE_SIGNING_SECRET (hex, ≥32 ' +
+        'bytes, identical across replicas) before enabling IP/UA-bound grace in HA.',
+      );
+    }
+
     const fingerprintInputs = {
       provider: 'embedded',
       methodIds: this.methods.map((m) => m.id),

@@ -6,20 +6,37 @@
  * surface that state so Kubernetes / load balancers stop sending
  * traffic to the pod until the operator runs the bootstrap CLI.
  *
- * Lean test: stand up the runtime with a stub oauthProvider exposing
- * isReadyForTraffic, drive that flag via the test, and assert the
- * /readyz response shape. Doesn't need the full container — the
- * /readyz handler doesn't touch any session state.
+ * Stub-based tests: stand up the runtime with a stub oauthProvider
+ * exposing isReadyForTraffic, drive that flag via the test, and
+ * assert the /readyz response shape. Doesn't need the full container.
+ *
+ * Real-AS test (Round 6 review fixup): the latch behavior in
+ * EmbeddedAuthorizationServer.isReadyForTraffic() — once true, never
+ * re-reads storage — was previously only covered by stub-based tests
+ * that don't exercise the actual latch field. The new tests at the
+ * bottom build a real EmbeddedAuthorizationServer and verify
+ * (a) pre-bootstrap multi-user mode → false, (b) post-bootstrap →
+ * true, (c) post-bootstrap subsequent calls don't hit storage.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
 import request from 'supertest';
 import express from 'express';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+import os from 'node:os';
 import {
   createStreamableHttpRuntime,
   type StreamableHttpRuntimeHandle,
 } from '../../../src/server/StreamableHttpServer.js';
 import { setHttpModeActive } from '../../../src/index.js';
+import { EmbeddedAuthorizationServer } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
+import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalAccountMethod.js';
+import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
+import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
+import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
+import { randomBytes } from 'node:crypto';
 
 describe('/readyz — H3 bootstrap gate consultation', () => {
   beforeAll(() => setHttpModeActive(true));
@@ -100,5 +117,112 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
     } finally {
       await runtime.close();
     }
+  });
+});
+
+/**
+ * Round 6 review fixup: the stub-based tests above only exercise the
+ * /readyz route's response shape. They never touch the actual
+ * EmbeddedAuthorizationServer.isReadyForTraffic implementation or its
+ * bootstrapReadyLatch field. These tests fix that gap by exercising
+ * the real method directly.
+ */
+describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch coverage', () => {
+  let tmpDir: string;
+
+  beforeAll(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'readyz-real-'));
+    process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+  });
+  afterAll(async () => {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('non-multi-user (trivial-consent only) → always ready, never reads storage', async () => {
+    // Wrap the storage's getBootstrapState to count calls.
+    const storage = new InMemoryAuthStorageLayer();
+    let getBootstrapCallCount = 0;
+    const originalGet = storage.getBootstrapState.bind(storage);
+    storage.getBootstrapState = async () => {
+      getBootstrapCallCount += 1;
+      return originalGet();
+    };
+    const as = new EmbeddedAuthorizationServer({
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: path.join(tmpDir, 'key-1.json'),
+      methods: [new TrivialConsentMethod({ defaultSubject: 'readyz-test' })],
+      storage,
+    });
+    expect(await as.isReadyForTraffic()).toBe(true);
+    expect(await as.isReadyForTraffic()).toBe(true);
+    expect(getBootstrapCallCount).toBe(0); // never read storage
+  });
+
+  it('multi-user pre-bootstrap → false; multi-user post-bootstrap → true', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const invites = new InviteTokenStore(randomBytes(32), storage);
+    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const method = new LocalAccountMethod({ storage, invites, rateLimiter });
+    const as = new EmbeddedAuthorizationServer({
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: path.join(tmpDir, 'key-2.json'),
+      methods: [method],
+      storage,
+    });
+    expect(await as.isReadyForTraffic()).toBe(false);
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+    expect(await as.isReadyForTraffic()).toBe(true);
+  });
+
+  it('latch: once bootstrap is observed complete, subsequent calls skip the storage read', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    let getBootstrapCallCount = 0;
+    const originalGet = storage.getBootstrapState.bind(storage);
+    storage.getBootstrapState = async () => {
+      getBootstrapCallCount += 1;
+      return originalGet();
+    };
+    const invites = new InviteTokenStore(randomBytes(32), storage);
+    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const method = new LocalAccountMethod({ storage, invites, rateLimiter });
+    const as = new EmbeddedAuthorizationServer({
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: path.join(tmpDir, 'key-3.json'),
+      methods: [method],
+      storage,
+    });
+    // First call: pre-bootstrap, hits storage.
+    expect(await as.isReadyForTraffic()).toBe(false);
+    expect(getBootstrapCallCount).toBe(1);
+    // Bootstrap, then call again. Storage hit (latch flips on this call).
+    await storage.markBootstrapComplete('local_admin', 'local-password');
+    expect(await as.isReadyForTraffic()).toBe(true);
+    const callsAfterFirstReady = getBootstrapCallCount;
+    expect(callsAfterFirstReady).toBeGreaterThan(1); // at least the bootstrap-complete call
+    // Subsequent calls — latch is on, MUST NOT increment the storage-call counter.
+    expect(await as.isReadyForTraffic()).toBe(true);
+    expect(await as.isReadyForTraffic()).toBe(true);
+    expect(await as.isReadyForTraffic()).toBe(true);
+    expect(getBootstrapCallCount).toBe(callsAfterFirstReady);
+  });
+
+  it('storage read failure pre-bootstrap → false (fail closed)', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    storage.getBootstrapState = async () => {
+      throw new Error('simulated storage outage');
+    };
+    const invites = new InviteTokenStore(randomBytes(32), storage);
+    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const method = new LocalAccountMethod({ storage, invites, rateLimiter });
+    const as = new EmbeddedAuthorizationServer({
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: path.join(tmpDir, 'key-4.json'),
+      methods: [method],
+      storage,
+    });
+    // Storage outage must NOT cause /readyz to return 200 (fail-closed
+    // is the documented behavior — a pod that can't read storage is
+    // not safely serving auth).
+    expect(await as.isReadyForTraffic()).toBe(false);
   });
 });
