@@ -302,9 +302,15 @@ export async function assertHostedDeploymentSafety(config: {
       `[StreamableHttpServer] Refusing to start: DOLLHOUSE_AUTH_METHODS configures ` +
       `a multi-user identity method on a non-loopback bind '${config.host}', but ` +
       `DOLLHOUSE_TRUSTED_PROXIES is unset. Per-IP rate limits would collapse to ` +
-      `the proxy's IP and brute-force protection would be ineffective. Set ` +
-      `DOLLHOUSE_TRUSTED_PROXIES to a comma-separated CIDR list (or 'loopback' for ` +
-      `loopback+linklocal+uniquelocal) describing trusted upstream proxies.`,
+      `the proxy's IP and brute-force protection would be ineffective.\n\n` +
+      `For native HTTPS deployments (TLS certificate at this server, no upstream ` +
+      `proxy): set DOLLHOUSE_TRUSTED_PROXIES=loopback. The 'loopback' keyword ` +
+      `tells Express to trust only loopback addresses (which never appear in ` +
+      `real client traffic), so X-Forwarded-* headers from external clients are ` +
+      `correctly ignored and req.ip is the TCP peer.\n\n` +
+      `For deployments behind a TLS-terminating reverse proxy (Cloudflare Tunnel, ` +
+      `nginx, ALB, Cloud Run, etc.): set DOLLHOUSE_TRUSTED_PROXIES to the proxy's ` +
+      `CIDR range, e.g. '10.0.0.0/8' or '127.0.0.1/32,fd00::/8'.`,
     );
   }
 }
