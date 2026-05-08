@@ -127,6 +127,15 @@ function keygripSign(data: string, key: string): string {
 /**
  * Minimal cookie-header parser. Returns the value for `name` or undefined.
  * Header format per RFC 6265: `name1=value1; name2=value2`.
+ *
+ * Cycle-10 BLOCKER fix: a malformed percent-encoded value (e.g.
+ * `_interaction=%GG`) makes `decodeURIComponent` throw URIError. The
+ * exception propagated through public callback URLs (GitHub
+ * callback, magic-link verify POST), surfacing as a 500 with a stack
+ * trace via Express's default error handler — leaking internal file
+ * paths to anyone willing to send a malformed cookie. Treat any
+ * decode failure as "no cookie" (the cookie is unverifiable, which
+ * is the same outcome as missing) and return undefined.
  */
 function parseCookieValue(header: string, name: string): string | undefined {
   const pairs = header.split(';');
@@ -135,7 +144,14 @@ function parseCookieValue(header: string, name: string): string | undefined {
     if (eqIdx < 0) continue;
     const k = pair.slice(0, eqIdx).trim();
     const v = pair.slice(eqIdx + 1).trim();
-    if (k === name) return decodeURIComponent(v);
+    if (k === name) {
+      try {
+        return decodeURIComponent(v);
+      } catch {
+        // Malformed percent-encoding — treat as missing cookie.
+        return undefined;
+      }
+    }
   }
   return undefined;
 }

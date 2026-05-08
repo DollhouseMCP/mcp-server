@@ -116,6 +116,57 @@ describe('Bootstrap gate (must-fix #22)', () => {
     expect(flow.interactionUrl).toMatch(/\/interaction\//);
   });
 
+  // Cycle-10 fix (TPW-3): must-fix #5 says PKCE S256 is mandatory and
+  // `plain` must be rejected. The dashboard cited tests that all use
+  // S256 — none actually drove the rejection path. A config regression
+  // re-enabling `plain` would have shipped silently.
+  it('must-fix #5: /authorize with code_challenge_method=plain is rejected', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const method = buildLocalMethod(storage);
+    harness = await startASHarness({
+      methods: [method],
+      storage,
+      skipAutoBootstrap: false, // bootstrapped so the gate is open
+    });
+
+    const meta = await fetchAuthServerMetadata(harness.baseUrl);
+    const params = new URLSearchParams({
+      response_type: 'code',
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      // S256-encoded values shape, but method=plain — must be rejected
+      // regardless of the challenge value.
+      code_challenge: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      code_challenge_method: 'plain',
+      resource: `${harness.publicBaseUrl}/mcp`,
+      scope: 'mcp',
+      state: 'pkce-plain-reject-test',
+    });
+    const resp = await fetch(`${meta.authorization_endpoint}?${params}`, {
+      redirect: 'manual',
+    });
+    // oidc-provider rejects with either a 400 inline error or a 303
+    // redirect back to the client carrying error=invalid_request.
+    // Both shapes prove the rejection — what we DON'T want is a
+    // 302/303 to /interaction (which would indicate the AS accepted
+    // the plain challenge and started a flow).
+    if (resp.status === 400) {
+      const body = await resp.json() as { error?: string; error_description?: string };
+      expect(body.error).toMatch(/invalid_request/);
+      // Must mention the unsupported method.
+      expect((body.error_description ?? '').toLowerCase()).toMatch(/plain|code_challenge|s256/);
+    } else if (resp.status === 303 || resp.status === 302) {
+      const location = resp.headers.get('location') ?? '';
+      // Redirect must be back to the client with an error param,
+      // NOT into /interaction (which would mean we accepted plain).
+      expect(location).not.toMatch(/\/interaction\//);
+      expect(location).toMatch(/error=invalid_request/);
+    } else {
+      throw new Error(`Unexpected status ${resp.status} on plain PKCE rejection — ` +
+        `expected 400 or 302/303 with error param`);
+    }
+  });
+
   it('trivial-consent mode → no gate, /authorize works without bootstrap', async () => {
     const storage = new InMemoryAuthStorageLayer();
     const method = new TrivialConsentMethod({ defaultSubject: 'todd', storage });

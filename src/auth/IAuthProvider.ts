@@ -6,9 +6,17 @@
  * knows nothing about Express, sessions, or the database — those
  * concerns live in the middleware and session wiring layers.
  *
- * Two implementations:
- * - LocalDevAuthProvider: self-signed ES256 JWTs for development
- * - OidcAuthProvider: validates against an external OIDC provider's JWKS
+ * Three implementations ship today (selected via DOLLHOUSE_AUTH_PROVIDER):
+ * - `EmbeddedAuthorizationServer` (DOLLHOUSE_AUTH_PROVIDER=embedded):
+ *   the §8.1 on-box authorization server. Issues + validates ES256
+ *   `at+jwt` access tokens. Multi-method (GitHub, magic-link,
+ *   local-password, trivial-consent). The recommended choice for
+ *   production deployments.
+ * - `OidcAuthProvider` (DOLLHOUSE_AUTH_PROVIDER=oidc): bridge mode that
+ *   validates tokens issued by an external OIDC provider against its
+ *   JWKS. Use when an upstream IdP already exists.
+ * - `LocalDevAuthProvider` (DOLLHOUSE_AUTH_PROVIDER=local): self-signed
+ *   ES256 JWTs for solo dev. Generates a keypair on first use.
  *
  * Swapping providers is a config change (DOLLHOUSE_AUTH_PROVIDER env var),
  * not a code change.

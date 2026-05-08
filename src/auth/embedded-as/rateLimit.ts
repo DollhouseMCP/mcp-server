@@ -54,8 +54,15 @@ const UNKNOWN_IP = 'unknown';
  * Strip the IPv4-mapped IPv6 prefix so `::ffff:1.2.3.4` and `1.2.3.4` share
  * the same bucket. Without this an attacker can bypass per-IP limits by
  * alternating address families.
+ *
+ * Cycle-10 fix: exported so other rate-limit consumers (e.g.
+ * `MagicLinkMethod.noteRequestRate`) can normalize consistently. The
+ * earlier shape kept this private to LocalLoginRateLimiter, leaving
+ * MagicLink keying its `perIpRequests` Map by raw IP — letting an
+ * attacker on dual-stack get 2× the per-IP budget by alternating v4
+ * and v6 forms of the same address.
  */
-function normalizeIp(ip: string): string {
+export function normalizeIp(ip: string): string {
   if (ip.startsWith('::ffff:')) return ip.slice(7);
   return ip;
 }

@@ -100,4 +100,36 @@ describe('verifyInteractionCookieMatches — H12 signature verification', () => 
     const req = makeReq(signedCookie(expectedUid, oldKey));
     expect(verifyInteractionCookieMatches(req, expectedUid, keys)).toEqual({ ok: true });
   });
+
+  // Cycle-10 BLOCKER regression: a malformed percent-encoded cookie
+  // value used to throw URIError unhandled, surfacing as a 500 with a
+  // stack trace via Express's default error handler. Public callback
+  // URLs (GitHub callback, magic-link verify POST) were exposed.
+  // After the fix, malformed cookies are treated as missing.
+  it('treats a malformed percent-encoded cookie value as missing (does not throw URIError)', () => {
+    const req = makeReq(`_interaction=%GG; _interaction.sig=anything`);
+    // Must not throw. Must return a structured rejection.
+    expect(() =>
+      verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS),
+    ).not.toThrow();
+    expect(verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS)).toEqual({
+      ok: false, reason: 'missing-cookie',
+    });
+  });
+
+  it('treats a malformed percent-encoded sig as missing (does not throw URIError)', () => {
+    // The unsigned part is fine but the .sig has bad encoding.
+    const req = makeReq(`_interaction=${expectedUid}; _interaction.sig=%ZZ`);
+    expect(() =>
+      verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS),
+    ).not.toThrow();
+    const result = verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Either treated as missing or as invalid-signature, depending on
+      // which decode short-circuits first. Both are acceptable —
+      // critical thing is no URIError leak.
+      expect(['missing-cookie', 'invalid-signature']).toContain(result.reason);
+    }
+  });
 });

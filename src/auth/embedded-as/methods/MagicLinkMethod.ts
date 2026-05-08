@@ -42,6 +42,7 @@ import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
+import { normalizeIp } from '../rateLimit.js';
 
 const PROVIDER_NAME = 'magic-link';
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -358,9 +359,17 @@ export class MagicLinkMethod implements IAuthMethod {
       // Per-email + per-IP rate limit. `noteRequestRate` is async to leave
       // room for the storage-backed migration in Phase 5; today it's a
       // sync Map operation under an async signature.
+      //
+      // Cycle-10 fix: normalize the IP so `::ffff:1.2.3.4` and `1.2.3.4`
+      // share a bucket. Without this, an attacker on dual-stack Node
+      // got 2× the per-IP rate-limit budget by alternating address
+      // families. `LocalLoginRateLimiter` already does this; the gap
+      // was that MagicLink used the raw IP. Now both share the helper
+      // exported from rateLimit.ts.
       const emailOk = await this.noteRequestRate(this.perEmailRequests, email, REQUEST_RATE_LIMIT_PER_EMAIL, 'email');
       if (!emailOk) return generic();
-      const ipOk = await this.noteRequestRate(this.perIpRequests, ip, REQUEST_RATE_LIMIT_PER_IP, 'ip');
+      const normalizedIp = normalizeIp(ip);
+      const ipOk = await this.noteRequestRate(this.perIpRequests, normalizedIp, REQUEST_RATE_LIMIT_PER_IP, 'ip');
       if (!ipOk) return generic();
 
       // Issue token + send. Always issue and always attempt send so the

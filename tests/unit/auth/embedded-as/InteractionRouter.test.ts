@@ -325,5 +325,58 @@ describe('InteractionRouter — multi-method dispatch', () => {
         await h.close();
       }
     });
+
+    // Cycle-10 HIGH regression: methods that render multiple <form>
+    // elements on the same page (LocalAccountMethod renders two — one
+    // for sign-in, one for invite redemption) used to get the CSRF
+    // token injected into ONLY the first form. The second form's
+    // POST was rejected with 403 because no csrf_token field. Pin
+    // the fix: ensureCsrfInForm runs on every form on the page.
+    it('multi-form pages: CSRF token is injected into EVERY <form>, not just the first', async () => {
+      const localStorage = new InMemoryAuthStorageLayer();
+      const localDetails: OidcInteractionDetails = {
+        uid: 'multi-form-uid',
+        prompt: { name: 'login' },
+        params: { client_id: 'c', scope: 'mcp' },
+      };
+      // Method that renders two forms — the bug case.
+      const multiFormMethod: IAuthMethod = {
+        id: 'local-password',
+        displayName: 'Sign in or set password',
+        async beginInteraction() {
+          return {
+            kind: 'render-html',
+            html: `
+              <form method="post" id="login">
+                <button name="action" value="login">Sign in</button>
+              </form>
+              <form method="post" id="invite">
+                <button name="action" value="set-password">Redeem invite</button>
+              </form>
+            `,
+            csrfToken: '',
+          } satisfies InteractionStep;
+        },
+        async completeInteraction(): Promise<InteractionResult> {
+          return { kind: 'denied', reason: 'not exercised' };
+        },
+        async findAccount() { return null; },
+      };
+      const h = await startHarness([multiFormMethod], localStorage, localDetails);
+      try {
+        const getRes = await fetch(`${h.url}/interaction/multi-form-uid`);
+        expect(getRes.status).toBe(200);
+        const getBody = await getRes.text();
+        // Count csrf_token inputs — must be 2, one per <form>.
+        const csrfInputCount = (getBody.match(/name="csrf_token"/g) ?? []).length;
+        expect(csrfInputCount).toBe(2);
+        // Both must have the SAME value (single per-render token).
+        const csrfMatches = [...getBody.matchAll(/name="csrf_token"\s+value="([^"]+)"/g)];
+        expect(csrfMatches).toHaveLength(2);
+        expect(csrfMatches[0]![1]).toBe(csrfMatches[1]![1]);
+      } finally {
+        await h.close();
+      }
+    });
   });
 });

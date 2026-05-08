@@ -410,11 +410,22 @@ function makeContext(
 }
 
 function ensureCsrfInForm(html: string, csrfToken: string): string {
-  // Insert a hidden CSRF input as the first <form> child. Methods can include
-  // their own placeholder (the empty csrfInput in TrivialConsentMethod is a
-  // no-op when no token was available), but the router is the source of truth.
+  // Insert a hidden CSRF input as the first child of EVERY <form>.
+  // Methods can include their own placeholder (the empty csrfInput
+  // in TrivialConsentMethod is a no-op when no token was available),
+  // but the router is the source of truth.
+  //
+  // Cycle-10 HIGH fix: previously this used a single regex replace
+  // (no /g flag), so only the FIRST <form> on the page got the CSRF
+  // token. `LocalAccountMethod`'s render renders TWO <form>s on the
+  // login-or-invite page (one for sign-in, one for invite redemption);
+  // the second form's POST was rejected with 403 because no
+  // csrf_token field. The fix: replaceAll-equivalent regex with /g
+  // flag so every form gets a token. They share the same per-render
+  // CSRF token, which is correct — the token is bound to the
+  // interaction, not to a specific form.
   return html.replace(
-    /<form\b([^>]*)>/i,
+    /<form\b([^>]*)>/gi,
     (_match, attrs) =>
       `<form${attrs}>\n      <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">`,
   );

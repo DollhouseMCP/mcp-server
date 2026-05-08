@@ -122,6 +122,49 @@ describe('assertHostedDeploymentSafety', () => {
     })).rejects.toThrow(/DOLLHOUSE_TRUSTED_PROXIES is unset/);
   });
 
+  it('cycle-9: error message names the loopback escape valve for native HTTPS deployments', async () => {
+    // Cycle-10 fix (TPW-2): the cycle-9 commit specifically rewrote
+    // this error to be operator-actionable — naming
+    // `DOLLHOUSE_TRUSTED_PROXIES=loopback` as the answer for native
+    // HTTPS deployments and CIDR examples for upstream proxies. The
+    // earlier test only matched the leading "is unset" phrase, which
+    // existed before cycle 9 too — a regression that reverted the
+    // operator-actionable text would have passed the prior test.
+    let err: unknown;
+    try {
+      await assertHostedDeploymentSafety({
+        host: '0.0.0.0',
+        methods: ['github'],
+        authEnabled: true,
+        trustedProxies: undefined,
+      });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    // Native HTTPS escape valve named.
+    expect(msg).toMatch(/DOLLHOUSE_TRUSTED_PROXIES=loopback/);
+    expect(msg).toMatch(/native HTTPS/i);
+    // Upstream-proxy guidance with concrete CIDR example.
+    expect(msg).toMatch(/CIDR/);
+    expect(msg).toMatch(/Cloudflare Tunnel|nginx|ALB|Cloud Run/);
+  });
+
+  it('cycle-9: H2 error message names the bootstrap CLI step alongside the env var', async () => {
+    let err: unknown;
+    try {
+      await assertHostedDeploymentSafety({
+        host: '0.0.0.0',
+        methods: ['github'],
+        authEnabled: false,
+        trustedProxies: ['10.0.0.0/8'],
+      });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    expect(msg).toMatch(/DOLLHOUSE_AUTH_ENABLED is false/);
+    expect(msg).toMatch(/bootstrap-admin CLI/);
+  });
+
   it('H4: passes when non-loopback bind + multi-user + auth enabled + trusted proxies set', async () => {
     await expect(assertHostedDeploymentSafety({
       host: '0.0.0.0',

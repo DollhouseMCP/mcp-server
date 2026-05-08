@@ -349,6 +349,51 @@ function runContractSuite(
       // Untouched.
       expect(await storage.genericGet('AccessToken', 't-2')).not.toBeNull();
     });
+
+    // Cycle-10 fix (H10-4): clearGenericByModels was implemented on
+    // all 3 backends and is load-bearing for must-fix #14 mode-switch
+    // invalidation, but had zero parity coverage. The storage-parity
+    // rule (added Round 5 specifically to catch this drift class) was
+    // violated because clearGenericByModels predates the rule. Pin
+    // it now.
+    it('clearGenericByModels removes only the named models (H10-4 / must-fix #14)', async () => {
+      await storage.genericSet('Session', 's-cgm-1', { uid: 'session-1' });
+      await storage.genericSet('Session', 's-cgm-2', { uid: 'session-2' });
+      await storage.genericSet('Grant', 'g-cgm-1', { accountId: 'sub-1' });
+      await storage.genericSet('AccessToken', 'at-cgm-1', { sub: 'sub-1' });
+      await storage.genericSet('RefreshToken', 'rt-cgm-1', { sub: 'sub-1' });
+      // Untouched model.
+      await storage.genericSet('AuthBootstrap', 'state', { completed: false });
+
+      const cleared = await storage.clearGenericByModels(
+        ['Session', 'Grant', 'AccessToken', 'RefreshToken'],
+      );
+      // At minimum, we cleared the 5 entries we just inserted (other
+      // tests in the same suite may have left additional entries
+      // under these models, so use >=).
+      expect(cleared).toBeGreaterThanOrEqual(5);
+
+      expect(await storage.genericGet('Session', 's-cgm-1')).toBeNull();
+      expect(await storage.genericGet('Session', 's-cgm-2')).toBeNull();
+      expect(await storage.genericGet('Grant', 'g-cgm-1')).toBeNull();
+      expect(await storage.genericGet('AccessToken', 'at-cgm-1')).toBeNull();
+      expect(await storage.genericGet('RefreshToken', 'rt-cgm-1')).toBeNull();
+      // Untouched model survives.
+      expect(await storage.genericGet('AuthBootstrap', 'state')).toEqual({ completed: false });
+    });
+
+    it('clearGenericByModels returns 0 when no entries match the named models', async () => {
+      // Empty starting state for these models — clear should be a no-op.
+      const cleared = await storage.clearGenericByModels(['NonexistentModelX', 'NonexistentModelY']);
+      expect(cleared).toBe(0);
+    });
+
+    it('clearGenericByModels with an empty list is a no-op', async () => {
+      await storage.genericSet('Session', 's-noop', { uid: 'untouched' });
+      const cleared = await storage.clearGenericByModels([]);
+      expect(cleared).toBe(0);
+      expect(await storage.genericGet('Session', 's-noop')).toEqual({ uid: 'untouched' });
+    });
   });
 
   describe('bootstrap state (must-fix #22)', () => {

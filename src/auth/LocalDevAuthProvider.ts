@@ -20,7 +20,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { SignJWT, jwtVerify, importJWK, exportJWK, generateKeyPair } from 'jose';
+import { SignJWT, jwtVerify, importJWK, exportJWK, generateKeyPair, errors as joseErrors } from 'jose';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IAuthProvider, AuthResult, AuthClaims, IssueOptions } from './IAuthProvider.js';
@@ -84,13 +84,25 @@ export class LocalDevAuthProvider implements IAuthProvider {
       };
 
       return { ok: true, claims };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('exp')) {
+    } catch (error) {
+      // Cycle-10 fix (H10-3): use jose's typed errors instead of
+      // substring-matching .message. Substrings like 'exp' / 'signature'
+      // collide with unrelated error text ('issuer' contains 'iss',
+      // 'expected' contains 'exp', 'unexpected signal' contains
+      // 'signature') and produce misleading reasons in operator logs.
+      // Cycle 8 made the same fix in EmbeddedAuthorizationServer.validate;
+      // this is the sibling site that was missed at the time.
+      if (error instanceof joseErrors.JWTExpired) {
         return { ok: false, reason: 'token expired' };
       }
-      if (message.includes('signature')) {
+      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
+      }
+      if (error instanceof joseErrors.JWTClaimValidationFailed) {
+        const claim = error.claim;
+        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
+        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
+        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
       }
       return { ok: false, reason: 'token validation failed' };
     }

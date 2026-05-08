@@ -35,16 +35,24 @@ class AlwaysFailGetStorage implements IAuthStorageLayer {
     throw new Error('storage unreachable (simulated init failure)');
   }
 
+  // Cycle-10 fix (TPW-1): kept up to date with IAuthStorageLayer.
   findAccountByExternalId(p: string, e: string) { return this.inner.findAccountByExternalId(p, e); }
   upsertAccount(a: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').StoredAccount) { return this.inner.upsertAccount(a); }
   getAccount(s: string) { return this.inner.getAccount(s); }
+  setAccountRoles(s: string, r: string[]) { return this.inner.setAccountRoles(s, r); }
+  updateAccountLastAuth(s: string, t: number) { return this.inner.updateAccountLastAuth(s, t); }
+  getBootstrapState() { return this.inner.getBootstrapState(); }
+  markBootstrapComplete(s: string, m: 'local-password' | 'magic-link' | 'github') { return this.inner.markBootstrapComplete(s, m); }
   recordIdentityEvent(e: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').IdentityAuditEvent) { return this.inner.recordIdentityEvent(e); }
   listIdentityEvents(f?: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').IdentityEventFilter) { return this.inner.listIdentityEvents(f); }
   findGrantsByAccountId(s: string) { return this.inner.findGrantsByAccountId(s); }
   genericSet(m: string, i: string, p: unknown, e?: number) { return this.inner.genericSet(m, i, p, e); }
   genericDestroy(m: string, i: string) { return this.inner.genericDestroy(m, i); }
+  genericConsume(m: string, i: string) { return this.inner.genericConsume(m, i); }
+  genericInsertIfAbsent(m: string, i: string, p: unknown, e?: number) { return this.inner.genericInsertIfAbsent(m, i, p, e); }
   clearGenericByModels(m: readonly string[]) { return this.inner.clearGenericByModels(m); }
   genericFindByUid(uid: string) { return this.inner.genericFindByUid?.(uid) ?? Promise.resolve(null); }
+  genericRevokeByGrantId(grantId: string) { return this.inner.genericRevokeByGrantId?.(grantId) ?? Promise.resolve(); }
 }
 
 describe('EmbeddedAuthorizationServer — H8 well-known route init-failure', () => {
