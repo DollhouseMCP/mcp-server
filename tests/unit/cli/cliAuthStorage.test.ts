@@ -10,8 +10,21 @@
  *   - memory backend → no DB pool opened
  *   - postgres backend without DOLLHOUSE_DATABASE_URL → clear error
  *
- * The full postgres-with-DB-URL path is exercised end-to-end by the
- * integration suite (storage-parity.test.ts runs the same backends).
+ * The postgres-with-valid-DB-URL happy path is intentionally NOT unit
+ * tested here. Mocking the postgres.js + Drizzle stack at unit level
+ * would lock in a specific transitive call shape that the integration
+ * suite already exercises against a real Postgres in CI (when
+ * DOLLHOUSE_REQUIRE_PG_AUTH_TESTS=1 is set, `storage-parity.test.ts`
+ * runs the same `createAuthStorage` postgres branch this helper
+ * delegates to). A unit-level stub would catch wiring regressions
+ * cheaply but at the cost of test fidelity to a real connection
+ * lifecycle. Rather than add a synthetic mock, we rely on:
+ *   1. Integration coverage via storage-parity (gated, runs in CI).
+ *   2. Manual smoke verification at deploy time:
+ *      `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres
+ *       DOLLHOUSE_DATABASE_URL=<...>
+ *       node dist/cli/admin-bootstrap.js --method github --github-id 1`
+ *      which was confirmed end-to-end in cycle 5 review.
  */
 
 import { describe, it, expect, afterEach } from '@jest/globals';

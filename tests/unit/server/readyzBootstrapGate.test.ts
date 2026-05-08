@@ -101,11 +101,13 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
     }
   });
 
-  it('flips between 503 and 200 when bootstrap completes mid-run', async () => {
-    // Pins the operator workflow: pod boots, /readyz=503, operator
-    // runs bootstrap CLI, /readyz becomes 200, k8s starts routing
-    // traffic. Locks the no-restart-required behavior — the AS
-    // re-reads bootstrap state on every /readyz hit.
+  it('route shape: /readyz response flips when isReadyForTraffic flips (stub-driven)', async () => {
+    // Round 6 review fixup: this test pins the /readyz Express route
+    // shape — that the route correctly translates a true/false return
+    // from the oauthProvider's isReadyForTraffic into a 200/503
+    // response. It does NOT exercise the latch in
+    // EmbeddedAuthorizationServer.isReadyForTraffic itself; that's
+    // what the second describe block below covers.
     let bootstrapped = false;
     const runtime = await buildRuntime(async () => bootstrapped);
     try {
@@ -204,6 +206,85 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     expect(await as.isReadyForTraffic()).toBe(true);
     expect(await as.isReadyForTraffic()).toBe(true);
     expect(getBootstrapCallCount).toBe(callsAfterFirstReady);
+  });
+
+  it('Round 7: warns at init when refreshRotationCheckIpUa=true and DOLLHOUSE_COOKIE_SIGNING_SECRET is unset', async () => {
+    // The cookie key doubles as the HMAC salt for the IP/UA hashes
+    // stamped onto refresh tokens. In multi-replica HA with file-based
+    // cookie keys, replicas HMAC the same IP+UA differently and
+    // legitimate refreshes get revoked. The fix: warn at AS init when
+    // the operator opted into IP/UA grace but didn't set the env var
+    // that pins the key across replicas.
+    //
+    // The warning fires inside initialize(); validate() triggers
+    // ensureInitialized() so we use that to drive init.
+    const savedEnv = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+    delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+    const warnings: string[] = [];
+    const { logger } = await import('../../../src/utils/logger.js');
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = ((msg: string, ...rest: unknown[]) => {
+      warnings.push(String(msg));
+      return originalWarn(msg, ...rest as []);
+    }) as typeof logger.warn;
+    try {
+      const storage = new InMemoryAuthStorageLayer();
+      const invites = new InviteTokenStore(randomBytes(32), storage);
+      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      const method = new LocalAccountMethod({ storage, invites, rateLimiter });
+      const as = new EmbeddedAuthorizationServer({
+        publicBaseUrl: 'http://127.0.0.1:65530',
+        keyFilePath: path.join(tmpDir, 'key-warn.json'),
+        methods: [method],
+        storage,
+        refreshRotationCheckIpUa: true,
+      });
+      // Force initialize() so the warn fires. validate() triggers it.
+      await as.validate('not-a-real-token');
+      const matched = warnings.find((w) =>
+        /refreshRotationCheckIpUa is enabled but DOLLHOUSE_COOKIE_SIGNING_SECRET is unset/.test(w),
+      );
+      expect(matched).toBeDefined();
+    } finally {
+      logger.warn = originalWarn;
+      if (savedEnv === undefined) delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+      else process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = savedEnv;
+    }
+  });
+
+  it('Round 7: does NOT warn when DOLLHOUSE_COOKIE_SIGNING_SECRET is set', async () => {
+    const savedEnv = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+    // Hex string ≥32 bytes so loadOrGenerateCookieSigningKeys accepts it.
+    process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = randomBytes(32).toString('hex');
+    const warnings: string[] = [];
+    const { logger } = await import('../../../src/utils/logger.js');
+    const originalWarn = logger.warn.bind(logger);
+    logger.warn = ((msg: string, ...rest: unknown[]) => {
+      warnings.push(String(msg));
+      return originalWarn(msg, ...rest as []);
+    }) as typeof logger.warn;
+    try {
+      const storage = new InMemoryAuthStorageLayer();
+      const invites = new InviteTokenStore(randomBytes(32), storage);
+      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      const method = new LocalAccountMethod({ storage, invites, rateLimiter });
+      const as = new EmbeddedAuthorizationServer({
+        publicBaseUrl: 'http://127.0.0.1:65530',
+        keyFilePath: path.join(tmpDir, 'key-nowarn.json'),
+        methods: [method],
+        storage,
+        refreshRotationCheckIpUa: true,
+      });
+      await as.validate('not-a-real-token');
+      const matched = warnings.find((w) =>
+        /refreshRotationCheckIpUa is enabled but DOLLHOUSE_COOKIE_SIGNING_SECRET is unset/.test(w),
+      );
+      expect(matched).toBeUndefined();
+    } finally {
+      logger.warn = originalWarn;
+      if (savedEnv === undefined) delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+      else process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = savedEnv;
+    }
   });
 
   it('storage read failure pre-bootstrap → false (fail closed)', async () => {
