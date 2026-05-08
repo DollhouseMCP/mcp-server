@@ -313,9 +313,15 @@ const envSchema = z.object({
   /**
    * Comma-separated list of auth methods exposed by the embedded AS.
    * Recognized values (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
-   * 'trivial-consent', 'github', 'local-password', 'magic-link', 'oidc-bridge'.
-   * Defaults to 'trivial-consent' (solo localhost). Single-method per AS today;
-   * multi-method chooser UI is future work.
+   * 'trivial-consent', 'github', 'local-password', 'magic-link'.
+   *
+   * Multi-method is supported (Phase 2 shipped) — list any combination
+   * and the AS exposes them all simultaneously via the LoginChooser
+   * at /interaction time.
+   *
+   * Defaults to 'trivial-consent' (solo localhost) when unset.
+   * 'oidc-bridge' is NOT a method id — it's the outer provider mode
+   * selected via DOLLHOUSE_AUTH_PROVIDER=oidc.
    */
   DOLLHOUSE_AUTH_METHODS: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
@@ -343,6 +349,37 @@ const envSchema = z.object({
    * read at point-of-use to keep them out of debug dumps.
    */
   DOLLHOUSE_GITHUB_CLIENT_ID: z.string().optional(),
+
+  /**
+   * Cycle-8 fix (H8): cookie signing secret. When set, must be hex-
+   * encoded and decode to at least 32 bytes. Used as the keygrip key
+   * for oidc-provider's signed-cookie path AND (when
+   * `refreshRotationCheckIpUa=true`) as the HMAC salt for IP/UA
+   * hashes on refresh tokens. In multi-replica HA, every replica
+   * MUST read the same value here — file-loaded keys diverge per
+   * replica and break legitimate refresh rotations.
+   *
+   * The shape validation here catches "set but decodes to <32 bytes"
+   * at config load instead of at AS init (where the throw is buried
+   * inside `loadOrGenerateCookieSigningKeys`).
+   */
+  DOLLHOUSE_COOKIE_SIGNING_SECRET: z.string().trim().optional()
+    .refine(
+      (v) => {
+        if (v === undefined || v === '') return true;
+        // Must be hex-encoded ≥32 bytes (64 hex chars).
+        if (!/^[0-9a-fA-F]+$/.test(v)) return false;
+        if (v.length < 64) return false;
+        return true;
+      },
+      {
+        message:
+          'DOLLHOUSE_COOKIE_SIGNING_SECRET must be hex-encoded and decode to at least ' +
+          '32 bytes (64 hex characters). Generate one with: ' +
+          'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
+      },
+    )
+    .transform((v) => (v === '' ? undefined : v)),
 
   /**
    * Round 5 / H4: trusted-proxy CIDR list for `app.set('trust proxy')`.

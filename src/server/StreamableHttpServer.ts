@@ -165,12 +165,24 @@ function getMcpSessionId(req: Request): string | undefined {
   return normalizeUserInput(sessionId);
 }
 
-function getClientKey(req: Request): string {
-  const forwardedFor = req.headers['x-forwarded-for'];
-  if (typeof forwardedFor === 'string' && forwardedFor.trim()) {
-    return normalizeUserInput(forwardedFor.split(',')[0].trim()) ?? 'unknown';
-  }
-
+export function getClientKey(req: Request): string {
+  // Cycle-8 fix (H1): use Express's `req.ip` which resolves through
+  // the configured `app.set('trust proxy', ...)` chain. The earlier
+  // shape read `x-forwarded-for` directly and always trusted the
+  // first hop — bypassing trust-proxy entirely. An attacker
+  // connecting directly to a non-loopback bind could spoof their
+  // identity by setting the header to defeat per-IP rate limiting.
+  //
+  // Behavior across deployment shapes:
+  //   - Native HTTPS (no upstream proxy, DOLLHOUSE_TRUSTED_PROXIES
+  //     unset or 'loopback'): `req.ip` is the TCP peer; the header
+  //     is ignored. Correct.
+  //   - Behind a TLS-terminating proxy with DOLLHOUSE_TRUSTED_PROXIES
+  //     set to that proxy's CIDR: `req.ip` is resolved by walking
+  //     the X-Forwarded-For chain trusting only configured hops.
+  //     Correct.
+  //   - Behind a proxy with trusted proxies UNSET on a non-loopback
+  //     bind: blocked at startup by `assertHostedDeploymentSafety`.
   return normalizeUserInput(req.ip || req.socket.remoteAddress || 'unknown') ?? 'unknown';
 }
 

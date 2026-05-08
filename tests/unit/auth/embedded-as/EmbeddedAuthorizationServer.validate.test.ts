@@ -106,6 +106,21 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     const token = await mintToken();
     const result = await as.validate(token);
     expect(result.ok).toBe(true);
+    // Cycle-8 fix: assert the SHAPE of claims, not just that
+    // validation passed. A regression in `claimsFromPayload` that
+    // dropped fields would otherwise pass this test silently.
+    if (result.ok) {
+      // Cycle-8 fix: assert the SHAPE of claims, not just that
+      // validation passed. A regression in `claimsFromPayload` that
+      // dropped fields would otherwise pass this test silently.
+      // AuthClaims fields per src/auth/IAuthProvider.ts: sub,
+      // displayName, email, tenantId, scopes, roles, exp.
+      expect(result.claims.sub).toBe('local-user');
+      expect(typeof result.claims.exp).toBe('number');
+      // scopes derived from the `scope` claim — `mcp` must be there
+      // since validate() rejected the no-mcp-scope path otherwise.
+      expect(result.claims.scopes).toContain('mcp');
+    }
   });
 
   it('rejects token with typ: "JWT" (not at+jwt) — RFC 9068', async () => {

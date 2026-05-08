@@ -64,6 +64,33 @@ const ALGORITHM = 'ES256';
 const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
 const DEFAULT_CLIENT_ID = 'dollhouse-claude-connector';
 
+/**
+ * Cycle-8 fix (B1): predicate that decides whether oidc-provider's
+ * `proxy` setting should be true (trust X-Forwarded-Proto/Host) or
+ * false (treat the request as terminal).
+ *
+ * Returns true when `DOLLHOUSE_TRUSTED_PROXIES` names at least one
+ * upstream proxy that is NOT just the loopback default. The two
+ * supported tester deployment shapes:
+ *   - Native HTTPS (env unset or only 'loopback'): predicate returns
+ *     false; oidc-provider uses Node's view of the request directly.
+ *   - Behind a TLS-terminating proxy (env names a real CIDR): predicate
+ *     returns true; oidc-provider walks X-Forwarded-Proto/Host through
+ *     the trust-proxy chain Express resolves.
+ *
+ * Exported so unit tests can pin the matrix without spinning up the AS.
+ */
+export function shouldTrustUpstreamProxy(
+  trustedProxies: readonly string[] | undefined,
+): boolean {
+  if (!Array.isArray(trustedProxies) || trustedProxies.length === 0) return false;
+  // 'loopback' alone means no upstream proxy — Express's loopback
+  // shorthand is the default and is what we set when nothing is
+  // configured. Treat it as the unset case.
+  if (trustedProxies.length === 1 && trustedProxies[0] === 'loopback') return false;
+  return true;
+}
+
 export interface EmbeddedAuthorizationServerOptions {
   publicBaseUrl?: string;
   mcpPath?: string;
@@ -440,6 +467,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * Without this, /readyz at a 10s probe interval × N replicas
    * generates sustained read traffic against `auth_kv` indefinitely
    * even though the answer can never change again.
+   *
+   * Concurrency: under concurrent /readyz probes (Kubernetes liveness
+   * + readiness racing), two callers can both observe the latch as
+   * `false`, both read storage, and both write `true`. That's benign:
+   * both writes converge to the same value and the worst case is one
+   * extra storage read per cold-start probe. The latch is monotonic
+   * `false → true` and never reverts, so this is not a race in any
+   * meaningful sense — it's a converging idempotent write.
    */
   private bootstrapReadyLatch = false;
 
@@ -1013,9 +1048,28 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
     const provider = new OidcProvider(this.issuer, config);
 
-    // Match the existing-test expectation that errors throw rather than render
-    // a redirect-with-error in dev; this also surfaces config issues early.
-    provider.proxy = false;
+    // Cycle-8 fix (B1): align oidc-provider's proxy setting with the
+    // operator's trust-proxy configuration. `proxy` controls whether
+    // X-Forwarded-Proto/Host headers are trusted when oidc-provider
+    // computes the request scheme/host for redirect URI validation
+    // and similar checks.
+    //
+    //   - Native HTTPS at the server (DOLLHOUSE_TRUSTED_PROXIES unset
+    //     or only 'loopback'): server scheme is what Node sees; no
+    //     upstream proxy to trust. proxy=false is correct.
+    //   - Behind a TLS-terminating upstream proxy
+    //     (DOLLHOUSE_TRUSTED_PROXIES set to that proxy's CIDR):
+    //     server is HTTP, proxy supplies X-Forwarded-Proto=https
+    //     and X-Forwarded-Host=public.example.com. proxy=true is
+    //     required or oidc-provider rejects https:// redirect URIs
+    //     as "not matching" the http:// scheme it computes from req.
+    //
+    // The earlier hardcoded `false` broke every TLS-terminating
+    // reverse-proxy deployment. shouldTrustUpstreamProxy() is
+    // exported for unit testing and reads the same env source of
+    // truth that drives `app.set('trust proxy')` in
+    // StreamableHttpServer.
+    provider.proxy = shouldTrustUpstreamProxy(env.DOLLHOUSE_TRUSTED_PROXIES);
 
     // privateJwk carries `d`/`p`/`q`/etc; strip those for the public key
     // import so signature verification can't accidentally use the private
