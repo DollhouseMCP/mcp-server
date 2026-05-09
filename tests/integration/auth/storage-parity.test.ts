@@ -367,6 +367,60 @@ function runContractSuite(
       expect(found).toBeNull();
     });
 
+    // Cycle-15 fix (HIGH-2): genericInsertIfAbsent backs InviteTokenStore
+    // single-use enforcement. All 3 backends implement it with different
+    // atomicity primitives (Map check-and-set, lock+RMW, INSERT...ON
+    // CONFLICT DO NOTHING). The storage-parity rule says every method
+    // must round-trip through the contract suite — this one slipped.
+    it('genericInsertIfAbsent: first insert returns true and stores the payload', async () => {
+      const inserted = await storage.genericInsertIfAbsent(
+        'ConsumedInvite', 'jti-1', { consumed: true },
+      );
+      expect(inserted).toBe(true);
+      expect(await storage.genericGet('ConsumedInvite', 'jti-1')).toEqual({ consumed: true });
+    });
+
+    it('genericInsertIfAbsent: second insert with same key returns false (does not overwrite)', async () => {
+      await storage.genericInsertIfAbsent('ConsumedInvite', 'jti-2', { consumed: true, by: 'first' });
+      const second = await storage.genericInsertIfAbsent(
+        'ConsumedInvite', 'jti-2', { consumed: true, by: 'second' },
+      );
+      expect(second).toBe(false);
+      // Original payload preserved — the second insert did not overwrite.
+      expect(await storage.genericGet('ConsumedInvite', 'jti-2')).toEqual({
+        consumed: true, by: 'first',
+      });
+    });
+
+    it('genericInsertIfAbsent: concurrent inserts with same key — exactly one wins', async () => {
+      // Pin the atomicity contract: N concurrent inserts of the same
+      // (model, id) — exactly one returns true, the rest return false.
+      // Postgres guarantees this via INSERT...ON CONFLICT DO NOTHING
+      // RETURNING; in-memory and filesystem use single-process
+      // serialization which gives the same observable behavior.
+      const candidates = ['a', 'b', 'c', 'd', 'e'];
+      const results = await Promise.all(
+        candidates.map((c) =>
+          storage.genericInsertIfAbsent('ConsumedInvite', 'jti-race', { winner: c }),
+        ),
+      );
+      const wins = results.filter((r) => r === true);
+      const losses = results.filter((r) => r === false);
+      expect(wins.length).toBe(1);
+      expect(losses.length).toBe(candidates.length - 1);
+    });
+
+    it('genericInsertIfAbsent: respects expiresInSec — expired entry is treated as absent', async () => {
+      // Insert with a past TTL so the row is immediately considered expired.
+      await storage.genericInsertIfAbsent('ConsumedInvite', 'jti-expired', { v: 1 }, -1);
+      // The next insert with the same key should succeed because the
+      // prior entry is expired.
+      const second = await storage.genericInsertIfAbsent(
+        'ConsumedInvite', 'jti-expired', { v: 2 },
+      );
+      expect(second).toBe(true);
+    });
+
     it('genericRevokeByGrantId removes every entry referencing the grant id (H14)', async () => {
       await storage.genericSet('Grant', 'g-revoke', { accountId: 'sub-1' });
       await storage.genericSet('AccessToken', 't-1', { grantId: 'g-revoke', sub: 'sub-1' });

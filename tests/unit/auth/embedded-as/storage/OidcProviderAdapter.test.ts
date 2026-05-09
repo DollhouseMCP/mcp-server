@@ -146,6 +146,46 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(c?.consumed).toBeUndefined();
   });
 
+  // ---- Cycle-15 fix: hashRotationAttribute salted branch coverage ----
+  //
+  // hashRotationAttribute has two production paths: with salt (HMAC-
+  // SHA256) and without (plain SHA-256). All other tests in this file
+  // use the unsalted form. The cycle-12 IP/UA hashing in production
+  // ALWAYS passes a salt (state.cookieKeys[0]). Without a test for the
+  // salted branch, a regression that swapped the branches or dropped
+  // the HMAC path would not be caught.
+
+  describe('hashRotationAttribute salted branch (Cycle-15)', () => {
+    it('produces a different hash from the unsalted form for the same input', () => {
+      const value = '203.0.113.42';
+      const unsalted = hashRotationAttribute(value);
+      const salted = hashRotationAttribute(value, 'deployment-secret-32-bytes-or-more');
+      expect(salted).not.toBe(unsalted);
+      expect(salted).toMatch(/^[0-9a-f]{64}$/); // 32-byte hex
+    });
+
+    it('different salts produce different hashes for the same input', () => {
+      const value = '203.0.113.42';
+      const a = hashRotationAttribute(value, 'salt-a');
+      const b = hashRotationAttribute(value, 'salt-b');
+      expect(a).not.toBe(b);
+    });
+
+    it('same salt + same input produces stable output (HMAC determinism)', () => {
+      const a = hashRotationAttribute('203.0.113.42', 'shared-salt');
+      const b = hashRotationAttribute('203.0.113.42', 'shared-salt');
+      expect(a).toBe(b);
+    });
+
+    it('empty-string salt falls back to unsalted SHA-256', () => {
+      // The function checks `salt && salt.length > 0`; empty string
+      // takes the unsalted branch.
+      const empty = hashRotationAttribute('203.0.113.42', '');
+      const unsalted = hashRotationAttribute('203.0.113.42');
+      expect(empty).toBe(unsalted);
+    });
+  });
+
   // ---- Round 5 / H1: opt-in IP/UA-bound grace window ----
 
   describe('refreshRotationCheckIpUa: true', () => {

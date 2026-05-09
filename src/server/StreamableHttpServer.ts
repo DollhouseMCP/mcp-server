@@ -9,6 +9,7 @@ import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { normalizeIp } from '../auth/embedded-as/rateLimit.js';
+import { pickHeaderValue } from '../auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { logger } from '../utils/logger.js';
 import { assertSafePublicBaseUrl } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
@@ -161,9 +162,12 @@ function getRequestId(req: Request): unknown {
 }
 
 function getMcpSessionId(req: Request): string | undefined {
-  const headerValue = req.headers['mcp-session-id'];
-  const sessionId = Array.isArray(headerValue) ? headerValue[0] : headerValue;
-  return normalizeUserInput(sessionId);
+  // Cycle-15 fix (HIGH-1): use the shared pickHeaderValue helper
+  // that cycle-13 extracted for the user-agent path. Inline
+  // `Array.isArray ? [0] : value` is the exact pattern the helper
+  // generalizes — duplicating it here was the sibling-fix-miss the
+  // architect-reviewer flagged in cycle 15.
+  return normalizeUserInput(pickHeaderValue(req.headers['mcp-session-id']));
 }
 
 export function getClientKey(req: Request): string {

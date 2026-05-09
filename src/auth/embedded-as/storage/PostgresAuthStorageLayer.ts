@@ -321,11 +321,22 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     expiresInSec?: number,
   ): Promise<boolean> {
     const expiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
-    // INSERT ... ON CONFLICT DO NOTHING RETURNING is the canonical
-    // atomic primitive for "create if not present." Two concurrent
-    // inserts with the same (model, id) cannot both return a row;
-    // exactly one wins. Drizzle's .onConflictDoNothing emits the same
-    // shape and binds the values safely.
+    // Cycle-15 fix: align with InMemory/Filesystem semantics where an
+    // expired row is treated as absent — INSERT ... ON CONFLICT DO
+    // UPDATE ... WHERE auth_kv.expires_at < NOW() lets a new insert
+    // succeed when the existing row has aged out. Without this, the
+    // Postgres backend was strictly more restrictive than the other
+    // two: a TTL'd row blocked re-insert forever, while InMemory/FS
+    // would have allowed it after expiry. The storage-parity rule
+    // caught the drift in cycle 15.
+    //
+    // Atomicity: still single-statement. Two concurrent inserts of
+    // the same id with no live row both attempt the UPSERT; Postgres
+    // serializes at the row level and exactly one .returning() row
+    // is emitted (the winner). Concurrent inserts where a live row
+    // exists both hit the conflict path with the WHERE clause
+    // rejecting both — `returning` is empty and both correctly
+    // return false.
     const rows = await withSystemContext(this.db, (tx) =>
       tx.insert(authKv)
         .values({
@@ -334,7 +345,16 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
           payload: payload as AuthKvRow['payload'],
           expiresAt,
         })
-        .onConflictDoNothing({ target: [authKv.model, authKv.id] })
+        .onConflictDoUpdate({
+          target: [authKv.model, authKv.id],
+          set: {
+            payload: payload as AuthKvRow['payload'],
+            expiresAt,
+          },
+          // Only overwrite when the existing row has expired. Live
+          // rows stay untouched.
+          where: sql`${authKv.expiresAt} IS NOT NULL AND ${authKv.expiresAt} < NOW()`,
+        })
         .returning({ id: authKv.id }),
     );
     return rows.length > 0;
