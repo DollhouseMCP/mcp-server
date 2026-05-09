@@ -35,6 +35,21 @@ export interface LocalDevAuthProviderOptions {
   keyFilePath: string;
 }
 
+/**
+ * Extract scopes from either the spec-standard `scope` claim
+ * (space-separated string per RFC 8693 §4.2) or the legacy `scopes`
+ * array claim emitted by older issuance code.
+ */
+function extractScopes(payload: Record<string, unknown>): string[] | undefined {
+  if (typeof payload.scope === 'string') {
+    return payload.scope.split(/\s+/).filter(Boolean);
+  }
+  if (Array.isArray(payload.scopes)) {
+    return payload.scopes.filter((s): s is string => typeof s === 'string');
+  }
+  return undefined;
+}
+
 export class LocalDevAuthProvider implements IAuthProvider {
   readonly name = 'local-dev';
 
@@ -51,22 +66,30 @@ export class LocalDevAuthProvider implements IAuthProvider {
     await this.ensureInitialized();
 
     try {
-      const { payload } = await jwtVerify(token, this.publicKey!, {
+      const { payload, protectedHeader } = await jwtVerify(token, this.publicKey!, {
         issuer: ISSUER,
         audience: AUDIENCE,
         algorithms: [ALGORITHM],
       });
 
+      // RFC 9068: access tokens carry `typ: at+jwt` so an id_token
+      // (or any other JWT signed by the same key) can't be replayed
+      // as an access token. Mirror the embedded AS's enforcement.
+      if (protectedHeader.typ && protectedHeader.typ !== 'at+jwt') {
+        return { ok: false, reason: 'invalid token type' };
+      }
+
       if (!payload.sub) {
         return { ok: false, reason: 'token missing sub claim' };
       }
 
-      const scopes = Array.isArray(payload.scopes) ? payload.scopes as string[] : undefined;
-      // Defense in depth: same `mcp` scope requirement as the embedded
-      // AS and the OIDC bridge. The dev startup token is issued with
-      // `scopes: ['mcp']` by AuthProviderFactory; a token issued
-      // elsewhere (e.g. an old token from before the scope was added,
-      // or a stray token from another flow) is rejected here.
+      // Cycle-16 fix: validate the spec-standard `scope` (RFC 8693 §4.2,
+      // space-separated string) AND legacy `scopes` (array) for tokens
+      // issued by older versions of this provider. Both forms decode to
+      // the same string array internally. New issuance uses `scope`
+      // exclusively so a token issued under DOLLHOUSE_AUTH_PROVIDER=local
+      // can be verified by the embedded AS (which requires `scope`).
+      const scopes = extractScopes(payload);
       if (!scopes || !scopes.includes('mcp')) {
         return { ok: false, reason: 'token missing mcp scope' };
       }
@@ -121,9 +144,9 @@ export class LocalDevAuthProvider implements IAuthProvider {
     const builder = new SignJWT({
       ...(options?.displayName ? { display_name: options.displayName } : {}),
       ...(options?.email ? { email: options.email } : {}),
-      ...(options?.scopes?.length ? { scopes: options.scopes } : {}),
+      ...(options?.scopes?.length ? { scope: options.scopes.join(' ') } : {}),
     })
-      .setProtectedHeader({ alg: ALGORITHM })
+      .setProtectedHeader({ alg: ALGORITHM, typ: 'at+jwt' })
       .setIssuer(ISSUER)
       .setAudience(AUDIENCE)
       .setSubject(sub)

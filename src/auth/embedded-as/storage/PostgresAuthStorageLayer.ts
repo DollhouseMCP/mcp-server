@@ -139,7 +139,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     const result = await withSystemContext(this.db, (tx) =>
       tx
         .update(authAccounts)
-        .set({ lastAuthAt, updatedAt: new Date(lastAuthAt) })
+        .set({ lastAuthAt, updatedAt: new Date() })
         .where(eq(authAccounts.sub, sub))
         .returning({ sub: authAccounts.sub }),
     );
@@ -379,7 +379,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
          WHERE model = ${model}
            AND id = ${id}
            AND (expires_at IS NULL OR expires_at > NOW())
-           AND NOT (payload ? 'consumed')
+           AND (NOT (payload ? 'consumed') OR jsonb_typeof(payload->'consumed') <> 'number')
         RETURNING id
       `),
     );
@@ -398,6 +398,16 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       tx.delete(authKv).where(inArray(authKv.model, [...models])).returning({ id: authKv.id }),
     );
     return result.length;
+  }
+
+  async sweepExpiredKv(): Promise<number> {
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx
+        .delete(authKv)
+        .where(sql`${authKv.expiresAt} IS NOT NULL AND ${authKv.expiresAt} < NOW()`)
+        .returning({ id: authKv.id }),
+    );
+    return rows.length;
   }
 
   async genericRevokeByGrantId(grantId: string): Promise<void> {

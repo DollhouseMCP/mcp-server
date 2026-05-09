@@ -92,7 +92,15 @@ export function verifyInteractionCookieMatches(
   for (const key of cookieKeys) {
     const expected = keygripSign(signedData, key);
     const expectedBuf = Buffer.from(expected);
-    if (sigBuf.length === expectedBuf.length && timingSafeEqual(sigBuf, expectedBuf)) {
+    // Cycle-16 sibling-fix (security LOW-3): pad-and-compare so a
+    // length mismatch doesn't take a different code path from a
+    // content mismatch. Signature length is fixed (HMAC-SHA1 → 27
+    // base64url chars) so a length difference always means forgery.
+    if (sigBuf.length !== expectedBuf.length) {
+      timingSafeEqual(expectedBuf, Buffer.alloc(expectedBuf.length));
+      continue;
+    }
+    if (timingSafeEqual(sigBuf, expectedBuf)) {
       return { ok: true };
     }
   }

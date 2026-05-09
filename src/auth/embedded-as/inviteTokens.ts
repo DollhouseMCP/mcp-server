@@ -225,6 +225,8 @@ export function defaultInviteSecretFilePath(legacyRoot?: string): string {
  * instances need to share the secret.
  */
 export function loadOrGenerateInviteSecret(filePath?: string): Buffer {
+  // Re-read at call time so tests and runtime reconfiguration observe
+  // the current env (Zod schema in env.ts validates the shape at load).
   const envSecret = process.env.DOLLHOUSE_INVITE_TOKEN_SECRET?.trim();
   if (envSecret && envSecret.length > 0) {
     const buf = Buffer.from(envSecret, 'hex');
@@ -238,8 +240,19 @@ export function loadOrGenerateInviteSecret(filePath?: string): Buffer {
   try {
     const buf = fs.readFileSync(target);
     if (buf.length >= 16) return buf;
-  } catch {
-    // Fall through to generation.
+    // File exists but is too short — corrupt or partial write. Treat
+    // as missing and regenerate; logging the truncation so operators
+    // can investigate.
+    console.warn(
+      `[inviteTokens] secret file at ${target} is shorter than 16 bytes; regenerating.`,
+    );
+  } catch (err) {
+    // Cycle-16 fix: only fall through to generation on ENOENT. A
+    // permission-denied or I/O error means the file probably exists
+    // but we can't read it — silently generating a new secret would
+    // invalidate every previously-issued invite token without operator
+    // awareness. Re-throw so the operator sees the actual error.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
   const fresh = randomBytes(32);
@@ -259,6 +272,14 @@ function base64UrlDecode(value: string): string {
 function constantTimeStrEq(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
+  // Pad-and-compare: an early-return on length mismatch leaks
+  // length-differs-from-expected via timing. The signature length is
+  // public and constant (HMAC-SHA256 → 43 base64url chars) so the leak
+  // is informational only, but keep the helper actually constant-time.
+  if (bufA.length !== bufB.length) {
+    const padded = Buffer.alloc(bufA.length);
+    timingSafeEqual(bufA, padded);
+    return false;
+  }
   return timingSafeEqual(bufA, bufB);
 }

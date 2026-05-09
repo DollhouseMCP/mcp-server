@@ -342,6 +342,24 @@ export interface IAuthStorageLayer {
    */
   clearGenericByModels(models: readonly string[]): Promise<number>;
 
+  /**
+   * Sweep all expired generic K/V entries. Runs the equivalent of
+   *   DELETE FROM <kv> WHERE expires_at IS NOT NULL AND expires_at < NOW()
+   * on each backend. Returns the number of rows deleted.
+   *
+   * Why this exists: lazy-expiry on `genericGet` / `genericConsume` only
+   * cleans up rows that are individually fetched. Sessions whose owner
+   * never returns, abandoned interactions, and revoked refresh-token
+   * payloads accumulate forever otherwise. Operators on long-running
+   * deployments should call this on a timer (every 1-6 hours) — the
+   * recommended wiring is via LifecycleService.
+   *
+   * Idempotent and safe to call concurrently; backends serialize
+   * naturally (Postgres MVCC, in-process Map iteration, filesystem
+   * directory lock).
+   */
+  sweepExpiredKv(): Promise<number>;
+
   /** Optional secondary indexes oidc-provider expects when those features are enabled. */
   genericFindByUserCode?(userCode: string): Promise<unknown | null>;
   genericFindByUid?(uid: string): Promise<unknown | null>;

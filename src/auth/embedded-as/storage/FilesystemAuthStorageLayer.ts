@@ -125,7 +125,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       // Surgical update under the same lock that guards upsertAccount —
       // protects the lastAuthAt write from being clobbered by a
       // concurrent upsert that re-writes the row from a stale read.
-      accounts[idx] = { ...accounts[idx]!, lastAuthAt, updatedAt: lastAuthAt };
+      accounts[idx] = { ...accounts[idx]!, lastAuthAt, updatedAt: Date.now() };
       await this.ensureRoot();
       await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
       return true;
@@ -257,7 +257,20 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     for (const entry of entries) {
       if (!entry.endsWith('.json')) continue;
       const id = entry.slice(0, -'.json'.length);
-      const record = await this.readKv('Grant', id);
+      // Cycle-16 sibling-fix: tolerate a single unreadable / malformed
+      // Grant file the same way `genericRevokeByGrantId` does. Without
+      // this, a stray non-base64url file in kv/Grant/ throws from the
+      // first `readKv` call and breaks every GitHub login (each callback
+      // calls findGrantsByAccountId before the token exchange).
+      let record: KvRecord | null;
+      try {
+        record = await this.readKv('Grant', id);
+      } catch (err) {
+        logger.warn('[FilesystemAuthStorageLayer] skipping unreadable Grant file', {
+          id, error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
+      }
       if (!record) continue;
       if (record.exp !== null && record.exp <= now) continue;
       const payload = record.value as { accountId?: string } | null;
@@ -435,6 +448,49 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
           deleted += 1;
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+      }
+    }
+    return deleted;
+  }
+
+  async sweepExpiredKv(): Promise<number> {
+    const kvRoot = path.join(this.rootDir, 'kv');
+    let modelDirs: string[];
+    try {
+      modelDirs = await fs.readdir(kvRoot);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw err;
+    }
+    const now = Date.now();
+    let deleted = 0;
+    for (const model of modelDirs) {
+      const dir = path.join(kvRoot, model);
+      let entries: string[];
+      try {
+        entries = await fs.readdir(dir);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const entry of entries) {
+        if (!entry.endsWith('.json')) continue;
+        const id = entry.slice(0, -'.json'.length);
+        let record: KvRecord | null;
+        try {
+          record = await this.readKv(model, id);
+        } catch {
+          continue;
+        }
+        if (!record || record.exp === null) continue;
+        if (record.exp <= now) {
+          try {
+            await fs.unlink(path.join(dir, entry));
+            deleted += 1;
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          }
         }
       }
     }

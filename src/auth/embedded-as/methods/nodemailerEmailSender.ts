@@ -47,13 +47,21 @@ export class NodemailerEmailSender implements EmailSender {
         `Use 465 (implicit TLS) or 587 (STARTTLS).`,
       );
     }
+    const timeoutMs = options.connectionTimeoutMs ?? 30_000;
     this.transporter = nodemailer.createTransport({
       host: options.host,
       port: options.port,
       secure,
       requireTLS: !secure, // force STARTTLS upgrade on 587
       auth: { user: options.user, pass: options.password },
-      connectionTimeout: options.connectionTimeoutMs ?? 30_000,
+      // Cycle-16 fix: cover all three timeout phases. connectionTimeout
+      // gates TCP connect; greetingTimeout gates the SMTP banner;
+      // socketTimeout gates inactivity during DATA. Without socketTimeout
+      // a relay that accepts connections but hangs during DATA would
+      // wedge sendMail forever, holding Express response objects open.
+      connectionTimeout: timeoutMs,
+      greetingTimeout: timeoutMs,
+      socketTimeout: timeoutMs,
     });
     this.from = options.from;
     this.host = options.host;
@@ -94,6 +102,16 @@ export class NodemailerEmailSender implements EmailSender {
   }
 
   async sendMagicLink(input: SendMagicLinkInput): Promise<void> {
+    // Cycle-16 fix: sanity-check URL length before drop-in to the email
+    // body. An extremely long URL (interactionId injection, oversize
+    // verifyUrl) would produce an email over typical MTA size limits
+    // with no signal to the operator.
+    if (input.url.length > 2048) {
+      throw new Error(
+        `magic-link URL exceeds 2048 chars (got ${input.url.length}); ` +
+        `confirm DOLLHOUSE_PUBLIC_BASE_URL is reasonable.`,
+      );
+    }
     await this.transporter.sendMail({
       from: this.from,
       to: input.to,

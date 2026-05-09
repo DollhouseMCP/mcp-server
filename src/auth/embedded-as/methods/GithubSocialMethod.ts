@@ -374,6 +374,12 @@ export class GithubSocialMethod implements IAuthMethod {
           code,
           redirect_uri: this.options.callbackUrl,
         }),
+        // Cycle-16 fix: GitHub partial outages (token endpoint accepts
+        // connections but responds slowly) used to wedge the callback
+        // handler. Cap at 15s — well above the 99p of GitHub's normal
+        // response time but short enough that an outage doesn't
+        // exhaust the event loop with hung fetches.
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (err) {
       logger.warn('[GithubSocialMethod] token exchange network error', {
@@ -411,6 +417,7 @@ export class GithubSocialMethod implements IAuthMethod {
           Authorization: `Bearer ${accessToken}`,
           'X-GitHub-Api-Version': '2022-11-28',
         },
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (err) {
       logger.warn('[GithubSocialMethod] /user network error', {
@@ -434,6 +441,7 @@ export class GithubSocialMethod implements IAuthMethod {
           Authorization: `Bearer ${accessToken}`,
           'X-GitHub-Api-Version': '2022-11-28',
         },
+        signal: AbortSignal.timeout(15_000),
       });
     } catch (err) {
       logger.warn('[GithubSocialMethod] /user/emails network error', {

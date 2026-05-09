@@ -22,7 +22,7 @@
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
-import { jwtVerify, importJWK, SignJWT, errors as joseErrors, type JWK } from 'jose';
+import { jwtVerify, importJWK, errors as joseErrors, type JWK } from 'jose';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
@@ -31,7 +31,6 @@ import type {
   AuthClaims,
   AuthResult,
   IAuthProvider,
-  IssueOptions,
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import { normalizeIp } from './rateLimit.js';
@@ -48,7 +47,8 @@ import {
 } from './persistKeys.js';
 import { loadOrGenerateCookieSigningKeys, rotateCookieSecret } from './cookieSecret.js';
 import {
-  checkAndPersistModeFingerprint,
+  checkModeFingerprint,
+  persistModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
 import {
@@ -154,7 +154,6 @@ interface InitializedState {
   provider: InstanceType<typeof OidcProvider>;
   keyset: SigningKeyset;
   publicSigningKey: CryptoKey;
-  privateSigningKey: CryptoKey;
   /** Cookie signing keys oidc-provider received; methods need them for H12 binding verify. */
   cookieKeys: readonly string[];
   /** Pre-built interaction middleware bound to the initialized provider. */
@@ -312,30 +311,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   /**
-   * Issue an access token directly without going through the OAuth flow.
-   * Used by the LocalDev startup-token convenience path; bypasses
-   * oidc-provider's accounting. Signed with the same JWKS the AS publishes
-   * so the standard validate() path verifies it.
+   * Build the AS's Express router. All embedded-AS routes (oidc-provider
+   * mount, /interaction, /.well-known, JWKS) live under here.
    */
-  async issue(sub: string, options?: IssueOptions): Promise<string> {
-    const { keyset, privateSigningKey } = await this.ensureInitialized();
-    const ttl = options?.ttlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
-    const scope = options?.scopes?.join(' ') || 'mcp';
-
-    return new SignJWT({
-      azp: DEFAULT_CLIENT_ID,
-      scope,
-      name: options?.displayName ?? sub,
-    })
-      .setProtectedHeader({ alg: ALGORITHM, kid: keyset.kid, typ: 'at+jwt' })
-      .setIssuer(this.issuer)
-      .setAudience(this.resource)
-      .setSubject(sub)
-      .setIssuedAt()
-      .setExpirationTime(`${ttl}s`)
-      .sign(privateSigningKey);
-  }
-
   createRouter(): Router {
     const router = express.Router();
 
@@ -499,11 +477,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * Paths that bypass the bootstrap gate. Discovery + key-distribution
    * endpoints MUST stay reachable even when the AS is closed so that
    * clients can find the AS and verify any tokens already in their
-   * possession. The list is path-prefix matched against `req.path`
-   * (route-level path, NOT originalUrl) — when this middleware runs
-   * inside the AS router, `req.path` is already mount-relative.
+   * possession. Each entry is matched as `path === entry.path` for
+   * exact entries, or `path.startsWith(entry.path)` for prefix entries.
+   * Cycle-16 fix: `/jwks` was previously matched via `startsWith` which
+   * silently allows future `/jwks*` routes (`/jwks-rotate`, etc.) to
+   * bypass the gate — that's the wrong default for a security-relevant
+   * allowlist. Use exact match for /jwks; prefix match only for the
+   * /.well-known/ tree which is genuinely a directory.
    */
-  private static readonly GATE_BYPASS_PREFIXES: readonly string[] = ['/.well-known/', '/jwks'];
+  private static readonly GATE_BYPASS_RULES: ReadonlyArray<{ path: string; mode: 'exact' | 'prefix' }> = [
+    { path: '/.well-known/', mode: 'prefix' },
+    { path: '/jwks', mode: 'exact' },
+  ];
 
   private isMultiUserMode(): boolean {
     return this.methods.some((m) => EmbeddedAuthorizationServer.MULTI_USER_METHODS.has(m.id));
@@ -554,7 +539,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         return true;
       }
       return false;
-    } catch {
+    } catch (err) {
+      logger.warn('[EmbeddedAuthorizationServer] isReadyForTraffic storage read failed; reporting not-ready', {
+        error: err instanceof Error ? err.message : String(err),
+      });
       return false;
     }
   }
@@ -604,20 +592,23 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // Trivial-consent / oidc-bridge: gate is unconditionally open.
       return (_req, _res, next) => next();
     }
-    const bypassPrefixes = EmbeddedAuthorizationServer.GATE_BYPASS_PREFIXES;
-    // Once bootstrap has been observed as complete, latch open. The
-    // markBootstrapComplete contract rejects admin transfer, so going
-    // back from completed→incomplete is impossible — caching is safe.
-    let cachedComplete = false;
+    const bypassRules = EmbeddedAuthorizationServer.GATE_BYPASS_RULES;
     return async (req, res, next) => {
-      if (cachedComplete) {
+      // Cycle-16 fix: share `bootstrapReadyLatch` with isReadyForTraffic
+      // so /readyz and the gate observe the same monotonic flag.
+      // Previously each had its own latch, so a /readyz hit and an
+      // /authorize hit each fired a separate storage read.
+      if (this.bootstrapReadyLatch) {
         next();
         return;
       }
       // Mount-relative path: `req.path` is path within this router's
       // scope, regardless of where the router is mounted in the host app.
-      for (const prefix of bypassPrefixes) {
-        if (req.path === prefix || req.path.startsWith(prefix)) {
+      for (const rule of bypassRules) {
+        const matched = rule.mode === 'exact'
+          ? req.path === rule.path
+          : (req.path === rule.path || req.path.startsWith(rule.path));
+        if (matched) {
           next();
           return;
         }
@@ -625,7 +616,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       try {
         const state = await this.storage.getBootstrapState();
         if (state.completed) {
-          cachedComplete = true;
+          this.bootstrapReadyLatch = true;
           next();
           return;
         }
@@ -842,9 +833,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       primaryKid: keyset.kid,
       primaryCookieKey: cookieKeys[0]!,
     };
-    const fingerprintResult = await checkAndPersistModeFingerprint(this.storage, fingerprintInputs);
+    const fingerprintResult = await checkModeFingerprint(this.storage, fingerprintInputs);
 
-    if (fingerprintResult.changed) {
+    if (fingerprintResult.firstRun) {
+      // First run: nothing to invalidate, just record the fingerprint.
+      await persistModeFingerprint(this.storage, fingerprintInputs);
+    } else if (fingerprintResult.changed) {
+      // Cycle-16 fix: invalidate FIRST, then persist the new fingerprint.
+      // The earlier "checkAndPersist" wrote the new fingerprint before
+      // clearing OAuth state — a crash between the two left stale tokens
+      // valid against the new mode. Clear-then-persist is crash-safe:
+      // a crash mid-sequence means the next boot recomputes `changed:
+      // true` and re-runs the idempotent clear.
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
       rotateCookieSecret();
       cookieKeys = loadOrGenerateCookieSigningKeys();
@@ -855,12 +855,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // mints a fresh kid; old tokens fail kid-match in validate().
       await rotateSigningKey(this.keyFilePath);
       keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
-      // Re-persist with the post-rotation cookie key + new kid so the
+      // Persist with the post-rotation cookie key + new kid so the
       // next boot sees a stable fingerprint that already reflects the
-      // rotation. Without this, every boot after a mode-switch would
-      // detect "another change" because cookieKeys[0] and primaryKid
-      // both moved on rotation.
-      await checkAndPersistModeFingerprint(this.storage, {
+      // rotation. Done LAST so a crash before this point re-triggers
+      // the invalidation on next boot rather than skipping it.
+      await persistModeFingerprint(this.storage, {
         ...fingerprintInputs,
         primaryKid: keyset.kid,
         primaryCookieKey: cookieKeys[0]!,
@@ -1128,7 +1127,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // it was the full private JWK. The names now match what each value is.
     const privateJwk = keyset.jwks.keys[0];
     const publicSigningKey = (await importJWK(stripPrivate(privateJwk), ALGORITHM)) as CryptoKey;
-    const privateSigningKey = (await importJWK(privateJwk, ALGORITHM)) as CryptoKey;
 
     logger.info('[EmbeddedAuthorizationServer] initialized', {
       issuer: this.issuer,
@@ -1146,7 +1144,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       storage: this.storage,
     });
 
-    return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };
+    return { provider, keyset, publicSigningKey, cookieKeys, interactionMiddleware };
   }
 }
 
@@ -1165,10 +1163,32 @@ function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
   };
 }
 
+/**
+ * Cycle-16 fix: explicit denylist of private JWK fields. The earlier
+ * destructure-and-discard pattern silently passed through any new
+ * private field name (e.g., a future OKP `oth`) — a regression that
+ * lets `d` survive into the published key would expose the signing
+ * material. A denylist is self-documenting and fails closed: if a new
+ * private field is added to the JWK type, it slips through and gets
+ * caught by review or by an explicit test (rather than passing through
+ * unstripped). Track these against RFC 7517/7518 (RSA + EC private
+ * material) and RFC 8037 (OKP private material).
+ */
+const PRIVATE_JWK_FIELDS: ReadonlySet<string> = new Set([
+  'd',  // RSA + EC + OKP private exponent / scalar
+  'p', 'q', 'dp', 'dq', 'qi', // RSA CRT params
+  'k',  // symmetric key material
+  'oth', // RSA "other primes" (multi-prime)
+]);
+
 function stripPrivate(jwk: JWK): JWK {
-  const { d, p, q, dp, dq, qi, k, ...publicPart } = jwk as JWK & Record<string, unknown>;
-  void d; void p; void q; void dp; void dq; void qi; void k;
-  return publicPart as JWK;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(jwk as JWK & Record<string, unknown>)) {
+    if (!PRIVATE_JWK_FIELDS.has(key)) {
+      result[key] = value;
+    }
+  }
+  return result as JWK;
 }
 
 function normalizePath(rawPath: string): string {

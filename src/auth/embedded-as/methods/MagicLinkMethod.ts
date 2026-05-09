@@ -117,7 +117,21 @@ export class MagicLinkMethod implements IAuthMethod {
   private readonly perEmailRequests = new Map<string, RequestRateBucket>();
   private readonly perIpRequests = new Map<string, RequestRateBucket>();
 
-  constructor(private readonly options: MagicLinkMethodOptions) {}
+  constructor(private readonly options: MagicLinkMethodOptions) {
+    // Cycle-16 fix: enforce that requestResponseFloorMs is either 0
+    // (test override only) or above a sensible production floor.
+    // Without this, an operator (or misconfigured factory) could set
+    // a tiny positive value and silently defeat the timing-equalisation
+    // requirement (must-fix #2).
+    const floor = options.requestResponseFloorMs;
+    if (floor !== undefined && floor !== 0 && floor < 100) {
+      throw new Error(
+        `MagicLinkMethod.requestResponseFloorMs must be 0 (test override) ` +
+        `or at least 100ms; got ${floor}. Defeating the timing floor lets an ` +
+        `observer distinguish unknown emails from known emails.`,
+      );
+    }
+  }
 
   async beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
     return { kind: 'render-html', html: renderRequestPage(), csrfToken: '' };

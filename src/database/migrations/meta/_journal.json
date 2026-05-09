@@ -78,6 +78,13 @@
       "when": 1778544000000,
       "tag": "0010_auth_accounts_roles",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778803200000,
+      "tag": "0011_auth_kv_grant_id_index",
+      "breakpoints": true
     }
   ]
 }

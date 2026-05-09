@@ -83,14 +83,20 @@ export interface CheckModeFingerprintResult {
 }
 
 /**
- * Read the persisted fingerprint, compare to the current one, and write
- * the current one back. Returns metadata describing the comparison.
+ * Compare the current mode fingerprint to the persisted one. Returns
+ * metadata describing the comparison. Does NOT persist on the
+ * `changed: true` path — the caller MUST run the invalidation
+ * (clearGenericByModels, rotate cookie secret, rotate signing key)
+ * BEFORE calling `persistModeFingerprint` to record the new fingerprint.
  *
- * The caller is responsible for acting on `changed === true` —
- * typically by calling `storage.clearGenericByModels(OAUTH_STATE_MODELS)`
- * and rotating the cookie signing secret.
+ * Why split the read and the write: a crash between fingerprint
+ * persistence and OAuth-state clear leaves stale tokens valid against
+ * the new mode (the next boot sees the new fingerprint, computes the
+ * same fingerprint, decides nothing changed, and never clears). Clear
+ * first, then persist — on a crash mid-sequence the next boot
+ * recomputes `changed: true` and re-runs the (idempotent) clear.
  */
-export async function checkAndPersistModeFingerprint(
+export async function checkModeFingerprint(
   storage: IAuthStorageLayer,
   inputs: ModeFingerprintInputs,
 ): Promise<CheckModeFingerprintResult> {
@@ -101,7 +107,6 @@ export async function checkAndPersistModeFingerprint(
   const previous = stored?.fingerprint;
 
   if (!previous) {
-    await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: current });
     return { changed: false, firstRun: true, current };
   }
 
@@ -109,6 +114,36 @@ export async function checkAndPersistModeFingerprint(
     return { changed: false, firstRun: false, previous, current };
   }
 
-  await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: current });
   return { changed: true, firstRun: false, previous, current };
+}
+
+/**
+ * Persist the current mode fingerprint. Caller MUST run all
+ * invalidation work first; this is the last step in the sequence so
+ * a crash mid-sequence is safe (next boot recomputes `changed: true`
+ * and re-runs the idempotent invalidation).
+ */
+export async function persistModeFingerprint(
+  storage: IAuthStorageLayer,
+  inputs: ModeFingerprintInputs,
+): Promise<void> {
+  const current = computeFingerprint(inputs);
+  await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: current });
+}
+
+/**
+ * @deprecated Crash-window-unsafe — persists before the caller's
+ * invalidation runs. Use `checkModeFingerprint` + `persistModeFingerprint`
+ * with the invalidation sandwiched between. Kept temporarily for tests
+ * that need the legacy behavior; remove after callers migrate.
+ */
+export async function checkAndPersistModeFingerprint(
+  storage: IAuthStorageLayer,
+  inputs: ModeFingerprintInputs,
+): Promise<CheckModeFingerprintResult> {
+  const result = await checkModeFingerprint(storage, inputs);
+  if (result.firstRun || result.changed) {
+    await persistModeFingerprint(storage, inputs);
+  }
+  return result;
 }

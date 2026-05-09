@@ -60,6 +60,9 @@ export function defaultCookieSecretFilePath(legacyRoot?: string): string {
  *     CLI; tracked as a follow-up, not §8.1 scope.
  */
 export function loadOrGenerateCookieSigningKeys(filePath?: string): [string] {
+  // The Zod schema in env.ts validates the shape at config load.
+  // We re-read process.env here so tests (and runtime reconfiguration)
+  // observe the current value rather than the cached snapshot.
   const envSecret = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim();
   if (envSecret && envSecret.length > 0) {
     const buf = Buffer.from(envSecret, 'hex');
@@ -82,8 +85,13 @@ export function loadOrGenerateCookieSigningKeys(filePath?: string): [string] {
       `[cookieSecret] file at ${target} is shorter than 32 bytes; regenerating. ` +
       `Any previous cookies signed with the prior key will be invalidated.`,
     );
-  } catch {
-    // Missing file is the normal first-run path; fall through silently.
+  } catch (err) {
+    // Cycle-16 fix: only fall through to generation on ENOENT. Other
+    // errors (EACCES, EISDIR, etc.) mean the file probably exists but
+    // we can't read it — silently generating a new secret would
+    // invalidate every previously-signed cookie without any operator
+    // signal.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
 
   const fresh = randomBytes(32);

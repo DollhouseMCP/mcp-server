@@ -67,8 +67,24 @@ export async function loadOrGenerateSigningJwks(keyFilePath: string): Promise<Si
         jwks: { keys: [{ ...stored.privateKey, kid: stored.kid, alg: ALGORITHM, use: 'sig' }] },
       };
     }
-  } catch {
-    // Fall through to generation.
+    // File exists but is structurally wrong (missing required fields).
+    // Treat as corrupt and regenerate; log so operators see the event.
+    logger.warn(`[persistKeys] key file at ${keyFilePath} is missing required fields; regenerating. ` +
+      `All previously-issued tokens will fail validation.`);
+  } catch (err) {
+    // Cycle-16 fix: only fall through to generation on ENOENT or
+    // SyntaxError (corrupt JSON). Other errors (EACCES, EISDIR) mean
+    // the file probably exists but is unreadable — silently generating
+    // a new key invalidates every previously-issued access token with
+    // no operator signal beyond an info log.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (err instanceof SyntaxError) {
+      logger.warn(`[persistKeys] key file at ${keyFilePath} is corrupt JSON; regenerating. ` +
+        `All previously-issued tokens will fail validation.`,
+        { error: err.message });
+    } else if (code !== 'ENOENT') {
+      throw err;
+    }
   }
 
   const { privateKey, publicKey } = await generateKeyPair(ALGORITHM, { extractable: true });

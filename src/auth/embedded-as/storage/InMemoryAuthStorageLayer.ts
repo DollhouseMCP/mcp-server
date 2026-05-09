@@ -92,7 +92,11 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     // sub still races, but that's the caller's contract — this method
     // only protects the lastAuthAt+updatedAt pair against
     // upsertAccount-based last-write-wins.
-    this.accountsBySub.set(sub, { ...existing, lastAuthAt, updatedAt: lastAuthAt });
+    // updatedAt reflects when the row was last written, not when the user
+    // last authenticated; the two are equal only when the caller passes
+    // Date.now() as lastAuthAt (which is typical but not contractually
+    // required).
+    this.accountsBySub.set(sub, { ...existing, lastAuthAt, updatedAt: Date.now() });
     return true;
   }
 
@@ -195,6 +199,18 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
       if (sep < 0) continue;
       const model = key.slice(0, sep + 1);
       if (prefixes.has(model)) {
+        this.genericStore.delete(key);
+        deleted += 1;
+      }
+    }
+    return deleted;
+  }
+
+  async sweepExpiredKv(): Promise<number> {
+    const now = Date.now();
+    let deleted = 0;
+    for (const [key, record] of this.genericStore.entries()) {
+      if (record.expiresAt !== undefined && record.expiresAt <= now) {
         this.genericStore.delete(key);
         deleted += 1;
       }
