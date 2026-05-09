@@ -390,20 +390,19 @@ export async function createStreamableHttpRuntime(
   // See assertHostedDeploymentSafety for the full rationale; the
   // function is exported so unit tests can exercise the guard
   // without standing up an Express server.
-  // Cycle-12 fix: detect whether TLS is configured at this server.
-  // The presence of both cert and key paths means native HTTPS;
-  // their absence means upstream-proxy shape. The guard uses this
-  // signal to refuse the silent `loopback`-only-without-native-TLS
-  // combination.
-  const nativeTlsConfigured = Boolean(
-    env.DOLLHOUSE_TLS_CERT_PATH && env.DOLLHOUSE_TLS_KEY_PATH,
-  );
+  // Cycle-13 fix: instantiate TlsConfig FIRST so its `isEnabled()`
+  // is the single source of truth for nativeTls. The earlier shape
+  // re-read env vars at the safety-guard call site, which diverged
+  // from a constructor-injected `options.tlsConfig` (e.g. a test
+  // stub). Now both the safety guard and the later HTTPS bind read
+  // from the same TlsConfig instance.
+  const tlsConfig = options.tlsConfig ?? new TlsConfig();
   await assertHostedDeploymentSafety({
     host,
     methods: env.DOLLHOUSE_AUTH_METHODS,
     authEnabled: env.DOLLHOUSE_AUTH_ENABLED,
     trustedProxies: env.DOLLHOUSE_TRUSTED_PROXIES,
-    nativeTls: nativeTlsConfigured,
+    nativeTls: tlsConfig.isEnabled(),
   });
 
   // Wire trust proxy from env. Default 'loopback' (Express built-in)
@@ -873,7 +872,8 @@ export async function createStreamableHttpRuntime(
     });
   }
 
-  const tlsConfig = options.tlsConfig ?? new TlsConfig();
+  // tlsConfig already instantiated above (cycle-13: single source of
+  // truth for both safety guard and HTTPS bind).
   const { server: httpServer, isHttps } = await createHttpOrHttpsServer(app, {
     host,
     port,

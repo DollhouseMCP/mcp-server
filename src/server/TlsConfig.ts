@@ -59,8 +59,18 @@ export class TlsConfig {
     const cert = readPemOrThrow(this.certPath, 'DOLLHOUSE_TLS_CERT_PATH');
     const key = readPemOrThrow(this.keyPath, 'DOLLHOUSE_TLS_KEY_PATH');
 
-    this.cachedOptions = { cert, key };
-    logger.info('[TlsConfig] TLS enabled', { certPath: this.certPath, keyPath: this.keyPath });
+    // Cycle-13 fix: pin TLS 1.2 as the floor. Node's defaults on 18+
+    // happen to match this, but an operator running an older base
+    // image (Node 16 LTS variants still in some deployment shapes)
+    // gets TLS 1.0/1.1 acceptance by default. Explicit floor protects
+    // against that and is the documented hardening pattern (NIST
+    // SP 800-52r2, RFC 8996 deprecating TLS 1.0/1.1).
+    this.cachedOptions = { cert, key, minVersion: 'TLSv1.2' };
+    logger.info('[TlsConfig] TLS enabled', {
+      certPath: this.certPath,
+      keyPath: this.keyPath,
+      minVersion: 'TLSv1.2',
+    });
     return this.cachedOptions;
   }
 }

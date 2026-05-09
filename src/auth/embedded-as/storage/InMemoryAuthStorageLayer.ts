@@ -140,8 +140,12 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     // are usually monotonic, but recordIdentityEvent permits caller-supplied
     // timestamps so a sort guards against out-of-order writes.
     const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
-    // Cycle-12 fix: cap the result set to prevent unbounded memory
-    // growth on long-running deployments (see DEFAULT_IDENTITY_EVENTS_LIMIT).
+    // Cycle-12 fix: cap the result set to prevent the caller from
+    // materializing a huge array. The InMemory backend is dev/test
+    // only; the underlying `auditEvents` array is bounded by the test
+    // fixture / dev session size, so the sort itself is not the OOM
+    // concern (Postgres is — see PostgresAuthStorageLayer.ts which
+    // applies the cap at SQL layer). Document the difference here.
     const limit = filter?.limit ?? DEFAULT_IDENTITY_EVENTS_LIMIT;
     return limit > 0 && sorted.length > limit ? sorted.slice(0, limit) : sorted;
   }

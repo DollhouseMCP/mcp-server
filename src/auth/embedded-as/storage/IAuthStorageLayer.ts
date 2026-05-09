@@ -156,6 +156,11 @@ export interface IdentityEventFilter {
    * only and grows unbounded over deployment lifetime; an admin
    * call without a `since` window could otherwise pull the entire
    * table into Node process memory. Cycle-12 fix.
+   *
+   * Pass `0` to explicitly disable the cap (return all matching
+   * events). Use only for diagnostic / archive-export workflows
+   * where the full audit history is needed and the caller has
+   * verified the table size is bounded.
    */
   limit?: number;
 }

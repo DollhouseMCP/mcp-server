@@ -276,6 +276,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
       }
+      // Cycle-13 fix: distinct reason for alg-rejection across all 3
+      // providers (M11-1 alignment + cycle-13 follow-up).
+      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+        return { ok: false, reason: 'algorithm not allowed' };
+      }
       if (error instanceof joseErrors.JWTClaimValidationFailed) {
         const claim = error.claim;
         if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
@@ -432,9 +437,19 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
             // that rotate via v4 (or vice-versa). Same bug class as
             // cycle-10 H10-2 (MagicLink), cycle-11 H11-2 (getClientKey)
             // — fourth and final site of the pattern.
+            //
+            // Cycle-13 fix: Express's `req.headers['user-agent']` is
+            // typed `string | string[] | undefined`. Multi-value UA
+            // headers (rare but valid per HTTP/1.1) used to coerce to
+            // a comma-joined string via `createHmac.update(arr)` —
+            // producing a different hash from the same UA sent as a
+            // single header. Pick the first value when an array is
+            // present so the hash stays stable.
+            const uaHeader = req.headers['user-agent'];
+            const uaValue = Array.isArray(uaHeader) ? uaHeader[0] : uaHeader;
             const context: RotationRequestContext = {
               ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
-              uaHash: hashRotationAttribute(req.headers['user-agent'], salt),
+              uaHash: hashRotationAttribute(uaValue, salt),
             };
             withRotationRequestContext(context, () => {
               state.provider.callback()(req, res);

@@ -98,6 +98,12 @@ export class LocalDevAuthProvider implements IAuthProvider {
       if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
       }
+      // Cycle-13 fix: parity with OidcAuthProvider — distinct reason
+      // for alg-rejection so operator triage doesn't fold it into the
+      // generic "token validation failed" bucket.
+      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+        return { ok: false, reason: 'algorithm not allowed' };
+      }
       if (error instanceof joseErrors.JWTClaimValidationFailed) {
         const claim = error.claim;
         if (claim === 'aud') return { ok: false, reason: 'invalid audience' };

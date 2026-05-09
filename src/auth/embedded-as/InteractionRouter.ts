@@ -88,8 +88,15 @@ export interface InteractionRouterDeps {
 export function createInteractionRouter(deps: InteractionRouterDeps): Router {
   const { provider, methods, storage } = deps;
   const router = express.Router();
-  router.use(express.urlencoded({ extended: false }));
-  router.use(express.json({ limit: '32kb' }));
+  // Cycle-13 fix (HIGH): cap urlencoded body at 4kb to match the
+  // per-method routers (LocalAccountMethod, MagicLinkMethod). The
+  // earlier shape used Express's 100kb default, which left the
+  // unauthenticated interaction POST as a sibling-fix-miss of the
+  // body-cap-by-route pattern those methods already enforce. CSRF
+  // token + form fields fit comfortably under 4kb. JSON parser also
+  // tightened from 32kb to 4kb (no JSON consumer needs more here).
+  router.use(express.urlencoded({ extended: false, limit: '4kb' }));
+  router.use(express.json({ limit: '4kb' }));
 
   // H8: route handlers forward errors to Express's `next` so unhandled
   // rejections in handleGet/handlePost surface as a real 500 instead of

@@ -293,11 +293,23 @@ function runContractSuite(
     it('cycle-12: listIdentityEvents default-caps without an explicit limit', async () => {
       // Default cap is 1000 (DEFAULT_IDENTITY_EVENTS_LIMIT). We don't
       // insert 1000 rows here (slow); instead verify a small set still
-      // returns and that limit=0 is treated as "no cap" (escape hatch).
+      // returns under the default cap.
       await storage.recordIdentityEvent({ type: 'auth.uncap', timestamp: 1 });
       await storage.recordIdentityEvent({ type: 'auth.uncap', timestamp: 2 });
       const all = await storage.listIdentityEvents({ type: 'auth.uncap' });
       expect(all).toHaveLength(2);
+    });
+
+    // Cycle-13 fix: actually test the limit=0 escape hatch the
+    // interface JSDoc documents. Cycle-12's "default-caps" test
+    // claimed to verify this but didn't pass limit:0.
+    it('cycle-13: limit=0 escape hatch returns all matching events (no cap)', async () => {
+      for (let i = 0; i < 5; i += 1) {
+        await storage.recordIdentityEvent({ type: 'auth.no-cap', timestamp: i });
+      }
+      const all = await storage.listIdentityEvents({ type: 'auth.no-cap', limit: 0 });
+      expect(all).toHaveLength(5);
+      expect(all.map(e => e.timestamp).sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
     });
   });
 

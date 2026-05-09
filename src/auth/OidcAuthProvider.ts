@@ -149,6 +149,14 @@ export class OidcAuthProvider implements IAuthProvider {
       if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
       }
+      // Cycle-13 fix: JOSEAlgNotAllowed gets its own reason string so
+      // operator log triage can distinguish "token had a forbidden alg"
+      // from generic "token validation failed". Sibling of the M11-1
+      // alignment work — that round caught aud/iss/expired/signature
+      // but not alg.
+      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+        return { ok: false, reason: 'algorithm not allowed' };
+      }
       if (error instanceof joseErrors.JWTClaimValidationFailed) {
         const claim = error.claim;
         if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
