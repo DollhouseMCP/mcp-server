@@ -290,6 +290,17 @@ export async function assertHostedDeploymentSafety(config: {
   methods: readonly string[] | undefined;
   authEnabled: boolean;
   trustedProxies: readonly string[] | undefined;
+  /**
+   * Cycle-12 fix: whether the AS is serving TLS itself (cert/key
+   * configured at the server) vs. relying on an upstream TLS-
+   * terminating proxy. When `false` and the operator sets
+   * `trustedProxies=['loopback']` only on a non-loopback bind, the
+   * deployment shape is "behind a real proxy" but the trust-proxy
+   * config doesn't trust the proxy — `req.ip` collapses to the
+   * proxy's egress IP and per-IP rate limits become per-cluster.
+   * Refusing this combination prevents the silent misconfig.
+   */
+  nativeTls?: boolean;
 }): Promise<void> {
   const { isLoopbackHost } = await import('../auth/oauth/url.js');
   const multiUserMethods = new Set(['github', 'local-password', 'magic-link']);
@@ -323,6 +334,35 @@ export async function assertHostedDeploymentSafety(config: {
       `CIDR range, e.g. '10.0.0.0/8' or '127.0.0.1/32,fd00::/8'.`,
     );
   }
+
+  // Cycle-12 fix: refuse the silent misconfiguration where an
+  // operator behind an upstream proxy sets `loopback` only. With
+  // native TLS at this server, `loopback` is correct (we serve TLS,
+  // no proxy in front). Without native TLS on a non-loopback bind,
+  // the only way TLS reaches the user is via an upstream proxy —
+  // but then `loopback` means we don't trust that proxy, `req.ip`
+  // collapses to its egress, and per-IP rate limits become per-
+  // cluster. The cycle-12 reviewer flagged this as a deployment
+  // footgun that bypasses the previous guards.
+  const onlyLoopback =
+    config.trustedProxies.length === 1 && config.trustedProxies[0] === 'loopback';
+  if (onlyLoopback && config.nativeTls === false) {
+    throw new Error(
+      `[StreamableHttpServer] Refusing to start: DOLLHOUSE_TRUSTED_PROXIES='loopback' ` +
+      `on a non-loopback bind '${config.host}' WITHOUT native TLS at this server ` +
+      `(no DOLLHOUSE_TLS_CERT_PATH / DOLLHOUSE_TLS_KEY_PATH). This combination is ` +
+      `inconsistent: either\n\n` +
+      `  (a) you serve TLS at this server — set DOLLHOUSE_TLS_CERT_PATH and _KEY_PATH ` +
+      `      so this configuration becomes correct (loopback-only is right for ` +
+      `      native HTTPS), OR\n\n` +
+      `  (b) you're behind a TLS-terminating reverse proxy — set DOLLHOUSE_TRUSTED_PROXIES ` +
+      `      to the proxy's CIDR (e.g. 'fd00::/8' or '10.0.0.0/8') so req.ip resolves ` +
+      `      to the real client and per-IP rate limits work.\n\n` +
+      `Mixing 'loopback'-only with no-native-TLS leaves you with collapsed rate limits ` +
+      `and an oidc-provider that thinks the request scheme is http://, breaking ` +
+      `https:// redirect URI validation.`,
+    );
+  }
 }
 
 export async function createStreamableHttpRuntime(
@@ -350,11 +390,20 @@ export async function createStreamableHttpRuntime(
   // See assertHostedDeploymentSafety for the full rationale; the
   // function is exported so unit tests can exercise the guard
   // without standing up an Express server.
+  // Cycle-12 fix: detect whether TLS is configured at this server.
+  // The presence of both cert and key paths means native HTTPS;
+  // their absence means upstream-proxy shape. The guard uses this
+  // signal to refuse the silent `loopback`-only-without-native-TLS
+  // combination.
+  const nativeTlsConfigured = Boolean(
+    env.DOLLHOUSE_TLS_CERT_PATH && env.DOLLHOUSE_TLS_KEY_PATH,
+  );
   await assertHostedDeploymentSafety({
     host,
     methods: env.DOLLHOUSE_AUTH_METHODS,
     authEnabled: env.DOLLHOUSE_AUTH_ENABLED,
     trustedProxies: env.DOLLHOUSE_TRUSTED_PROXIES,
+    nativeTls: nativeTlsConfigured,
   });
 
   // Wire trust proxy from env. Default 'loopback' (Express built-in)

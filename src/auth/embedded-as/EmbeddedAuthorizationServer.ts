@@ -34,6 +34,7 @@ import type {
   IssueOptions,
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
+import { normalizeIp } from './rateLimit.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import {
   createInteractionRouter,
@@ -424,8 +425,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
             // already deployment-scoped, persisted, and rotated on
             // mode-switch — exactly the lifecycle we want.
             const salt = state.cookieKeys[0];
+            // Cycle-12 fix (H12-1): normalize the IP before hashing so
+            // the same dual-stack client (`::ffff:1.2.3.4` vs `1.2.3.4`)
+            // produces the same `ipHash`. Without this, the IP/UA-bound
+            // rotation grace silently fails closed for v6-mapped clients
+            // that rotate via v4 (or vice-versa). Same bug class as
+            // cycle-10 H10-2 (MagicLink), cycle-11 H11-2 (getClientKey)
+            // — fourth and final site of the pattern.
             const context: RotationRequestContext = {
-              ipHash: hashRotationAttribute(req.ip, salt),
+              ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
               uaHash: hashRotationAttribute(req.headers['user-agent'], salt),
             };
             withRotationRequestContext(context, () => {

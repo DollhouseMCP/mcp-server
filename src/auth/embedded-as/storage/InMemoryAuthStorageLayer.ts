@@ -28,6 +28,7 @@ import type {
   IdentityEventFilter,
   StoredAccount,
 } from './IAuthStorageLayer.js';
+import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
 
 interface GenericRecord {
   payload: unknown;
@@ -138,7 +139,11 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     // Defensive copy + stable sort; auditEvents is push-ordered so timestamps
     // are usually monotonic, but recordIdentityEvent permits caller-supplied
     // timestamps so a sort guards against out-of-order writes.
-    return [...events].sort((a, b) => a.timestamp - b.timestamp);
+    const sorted = [...events].sort((a, b) => a.timestamp - b.timestamp);
+    // Cycle-12 fix: cap the result set to prevent unbounded memory
+    // growth on long-running deployments (see DEFAULT_IDENTITY_EVENTS_LIMIT).
+    const limit = filter?.limit ?? DEFAULT_IDENTITY_EVENTS_LIMIT;
+    return limit > 0 && sorted.length > limit ? sorted.slice(0, limit) : sorted;
   }
 
   // ---- Grants (Phase 5 H14 support) ----

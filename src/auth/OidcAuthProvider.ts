@@ -28,6 +28,18 @@ export interface OidcAuthProviderOptions {
   /** JWKS endpoint URL. Defaults to {issuer}/.well-known/jwks.json */
   jwksUri?: string;
   /**
+   * Allowlist of acceptable JWT signing algorithms. The peer providers
+   * (EmbeddedAuthorizationServer and LocalDevAuthProvider) pin
+   * algorithms explicitly. OIDC bridge mode must accept whatever the
+   * upstream IdP signs with — typically RS256/RS384/RS512 or
+   * ES256/ES384/ES512 — but should still refuse `none` and HS-family
+   * algorithms (HMAC keys would be derivable from the public JWKS).
+   *
+   * Default covers the standard asymmetric set that managed IdPs
+   * (Auth0, Okta, Keycloak, Azure AD, Google) use.
+   */
+  algorithms?: readonly string[];
+  /**
    * Test injection point: pre-built JWTVerifyGetKey, used in place of
    * the remote JWKS fetcher. Production code should never set this —
    * `jwksUri` is the operator-facing knob. Tests use this to exercise
@@ -37,17 +49,32 @@ export interface OidcAuthProviderOptions {
   jwksGetter?: JWTVerifyGetKey;
 }
 
+/**
+ * Default JWT signing algorithm allowlist for OIDC bridge mode.
+ * Asymmetric only — refuses `none` and HMAC algorithms which would
+ * be derivable from the public JWKS material. Operators with an IdP
+ * that signs with something exotic can override via the
+ * `algorithms` option.
+ */
+export const DEFAULT_OIDC_ALGORITHMS: readonly string[] = [
+  'RS256', 'RS384', 'RS512',
+  'ES256', 'ES384', 'ES512',
+  'PS256', 'PS384', 'PS512',
+];
+
 export class OidcAuthProvider implements IAuthProvider {
   readonly name: string;
 
   private readonly issuer: string;
   private readonly audience: string;
   private readonly jwks: JWTVerifyGetKey;
+  private readonly algorithms: readonly string[];
 
   constructor(options: OidcAuthProviderOptions) {
     this.issuer = options.issuer;
     this.audience = options.audience;
     this.name = `oidc:${new URL(options.issuer).hostname}`;
+    this.algorithms = options.algorithms ?? DEFAULT_OIDC_ALGORITHMS;
 
     const jwksUri = options.jwksUri
       ?? new URL('.well-known/jwks.json', options.issuer).toString();
@@ -57,15 +84,23 @@ export class OidcAuthProvider implements IAuthProvider {
     logger.info(`[OidcAuthProvider] Configured for issuer ${this.issuer}`, {
       audience: this.audience,
       jwksUri,
+      algorithms: this.algorithms,
       injected: options.jwksGetter !== undefined,
     });
   }
 
   async validate(token: string): Promise<AuthResult> {
     try {
+      // Cycle-12 fix (M12-1): pin algorithms explicitly. The peer
+      // providers do this; OIDC bridge mode was missing the parity
+      // hardening. jose's default is permissive (any alg the JWKS
+      // keys support); explicit allowlist refuses `none`/HMAC even
+      // if the upstream JWKS were ever compromised in a way that
+      // included symmetric keys.
       const { payload } = await jwtVerify(token, this.jwks, {
         issuer: this.issuer,
         audience: this.audience,
+        algorithms: [...this.algorithms],
       });
 
       if (!payload.sub) {

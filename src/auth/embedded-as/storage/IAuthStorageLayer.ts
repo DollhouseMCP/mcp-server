@@ -150,7 +150,23 @@ export interface IdentityEventFilter {
   sub?: string;
   /** Only events at or after this epoch ms. */
   since?: number;
+  /**
+   * Maximum number of events to return. When omitted, the storage
+   * layer applies its default cap (1000). The audit log is append-
+   * only and grows unbounded over deployment lifetime; an admin
+   * call without a `since` window could otherwise pull the entire
+   * table into Node process memory. Cycle-12 fix.
+   */
+  limit?: number;
 }
+
+/**
+ * Default cap for `listIdentityEvents` when no limit is supplied.
+ * Tunable via the filter; chosen to be large enough for one-shot
+ * incident triage but small enough to prevent OOM on a long-running
+ * deployment.
+ */
+export const DEFAULT_IDENTITY_EVENTS_LIMIT = 1000;
 
 /**
  * Storage contract. All methods are async. The semantic account methods

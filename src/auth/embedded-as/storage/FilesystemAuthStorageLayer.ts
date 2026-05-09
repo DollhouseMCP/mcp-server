@@ -52,6 +52,7 @@ import type {
   IdentityEventFilter,
   StoredAccount,
 } from './IAuthStorageLayer.js';
+import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
 
 const SAFE_ID_RE = /^[A-Za-z0-9_\-]+$/;
 const SAFE_MODEL_RE = /^[A-Za-z][A-Za-z0-9]*$/;
@@ -233,7 +234,11 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       const since = filter.since;
       filtered = filtered.filter(e => e.timestamp >= since);
     }
-    return filtered.slice().sort((a, b) => a.timestamp - b.timestamp);
+    const sorted = filtered.slice().sort((a, b) => a.timestamp - b.timestamp);
+    // Cycle-12 fix: cap result set (audit log grows unbounded over
+    // deployment lifetime).
+    const limit = filter?.limit ?? DEFAULT_IDENTITY_EVENTS_LIMIT;
+    return limit > 0 && sorted.length > limit ? sorted.slice(0, limit) : sorted;
   }
 
   // ---- Grants (Phase 5 H14) ----

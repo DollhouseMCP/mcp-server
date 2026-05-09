@@ -165,6 +165,66 @@ describe('assertHostedDeploymentSafety', () => {
     expect(msg).toMatch(/bootstrap-admin CLI/);
   });
 
+  // Cycle-12 fix: refuse the silent misconfiguration where an operator
+  // behind an upstream proxy sets `loopback` only. The previous H4
+  // guard fired when trustedProxies was empty/unset; this new guard
+  // catches the wrong-value case.
+  it('Round 12: refuses loopback-only trusted-proxies without native TLS on non-loopback bind', async () => {
+    let err: unknown;
+    try {
+      await assertHostedDeploymentSafety({
+        host: '0.0.0.0',
+        methods: ['github'],
+        authEnabled: true,
+        trustedProxies: ['loopback'],
+        nativeTls: false, // operator behind a proxy but only trusts loopback
+      });
+    } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(Error);
+    const msg = (err as Error).message;
+    expect(msg).toMatch(/loopback/);
+    expect(msg).toMatch(/native TLS/);
+    expect(msg).toMatch(/CIDR/);
+  });
+
+  it('Round 12: ALLOWS loopback-only trusted-proxies WITH native TLS (correct native-HTTPS shape)', async () => {
+    // Native HTTPS: the AS serves TLS itself. There's no upstream
+    // proxy, so loopback-only is correct — Express ignores client-
+    // supplied X-Forwarded-* headers.
+    await expect(assertHostedDeploymentSafety({
+      host: '0.0.0.0',
+      methods: ['github'],
+      authEnabled: true,
+      trustedProxies: ['loopback'],
+      nativeTls: true,
+    })).resolves.toBeUndefined();
+  });
+
+  it('Round 12: ALLOWS loopback-only when nativeTls flag is undefined (backward compat)', async () => {
+    // The flag defaults to undefined when callers don't pass it.
+    // The guard only fires on `nativeTls === false`. This preserves
+    // existing test behavior.
+    await expect(assertHostedDeploymentSafety({
+      host: '0.0.0.0',
+      methods: ['github'],
+      authEnabled: true,
+      trustedProxies: ['loopback'],
+      // nativeTls intentionally omitted
+    })).resolves.toBeUndefined();
+  });
+
+  it('Round 12: ALLOWS real CIDR without native TLS (upstream-proxy shape)', async () => {
+    // Behind Cloudflare Tunnel / nginx / ALB. Real CIDR trusted; no
+    // local TLS. This is the canonical proxy deployment.
+    await expect(assertHostedDeploymentSafety({
+      host: '0.0.0.0',
+      methods: ['github'],
+      authEnabled: true,
+      trustedProxies: ['10.0.0.0/8'],
+      nativeTls: false,
+    })).resolves.toBeUndefined();
+  });
+
   it('H4: passes when non-loopback bind + multi-user + auth enabled + trusted proxies set', async () => {
     await expect(assertHostedDeploymentSafety({
       host: '0.0.0.0',

@@ -160,6 +160,36 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     if (!result.ok) expect(result.reason).toMatch(/key id|kid/);
   });
 
+  // Cycle-12 fix (MISSING-COVERAGE-HIGH from cycle-12 review): the
+  // JWSSignatureVerificationFailed branch added in cycle 11 had no
+  // test. A revert of the branch returned 'token validation failed'
+  // (generic) instead of 'invalid signature' — silent loss of
+  // operator log specificity. This test pins the typed-error
+  // classification by signing a token with the AS's claims but
+  // a different ES256 key (matching alg + kid → reaches signature
+  // verification → fails there).
+  it('rejects token signed with a different key → reason "invalid signature" (typed JWSSignatureVerificationFailed)', async () => {
+    const { generateKeyPair } = await import('jose');
+    const { privateKey: wrongKey } = await generateKeyPair('ES256', { extractable: true });
+    const now = Math.floor(Date.now() / 1000);
+    // Same kid as the AS expects — signature verification will be
+    // attempted (not rejected at kid-match).
+    const tampered = await new SignJWT({ scope: 'mcp' })
+      .setProtectedHeader({ alg: 'ES256', typ: 'at+jwt', kid })
+      .setIssuer(ISSUER)
+      .setAudience(RESOURCE)
+      .setSubject('alice')
+      .setIssuedAt(now)
+      .setExpirationTime(now + 3600)
+      .sign(wrongKey);
+    const result = await as.validate(tampered);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      // Cycle-11 / M11-1: aligned reason text across all 3 providers.
+      expect(result.reason).toBe('invalid signature');
+    }
+  });
+
   it('rejects token with alg: HS256 (algorithm-confusion attack)', async () => {
     // Classic alg-confusion: an attacker takes the AS's published public
     // key and uses its bytes as an HMAC-SHA256 secret to sign a forged

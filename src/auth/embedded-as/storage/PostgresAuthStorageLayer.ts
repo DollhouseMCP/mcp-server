@@ -41,6 +41,7 @@ import type {
   IdentityEventFilter,
   StoredAccount,
 } from './IAuthStorageLayer.js';
+import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
 
 export interface PostgresAuthStorageLayerOptions {
   /** Drizzle DB instance. Pass the same instance the rest of the app uses. */
@@ -248,10 +249,16 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     if (filter?.sub) clauses.push(eq(authIdentityEvents.sub, filter.sub));
     if (filter?.since !== undefined) clauses.push(gte(authIdentityEvents.timestamp, filter.since));
 
+    // Cycle-12 fix: cap the result set at the SQL layer so a long-
+    // running deployment's audit log doesn't pull millions of rows
+    // into Node memory on a single admin call.
+    const limit = filter?.limit ?? DEFAULT_IDENTITY_EVENTS_LIMIT;
+
     const rows = await withSystemContext(this.db, (tx) => {
       const baseSelect = tx.select().from(authIdentityEvents);
       const filtered = clauses.length > 0 ? baseSelect.where(and(...clauses)) : baseSelect;
-      return filtered.orderBy(authIdentityEvents.timestamp);
+      const ordered = filtered.orderBy(authIdentityEvents.timestamp);
+      return limit > 0 ? ordered.limit(limit) : ordered;
     });
 
     return (rows as IdentityEventRow[]).map(rowToIdentityEvent);

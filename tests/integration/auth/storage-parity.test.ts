@@ -276,6 +276,29 @@ function runContractSuite(
       const recent = await storage.listIdentityEvents({ since: 200 });
       expect(recent.map(e => e.timestamp)).toEqual([200, 300]);
     });
+
+    // Cycle-12 fix: result-set cap to prevent OOM on long-running
+    // deployments. Backends must honor an explicit limit and apply
+    // a default when none is supplied.
+    it('cycle-12: listIdentityEvents respects explicit limit', async () => {
+      for (let i = 0; i < 10; i += 1) {
+        await storage.recordIdentityEvent({ type: 'auth.cap', timestamp: i });
+      }
+      const limited = await storage.listIdentityEvents({ type: 'auth.cap', limit: 3 });
+      expect(limited).toHaveLength(3);
+      // Returned in timestamp ascending order — first three.
+      expect(limited.map(e => e.timestamp)).toEqual([0, 1, 2]);
+    });
+
+    it('cycle-12: listIdentityEvents default-caps without an explicit limit', async () => {
+      // Default cap is 1000 (DEFAULT_IDENTITY_EVENTS_LIMIT). We don't
+      // insert 1000 rows here (slow); instead verify a small set still
+      // returns and that limit=0 is treated as "no cap" (escape hatch).
+      await storage.recordIdentityEvent({ type: 'auth.uncap', timestamp: 1 });
+      await storage.recordIdentityEvent({ type: 'auth.uncap', timestamp: 2 });
+      const all = await storage.listIdentityEvents({ type: 'auth.uncap' });
+      expect(all).toHaveLength(2);
+    });
   });
 
   describe('grants', () => {

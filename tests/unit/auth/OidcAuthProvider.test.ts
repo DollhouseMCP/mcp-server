@@ -163,4 +163,35 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
       expect(result.reason).toMatch(/mcp scope/);
     }
   });
+
+  // Cycle-12 fix (M12-1): algorithms allowlist parity with EmbeddedAS
+  // and LocalDev. The default allowlist excludes `none` and HS-family
+  // algorithms; jose rejects them at verify-time even if a token were
+  // crafted with one.
+  describe('algorithms allowlist (M12-1)', () => {
+    it('accepts a token signed with a default-allowlist algorithm (ES256)', async () => {
+      const token = await mintToken();
+      const result = await provider.validate(token);
+      expect(result.ok).toBe(true);
+    });
+
+    it('rejects a token whose alg is outside a custom allowlist', async () => {
+      // Configure a provider that only accepts RS256.
+      const restrictedProvider = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        algorithms: ['RS256'],
+      });
+      // Mint a token with ES256 (which the verifier no longer allows).
+      const token = await mintToken();
+      const result = await restrictedProvider.validate(token);
+      expect(result.ok).toBe(false);
+      // jose throws JOSEAlgNotAllowed; falls through to generic.
+      // What matters is the rejection happens.
+      if (!result.ok) {
+        expect(result.reason).toBeTruthy();
+      }
+    });
+  });
 });
