@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { randomBytes } from 'node:crypto';
-import { InviteTokenStore } from '../../../../src/auth/embedded-as/inviteTokens.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import {
+  InviteTokenStore,
+  loadOrGenerateInviteSecret,
+} from '../../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
 describe('InviteTokenStore', () => {
@@ -91,6 +97,68 @@ describe('InviteTokenStore', () => {
     const replay = await storeB.consume(token);
     expect(replay.ok).toBe(false);
     if (!replay.ok) expect(replay.reason).toBe('already-consumed');
+  });
+
+  describe('loadOrGenerateInviteSecret (cycle-16 coverage gap)', () => {
+    let tmpDir: string;
+    const ENV_KEY = 'DOLLHOUSE_INVITE_TOKEN_SECRET';
+    let originalEnv: string | undefined;
+
+    beforeEach(() => {
+      tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'invite-secret-'));
+      originalEnv = process.env[ENV_KEY];
+      delete process.env[ENV_KEY];
+    });
+
+    afterEach(() => {
+      if (originalEnv !== undefined) process.env[ENV_KEY] = originalEnv;
+      else delete process.env[ENV_KEY];
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('reads a valid hex env var and returns the decoded buffer', () => {
+      const hexSecret = randomBytes(32).toString('hex');
+      process.env[ENV_KEY] = hexSecret;
+      const buf = loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin'));
+      expect(buf.toString('hex')).toBe(hexSecret);
+    });
+
+    it('rejects env-var values shorter than 16 bytes', () => {
+      process.env[ENV_KEY] = 'aa'.repeat(8); // 8 bytes, below the 16-byte floor
+      expect(() => loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin')))
+        .toThrow(/at least 16 bytes/);
+    });
+
+    it('env var takes precedence over the file', () => {
+      const filePath = path.join(tmpDir, 'invite-secret.bin');
+      const fileSecret = randomBytes(32);
+      fs.writeFileSync(filePath, fileSecret);
+      const envHex = randomBytes(32).toString('hex');
+      process.env[ENV_KEY] = envHex;
+      const buf = loadOrGenerateInviteSecret(filePath);
+      expect(buf.toString('hex')).toBe(envHex);
+    });
+
+    it('generates a new secret on first run when no file or env is set', () => {
+      const filePath = path.join(tmpDir, 'invite-secret.bin');
+      expect(fs.existsSync(filePath)).toBe(false);
+      const buf = loadOrGenerateInviteSecret(filePath);
+      expect(buf.length).toBeGreaterThanOrEqual(16);
+      expect(fs.existsSync(filePath)).toBe(true);
+      // Mode 0600 only meaningful on POSIX; skip the stat assertion on
+      // Windows where mode bits don't map cleanly.
+      if (process.platform !== 'win32') {
+        const mode = fs.statSync(filePath).mode & 0o777;
+        expect(mode).toBe(0o600);
+      }
+    });
+
+    it('reuses an existing valid file on subsequent calls', () => {
+      const filePath = path.join(tmpDir, 'invite-secret.bin');
+      const first = loadOrGenerateInviteSecret(filePath);
+      const second = loadOrGenerateInviteSecret(filePath);
+      expect(first.equals(second)).toBe(true);
+    });
   });
 
   describe('H11: oversize-token DoS guard', () => {

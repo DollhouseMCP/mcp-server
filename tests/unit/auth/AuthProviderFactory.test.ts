@@ -212,4 +212,30 @@ describe('AuthProviderFactory two-level structure', () => {
       })).rejects.toThrow(/DOLLHOUSE_GITHUB_CLIENT_ID/);
     });
   });
+
+  describe('GitHub method env-var coverage (cycle-16 gap)', () => {
+    const ORIGINAL_HOST = process.env.DOLLHOUSE_HTTP_HOST;
+    const ORIGINAL_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+    const ORIGINAL_SECRET = process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+
+    afterEach(() => {
+      if (ORIGINAL_HOST !== undefined) process.env.DOLLHOUSE_HTTP_HOST = ORIGINAL_HOST;
+      else delete process.env.DOLLHOUSE_HTTP_HOST;
+      if (ORIGINAL_ID !== undefined) process.env.DOLLHOUSE_GITHUB_CLIENT_ID = ORIGINAL_ID;
+      else delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      if (ORIGINAL_SECRET !== undefined) process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET = ORIGINAL_SECRET;
+      else delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+    });
+
+    it('rejects when DOLLHOUSE_GITHUB_CLIENT_SECRET is missing but ID is set', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      process.env.DOLLHOUSE_GITHUB_CLIENT_ID = 'gh-app-id';
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['github'],
+      })).rejects.toThrow(/DOLLHOUSE_GITHUB_CLIENT_SECRET/);
+    });
+  });
 });

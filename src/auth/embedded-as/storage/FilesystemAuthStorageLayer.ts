@@ -213,9 +213,34 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Audit (must-fix #21) ----
 
+  /**
+   * Cycle-16 fix (HIGH): rotate audit.jsonl when it grows past this
+   * size. Without rotation, listIdentityEvents would eventually load
+   * gigabytes into memory (the whole file is read on every call).
+   * 50 MB ≈ 100k events worth of moderately-sized JSON; far above
+   * normal volume but caps the worst case.
+   */
+  private static readonly AUDIT_ROTATION_THRESHOLD_BYTES = 50 * 1024 * 1024;
+
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
     await this.locks.withLock(`auth:audit:${this.auditPath}`, async () => {
       await this.ensureRoot();
+      // Rotate before append when the current file is past threshold.
+      // Standard log-rotation shape: rename audit.jsonl → audit.jsonl.1,
+      // then start a fresh file. The .1 file is preserved for offline
+      // analysis; operators can sweep it on their own retention policy.
+      try {
+        const stat = await fs.stat(this.auditPath);
+        if (stat.size >= FilesystemAuthStorageLayer.AUDIT_ROTATION_THRESHOLD_BYTES) {
+          const archived = `${this.auditPath}.1`;
+          await fs.rename(this.auditPath, archived).catch(() => undefined);
+          logger.info('[AuthStorage:fs] audit log rotated', {
+            from: this.auditPath, to: archived, sizeBytes: stat.size,
+          });
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
       await fs.appendFile(this.auditPath, `${JSON.stringify(event)}\n`, 'utf8');
     });
     logger.info('[AuthStorage:fs] identity event', {

@@ -11,7 +11,7 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { normalizeIp } from '../auth/embedded-as/rateLimit.js';
 import { pickHeaderValue } from '../auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { logger } from '../utils/logger.js';
-import { assertSafePublicBaseUrl } from '../auth/oauth/url.js';
+import { assertSafePublicBaseUrl, isLoopbackHost } from '../auth/oauth/url.js';
 import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { TlsConfig } from './TlsConfig.js';
 
@@ -306,7 +306,6 @@ export async function assertHostedDeploymentSafety(config: {
    */
   nativeTls?: boolean;
 }): Promise<void> {
-  const { isLoopbackHost } = await import('../auth/oauth/url.js');
   const multiUserMethods = new Set(['github', 'local-password', 'magic-link']);
   const hasMultiUserMethod = Array.isArray(config.methods)
     && config.methods.some((m) => multiUserMethods.has(m));

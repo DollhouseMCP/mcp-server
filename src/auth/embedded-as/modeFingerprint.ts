@@ -37,6 +37,11 @@ export const OAUTH_STATE_MODELS: readonly string[] = [
   'InteractionMethodChoice',
   'PushedAuthorizationRequest',
   'BackchannelAuthenticationRequest',
+  // Cycle-16 fix: oidc-provider's PKCE replay-detection records are
+  // tied to the prior signing key + issuer. Surviving them across a
+  // mode-switch lets a previously-replayed code_verifier evade
+  // replay detection in the new mode.
+  'ReplayDetection',
 ];
 
 export interface ModeFingerprintInputs {

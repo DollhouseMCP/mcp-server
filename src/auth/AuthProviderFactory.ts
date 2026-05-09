@@ -109,7 +109,23 @@ function resolveDefaultKeyFilePath(): string {
  */
 export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvider | null> {
   if (!config.enabled) {
-    logger.info('[AuthProviderFactory] Authentication disabled');
+    // Cycle-16 fix: a configured non-default provider (oidc/embedded)
+    // with auth disabled is almost certainly an operator misconfig —
+    // they wired up the AS but forgot DOLLHOUSE_AUTH_ENABLED=true, so
+    // the MCP endpoint accepts unauthenticated traffic and the OAuth
+    // setup is silently bypassed. Log loudly enough that this surfaces
+    // in the operator's startup output.
+    if (config.provider === 'embedded' || config.provider === 'oidc') {
+      logger.warn(
+        `[AuthProviderFactory] DOLLHOUSE_AUTH_PROVIDER=${config.provider} is ` +
+        `configured but DOLLHOUSE_AUTH_ENABLED is false. The MCP endpoint will ` +
+        `accept unauthenticated traffic. Set DOLLHOUSE_AUTH_ENABLED=true to ` +
+        `enforce token authentication, or unset DOLLHOUSE_AUTH_PROVIDER if you ` +
+        `intend to run without authentication.`,
+      );
+    } else {
+      logger.info('[AuthProviderFactory] Authentication disabled');
+    }
     return null;
   }
 

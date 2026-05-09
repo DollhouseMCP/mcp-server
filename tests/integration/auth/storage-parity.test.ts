@@ -581,9 +581,11 @@ function runContractSuite(
     });
 
     it('consume on an expired record returns false', async () => {
-      // Set with a 1-second expiry; sleep past it; consume should refuse.
-      await storage.genericSet('AuthorizationCode', 'expired', { grantId: 'g-exp' }, 1);
-      await new Promise((resolve) => setTimeout(resolve, 1100));
+      // Cycle-16 fix: use a negative TTL (already-expired) instead of
+      // a wall-clock sleep. The setTimeout-based version was racing
+      // CPU pressure under parallel jest workers; aligns with the
+      // expiresInSec=-1 pattern used elsewhere in this file.
+      await storage.genericSet('AuthorizationCode', 'expired', { grantId: 'g-exp' }, -1);
       expect(await storage.genericConsume('AuthorizationCode', 'expired')).toBe(false);
     });
 
