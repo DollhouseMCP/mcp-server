@@ -160,6 +160,33 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     if (!result.ok) expect(result.reason).toMatch(/key id|kid/);
   });
 
+  // Cycle-13 fix: JOSEAlgNotAllowed branch added for cross-provider
+  // parity. A revert would return 'token validation failed' (generic)
+  // instead of 'algorithm not allowed' — silent loss of operator-log
+  // specificity. validate() pins ES256 in algorithms, so an HS256
+  // token (algorithm-confusion attack shape) triggers this branch.
+  it('rejects token with disallowed algorithm → reason "algorithm not allowed"', async () => {
+    const { createHmac } = await import('node:crypto');
+    const now = Math.floor(Date.now() / 1000);
+    // HS256-shaped token. The validator's algorithms allowlist refuses
+    // it before signature verification.
+    const header = { alg: 'HS256', typ: 'at+jwt', kid };
+    const payload = {
+      iss: ISSUER, aud: RESOURCE, sub: 'attacker',
+      iat: now, exp: now + 3600, scope: 'mcp',
+    };
+    const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const sig = createHmac('sha256', 'arbitrary-secret-bytes')
+      .update(`${headerB64}.${payloadB64}`)
+      .digest('base64url');
+    const result = await as.validate(`${headerB64}.${payloadB64}.${sig}`);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe('algorithm not allowed');
+    }
+  });
+
   // Cycle-12 fix (MISSING-COVERAGE-HIGH from cycle-12 review): the
   // JWSSignatureVerificationFailed branch added in cycle 11 had no
   // test. A revert of the branch returned 'token validation failed'

@@ -147,6 +147,33 @@ describe('LocalDevAuthProvider', () => {
       const result = await provider.validate(token);
       expect(result.ok).toBe(false);
     });
+
+    // Cycle-13 fix: JOSEAlgNotAllowed branch added for cross-provider
+    // parity with EmbeddedAS and OIDC. validate() pins ES256; an HS256
+    // token (alg-confusion shape) hits the new branch.
+    it('rejects an HS256 token with reason "algorithm not allowed"', async () => {
+      const { createHmac } = await import('node:crypto');
+      const now = Math.floor(Date.now() / 1000);
+      const header = { alg: 'HS256', typ: 'JWT' };
+      const payload = {
+        iss: 'dollhousemcp-local',
+        aud: 'dollhousemcp',
+        sub: 'attacker',
+        iat: now,
+        exp: now + 3600,
+        scopes: ['mcp'],
+      };
+      const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+      const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const sig = createHmac('sha256', 'guess-the-secret')
+        .update(`${headerB64}.${payloadB64}`)
+        .digest('base64url');
+      const result = await provider.validate(`${headerB64}.${payloadB64}.${sig}`);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('algorithm not allowed');
+      }
+    });
   });
 
   describe('provider metadata', () => {

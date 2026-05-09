@@ -175,22 +175,22 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
       expect(result.ok).toBe(true);
     });
 
-    it('rejects a token whose alg is outside a custom allowlist', async () => {
-      // Configure a provider that only accepts RS256.
+    it('rejects a token whose alg is outside a custom allowlist with reason="algorithm not allowed"', async () => {
+      // Cycle-13 fix: jose throws JOSEAlgNotAllowed; the new typed
+      // branch in OidcAuthProvider.validate maps it to a distinct
+      // reason string. Pre-cycle-13 this fell through to the generic
+      // 'token validation failed', losing operator-log specificity.
       const restrictedProvider = new OidcAuthProvider({
         issuer: ISSUER,
         audience: AUDIENCE,
         jwksGetter: verifyJwks,
         algorithms: ['RS256'],
       });
-      // Mint a token with ES256 (which the verifier no longer allows).
       const token = await mintToken();
       const result = await restrictedProvider.validate(token);
       expect(result.ok).toBe(false);
-      // jose throws JOSEAlgNotAllowed; falls through to generic.
-      // What matters is the rejection happens.
       if (!result.ok) {
-        expect(result.reason).toBeTruthy();
+        expect(result.reason).toBe('algorithm not allowed');
       }
     });
   });

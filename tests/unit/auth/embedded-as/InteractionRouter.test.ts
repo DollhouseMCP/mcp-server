@@ -326,6 +326,37 @@ describe('InteractionRouter — multi-method dispatch', () => {
       }
     });
 
+    // Cycle-13 HIGH regression: InteractionRouter body parsers now
+    // cap at 4kb. A revert to the express default 100kb (or removal
+    // of the limit option) would let a 50kb body POST through to the
+    // route handler — the cycle-13 fix existed without a test until
+    // now.
+    it('cycle-13: urlencoded body > 4kb is rejected with 413', async () => {
+      const localStorage = new InMemoryAuthStorageLayer();
+      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Test' });
+      const h = await startHarness([method], localStorage, {
+        uid: 'body-limit-test-uid',
+        prompt: { name: 'login' },
+        params: { client_id: 'c', scope: 'mcp' },
+      });
+      try {
+        // Build a urlencoded body comfortably over 4kb — pad a single
+        // field with 5kb of 'a'.
+        const oversized = new URLSearchParams({
+          csrf_token: 'doesnt-matter',
+          padding: 'a'.repeat(5_120),
+        });
+        const res = await fetch(`${h.url}/interaction/body-limit-test-uid`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: oversized.toString(),
+        });
+        expect(res.status).toBe(413);
+      } finally {
+        await h.close();
+      }
+    });
+
     // Cycle-10 HIGH regression: methods that render multiple <form>
     // elements on the same page (LocalAccountMethod renders two — one
     // for sign-in, one for invite redemption) used to get the CSRF

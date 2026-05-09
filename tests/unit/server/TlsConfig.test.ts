@@ -36,6 +36,10 @@ describe('TlsConfig', () => {
     expect(options).not.toBeNull();
     expect(options!.cert).toBeInstanceOf(Buffer);
     expect(options!.key).toBeInstanceOf(Buffer);
+    // Cycle-13 fix: pin TLSv1.2 minimum. A regression that drops this
+    // would let Node's default acceptance of TLS 1.0/1.1 (on older
+    // base images) ship silently.
+    expect(options!.minVersion).toBe('TLSv1.2');
   });
 
   it('throws when only one of cert/key is set', () => {

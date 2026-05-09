@@ -92,6 +92,25 @@ export function shouldTrustUpstreamProxy(
   return true;
 }
 
+/**
+ * Cycle-13 fix (UA array coercion): Express's `req.headers[name]` is
+ * typed `string | string[] | undefined`. A multi-value header (rare
+ * but valid per HTTP/1.1) used to coerce to a comma-joined string
+ * when passed through `createHmac.update(arr)` — producing a different
+ * hash from the same value sent as a single header. This helper picks
+ * the first array element so the hash stays stable.
+ *
+ * Returns the input unchanged for `string` and `undefined`; returns
+ * `arr[0]` (which may itself be `undefined` for an empty/sparse array)
+ * for `string[]`. Exported for unit testing.
+ */
+export function pickHeaderValue(
+  header: string | string[] | undefined,
+): string | undefined {
+  if (Array.isArray(header)) return header[0];
+  return header;
+}
+
 export interface EmbeddedAuthorizationServerOptions {
   publicBaseUrl?: string;
   mcpPath?: string;
@@ -445,11 +464,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
             // producing a different hash from the same UA sent as a
             // single header. Pick the first value when an array is
             // present so the hash stays stable.
-            const uaHeader = req.headers['user-agent'];
-            const uaValue = Array.isArray(uaHeader) ? uaHeader[0] : uaHeader;
             const context: RotationRequestContext = {
               ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
-              uaHash: hashRotationAttribute(uaValue, salt),
+              uaHash: hashRotationAttribute(pickHeaderValue(req.headers['user-agent']), salt),
             };
             withRotationRequestContext(context, () => {
               state.provider.callback()(req, res);
