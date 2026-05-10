@@ -62,7 +62,13 @@ import { assertHasRole } from '../assertHasRole.js';
 import { createUnifiedAuthMiddleware } from '../authMiddleware.js';
 
 const ALGORITHM = 'ES256';
-const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
+const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600; // 1 hour
+const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
+const DEFAULT_AUTH_CODE_TTL_SECONDS = 5 * 60; // 5 minutes
+// Interaction TTL must stay aligned with InteractionRouter's CSRF_TTL_SECONDS;
+// the CSRF token's lifetime can't exceed the interaction's.
+const DEFAULT_INTERACTION_TTL_SECONDS = 10 * 60; // 10 minutes
+const DEFAULT_SESSION_TTL_SECONDS = 14 * 24 * 3600; // 14 days
 const DEFAULT_CLIENT_ID = 'dollhouse-claude-connector';
 
 /**
@@ -1011,10 +1017,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       pkce: { required: () => true },
       ttl: {
         AccessToken: DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
-        RefreshToken: 30 * 24 * 3600,
-        AuthorizationCode: 5 * 60,
-        Interaction: 10 * 60,
-        Session: 14 * 24 * 3600,
+        RefreshToken: DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+        AuthorizationCode: DEFAULT_AUTH_CODE_TTL_SECONDS,
+        Interaction: DEFAULT_INTERACTION_TTL_SECONDS,
+        Session: DEFAULT_SESSION_TTL_SECONDS,
       },
       // must-fix #11: enable refresh-token rotation + replay detection.
       // oidc-provider tags consumed records with `consumed: <ts>` (via

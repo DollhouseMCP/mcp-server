@@ -286,6 +286,43 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(second.status).toBe(400);
   }, 30_000);
 
+  it('cycle-16: POST /auth/email/verify rejects when interaction cookie is absent', async () => {
+    // The Phase 9 ordering fix verifies the cookie BEFORE consuming the
+    // token. This test asserts: (a) the 400 fires, (b) the token is
+    // NOT consumed (so a subsequent POST with the right cookie still
+    // works) — pinning that mismatch doesn't burn the token.
+    await bootHarness();
+    const authServer = await fetchAuthServerMetadata(harness.baseUrl);
+    const { interactionUrl, jar } = await startAuthorizeFlow({
+      baseUrl: harness.baseUrl,
+      authServerMetadata: authServer,
+      clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
+      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
+    });
+    await postRequestLinkForm(interactionUrl, jar, 'csrf@example.com');
+    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+
+    // POST without the cookie jar → cookie binding mismatches.
+    const noCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: tokenParam }),
+    });
+    expect(noCookie.status).toBe(400);
+
+    // Subsequent POST with the right cookie should still work — the
+    // earlier mismatch must not have consumed the token.
+    const withCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
+      method: 'POST', redirect: 'manual',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Cookie: jar.header(),
+      },
+      body: new URLSearchParams({ token: tokenParam }),
+    });
+    expect([302, 303]).toContain(withCookie.status);
+  }, 30_000);
+
   it('admin claim: pre-claimed magic-link sub gets roles:["admin"] on JWT (cycle-16)', async () => {
     // Need to skip auto-bootstrap so we can pre-claim with a specific
     // admin sub. bootHarness() always auto-bootstraps with a placeholder

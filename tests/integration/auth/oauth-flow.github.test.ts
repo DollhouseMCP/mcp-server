@@ -269,6 +269,60 @@ describe('GithubSocialMethod — OAuth E2E', () => {
     expect(callback.status).toBeLessThan(500);
   }, 30_000);
 
+  it('cycle-16: callback rejects when interaction cookie is absent (cookie-binding before code exchange)', async () => {
+    // Phase 9 L1/Q8 fix: the cookie binding check fires BEFORE the
+    // code exchange so a forged callback can't burn a real GitHub
+    // one-time code. This test asserts (a) 400 returns, (b) the GitHub
+    // token endpoint was NOT contacted (fetchImpl spy stays at zero
+    // calls for this request).
+    let tokenEndpointCalls = 0;
+    const spyMethod = new GithubSocialMethod({
+      clientId: 'gh-test', clientSecret: 'gh-secret',
+      callbackUrl: `${harness.publicBaseUrl}/auth/social/github/callback`,
+      storage,
+      fetchImpl: ((url: string | URL, init?: RequestInit) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('github.com/login/oauth/access_token')) tokenEndpointCalls += 1;
+        return buildFakeFetch(() => profile)(url, init);
+      }) as typeof fetch,
+      emailVerifiedCacheTtlMs: 0,
+    });
+    await harness.close();
+    const port = await getFreePort();
+    const publicBaseUrl = `http://127.0.0.1:${port}`;
+    harness = await startASHarness({
+      methods: [spyMethod], storage, publicBaseUrl, port,
+    });
+
+    // Start an authorize flow to get a real interaction in storage,
+    // then hit the callback URL WITHOUT the cookie jar.
+    const authServer = await fetchAuthServerMetadata(harness.baseUrl);
+    const { interactionUrl, jar } = await startAuthorizeFlow({
+      baseUrl: harness.baseUrl,
+      authServerMetadata: authServer,
+      clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
+      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
+    });
+    // Walk to the github authorize redirect to extract the real state,
+    // but use a fresh fetch (no jar header) for the callback.
+    const interactionResp = await fetch(interactionUrl, {
+      method: 'GET', redirect: 'manual',
+      headers: { Cookie: jar.header() },
+    });
+    const githubLocation = interactionResp.headers.get('location')!;
+    const state = new URL(githubLocation).searchParams.get('state')!;
+
+    const noCookie = await fetch(
+      `${harness.publicBaseUrl}/auth/social/github/callback?code=valid-code&state=${state}`,
+      { method: 'GET', redirect: 'manual' },
+    );
+    expect(noCookie.status).toBeGreaterThanOrEqual(400);
+    expect(noCookie.status).toBeLessThan(500);
+    // Critical: GitHub token endpoint never contacted because cookie
+    // binding fired first.
+    expect(tokenEndpointCalls).toBe(0);
+  }, 30_000);
+
   it('admin claim: pre-claimed github sub gets roles:["admin"] on JWT (cycle-16)', async () => {
     // Rebuild harness without auto-bootstrap so we can pre-claim a
     // specific admin sub.

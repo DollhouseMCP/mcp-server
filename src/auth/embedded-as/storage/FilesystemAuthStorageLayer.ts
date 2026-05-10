@@ -182,32 +182,54 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     adminMethod: 'local-password' | 'magic-link' | 'github',
   ): Promise<void> {
     await this.locks.withLock(`auth:bootstrap:${this.bootstrapPath}`, async () => {
-      // Read-modify-write under the lock so concurrent CLI runs serialize.
-      // (Unlikely in practice — the CLI is a one-shot invocation — but the
-      // lock pattern is consistent with the rest of the layer.)
-      let existing: BootstrapState = { completed: false };
-      try {
-        const raw = await fs.readFile(this.bootstrapPath, 'utf-8');
-        existing = JSON.parse(raw) as BootstrapState;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      }
-
-      if (existing.completed && existing.adminSub !== adminSub) {
-        throw new Error(
-          `bootstrap already completed for admin '${existing.adminSub}'; ` +
-          `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
-        );
-      }
-
+      // Cycle-16 fix: layer OS-level atomic create on top of the
+      // in-process lock so concurrent `dollhouse-admin-bootstrap`
+      // processes (different PIDs, separate in-process locks) can't
+      // both succeed and last-writer-wins. Try to create the bootstrap
+      // file with O_CREAT|O_EXCL; if EEXIST fires, read what's there
+      // and validate adminSub matches before treating as a no-op.
       const next: BootstrapState = {
         completed: true,
         adminSub,
         adminMethod,
         completedAt: Date.now(),
       };
+      const serialized = JSON.stringify(next, null, 2);
+
       await this.ensureRoot();
-      await this.locks.atomicWriteFile(this.bootstrapPath, JSON.stringify(next, null, 2));
+      try {
+        const handle = await fs.open(this.bootstrapPath, 'wx', 0o600);
+        try {
+          await handle.write(serialized);
+        } finally {
+          await handle.close();
+        }
+        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+
+      // File already exists. Read it, parse, and validate that we're
+      // re-claiming the SAME admin (idempotent re-run), not transferring.
+      const raw = await fs.readFile(this.bootstrapPath, 'utf-8');
+      let existing: BootstrapState;
+      try {
+        existing = JSON.parse(raw) as BootstrapState;
+      } catch {
+        // Corrupt or partial file — treat as absent and rewrite.
+        await this.locks.atomicWriteFile(this.bootstrapPath, serialized);
+        return;
+      }
+      if (existing.completed && existing.adminSub !== adminSub) {
+        throw new Error(
+          `bootstrap already completed for admin '${existing.adminSub}'; ` +
+          `re-running with a different admin '${adminSub}' is rejected (admin transfer is a separate operation)`,
+        );
+      }
+      // Same admin, idempotent re-run — refresh completedAt and method
+      // (a same-admin re-run with a different method is allowed and is
+      // the path the CLI takes when adding a second method).
+      await this.locks.atomicWriteFile(this.bootstrapPath, serialized);
     });
   }
 

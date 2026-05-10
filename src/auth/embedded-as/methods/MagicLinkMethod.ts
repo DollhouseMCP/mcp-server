@@ -131,6 +131,19 @@ export class MagicLinkMethod implements IAuthMethod {
         `observer distinguish unknown emails from known emails.`,
       );
     }
+    // Cycle-16: surface the per-replica rate-limit caveat for magic-link
+    // at construction time. The Map-backed limiters reset on restart and
+    // don't share state across replicas; distributed limits are §8.2.
+    // Suppress when running under jest (NODE_ENV=test) so unit tests
+    // don't see a startup-warn spam pattern.
+    if (process.env.NODE_ENV !== 'test') {
+      logger.warn(
+        '[MagicLinkMethod] rate-limit state is process-local. The per-IP ' +
+        'and per-email request limits reset on restart and are per-replica ' +
+        'in multi-instance deployments. Distributed rate-limit backing is a ' +
+        '§8.2 follow-up.',
+      );
+    }
   }
 
   async beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
