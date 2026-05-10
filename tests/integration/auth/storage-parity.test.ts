@@ -207,6 +207,25 @@ function runContractSuite(
       expect(found).toBeNull();
     });
 
+    it('cycle-16: credentials.passwordHash never bleeds into rawProfile', async () => {
+      // B4 invariant — a hash stored on `credentials` must round-trip
+      // back ONLY on credentials, not on rawProfile (which goes back
+      // to clients via various API shapes). Postgres maps these to
+      // different JSONB columns; in-memory + filesystem store them as
+      // separate fields. A schema regression that collapsed credentials
+      // into rawProfile would surface here.
+      await storage.upsertAccount(makeAccount({
+        sub: 'github_pwhash',
+        credentials: { passwordHash: '$argon2id$v=19$m=65536,t=3,p=4$saltsaltsaltsalt$hashhashhashhash' },
+        rawProfile: { login: 'pwhash-user', name: 'PW Hash' },
+      }));
+      const found = await storage.getAccount('github_pwhash');
+      expect(found?.credentials?.passwordHash).toMatch(/^\$argon2id\$/);
+      const rawProfileSerialized = JSON.stringify(found?.rawProfile ?? {});
+      expect(rawProfileSerialized).not.toContain('argon2id');
+      expect(rawProfileSerialized).not.toContain('passwordHash');
+    });
+
     it('updateAccountLastAuth: preserves the rest of the account row (no clobber)', async () => {
       // The whole point of the targeted-write API: don't re-write
       // displayName/email/rawProfile from a stale read. Any backend
@@ -809,6 +828,37 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
 
     const b = new FilesystemAuthStorageLayer({ rootDir: dir });
     expect(await b.genericGet('Grant', 'g-persist')).toEqual({ accountId: 'github_42' });
+  });
+
+  it('cycle-16: bootstrap state survives across instances', async () => {
+    // Without this, an AS restart re-enters the 503 bootstrap-required
+    // gate even though the operator already ran the CLI — locking out
+    // every user.
+    const a = new FilesystemAuthStorageLayer({ rootDir: dir });
+    await a.markBootstrapComplete('github_admin', 'github');
+    expect((await a.getBootstrapState()).completed).toBe(true);
+
+    const b = new FilesystemAuthStorageLayer({ rootDir: dir });
+    const state = await b.getBootstrapState();
+    expect(state.completed).toBe(true);
+    expect(state.adminSub).toBe('github_admin');
+    expect(state.adminMethod).toBe('github');
+  });
+
+  it('cycle-16: concurrent markBootstrapComplete with different subs — exactly one wins', async () => {
+    // Two independent instances pointing at the same directory race
+    // each other through the OS-level O_EXCL guard. Exactly one
+    // succeeds; the other gets the admin-transfer rejection.
+    const a = new FilesystemAuthStorageLayer({ rootDir: dir });
+    const b = new FilesystemAuthStorageLayer({ rootDir: dir });
+    const results = await Promise.allSettled([
+      a.markBootstrapComplete('admin-A', 'github'),
+      b.markBootstrapComplete('admin-B', 'github'),
+    ]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled.length).toBe(1);
+    expect(rejected.length).toBe(1);
   });
 
   it('rejects unsafe model names with path separators', async () => {
