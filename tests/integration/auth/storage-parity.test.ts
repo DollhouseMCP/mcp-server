@@ -601,6 +601,79 @@ function runContractSuite(
       expect(found.clientId).toBe('client-a');
       expect(typeof found.consumed).toBe('number');
     });
+
+    it('cycle-16: consume preserves the original TTL', async () => {
+      // The CAS shape varies per backend (Postgres jsonb_set vs Map
+      // spread vs filesystem KvRecord rebuild). All three must preserve
+      // the existing TTL — the row should still be readable until the
+      // original expiry, even after the consumed marker is stamped.
+      await storage.genericSet('AuthorizationCode', 'c-ttl', { grantId: 'g-ttl' }, 60);
+      expect(await storage.genericConsume('AuthorizationCode', 'c-ttl')).toBe(true);
+      // Still findable through the TTL window.
+      const after = await storage.genericGet('AuthorizationCode', 'c-ttl');
+      expect(after).not.toBeNull();
+    });
+  });
+
+  describe('genericInsertIfAbsent / genericConsume — concurrent semantics (cycle-16)', () => {
+    it('concurrent genericConsume on the same record — exactly one wins', async () => {
+      await storage.genericSet('AuthorizationCode', 'race-1', { grantId: 'g-race' });
+      const results = await Promise.all([
+        storage.genericConsume('AuthorizationCode', 'race-1'),
+        storage.genericConsume('AuthorizationCode', 'race-1'),
+        storage.genericConsume('AuthorizationCode', 'race-1'),
+      ]);
+      expect(results.filter((r) => r === true).length).toBe(1);
+    });
+
+    it('genericInsertIfAbsent against a non-expiring existing row rejects', async () => {
+      // No TTL on the existing row (expiresInSec omitted); the new
+      // insert with a 60s TTL must still be rejected because the
+      // existing row hasn't expired.
+      await storage.genericSet('Grant', 'permanent', { v: 1 });
+      const inserted = await storage.genericInsertIfAbsent(
+        'Grant', 'permanent', { v: 2 }, 60,
+      );
+      expect(inserted).toBe(false);
+      const found = await storage.genericGet('Grant', 'permanent') as Record<string, unknown>;
+      expect(found.v).toBe(1);
+    });
+  });
+
+  describe('recordIdentityEvent / listIdentityEvents — append-only (cycle-16)', () => {
+    it('recording the same event twice produces two distinct entries', async () => {
+      const event = {
+        type: 'auth.test.duplicate' as const,
+        sub: 'alice',
+        timestamp: Date.now(),
+        details: { foo: 'bar' },
+      };
+      await storage.recordIdentityEvent(event);
+      await storage.recordIdentityEvent(event);
+      const found = await storage.listIdentityEvents({
+        type: 'auth.test.duplicate',
+      });
+      expect(found.length).toBe(2);
+    });
+  });
+
+  describe('sweepExpiredKv (cycle-16)', () => {
+    it('returns the count of rows removed and leaves non-expired rows in place', async () => {
+      await storage.genericSet('AccessToken', 'live', { v: 1 }, 3600);
+      await storage.genericSet('AccessToken', 'dead', { v: 2 }, -1);
+      await storage.genericSet('Session', 'untouched', { v: 3 });
+      const removed = await storage.sweepExpiredKv();
+      expect(removed).toBeGreaterThanOrEqual(1);
+      expect(await storage.genericGet('AccessToken', 'live')).not.toBeNull();
+      expect(await storage.genericGet('Session', 'untouched')).not.toBeNull();
+      // The dead row should now be missing.
+      expect(await storage.genericGet('AccessToken', 'dead')).toBeNull();
+    });
+
+    it('idempotent: a second sweep with no expired rows returns 0', async () => {
+      await storage.sweepExpiredKv();
+      expect(await storage.sweepExpiredKv()).toBe(0);
+    });
   });
 }
 

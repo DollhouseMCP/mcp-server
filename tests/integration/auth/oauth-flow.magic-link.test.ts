@@ -15,6 +15,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { decodeJwt } from 'jose';
 import { randomBytes } from 'node:crypto';
 import {
+  hashEmail,
   MagicLinkMethod,
   type EmailSender,
   type SendMagicLinkInput,
@@ -283,5 +284,79 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       body: new URLSearchParams({ token: tokenParam }),
     });
     expect(second.status).toBe(400);
+  }, 30_000);
+
+  it('admin claim: pre-claimed magic-link sub gets roles:["admin"] on JWT (cycle-16)', async () => {
+    // Need to skip auto-bootstrap so we can pre-claim with a specific
+    // admin sub. bootHarness() always auto-bootstraps with a placeholder
+    // sub; build a custom harness here.
+    const port = await getFreePort();
+    const publicBaseUrl = `http://127.0.0.1:${port}`;
+    method = new MagicLinkMethod({
+      storage, invites, emailSender,
+      verifyUrl: `${publicBaseUrl}/auth/email/verify`,
+      requestResponseFloorMs: 0,
+    });
+    harness = await startASHarness({
+      methods: [method], storage, publicBaseUrl, port,
+      skipAutoBootstrap: true,
+    });
+
+    // Pre-claim the admin sub BEFORE the user requests the magic link.
+    // Mirrors the admin-bootstrap CLI's behavior for the magic-link path.
+    const adminEmail = 'admin@example.com';
+    const adminSub = `magic-link_${hashEmail(adminEmail)}`;
+    await storage.markBootstrapComplete(adminSub, 'magic-link');
+
+    const authServer = await fetchAuthServerMetadata(harness.baseUrl);
+    const { interactionUrl, jar, verifier } = await startAuthorizeFlow({
+      baseUrl: harness.baseUrl,
+      authServerMetadata: authServer,
+      clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
+      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
+    });
+    await postRequestLinkForm(interactionUrl, jar, adminEmail);
+
+    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+    const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
+      method: 'POST', redirect: 'manual',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Cookie: jar.header(),
+      },
+      body: new URLSearchParams({ token: tokenParam }),
+    });
+    expect([302, 303]).toContain(verifyPost.status);
+    jar.ingest(verifyPost.headers);
+
+    const code = await followToCodeRedirect({
+      baseUrl: harness.baseUrl,
+      start: verifyPost.headers.get('location'),
+      jar, redirectUriPrefix: REDIRECT_URI,
+    });
+    const tokenResp = await fetch(authServer.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+        code, code_verifier: verifier,
+        resource: `${harness.publicBaseUrl}/mcp`,
+      }),
+    });
+    expect(tokenResp.status).toBe(200);
+    const tokenBody = await tokenResp.json() as { access_token: string };
+
+    const validation = await harness.as.validate(tokenBody.access_token);
+    expect(validation.ok).toBe(true);
+    if (validation.ok) {
+      expect(validation.claims.sub).toBe(adminSub);
+      expect(validation.claims.roles).toEqual(['admin']);
+    }
+    const decoded = decodeJwt(tokenBody.access_token);
+    expect(decoded.roles).toEqual(['admin']);
+
+    const stored = await storage.getAccount(adminSub);
+    expect(stored?.roles).toEqual(['admin']);
   }, 30_000);
 });

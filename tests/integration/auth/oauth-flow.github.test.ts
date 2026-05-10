@@ -268,4 +268,74 @@ describe('GithubSocialMethod — OAuth E2E', () => {
     expect(callback.status).toBeGreaterThanOrEqual(400);
     expect(callback.status).toBeLessThan(500);
   }, 30_000);
+
+  it('admin claim: pre-claimed github sub gets roles:["admin"] on JWT (cycle-16)', async () => {
+    // Rebuild harness without auto-bootstrap so we can pre-claim a
+    // specific admin sub.
+    await harness.close();
+    storage = new InMemoryAuthStorageLayer();
+    const port = await getFreePort();
+    const publicBaseUrl = `http://127.0.0.1:${port}`;
+    method = new GithubSocialMethod({
+      clientId: 'gh-test-client-id',
+      clientSecret: 'gh-test-client-secret',
+      callbackUrl: `${publicBaseUrl}/auth/social/github/callback`,
+      storage,
+      fetchImpl: buildFakeFetch(() => profile),
+      emailVerifiedCacheTtlMs: 0,
+    });
+    harness = await startASHarness({
+      methods: [method], storage, publicBaseUrl, port,
+      skipAutoBootstrap: true,
+    });
+
+    // Pre-claim the admin sub before the OAuth flow runs. Mirrors the
+    // admin-bootstrap CLI's behavior for the github path.
+    const adminSub = `github_${profile.userId}`;
+    await storage.markBootstrapComplete(adminSub, 'github');
+
+    const authServer = await fetchAuthServerMetadata(harness.baseUrl);
+    const { interactionUrl, jar, verifier } = await startAuthorizeFlow({
+      baseUrl: harness.baseUrl,
+      authServerMetadata: authServer,
+      clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
+      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
+    });
+    const callback = await simulateGithubCallback({
+      publicBaseUrl: harness.publicBaseUrl,
+      interactionUrl, jar, code: 'gh-fake-code-admin',
+    });
+    expect([302, 303]).toContain(callback.status);
+    jar.ingest(callback.headers);
+
+    const code = await followToCodeRedirect({
+      baseUrl: harness.baseUrl,
+      start: callback.headers.get('location'),
+      jar, redirectUriPrefix: REDIRECT_URI,
+    });
+    const tokenResp = await fetch(authServer.token_endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,
+        code, code_verifier: verifier,
+        resource: `${harness.publicBaseUrl}/mcp`,
+      }),
+    });
+    expect(tokenResp.status).toBe(200);
+    const tokenBody = await tokenResp.json() as { access_token: string };
+
+    const validation = await harness.as.validate(tokenBody.access_token);
+    expect(validation.ok).toBe(true);
+    if (validation.ok) {
+      expect(validation.claims.sub).toBe(adminSub);
+      expect(validation.claims.roles).toEqual(['admin']);
+    }
+    const decoded = decodeJwt(tokenBody.access_token);
+    expect(decoded.roles).toEqual(['admin']);
+
+    const stored = await storage.getAccount(adminSub);
+    expect(stored?.roles).toEqual(['admin']);
+  }, 30_000);
 });
