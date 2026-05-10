@@ -319,15 +319,36 @@ async function buildAuthMethod(
   switch (id) {
     case 'github': {
       const { GithubSocialMethod } = await import('./embedded-as/methods/GithubSocialMethod.js');
-      // Round 5 / M4: read both via the validated env snapshot so a
-      // misspelled DOLLHOUSE_GITHUB_CLIENT_ID surfaces during config
-      // load rather than at first /authorize hit.
-      const clientId = env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      const clientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      // Cycle-17: prefer DOLLHOUSE_AUTH_GITHUB_CLIENT_ID/SECRET
+      // (dedicated to the §8.1 user-auth flow). Fall back to the
+      // legacy DOLLHOUSE_GITHUB_CLIENT_ID/SECRET (originally introduced
+      // for portfolio sync) so existing deployments don't break, and
+      // warn so operators know to migrate. The two features have
+      // different OAuth-app requirements (portfolio sync needs device
+      // flow; §8.1 needs web flow with a registered callback) and
+      // separate env vars let operators register distinct apps.
+      const newClientId = env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
+      const newClientSecret = env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
+      const legacyClientId = env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      const legacyClientSecret = env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+
+      const clientId = newClientId ?? legacyClientId;
+      const clientSecret = newClientSecret ?? legacyClientSecret;
       if (!clientId || !clientSecret) {
         throw new Error(
-          'GitHub social login requires DOLLHOUSE_GITHUB_CLIENT_ID and DOLLHOUSE_GITHUB_CLIENT_SECRET. ' +
+          'GitHub social login requires DOLLHOUSE_AUTH_GITHUB_CLIENT_ID and ' +
+          'DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET (or the legacy ' +
+          'DOLLHOUSE_GITHUB_CLIENT_ID / DOLLHOUSE_GITHUB_CLIENT_SECRET). ' +
           'Set both env vars or remove "github" from DOLLHOUSE_AUTH_METHODS.',
+        );
+      }
+      if (!newClientId || !newClientSecret) {
+        logger.warn(
+          '[AuthProviderFactory] §8.1 GitHub auth is using the legacy ' +
+          'DOLLHOUSE_GITHUB_CLIENT_ID/SECRET env vars. Migrate to ' +
+          'DOLLHOUSE_AUTH_GITHUB_CLIENT_ID/SECRET so the user-auth flow has ' +
+          'its own OAuth app, separate from the portfolio-sync feature. ' +
+          'The legacy vars will continue to work as a fallback.',
         );
       }
       return new GithubSocialMethod({

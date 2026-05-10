@@ -10,12 +10,17 @@ DollhouseMCP can serve MCP over Streamable HTTP instead of the default stdio tra
 - Health and readiness endpoints for container orchestration
 - Session pooling, rate limiting, and idle timeout management
 
-## What This Mode Is Not Yet
+## Authentication
 
-- No built-in authentication (Phase 3 will add JWT)
-- No database-backed state (file-backed portfolio storage)
-- No multi-tenant isolation (all sessions share one user identity)
-- No per-session activation state (shared across sessions)
+The embedded authorization server runs inside this transport when configured. It exposes standard OAuth 2.1 / OIDC endpoints (`/authorize`, `/token`, `/jwks`, `/.well-known/oauth-authorization-server`) and validates Bearer tokens on `/mcp`. Setup is its own document:
+
+→ [auth-server-setup.md](./auth-server-setup.md) — complete operator runbook covering filesystem vs Postgres storage, method selection (trivial-consent / local-password / magic-link / github), tunnels (Cloudflare / ngrok), reverse proxies, native HTTPS, and the security checklist.
+
+## Current limitations
+
+- File-backed portfolio storage by default (Postgres backend available; see auth-server-setup.md for `DOLLHOUSE_STORAGE_BACKEND=database`)
+- Single-tenant per process (multi-tenant isolation is planned follow-up work)
+- Per-session activation state is shared across sessions within a process
 
 ## Local Run
 

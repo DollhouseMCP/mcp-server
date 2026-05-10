@@ -6,7 +6,7 @@
  * these tests pin the behaviors that future refactors must preserve.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect } from '@jest/globals';
 import { TrivialConsentMethod } from '../../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import type {

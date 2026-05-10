@@ -209,7 +209,7 @@ describe('AuthProviderFactory two-level structure', () => {
         enabled: true,
         provider: 'embedded',
         methods: ['github'],
-      })).rejects.toThrow(/DOLLHOUSE_GITHUB_CLIENT_ID/);
+      })).rejects.toThrow(/DOLLHOUSE_AUTH_GITHUB_CLIENT_ID/);
     });
   });
 
@@ -217,6 +217,8 @@ describe('AuthProviderFactory two-level structure', () => {
     const ORIGINAL_HOST = process.env.DOLLHOUSE_HTTP_HOST;
     const ORIGINAL_ID = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
     const ORIGINAL_SECRET = process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+    const ORIGINAL_AUTH_ID = process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
+    const ORIGINAL_AUTH_SECRET = process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
 
     afterEach(() => {
       if (ORIGINAL_HOST !== undefined) process.env.DOLLHOUSE_HTTP_HOST = ORIGINAL_HOST;
@@ -225,6 +227,10 @@ describe('AuthProviderFactory two-level structure', () => {
       else delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
       if (ORIGINAL_SECRET !== undefined) process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET = ORIGINAL_SECRET;
       else delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      if (ORIGINAL_AUTH_ID !== undefined) process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID = ORIGINAL_AUTH_ID;
+      else delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
+      if (ORIGINAL_AUTH_SECRET !== undefined) process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET = ORIGINAL_AUTH_SECRET;
+      else delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
     });
 
     it('rejects when DOLLHOUSE_GITHUB_CLIENT_SECRET is missing but ID is set', async () => {
@@ -235,7 +241,31 @@ describe('AuthProviderFactory two-level structure', () => {
         enabled: true,
         provider: 'embedded',
         methods: ['github'],
-      })).rejects.toThrow(/DOLLHOUSE_GITHUB_CLIENT_SECRET/);
+      })).rejects.toThrow(/DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET/);
+    });
+
+    it('cycle-17: error message names BOTH new and legacy env-var pairs', async () => {
+      // Operators landing on the throw should know which set of env
+      // vars to set; either pair works. The message must mention both.
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
+      delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      try {
+        await createAuthProvider({
+          enabled: true,
+          provider: 'embedded',
+          methods: ['github'],
+        });
+        throw new Error('expected throw');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        expect(message).toMatch(/DOLLHOUSE_AUTH_GITHUB_CLIENT_ID/);
+        expect(message).toMatch(/DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET/);
+        expect(message).toMatch(/DOLLHOUSE_GITHUB_CLIENT_ID/);
+        expect(message).toMatch(/DOLLHOUSE_GITHUB_CLIENT_SECRET/);
+      }
     });
   });
 });

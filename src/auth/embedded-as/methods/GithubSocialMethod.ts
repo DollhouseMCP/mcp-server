@@ -2,10 +2,12 @@
  * GithubSocialMethod
  *
  * Stage B auth method: OAuth 2.0 authorization-code flow against GitHub.
- * Reuses the existing DOLLHOUSE_GITHUB_CLIENT_ID (the GitHub OAuth app
- * already registered for the device-flow collection install path); the
- * §8.1 flow adds a callback URL to that same app and requests a minimal
- * scope set distinct from the device flow.
+ * Configured via DOLLHOUSE_AUTH_GITHUB_CLIENT_ID + _CLIENT_SECRET — a
+ * dedicated GitHub OAuth app registered as a web-flow application with
+ * a callback URL pointing at /auth/social/github/callback. Distinct
+ * from the legacy DOLLHOUSE_GITHUB_CLIENT_ID used by the portfolio-sync
+ * device flow (cycle-17 split). AuthProviderFactory falls back to the
+ * legacy var pair with a deprecation warning if the new pair is unset.
  *
  * Identity contract (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
  *   - Account key is `github_<numeric_id>` (must-fix #18) — never the
@@ -68,10 +70,10 @@ const GITHUB_PROVIDER = 'github';
 const DEFAULT_EMAIL_VERIFIED_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface GithubSocialMethodOptions {
-  /** GitHub OAuth app client ID. Reuses DOLLHOUSE_GITHUB_CLIENT_ID. */
+  /** GitHub OAuth app client ID. Sourced from DOLLHOUSE_AUTH_GITHUB_CLIENT_ID (legacy DOLLHOUSE_GITHUB_CLIENT_ID also accepted). */
   clientId: string;
   /**
-   * GitHub OAuth app client secret. From DOLLHOUSE_GITHUB_CLIENT_SECRET.
+   * GitHub OAuth app client secret. Sourced from DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET (legacy DOLLHOUSE_GITHUB_CLIENT_SECRET also accepted).
    * Read once at construction; rotating the secret requires an AS
    * restart. A hot-rotation hook would need a config-watch path that
    * isn't §8.1 scope.

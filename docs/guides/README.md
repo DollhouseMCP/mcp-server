@@ -31,7 +31,9 @@ Task-oriented guides for DollhouseMCP. Each guide walks through common workflows
 | [Environment Variables](environment-variables.md) | Complete reference for all DollhouseMCP environment variables |
 | [Configuration Basics](configuration-basics.md) | Manage `config.yml` and configuration tools |
 | [GitHub Portfolio Sync](portfolio-setup-guide.md) | Back up your portfolio to GitHub, sync between machines, submit to the community |
-| [OAuth Setup](oauth-setup.md) | Custom GitHub OAuth app configuration |
+| [OAuth Setup — Portfolio Sync](oauth-setup.md) | Configure GitHub OAuth for the legacy portfolio-sync feature (server → GitHub, device flow) |
+| [Auth Server Setup](auth-server-setup.md) | Configure the embedded OAuth/OIDC authorization server for HTTP transport (filesystem vs Postgres, methods, tunnels, HTTPS, security) |
+| [Deployment Configuration](deployment-configuration.md) | Full env-var reference for all transports and auth providers |
 | [Retention Policy](retention-policy.md) | Automatic cleanup of expired memory entries |
 | [Logging](logging.md) | Configure, query, and read DollhouseMCP server logs |
 | [Telemetry](telemetry.md) | Privacy policy and opt-in controls for operational telemetry |

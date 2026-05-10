@@ -136,9 +136,27 @@ const envSchema = z.object({
   /** CI-only escape hatch: allow non-loopback bind without TLS. Never set in production. */
   DOLLHOUSE_UNSAFE_NO_TLS: envBool(false),
   /**
-   * GitHub OAuth client secret for the §8.1 social-login (auth-code) flow.
-   * Reuses the existing DOLLHOUSE_GITHUB_CLIENT_ID. The device-flow path
-   * (collection install) does not need this secret; the auth-code flow does.
+   * Cycle-17: separate GitHub OAuth credentials for the §8.1 user-auth
+   * flow. The legacy `DOLLHOUSE_GITHUB_CLIENT_ID` is for the
+   * portfolio-sync feature (server → GitHub, device flow, no secret).
+   * The §8.1 GitHub method needs its own web-flow OAuth app with a
+   * registered callback URL — running both features against a single
+   * OAuth app is possible (enable both flows, register the §8.1
+   * callback) but operationally fragile. Splitting the env vars lets
+   * operators register distinct apps for the two purposes.
+   *
+   * Backward compat: when `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` is unset,
+   * AuthProviderFactory falls back to `DOLLHOUSE_GITHUB_CLIENT_ID` and
+   * logs a deprecation warning. Same fallback for the secret.
+   */
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * Legacy GitHub OAuth client secret. Predates the env-var split
+   * above. Kept as a fallback so existing operators don't break;
+   * prefer `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` for new deployments.
    */
   DOLLHOUSE_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
@@ -342,11 +360,12 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB: z.string().optional(),
 
   /**
-   * Round 5 / M4: GitHub OAuth client ID for the embedded AS GitHub
-   * social method. Validated at startup so a misspelled name surfaces
-   * during config check rather than the first /authorize attempt. The
-   * matching secret stays out of the schema by design — secrets are
-   * read at point-of-use to keep them out of debug dumps.
+   * GitHub OAuth client ID. Originally introduced for the legacy
+   * portfolio-sync feature (server → GitHub, device flow). Cycle-17
+   * split out a dedicated `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` for the
+   * §8.1 user-auth flow; this var remains the canonical name for
+   * portfolio sync AND serves as the fallback for §8.1 when the new
+   * var is unset (with a deprecation warning).
    */
   DOLLHOUSE_GITHUB_CLIENT_ID: z.string().optional(),
 

@@ -902,7 +902,9 @@ Keycloak's JWKS endpoint is derived automatically as `https://keycloak.example.c
 
 ### Embedded authorization server (`DOLLHOUSE_AUTH_PROVIDER=embedded`)
 
-The `embedded` provider runs a full OAuth 2.1 / OIDC authorization server **inside this server** — no external IdP needed. This is the §8.1 production target shape: hosted multi-tenant with PostgreSQL storage, multi-method authentication (GitHub, magic-link email, local passwords, or trivial-consent for solo dev), atomic refresh-token rotation, and admin-bootstrap CLI.
+The `embedded` provider runs a full OAuth 2.1 / OIDC authorization server **inside this server** — no external IdP needed. This is the production target shape: hosted multi-tenant with PostgreSQL storage, multi-method authentication (GitHub, magic-link email, local passwords, or trivial-consent for solo dev), atomic refresh-token rotation, and admin-bootstrap CLI.
+
+> **Operator runbook:** [auth-server-setup.md](./auth-server-setup.md) walks through the four common setup paths (solo localhost smoke test, local-password on filesystem, github on filesystem, full Postgres-backed) end-to-end including bootstrap, tunnels, reverse-proxy, native HTTPS, and verification. The section below is the env-var reference.
 
 #### Choosing methods
 
@@ -915,7 +917,7 @@ Comma-separated list. Multi-method deployments expose all methods at the same `/
 
 | Method | Use case | Required setup |
 |---|---|---|
-| `github` | Hosted, users sign in with GitHub | Register GitHub OAuth app; set `DOLLHOUSE_GITHUB_CLIENT_ID` + `DOLLHOUSE_GITHUB_CLIENT_SECRET` |
+| `github` | Hosted, users sign in with GitHub | Register GitHub OAuth app (web flow with callback URL); set `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` + `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET`. The legacy `DOLLHOUSE_GITHUB_CLIENT_ID` / `_SECRET` pair (originally for portfolio sync) still works as a fallback with a deprecation warning. |
 | `local-password` | Self-hosted, operator-issued accounts | None at the env level — admin uses `dollhouse-create-user` to issue invite URLs |
 | `magic-link` | Hosted, email-based passwordless | SMTP config (`DOLLHOUSE_SMTP_*`) |
 | `trivial-consent` | Solo localhost dev only | None — refuses to start on non-loopback bind |
@@ -979,13 +981,13 @@ DOLLHOUSE_COOKIE_SIGNING_SECRET=<64+ hex chars>   # generate via:
 DOLLHOUSE_INVITE_TOKEN_SECRET=<base64 secret>     # for invite + magic-link tokens
 ```
 
-Without these, each replica generates its own keys at first run and stores them in the run directory. Single-replica deployments are unaffected; multi-replica without env-var secrets produces non-deterministic JWKS and revoked refresh-token sessions on rotation. (Multi-replica HA has additional limitations — see `SECTION-8.1-STATUS.md` `L-R8-1` through `L-R8-12` for the full deferral list.)
+Without these, each replica generates its own keys at first run and stores them in the run directory. Single-replica deployments are unaffected; multi-replica without env-var secrets produces non-deterministic JWKS and revoked refresh-token sessions on rotation. Multi-replica HA has additional limitations beyond signing-secret sharing (rate limits are per-replica; mode-switch invalidation can race across replicas; key rotation is not coordinated) — these are documented separately and tracked as follow-up work.
 
 The `DOLLHOUSE_COOKIE_SIGNING_SECRET` value is also used as the HMAC salt for IP/UA hashes when the optional `refreshRotationCheckIpUa: true` rotation-grace IP/UA gate is enabled.
 
 #### Refresh-token rotation grace
 
-Time-only grace window (industry-standard pattern from Auth0, better-auth, Apideck): a consumed refresh token's `consumed` marker stays hidden from `find()` for 30 seconds, so legitimate concurrent rotations succeed. Configurable via `EmbeddedAuthorizationServerOptions.refreshRotationGraceMs`. Optional IP/UA-bound gating via `refreshRotationCheckIpUa: true` (off by default — NAT/CGNAT realities make per-IP gating unreliable for legitimate users). DPoP (RFC 9449) sender-binding is the §8.2 follow-up.
+Time-only grace window (industry-standard pattern from Auth0, better-auth, Apideck): a consumed refresh token's `consumed` marker stays hidden from `find()` for 30 seconds, so legitimate concurrent rotations succeed. Configurable via `EmbeddedAuthorizationServerOptions.refreshRotationGraceMs`. Optional IP/UA-bound gating via `refreshRotationCheckIpUa: true` (off by default — NAT/CGNAT realities make per-IP gating unreliable for legitimate users). DPoP (RFC 9449) sender-binding is a planned follow-up.
 
 #### Disaster recovery
 
@@ -1019,7 +1021,7 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DOLLHOUSE_AUTH_ENABLED` | `false` | Master switch. Set to `true` to enable token authentication on HTTP endpoints. |
-| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs), `oidc` (external IdP), or `embedded` (full §8.1 OAuth 2.1 / OIDC AS in-process). |
+| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs), `oidc` (external IdP), or `embedded` (full OAuth 2.1 / OIDC AS in-process). |
 | `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived)* | JWKS endpoint. Defaults to `<issuer>/.well-known/jwks.json`. Override only if your provider uses a non-standard path. |
@@ -1036,15 +1038,17 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Required to be `true` for `BACKEND=memory` when durable methods (`local-password`, `magic-link`) are configured — otherwise refused at startup, since password hashes and pending invites would silently disappear on restart. Dev/test only. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | 64+ hex chars used to sign /interaction session cookies AND as the HMAC salt for IP/UA hashes. **Required for multi-replica HA** — without it, each replica generates its own key, so cross-replica session cookies fail to verify. Generate via `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Base64 secret used to sign invite + magic-link tokens. **Required for multi-replica HA** — without it, an invite issued by replica A can't be redeemed on replica B. |
-| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth app client ID. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Register at <https://github.com/settings/developers> with the callback URL `<DOLLHOUSE_PUBLIC_BASE_URL>/interaction/<uid>/methods/github/callback`. |
-| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth app client secret. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Treat as a deployment secret. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth app client ID for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Register a web-flow OAuth app at <https://github.com/settings/developers> with the callback URL `<DOLLHOUSE_PUBLIC_BASE_URL>/auth/social/github/callback`. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_ID` (with a deprecation warning) when unset, so existing deployments don't break. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth app client secret for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Treat as a deployment secret. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_SECRET` when unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy GitHub OAuth client ID. Originally introduced for the portfolio-sync feature (server → GitHub, device flow). Still used by `setup_github_auth`; also serves as the user-auth fallback when `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` is unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | Legacy GitHub OAuth client secret. User-auth fallback only — portfolio-sync device flow does not need a secret. |
 | `DOLLHOUSE_TLS_CERT_PATH` | *(unset)* | Path to TLS certificate (PEM). Setting this AND `DOLLHOUSE_TLS_KEY_PATH` enables native HTTPS termination on this server. Leave unset when terminating TLS at an upstream proxy. |
 | `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
 | `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting that controls how `req.ip` resolves. `loopback` for native-HTTPS deployments; explicit CIDR (e.g. `10.0.0.0/8`) for hosted deployments behind a reverse proxy. **Misconfiguring this collapses per-IP rate limits to the proxy's egress IP.** |
 
 > **Operator action — multi-replica HA:** if `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres` is set without `DOLLHOUSE_COOKIE_SIGNING_SECRET` and `DOLLHOUSE_INVITE_TOKEN_SECRET`, the server logs a warning at startup that brute-force protection is per-replica and that interaction sessions will not survive cross-replica routing. Set both env vars to the same value across all replicas.
 
-> **Operator action — admin bootstrap:** before the embedded AS will serve auth flows in any non-`trivial-consent` method, an operator must pre-claim the admin identity via `dollhouse-admin-bootstrap` (for `github` / `magic-link`) or via the first invocation of `dollhouse-create-user` (for `local-password`). `/readyz` returns 503 with `reason: "bootstrap_required"` until this completes. See the §8.1 DR runbook for backup/restore procedures.
+> **Operator action — admin bootstrap:** before the embedded AS will serve auth flows in any non-`trivial-consent` method, an operator must pre-claim the admin identity via `dollhouse-admin-bootstrap` (for `github` / `magic-link`) or via the first invocation of `dollhouse-create-user` (for `local-password`). `/readyz` returns 503 with `reason: "bootstrap_required"` until this completes.
 
 ---
 
@@ -1324,8 +1328,10 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived)* | Embedded AS only. Public-facing base URL. Required behind a reverse proxy. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | Embedded AS only. 64+ hex chars. Required for multi-replica HA. |
 | `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Embedded AS only. Base64 secret for invite + magic-link tokens. Required for multi-replica HA. |
-| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Embedded AS only. Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. |
-| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | Embedded AS only. Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. Deployment secret. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | Embedded AS only. User-auth (web flow). Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | Embedded AS only. User-auth secret. Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. Deployment secret. |
+| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy: portfolio-sync device flow. Also user-auth fallback when the AUTH-prefixed var is unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | Legacy: user-auth fallback only. |
 | `DOLLHOUSE_TLS_CERT_PATH` | *(unset)* | Path to TLS certificate (PEM). Enables native HTTPS termination. Leave unset when terminating TLS at an upstream proxy. |
 | `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
 | `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting. Use explicit CIDR (e.g. `10.0.0.0/8`) when behind a reverse proxy. |

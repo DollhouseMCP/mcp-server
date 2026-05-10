@@ -10,7 +10,7 @@
  *
  * Method IDs (all four ship in §8.1):
  *   - 'trivial-consent' — solo localhost auto-consent
- *   - 'github'          — Stage B social, reuses DOLLHOUSE_GITHUB_CLIENT_ID
+ *   - 'github'          — Stage B social, configured via DOLLHOUSE_AUTH_GITHUB_CLIENT_ID/SECRET
  *   - 'local-password'  — argon2id + invite token (CLI-issued)
  *   - 'magic-link'      — SMTP-required, requires durable storage
  *
