@@ -46,6 +46,16 @@ const ARGON2_OPTIONS: argon2.Options = {
   timeCost: 2,
   parallelism: 1,
 };
+/**
+ * Cap password byte length before argon2.hash. argon2's CPU cost is set
+ * by ARGON2_OPTIONS, but the pre-hash buffering is linear in input size
+ * — a multi-MB password ties the event loop for hundreds of ms.
+ * 1024 chars is well above any realistic passphrase + symbol budget.
+ * Body parsers cap requests at 4KB; this is defense-in-depth in case a
+ * future endpoint loosens that.
+ */
+const MAX_PASSWORD_BYTES = 1024;
+const MIN_PASSWORD_LENGTH = 12;
 
 /**
  * Lazy-initialised reference hash for the unknown-account login path.
@@ -169,8 +179,13 @@ export class LocalAccountMethod implements IAuthMethod {
     | { kind: 'ok'; sub: string; email: string }
     | { kind: 'error'; reason: string }
   > {
-    if (!token || newPassword.length < 12) {
-      return { kind: 'error', reason: 'password must be at least 12 characters' };
+    if (!token || newPassword.length < MIN_PASSWORD_LENGTH) {
+      return { kind: 'error', reason: `password must be at least ${MIN_PASSWORD_LENGTH} characters` };
+    }
+    // Cycle-17 fix: bound the input to argon2.hash. Same generic error
+    // shape as the minimum check so the cap is not a probe-able signal.
+    if (Buffer.byteLength(newPassword, 'utf8') > MAX_PASSWORD_BYTES) {
+      return { kind: 'error', reason: `password must be at least ${MIN_PASSWORD_LENGTH} characters` };
     }
 
     // Step 1 — verify (no consume). Cheap. If the token is invalid /
@@ -359,6 +374,14 @@ export class LocalAccountMethod implements IAuthMethod {
 
     if (!username || !password) {
       return { kind: 'denied', reason: 'missing username or password' };
+    }
+    // Cycle-17 fix: bound the input to argon2.verify. The dummy-hash
+    // timing-equalization branch also calls argon2.verify, so we cap
+    // BEFORE choosing branches — otherwise an attacker on the
+    // unknown-account path can DoS via long input even though they
+    // never submit a real password.
+    if (Buffer.byteLength(password, 'utf8') > MAX_PASSWORD_BYTES) {
+      return { kind: 'denied', reason: 'invalid username or password' };
     }
 
     const sub = `${LOCAL_PROVIDER}_${username}`;

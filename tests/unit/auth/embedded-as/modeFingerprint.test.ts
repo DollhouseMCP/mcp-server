@@ -11,6 +11,8 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import {
   computeFingerprint,
   checkAndPersistModeFingerprint,
+  checkModeFingerprint,
+  persistModeFingerprint,
   OAUTH_STATE_MODELS,
 } from '../../../../src/auth/embedded-as/modeFingerprint.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
@@ -123,6 +125,79 @@ describe('checkAndPersistModeFingerprint', () => {
       issuer: 'https://other.example.com',
     });
     expect(result.changed).toBe(true);
+  });
+});
+
+/**
+ * Cycle-17: cycle-16 introduced the split API (checkModeFingerprint +
+ * persistModeFingerprint) so the caller can run invalidation work
+ * BETWEEN the read and the write — a crash mid-sequence then re-runs
+ * the idempotent invalidation on next boot. The deprecated
+ * checkAndPersistModeFingerprint (above) is the legacy combined form.
+ */
+describe('checkModeFingerprint + persistModeFingerprint (cycle-16 split API)', () => {
+  let storage: InMemoryAuthStorageLayer;
+
+  beforeEach(() => {
+    storage = new InMemoryAuthStorageLayer();
+  });
+
+  it('first run: changed=false, firstRun=true, NOTHING persisted yet', async () => {
+    const result = await checkModeFingerprint(storage, baseInputs);
+    expect(result.firstRun).toBe(true);
+    expect(result.changed).toBe(false);
+    expect(result.current).toBeTruthy();
+    // Critical contract: storage is untouched until persistModeFingerprint
+    // is called explicitly.
+    expect(await storage.genericGet('AuthModeFingerprint', 'current')).toBeNull();
+  });
+
+  it('persistModeFingerprint writes the fingerprint to storage', async () => {
+    await persistModeFingerprint(storage, baseInputs);
+    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
+      | { fingerprint?: string } | null;
+    expect(stored?.fingerprint).toBe(computeFingerprint(baseInputs));
+  });
+
+  it('changed=true without persistModeFingerprint: next call STILL reports changed=true', async () => {
+    // The crash-safety contract: if the caller's invalidation work runs
+    // between check and persist, and the process crashes mid-sequence,
+    // the next boot must observe the unchanged stored fingerprint and
+    // re-fire the invalidation.
+    await persistModeFingerprint(storage, baseInputs);
+    const newInputs = { ...baseInputs, methodIds: ['local-password'] as const };
+    const first = await checkModeFingerprint(storage, newInputs);
+    expect(first.changed).toBe(true);
+    expect(first.previous).toBe(computeFingerprint(baseInputs));
+    expect(first.current).toBe(computeFingerprint(newInputs));
+
+    // Caller crashed before calling persistModeFingerprint. Next boot:
+    const second = await checkModeFingerprint(storage, newInputs);
+    expect(second.changed).toBe(true);
+    expect(second.previous).toBe(computeFingerprint(baseInputs));
+    expect(second.current).toBe(computeFingerprint(newInputs));
+  });
+
+  it('changed=true → caller persists → subsequent checks are stable (changed=false)', async () => {
+    await persistModeFingerprint(storage, baseInputs);
+    const newInputs = { ...baseInputs, methodIds: ['local-password'] as const };
+    const result = await checkModeFingerprint(storage, newInputs);
+    expect(result.changed).toBe(true);
+
+    // Caller's invalidation runs, then persists.
+    await persistModeFingerprint(storage, newInputs);
+
+    const stable = await checkModeFingerprint(storage, newInputs);
+    expect(stable.changed).toBe(false);
+    expect(stable.firstRun).toBe(false);
+  });
+
+  it('persistModeFingerprint is idempotent on identical inputs', async () => {
+    await persistModeFingerprint(storage, baseInputs);
+    await persistModeFingerprint(storage, baseInputs);
+    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
+      | { fingerprint?: string } | null;
+    expect(stored?.fingerprint).toBe(computeFingerprint(baseInputs));
   });
 });
 

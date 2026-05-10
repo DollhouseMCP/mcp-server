@@ -451,7 +451,15 @@ function bodyValue(req: Request, field: string): string | undefined {
 function constantTimeStringEq(a: string, b: string): boolean {
   const bufA = Buffer.from(a);
   const bufB = Buffer.from(b);
-  if (bufA.length !== bufB.length) return false;
+  // Cycle-17 sibling-fix: pad-and-compare so length mismatch doesn't
+  // take a different code path from content mismatch. Matches the
+  // pattern in inviteTokens.ts and interactionCookieBinding.ts.
+  // CSRF tokens are fixed-length (43 base64url chars) so a length
+  // mismatch always means forgery.
+  if (bufA.length !== bufB.length) {
+    timingSafeEqual(bufA, Buffer.alloc(bufA.length));
+    return false;
+  }
   return timingSafeEqual(bufA, bufB);
 }
 
