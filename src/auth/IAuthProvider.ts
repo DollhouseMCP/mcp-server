@@ -66,12 +66,16 @@ export interface IAuthProvider {
   validate(token: string): Promise<AuthResult>;
 
   /**
-   * Issue a signed token for a subject. Implemented only by
-   * `LocalDevAuthProvider` for the dev-convenience startup token path.
-   * The embedded authorization server issues tokens via the standard
-   * OAuth flow (oidc-provider's grant machinery) so every issued token
-   * has a Grant, an `accountId`, and is reachable from
-   * `revokeByGrantId`. The OIDC bridge does not issue at all.
+   * Issue a signed token for a subject. Implemented by:
+   *   - `LocalDevAuthProvider` for the dev-convenience startup token
+   *     printed to stderr at boot.
+   *   - `EmbeddedAuthorizationServer` for integration-test convenience:
+   *     mints a token bypassing the OAuth flow so transport-layer tests
+   *     don't have to drive /authorize + /token. Production code MUST
+   *     use the standard flow — tokens minted via `issue()` are not
+   *     attached to a Grant and cannot be reached from
+   *     `revokeByGrantId`.
+   * The OIDC bridge does not issue at all.
    */
   issue?(sub: string, options?: IssueOptions): Promise<string>;
 }

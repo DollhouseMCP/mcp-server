@@ -22,7 +22,7 @@
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
-import { jwtVerify, importJWK, errors as joseErrors, type JWK } from 'jose';
+import { jwtVerify, importJWK, SignJWT, errors as joseErrors, type JWK } from 'jose';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
@@ -31,6 +31,7 @@ import type {
   AuthClaims,
   AuthResult,
   IAuthProvider,
+  IssueOptions,
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import { normalizeIp } from './rateLimit.js';
@@ -160,6 +161,7 @@ interface InitializedState {
   provider: InstanceType<typeof OidcProvider>;
   keyset: SigningKeyset;
   publicSigningKey: CryptoKey;
+  privateSigningKey: CryptoKey;
   /** Cookie signing keys oidc-provider received; methods need them for H12 binding verify. */
   cookieKeys: readonly string[];
   /** Pre-built interaction middleware bound to the initialized provider. */
@@ -314,6 +316,36 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       }
       return { ok: false, reason: 'token validation failed' };
     }
+  }
+
+  /**
+   * Mint a signed access token directly without driving the OAuth flow.
+   * Used by integration tests that need to assert HTTP transport
+   * behaviors (session-ownership, rate limits, header parsing) without
+   * the cost of running through /authorize and /token. Tokens minted
+   * here carry the same signing key + issuer + audience as tokens
+   * issued via the standard flow, so validate() accepts them — but
+   * they have NO Grant, NO accountId, and are NOT reachable from
+   * revokeByGrantId. This is intentional for the test use case;
+   * production code paths must use the OAuth flow.
+   */
+  async issue(sub: string, options?: IssueOptions): Promise<string> {
+    const { keyset, privateSigningKey } = await this.ensureInitialized();
+    const ttl = options?.ttlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
+    const scope = options?.scopes?.join(' ') || 'mcp';
+
+    return new SignJWT({
+      azp: DEFAULT_CLIENT_ID,
+      scope,
+      name: options?.displayName ?? sub,
+    })
+      .setProtectedHeader({ alg: ALGORITHM, kid: keyset.kid, typ: 'at+jwt' })
+      .setIssuer(this.issuer)
+      .setAudience(this.resource)
+      .setSubject(sub)
+      .setIssuedAt()
+      .setExpirationTime(`${ttl}s`)
+      .sign(privateSigningKey);
   }
 
   /**
@@ -1133,6 +1165,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // it was the full private JWK. The names now match what each value is.
     const privateJwk = keyset.jwks.keys[0];
     const publicSigningKey = (await importJWK(stripPrivate(privateJwk), ALGORITHM)) as CryptoKey;
+    const privateSigningKey = (await importJWK(privateJwk, ALGORITHM)) as CryptoKey;
 
     logger.info('[EmbeddedAuthorizationServer] initialized', {
       issuer: this.issuer,
@@ -1150,7 +1183,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       storage: this.storage,
     });
 
-    return { provider, keyset, publicSigningKey, cookieKeys, interactionMiddleware };
+    return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };
   }
 }
 
