@@ -218,8 +218,10 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     //
     // The warning fires inside initialize(); validate() triggers
     // ensureInitialized() so we use that to drive init.
-    const savedEnv = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
-    delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+    //
+    // Cycle 22: env-var resolution now happens at module load through
+    // Zod. The constructor's `cookieSecretEnvOverride` option is the
+    // test injection point — explicitly empty here drives the warn.
     const warnings: string[] = [];
     const { logger } = await import('../../../src/utils/logger.js');
     const originalWarn = logger.warn.bind(logger);
@@ -238,6 +240,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
         methods: [method],
         storage,
         refreshRotationCheckIpUa: true,
+        cookieSecretEnvOverride: '', // explicit "unset" for warn-fires path
       });
       // Force initialize() so the warn fires. validate() triggers it.
       await as.validate('not-a-real-token');
@@ -247,15 +250,12 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       expect(matched).toBeDefined();
     } finally {
       logger.warn = originalWarn;
-      if (savedEnv === undefined) delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
-      else process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = savedEnv;
     }
   });
 
   it('Round 7: does NOT warn when DOLLHOUSE_COOKIE_SIGNING_SECRET is set', async () => {
-    const savedEnv = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
-    // Hex string ≥32 bytes so loadOrGenerateCookieSigningKeys accepts it.
-    process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = randomBytes(32).toString('hex');
+    // Cycle 22: env-var resolution at module load; pass via the
+    // constructor's cookieSecretEnvOverride test injection point.
     const warnings: string[] = [];
     const { logger } = await import('../../../src/utils/logger.js');
     const originalWarn = logger.warn.bind(logger);
@@ -274,6 +274,8 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
         methods: [method],
         storage,
         refreshRotationCheckIpUa: true,
+        // Hex string ≥32 bytes so loadOrGenerateCookieSigningKeys accepts it.
+        cookieSecretEnvOverride: randomBytes(32).toString('hex'),
       });
       await as.validate('not-a-real-token');
       const matched = warnings.find((w) =>
@@ -282,8 +284,6 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       expect(matched).toBeUndefined();
     } finally {
       logger.warn = originalWarn;
-      if (savedEnv === undefined) delete process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
-      else process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = savedEnv;
     }
   });
 

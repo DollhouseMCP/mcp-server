@@ -200,11 +200,15 @@ describe('LocalAccountMethod', () => {
       expect((await invites.consume(token)).ok).toBe(true);
     });
 
-    it('does NOT consume the invite when argon2 hashing fails (atomicity)', async () => {
-      // Earlier order (consume → hash) left the user with a dead invite
-      // and no account if argon2 failed mid-flight. The fix verifies the
-      // invite + hashes the password BEFORE consuming, so a hash failure
-      // leaves the invite consumable for the user's retry.
+    it('cycle 19 / security-#1: consume happens BEFORE argon2 to prevent DoS replay surface', async () => {
+      // Cycle 19 reordered consume to happen before argon2.hash. The
+      // earlier order paid the ~30ms argon2 cost on every replay of a
+      // captured-but-already-consumed invite URL — sustained CPU pin
+      // primitive for any attacker who got hold of a leaked URL within
+      // the 15-minute TTL. New tradeoff: argon2 failure after consume
+      // means the user requests a fresh invite (rare path, single-user
+      // UX cost) instead of opening the DoS surface (security cost,
+      // applies to anyone with a leaked URL).
       const url = method.issueInvite('local_carol', 'carol@example.com', 'http://app/auth/local/invite');
       const token = new URL(url).searchParams.get('invite')!;
 
@@ -212,16 +216,48 @@ describe('LocalAccountMethod', () => {
       try {
         const failed = await method.consumeInvite(token, 'a-very-long-password');
         expect(failed.kind).toBe('error');
+        if (failed.kind === 'error') {
+          // Error message should hint at the new behavior (request a
+          // fresh invite) so the user knows the token is dead.
+          expect(failed.reason).toMatch(/request a new invite/i);
+        }
       } finally {
         spy.mockRestore();
       }
 
-      // Token must still be consumable — the operator should not have to
-      // issue a new invite because of a transient hash failure.
+      // The token IS consumed even though argon2 failed — this is the
+      // tradeoff. A retry with the same token must fail with the
+      // already-consumed signal.
       const retried = await method.consumeInvite(token, 'a-very-long-password');
-      expect(retried.kind).toBe('ok');
-      const stored = await storage.getAccount('local_carol');
-      expect(stored?.email).toBe('carol@example.com');
+      expect(retried.kind).toBe('error');
+    });
+
+    it('cycle 19 / security-#1: replay of consumed token bails BEFORE argon2 (no CPU pin)', async () => {
+      // Direct DoS-surface regression test. Issue an invite, consume it
+      // successfully, then replay it many times and assert argon2.hash
+      // is NEVER invoked on the replays. If a future change reorders
+      // back to verify→hash→consume, this test fails loudly.
+      const url = method.issueInvite('local_dosvictim', 'victim@example.com', 'http://app/auth/local/invite');
+      const token = new URL(url).searchParams.get('invite')!;
+
+      // First (legitimate) consume — succeeds.
+      const ok = await method.consumeInvite(token, 'a-very-long-password');
+      expect(ok.kind).toBe('ok');
+
+      // Now spy on argon2.hash and replay the captured-but-consumed token.
+      const spy = jest.spyOn(argon2, 'hash');
+      try {
+        for (let i = 0; i < 10; i++) {
+          const replay = await method.consumeInvite(token, 'a-different-long-password');
+          expect(replay.kind).toBe('error');
+        }
+        // The crucial assertion: argon2.hash must NOT have been called
+        // on any of the replays. A regression that moves hash before
+        // consume would call it 10 times here.
+        expect(spy).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 

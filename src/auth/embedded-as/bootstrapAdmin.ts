@@ -69,3 +69,35 @@ export async function isBootstrapAdminFor(
     && bootstrap.adminMethod === methodId
   );
 }
+
+/**
+ * Cycle 22 / cycle-21 test-coverage MEDIUM: shared helper for the
+ * "mark bootstrap complete + emit audit" sequence so both CLI entry
+ * points (`admin-bootstrap`, `create-user`) call the same code path
+ * and a single test pins the contract end-to-end.
+ *
+ * Per cycle-19 / test-M1: the dashboard implies `auth.bootstrap.completed`
+ * is observable; the cycle-20 fix added emission inline in each CLI;
+ * cycle-21 review caught that those tests verify only the storage
+ * shape, not the CLI invocation. Centralising into this helper makes
+ * the assertion possible against an InMemoryAuthStorageLayer without
+ * having to spin up the CLI binary.
+ *
+ * Per cycle-21 / security-LOW-2: the `via` marker is mandatory to
+ * distinguish the two CLI entry points in audit-log queries.
+ * `admin-bootstrap` passes `'admin-bootstrap-cli'`; `create-user`
+ * passes `'implicit-create-user'`.
+ */
+export async function recordBootstrapCompleted(
+  storage: IAuthStorageLayer,
+  sub: string,
+  method: BootstrapAdminMethod,
+  via: 'admin-bootstrap-cli' | 'implicit-create-user',
+): Promise<void> {
+  await storage.recordIdentityEvent({
+    type: 'auth.bootstrap.completed',
+    sub,
+    details: { method, via },
+    timestamp: Date.now(),
+  });
+}

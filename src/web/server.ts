@@ -419,7 +419,8 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
   // handles it with token injection (replaces {{CONSOLE_TOKEN}} in the
   // meta tag). Without this, express.static serves the raw template
   // and the browser never gets the auth token (#1780).
-  const isDebug = Boolean(process.env.DOLLHOUSE_DEBUG || process.env.ENABLE_DEBUG);
+  // Cycle 19 / H3: route through env.X so typos fail at config parse.
+  const isDebug = env.DOLLHOUSE_DEBUG || env.ENABLE_DEBUG;
   app.use(express.static(publicDir, {
     index: false,
     // In debug mode, disable caching on all static assets (JS, CSS) so

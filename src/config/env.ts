@@ -54,6 +54,11 @@ function parseAllowedHosts(rawValue: string | undefined): string[] | undefined {
 // Solution: Temporarily redirect stdout to stderr during dotenv initialization.
 // In --web mode, suppress both stdout AND stderr — the user only needs the
 // console URL banner, not dotenv's injection summary. Logs go to the web viewer.
+//
+// Cycle 19 / H3 note: this is the one site that legitimately reads
+// DOLLHOUSE_DEBUG / ENABLE_DEBUG raw from process.env — the schema isn't
+// parsed until line 572, and we need this decision before dotenv runs.
+// All other consumers should use env.DOLLHOUSE_DEBUG / env.ENABLE_DEBUG.
 const isWebSilent = process.argv.includes('--web')
   && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG;
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
@@ -190,6 +195,31 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
 
   // ============================================================================
+  // Auth Storage Configuration (§8.1)
+  // ============================================================================
+  /**
+   * Cycle 19 / B2: backend selector for the embedded AS storage layer.
+   * Previously read raw via process.env in createAuthStorage.pickBackend
+   * and cliAuthStorage.detectBackend, which silently allowed typos to
+   * fall through to the filesystem default. Schema enforcement makes
+   * misspelled values fail loudly at config parse with a clear error.
+   *
+   * `memory` is permitted for tests only — runtime use with durable
+   * methods (local-password, magic-link) requires
+   * DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true (see below).
+   */
+  DOLLHOUSE_AUTH_STORAGE_BACKEND: z.enum(['memory', 'filesystem', 'postgres']).optional(),
+  /**
+   * Cycle 19 / B2: explicit override that lets the in-memory AS storage
+   * backend serve durable auth methods (local-password, magic-link).
+   * Without this, createAuthStorage refuses the combination because
+   * accounts and refresh tokens are lost on restart. Routed through
+   * the schema so a typo (e.g. DOLLHOUS_ALLOW_MEMORY_AUTH_STORAGE)
+   * fails loudly instead of silently leaving the safety guard active.
+   */
+  DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE: envBool(false),
+
+  // ============================================================================
   // Shared Pool Configuration (Step 4.6)
   // ============================================================================
   /** Override the upstream collection base URL. When set, install_collection_content
@@ -219,6 +249,18 @@ const envSchema = z.object({
   /** Enable the shared public element pool (Step 4.6). Default: false (opt-in). */
   DOLLHOUSE_SHARED_POOL_ENABLED: envBool(false),
   ENABLE_DEBUG: envBool(false),
+  /**
+   * Cycle 19 / H3: debug-mode flag for verbose logging and dev-friendly
+   * behaviors (console error verbosity, static-asset cache disable).
+   * Previously read raw via process.env across 5 src files; routing
+   * through the schema makes typos visible at config parse.
+   *
+   * NOTE: env.ts:58 (dotenv silencing) and utils/logger.ts:22 (logger
+   * minLevel default) intentionally still read process.env directly
+   * because both run before envSchema.parse() completes. See comments
+   * at those sites.
+   */
+  DOLLHOUSE_DEBUG: envBool(false),
   TEST_VERBOSE_LOGGING: envBool(false),
 
   // ============================================================================
@@ -352,6 +394,36 @@ const envSchema = z.object({
 
   /** OIDC JWKS endpoint (auto-derived from issuer if omitted). */
   DOLLHOUSE_AUTH_JWKS_URI: z.string().optional(),
+
+  /**
+   * Cycle 19 / security-#6: enforce RFC 9068 `typ: at+jwt` on OIDC-bridge
+   * tokens. Default false because many managed IdPs (Auth0, Okta, Keycloak,
+   * AWS Cognito) don't stamp typ on access tokens by default; hard-requiring
+   * it would break those deployments. Operators whose IdP DOES stamp typ
+   * should enable this to close the id-token-as-access-token gap (where an
+   * id_token issued for the same audience with `mcp` scope would otherwise
+   * pass the resource-server check).
+   */
+  DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP: envBool(false),
+
+  /**
+   * Cycle 24 / smoke-test escape hatch: allow open Dynamic Client Registration
+   * at /reg without requiring an Initial Access Token. Default false (production
+   * shape): only callers holding an IAT can register clients, preventing random
+   * clients on the network from registering arbitrary redirect URIs and defeating
+   * the redirect-URI exact-match guarantee. Set true for localhost dev to let
+   * MCP clients (Gemini CLI, claude.ai web, etc.) self-register without an
+   * out-of-band IAT-issuance step.
+   *
+   * Threat model: open DCR is acceptable when the AS is bound to loopback and
+   * cannot be reached from outside the host. On a non-loopback bind, leaving
+   * this on widens the attack surface to anyone who can reach the AS.
+   *
+   * Follow-up: the dashboard tracks IAT issuance as a deferred admin-channel
+   * feature. Once that lands, operators won't need this escape hatch for
+   * remote deployments; loopback dev can keep it for convenience.
+   */
+  DOLLHOUSE_AUTH_OPEN_DCR: envBool(false),
 
   /** Key pair file path for local dev provider. */
   DOLLHOUSE_AUTH_LOCAL_KEY_FILE: z.string().optional(),

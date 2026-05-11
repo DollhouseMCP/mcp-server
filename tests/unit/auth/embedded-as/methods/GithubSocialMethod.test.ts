@@ -74,6 +74,66 @@ describe('GithubSocialMethod', () => {
   });
 
   describe('processCallback', () => {
+    it('cycle 19 / security-#3: rawProfile is explicitly narrowed to {id, login, name} and excludes upstream PII', async () => {
+      // Reviewer caught the previous shape relying on a TypeScript cast
+      // to "narrow" the /user payload. Casts narrow types at compile
+      // time only; at runtime the full GitHub /user response (email,
+      // bio, company, location, twitter_username, blog, etc.) was
+      // landing in rawProfile. IAuthStorageLayer documents rawProfile
+      // as audit-safe — storing PII broke that contract. Cycle 19 fix:
+      // explicit projection in the response builder.
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho_xyz' }),
+        'api.github.com/user/emails': () => jsonResponse([
+          { email: 'verified@example.com', verified: true, primary: true },
+        ]),
+        // Mock returns a /user response with PII fields the API actually
+        // sends — bio, company, twitter_username, blog. The narrowing
+        // must drop them before they reach storage.
+        'api.github.com/user': () => jsonResponse({
+          id: 42,
+          login: 'octocat',
+          name: 'Octo Cat',
+          email: 'shouldnotbestoredhere@example.com',
+          bio: 'PII payload',
+          company: 'PII Inc',
+          location: 'PII City',
+          twitter_username: 'pii_handle',
+          blog: 'https://pii.example.com',
+          gravatar_id: 'pii-gravatar',
+          created_at: '2010-01-01T00:00:00Z',
+        }),
+      });
+
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: 'https://example.com/cb',
+        storage, fetchImpl: fetch,
+      });
+
+      const result = await method.processCallback({ code: 'c', state: 'i' });
+      expect(result.kind).toBe('ok');
+
+      const stored = await storage.findAccountByExternalId('github', '42');
+      const raw = stored?.rawProfile as Record<string, unknown> | undefined;
+      expect(raw).toBeDefined();
+      const userField = raw?.user as Record<string, unknown> | undefined;
+      // Whitelisted fields present:
+      expect(userField).toEqual({ id: 42, login: 'octocat', name: 'Octo Cat' });
+      // Explicit PII fields absent:
+      const json = JSON.stringify(stored);
+      expect(json).not.toContain('PII payload');
+      expect(json).not.toContain('PII Inc');
+      expect(json).not.toContain('PII City');
+      expect(json).not.toContain('pii_handle');
+      expect(json).not.toContain('pii.example.com');
+      expect(json).not.toContain('pii-gravatar');
+      // The shouldnotbestoredhere@ string is the upstream /user.email
+      // field — distinct from /user/emails' verified primary. It must
+      // not leak into rawProfile.
+      expect(json).not.toContain('shouldnotbestoredhere@');
+    });
+
     it('exchanges code, fetches verified primary email, persists account, returns identity', async () => {
       const { fetch, calls } = makeFetchMock({
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho_xyz' }),

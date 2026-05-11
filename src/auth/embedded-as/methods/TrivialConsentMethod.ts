@@ -157,6 +157,7 @@ export class TrivialConsentMethod implements IAuthMethod {
 }
 
 function defaultLocalSubject(): string {
+  // eslint-disable-next-line no-restricted-syntax -- DMCP-ENV-001 documented exception: DOLLHOUSE_USER is intentionally not in env.ts schema (identity label, not a secret; integration tests legitimately mutate at runtime)
   const envUser = process.env.DOLLHOUSE_USER?.trim();
   if (envUser) return envUser;
   try {

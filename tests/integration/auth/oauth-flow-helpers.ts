@@ -131,11 +131,10 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
   process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
 
   const as = new EmbeddedAuthorizationServer({
+    ...opts,
     publicBaseUrl,
     mcpPath: '/mcp',
     keyFilePath: path.join(tmpDir, 'key.json'),
-    methods: opts.methods,
-    storage: opts.storage,
   });
 
   // Auto-bootstrap so existing E2E tests in multi-user mode aren't blocked

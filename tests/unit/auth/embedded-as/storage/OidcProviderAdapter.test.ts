@@ -21,7 +21,7 @@
  *     consumed, only when it's reported).
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   OidcProviderAdapter,
   DEFAULT_REFRESH_ROTATION_GRACE_MS,
@@ -344,6 +344,96 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
       });
       // Same IP/UA inside grace window — consumed must be hidden.
       expect(found?.consumed).toBeUndefined();
+    });
+  });
+
+  describe('refreshRotationCheckIpUa: true — observability for silent degradation (cycle 19 / B1)', () => {
+    // The reviewer's B1 concern: if a future oidc-provider release breaks
+    // AsyncLocalStorage propagation OR a new auth-flow site forgets to
+    // wrap in withRotationRequestContext, the upsert silently falls back
+    // to a record without ipHash/uaHash and every subsequent find()
+    // accepts the time-only grace. The cycle-19 fix in upsert() makes
+    // that path log a warning so operators can detect the degradation
+    // instead of inferring it from a security-incident postmortem.
+    it('cycle 19 / B1: upsert without context on initial issue emits a warning', async () => {
+      const { logger } = await import('../../../../../src/utils/logger.js');
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      try {
+        const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+          refreshRotationGraceMs: 30_000,
+          refreshRotationCheckIpUa: true,
+        });
+        // Initial-issue upsert OUTSIDE any context wrapper.
+        await adapter.upsert('rt-b1-no-ctx', { grantId: 'g-1', sub: 'alice' });
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('refreshRotationCheckIpUa is enabled but the request context is missing'),
+          expect.objectContaining({ model: 'RefreshToken', id: 'rt-b1-no-ctx' }),
+        );
+
+        // Confirm the record was still written without ipHash/uaHash —
+        // we degrade open, not closed.
+        const stored = await storage.genericGet('RefreshToken', 'rt-b1-no-ctx') as Record<string, unknown>;
+        expect(stored.ipHash).toBeUndefined();
+        expect(stored.uaHash).toBeUndefined();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('cycle 19 / B1: upsert WITH context on initial issue does NOT warn', async () => {
+      const { logger } = await import('../../../../../src/utils/logger.js');
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      try {
+        const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+          refreshRotationGraceMs: 30_000,
+          refreshRotationCheckIpUa: true,
+        });
+        const ip = hashRotationAttribute('203.0.113.77');
+        const ua = hashRotationAttribute('happy-agent');
+        await withRotationRequestContext({ ipHash: ip, uaHash: ua }, async () => {
+          await adapter.upsert('rt-b1-with-ctx', { grantId: 'g-1', sub: 'alice' });
+        });
+
+        // No warning when the context flows through normally.
+        const warnCalls = warnSpy.mock.calls.filter(
+          ([msg]) => typeof msg === 'string' && msg.includes('refreshRotationCheckIpUa is enabled but'),
+        );
+        expect(warnCalls.length).toBe(0);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('cycle 19 / B1: rotated successor (payload already has ipHash) does NOT warn even without context', async () => {
+      // The upsert's early-issue check requires payload.ipHash === undefined.
+      // When oidc-provider rotates a successor token it carries the prior
+      // hashes forward, so a rotation call without a wrapping context is
+      // the legitimate "no need to stamp" path. The warning must not fire.
+      const { logger } = await import('../../../../../src/utils/logger.js');
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      try {
+        const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+          refreshRotationGraceMs: 30_000,
+          refreshRotationCheckIpUa: true,
+        });
+        // Payload already carries hashes (simulating a rotated successor).
+        await adapter.upsert('rt-b1-rotated', {
+          grantId: 'g-1', sub: 'alice',
+          ipHash: hashRotationAttribute('1.2.3.4'),
+          uaHash: hashRotationAttribute('rotated-agent'),
+        });
+
+        const warnCalls = warnSpy.mock.calls.filter(
+          ([msg]) => typeof msg === 'string' && msg.includes('refreshRotationCheckIpUa is enabled but'),
+        );
+        expect(warnCalls.length).toBe(0);
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 

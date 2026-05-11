@@ -120,6 +120,15 @@ export interface ContributeRoutesDeps {
     provider: OidcProviderForInteractions;
     cookieKeys: readonly string[];
   }>;
+  /**
+   * Cycle 24 fix: the AS's resource URL. Used by route handlers that call
+   * `finishInteractionWithIdentity` (GitHub social callback, magic-link
+   * verify) so resource scopes get bound to a real resource server even
+   * when the authorize request didn't pass `resource=...`. See the helper's
+   * JSDoc for the failure mode this prevents (consent-loop on missing
+   * resource binding).
+   */
+  defaultResource: string;
 }
 
 export interface IAuthMethod {

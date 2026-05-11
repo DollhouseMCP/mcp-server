@@ -28,6 +28,7 @@
  */
 
 import * as path from 'node:path';
+import { env } from '../../../config/env.js';
 import { logger } from '../../../utils/logger.js';
 import { resolveDataDirectory } from '../../../paths/resolveDataDirectory.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
@@ -79,7 +80,7 @@ export async function createAuthStorage(
   const requiresDurable = (options.methods ?? []).some(m => DURABLE_AUTH_METHODS.has(m));
   if (backend === 'memory' && requiresDurable) {
     const allowed = options.allowMemoryWithDurableMethods
-      ?? (process.env.DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE === 'true');
+      ?? env.DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE;
     if (!allowed) {
       throw new Error(
         `Auth storage backend 'memory' refused for methods that require durable state: ` +
@@ -149,13 +150,10 @@ export async function createAuthStorage(
 
 function pickBackend(options: CreateAuthStorageOptions): AuthStorageBackend {
   if (options.backend) return options.backend;
-  const env = process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND?.trim().toLowerCase();
-  if (env === 'memory' || env === 'filesystem' || env === 'postgres') return env;
-  if (env && env.length > 0) {
-    throw new Error(
-      `DOLLHOUSE_AUTH_STORAGE_BACKEND must be one of memory|filesystem|postgres, got: ${env}`,
-    );
-  }
-  if (process.env.NODE_ENV === 'test') return 'memory';
+  // Cycle 19 / B2: env-var read now goes through the Zod schema (env.ts);
+  // the schema's z.enum rejects typos at config parse with a clear error
+  // before this site is reached. NODE_ENV is also schema-validated.
+  if (env.DOLLHOUSE_AUTH_STORAGE_BACKEND) return env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
+  if (env.NODE_ENV === 'test') return 'memory';
   return 'filesystem';
 }

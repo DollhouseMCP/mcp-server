@@ -58,6 +58,8 @@ export class AuthServiceRegistrar {
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
       methods: env.DOLLHOUSE_AUTH_METHODS as import('../../auth/AuthProviderFactory.js').AuthConfig['methods'],
       database,
+      // Cycle 19 / security-#6: opt-in OIDC-bridge typ enforcement.
+      oidcRequireAccessTokenTyp: env.DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP,
     });
 
     if (!provider) return;

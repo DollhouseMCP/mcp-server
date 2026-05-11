@@ -33,6 +33,7 @@ import {
   loadOrGenerateInviteSecret,
 } from '../auth/embedded-as/inviteTokens.js';
 import { openCliAuthStorage } from './cliAuthStorage.js';
+import { recordBootstrapCompleted } from '../auth/embedded-as/bootstrapAdmin.js';
 
 interface CreateUserOptions {
   username: string;
@@ -150,6 +151,25 @@ async function main(): Promise<void> {
     const bootstrap = await handle.storage.getBootstrapState();
     if (!bootstrap.completed) {
       await handle.storage.markBootstrapComplete(sub, 'local-password');
+      // Cycle 19 / test-M1 + cycle 22: emit via the shared
+      // `recordBootstrapCompleted` helper so both CLI entry points
+      // (this one and dollhouse-admin-bootstrap) share a single
+      // tested code path. Sibling-fix sweep across the two CLIs.
+      try {
+        await recordBootstrapCompleted(
+          handle.storage,
+          sub,
+          'local-password',
+          'implicit-create-user',
+        );
+      } catch (err) {
+        // Don't fail the create-user flow on audit emission failure —
+        // the bootstrap state is already persisted.
+        process.stderr.write(
+          `[create-user] warning: failed to emit auth.bootstrap.completed audit event: ` +
+          `${err instanceof Error ? err.message : String(err)}\n`,
+        );
+      }
       process.stderr.write(
         `[create-user] Bootstrap pre-claim recorded — '${opts.username}' will be granted admin role on first sign-in.\n`,
       );

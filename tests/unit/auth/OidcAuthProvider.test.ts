@@ -194,4 +194,98 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
       }
     });
   });
+
+  describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
+    async function mintTokenWithTyp(typ: string | undefined): Promise<string> {
+      const now = Math.floor(Date.now() / 1000);
+      const builder = new SignJWT({ scope: 'mcp' })
+        .setProtectedHeader(typ ? { alg: ALGORITHM, kid: 'test-kid', typ }
+                                 : { alg: ALGORITHM, kid: 'test-kid' })
+        .setIssuer(ISSUER)
+        .setAudience(AUDIENCE)
+        .setSubject('alice')
+        .setIssuedAt(now)
+        .setExpirationTime(now + 3600);
+      return builder.sign(signKey);
+    }
+
+    it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
+      // The cycle 19 fix is opt-in. Default behavior must preserve
+      // compat with Auth0/Okta/Keycloak/Cognito, which typically don't
+      // stamp typ on access tokens.
+      const token = await mintTokenWithTyp(undefined);
+      const result = await provider.validate(token);
+      expect(result.ok).toBe(true);
+    });
+
+    it('default (option off): accepts a token with typ:JWT (legacy stamp)', async () => {
+      const token = await mintTokenWithTyp('JWT');
+      const result = await provider.validate(token);
+      expect(result.ok).toBe(true);
+    });
+
+    it('option on: accepts a token with typ:at+jwt (RFC 9068 compliant)', async () => {
+      const strict = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        requireAccessTokenTyp: true,
+      });
+      const token = await mintTokenWithTyp('at+jwt');
+      const result = await strict.validate(token);
+      expect(result.ok).toBe(true);
+    });
+
+    it('option on: REJECTS a token with no typ header (the security gain)', async () => {
+      // Without typ, an id_token mistakenly used as an access token
+      // could pass when typ-enforcement is off. With it on, the request
+      // is refused. Documents the operator decision: enabling the
+      // option requires the IdP to actually stamp typ.
+      const strict = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        requireAccessTokenTyp: true,
+      });
+      const token = await mintTokenWithTyp(undefined);
+      const result = await strict.validate(token);
+      expect(result.ok).toBe(false);
+    });
+
+    it('option on: REJECTS a token with typ:JWT (id-token-as-access-token defense)', async () => {
+      // The actual attack: external IdP issues both id_tokens and
+      // access tokens, both for our audience. id_tokens commonly carry
+      // typ:JWT (or no typ). With the option on we refuse those.
+      const strict = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        requireAccessTokenTyp: true,
+      });
+      const token = await mintTokenWithTyp('JWT');
+      const result = await strict.validate(token);
+      expect(result.ok).toBe(false);
+    });
+
+    it('cycle 22 / cycle-21 security-LOW-1: typ-rejection reason matches EmbeddedAuthorizationServer "wrong token type"', async () => {
+      // Operator log-grep across both providers must see consistent
+      // text when typ validation fails. Pre-cycle-22, OidcAuthProvider
+      // returned the generic "claim validation failed: typ" while
+      // EmbeddedAuthorizationServer returned "wrong token type" for
+      // the same condition. Same drift class as M11-1 reason-text
+      // alignment work.
+      const strict = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        requireAccessTokenTyp: true,
+      });
+      const token = await mintTokenWithTyp('JWT');
+      const result = await strict.validate(token);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.reason).toBe('wrong token type');
+      }
+    });
+  });
 });

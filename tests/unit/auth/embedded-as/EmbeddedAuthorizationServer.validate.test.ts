@@ -123,6 +123,96 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     }
   });
 
+  it('cycle 19 / test-B1 (L-R8-3): issue() mints a fully-shaped at+jwt that round-trips through validate()', async () => {
+    // The L-R8-3 known-limitation row tracked that the startup-token
+    // issue path was end-to-end-tested only — no unit test pinned the
+    // claim shape. A regression dropping `azp`, `displayName` →
+    // `name`, `scope`, `typ`, or `kid` would pass 11k+ unit tests.
+    // Cycle 19 closes the gap.
+    const token = await as.issue('alice', {
+      ttlSeconds: 600,
+      scopes: ['mcp', 'profile'],
+      displayName: 'Alice Anderson',
+    });
+
+    // Decode without verifying first to inspect the protected header.
+    const [headerB64] = token.split('.');
+    const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8'));
+    expect(header.alg).toBe('ES256');
+    expect(header.typ).toBe('at+jwt');
+    expect(typeof header.kid).toBe('string');
+    expect(header.kid.length).toBeGreaterThan(0);
+
+    // Now feed it through validate() to confirm the issuer/audience/sub
+    // round-trip and the claim mapping in claimsFromPayload.
+    const result = await as.validate(token);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.claims.sub).toBe('alice');
+    expect(result.claims.displayName).toBe('Alice Anderson');
+    expect(result.claims.scopes).toEqual(['mcp', 'profile']);
+    expect(typeof result.claims.exp).toBe('number');
+
+    // azp is on the raw JWT payload but not surfaced in AuthClaims —
+    // decode the payload directly to assert it.
+    const [, payloadB64] = token.split('.');
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    expect(payload.azp).toBe('dollhouse-claude-connector');
+    expect(payload.iss).toBe(ISSUER);
+    expect(payload.aud).toBe(RESOURCE);
+  });
+
+  it('cycle 19 / test-B1: issue() defaults — sub becomes displayName when omitted; scope defaults to mcp', async () => {
+    // Pins the default-shape contract so a regression that drops the
+    // scope default OR changes the displayName fallback fails loudly.
+    const token = await as.issue('bob');
+
+    const result = await as.validate(token);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.claims.sub).toBe('bob');
+    expect(result.claims.displayName).toBe('bob'); // sub fallback
+    expect(result.claims.scopes).toEqual(['mcp']); // default scope
+  });
+
+  it('cycle 19 / test-B3: positive control with name + roles claims maps through claimsFromPayload', async () => {
+    // Cycle 8's fix added algorithm-rejection negative tests but the
+    // positive-control still only asserted sub/exp/scopes. Round 5
+    // added the roles-bearing admin path (must-fix #22 + assertHasRole
+    // middleware) and `claimsFromPayload` was extended to map `name`
+    // and `roles`. Cycle 19 reviewer caught: a regression in those
+    // mappings is invisible to the existing positive control because
+    // the existing mintToken doesn't inject those claims.
+    //
+    // This test mints a token carrying the admin-shape claims and
+    // asserts displayName + roles flow through. A regression that
+    // breaks claimsFromPayload's roles mapping (which the
+    // assertHasRole middleware depends on) would now fail loudly.
+    const now = Math.floor(Date.now() / 1000);
+    const richToken = await new SignJWT({
+      scope: 'mcp',
+      name: 'Alice Admin',
+      roles: ['admin', 'auditor'],
+      email: 'alice@example.com',
+    })
+      .setProtectedHeader({ alg: 'ES256', typ: 'at+jwt', kid })
+      .setIssuer(ISSUER)
+      .setAudience(RESOURCE)
+      .setSubject('local-user')
+      .setIssuedAt(now)
+      .setExpirationTime(now + 3600)
+      .sign(signKey);
+
+    const result = await as.validate(richToken);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.claims.sub).toBe('local-user');
+    expect(result.claims.displayName).toBe('Alice Admin');
+    expect(result.claims.roles).toEqual(['admin', 'auditor']);
+    expect(result.claims.email).toBe('alice@example.com');
+    expect(result.claims.scopes).toContain('mcp');
+  });
+
   it('rejects token with typ: "JWT" (not at+jwt) — RFC 9068', async () => {
     const token = await mintToken({ typ: 'JWT' });
     const result = await as.validate(token);

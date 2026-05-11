@@ -267,7 +267,15 @@ export class LocalLoginRateLimiter {
    * lockout-persistence and the alarm is the mitigation today.
    */
   private boundAccounts(now: number): boolean {
-    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
+    if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) {
+      // Cycle 19 / H1: clear the one-shot guard when the table is back
+      // below saturation so a subsequent flood can re-fire the audit.
+      // The earlier shape latched the flag for the process lifetime,
+      // meaning operators only ever saw the FIRST flood — every later
+      // wave looked silent.
+      this.accountSaturationFired = false;
+      return false;
+    }
 
     for (const [key, rec] of this.accounts) {
       if (this.accounts.size <= MAX_TRACKED_ACCOUNTS) return false;
@@ -303,7 +311,12 @@ export class LocalLoginRateLimiter {
    * a still-locked record — the saturation alarm condition.
    */
   private boundIps(now: number): boolean {
-    if (this.ips.size <= MAX_TRACKED_IPS) return false;
+    if (this.ips.size <= MAX_TRACKED_IPS) {
+      // Cycle 19 / H1: same one-shot reset as boundAccounts. Sibling-fix
+      // sweep — the recurring drift class.
+      this.ipSaturationFired = false;
+      return false;
+    }
 
     for (const [key, rec] of this.ips) {
       if (this.ips.size <= MAX_TRACKED_IPS) return false;

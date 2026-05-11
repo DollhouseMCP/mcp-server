@@ -47,6 +47,27 @@ export interface OidcAuthProviderOptions {
    * a JWKS HTTP server.
    */
   jwksGetter?: JWTVerifyGetKey;
+
+  /**
+   * Cycle 19 / security-#6: when true, require RFC 9068 `typ: at+jwt`
+   * on incoming JWTs. Defaults to `false` because many managed IdPs
+   * (Auth0, Okta, Keycloak depending on config, AWS Cognito) do NOT
+   * stamp `typ` on access tokens, and hard-requiring it would break
+   * those deployments.
+   *
+   * The hardening matters because the same issuer can mint both
+   * `id_token` and access-token JWTs with overlapping `aud` and a
+   * `scope` claim. Without this check, an id_token carrying `mcp`
+   * scope (some configs surface scopes in id_tokens) would satisfy
+   * the resource-server check despite never being intended as an
+   * access token. Operators whose IdP stamps `typ: at+jwt` on access
+   * tokens should set this true to close the gap.
+   *
+   * The peer EmbeddedAuthorizationServer always enforces this — it
+   * controls its own issuance and stamps `typ: at+jwt` on every
+   * access token it mints.
+   */
+  requireAccessTokenTyp?: boolean;
 }
 
 /**
@@ -69,12 +90,14 @@ export class OidcAuthProvider implements IAuthProvider {
   private readonly audience: string;
   private readonly jwks: JWTVerifyGetKey;
   private readonly algorithms: readonly string[];
+  private readonly requireAccessTokenTyp: boolean;
 
   constructor(options: OidcAuthProviderOptions) {
     this.issuer = options.issuer;
     this.audience = options.audience;
     this.name = `oidc:${new URL(options.issuer).hostname}`;
     this.algorithms = options.algorithms ?? DEFAULT_OIDC_ALGORITHMS;
+    this.requireAccessTokenTyp = options.requireAccessTokenTyp ?? false;
 
     const jwksUri = options.jwksUri
       ?? new URL('.well-known/jwks.json', options.issuer).toString();
@@ -85,6 +108,7 @@ export class OidcAuthProvider implements IAuthProvider {
       audience: this.audience,
       jwksUri,
       algorithms: this.algorithms,
+      requireAccessTokenTyp: this.requireAccessTokenTyp,
       injected: options.jwksGetter !== undefined,
     });
   }
@@ -101,6 +125,10 @@ export class OidcAuthProvider implements IAuthProvider {
         issuer: this.issuer,
         audience: this.audience,
         algorithms: [...this.algorithms],
+        // Cycle 19 / security-#6: opt-in RFC 9068 typ enforcement.
+        // Default off for compat with IdPs that don't stamp typ; on
+        // closes the id-token-as-access-token gap.
+        ...(this.requireAccessTokenTyp ? { typ: 'at+jwt' } : {}),
       });
 
       if (!payload.sub) {
@@ -161,6 +189,12 @@ export class OidcAuthProvider implements IAuthProvider {
         const claim = error.claim;
         if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
         if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
+        // Cycle 22 / cycle-21 security-LOW-1: align typ-rejection
+        // reason with EmbeddedAuthorizationServer.validate so operator
+        // log-grep sees consistent strings across providers when an
+        // upstream typ check fails. Same drift class as M11-1
+        // alignment work.
+        if (claim === 'typ') return { ok: false, reason: 'wrong token type' };
         return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
       }
       return { ok: false, reason: 'token validation failed' };

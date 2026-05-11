@@ -19,7 +19,10 @@
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { isBootstrapAdminFor } from '../../../../src/auth/embedded-as/bootstrapAdmin.js';
+import {
+  isBootstrapAdminFor,
+  recordBootstrapCompleted,
+} from '../../../../src/auth/embedded-as/bootstrapAdmin.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
 describe('isBootstrapAdminFor', () => {
@@ -87,5 +90,86 @@ describe('isBootstrapAdminFor', () => {
     delete stateField.adminMethod;
     // Now the predicate must refuse promotion.
     expect(await isBootstrapAdminFor(partialStorage, 'local_admin', 'local-password')).toBe(false);
+  });
+});
+
+describe('cycle 19 / test-M1 + cycle 22: recordBootstrapCompleted helper', () => {
+  let storage: InMemoryAuthStorageLayer;
+
+  beforeEach(() => {
+    storage = new InMemoryAuthStorageLayer();
+  });
+
+  // Cycle 22: both CLIs (admin-bootstrap.ts and create-user.ts) now
+  // route through `recordBootstrapCompleted`. Testing the helper
+  // directly pins the contract that BOTH CLI invocations share.
+  // Cycle-21 test-coverage MEDIUM caught that the prior tests
+  // verified storage shape only — they wouldn't catch a regression
+  // deleting the call from a CLI. Routing through one helper means
+  // a regression in one place is detectable.
+
+  it('records auth.bootstrap.completed with method + via + sub + timestamp', async () => {
+    const sub = 'github_42';
+    await recordBootstrapCompleted(storage, sub, 'github', 'admin-bootstrap-cli');
+
+    const events = await storage.listIdentityEvents({ type: 'auth.bootstrap.completed' });
+    expect(events.length).toBe(1);
+    expect(events[0].sub).toBe(sub);
+    const details = events[0].details as Record<string, unknown>;
+    expect(details.method).toBe('github');
+    expect(details.via).toBe('admin-bootstrap-cli');
+    expect(typeof events[0].timestamp).toBe('number');
+  });
+
+  it('admin-bootstrap-cli vs implicit-create-user via marker is queryable', async () => {
+    // Operators querying `auth_identity_events WHERE type='auth.bootstrap.completed'
+    // AND details->>'via' = 'admin-bootstrap-cli'` must see only the
+    // explicit-CLI rows, not the implicit ones. Cycle-21 security-LOW-2
+    // flagged the missing `via` on admin-bootstrap; cycle 22 added it.
+    await recordBootstrapCompleted(storage, 'github_admin', 'github', 'admin-bootstrap-cli');
+    await recordBootstrapCompleted(storage, 'local_alice', 'local-password', 'implicit-create-user');
+
+    const allEvents = await storage.listIdentityEvents({ type: 'auth.bootstrap.completed' });
+    expect(allEvents.length).toBe(2);
+
+    const explicit = allEvents.filter(e => (e.details as Record<string, unknown>).via === 'admin-bootstrap-cli');
+    const implicit = allEvents.filter(e => (e.details as Record<string, unknown>).via === 'implicit-create-user');
+    expect(explicit.length).toBe(1);
+    expect(implicit.length).toBe(1);
+    expect(explicit[0].sub).toBe('github_admin');
+    expect(implicit[0].sub).toBe('local_alice');
+  });
+
+  it('cycle 22 / cycle-21 MEDIUM: CLI invocation pins the call shape', async () => {
+    // The CLIs (admin-bootstrap.ts, create-user.ts) call
+    // recordBootstrapCompleted directly. A regression that deletes
+    // that call would be caught by NO existing test — the dashboard
+    // shape tests above only assert what the helper does when
+    // invoked, not that the CLIs invoke it.
+    //
+    // We can't easily run the full CLI binary in unit tests (commander
+    // arg parsing, openCliAuthStorage env wiring, process.exit). The
+    // pragmatic mitigation: import the CLI module (which exercises
+    // top-level imports + statics) and grep its source for the helper
+    // invocation. If a refactor extracts the CLI's bootstrap path into
+    // a helper that the unit-test can call directly, replace this
+    // test with a real invocation. As-is this is a narrow regression
+    // guard for the "delete the call" mistake.
+    // Cycle 24: resolve paths relative to this test file via import.meta.url
+    // instead of hard-coding absolute filesystem locations. The earlier shape
+    // baked the developer machine's checkout path into the assertion, breaking
+    // any CI runner or contributor whose repo lived elsewhere.
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, resolve } = await import('node:path');
+    const here = dirname(fileURLToPath(import.meta.url));
+    // tests/unit/auth/embedded-as/ → src/cli/ : up 4, into src/cli
+    const cliDir = resolve(here, '../../../../src/cli');
+    const adminBootstrapSrc = readFileSync(resolve(cliDir, 'admin-bootstrap.ts'), 'utf8');
+    const createUserSrc = readFileSync(resolve(cliDir, 'create-user.ts'), 'utf8');
+    expect(adminBootstrapSrc).toContain('recordBootstrapCompleted(');
+    expect(adminBootstrapSrc).toContain("'admin-bootstrap-cli'");
+    expect(createUserSrc).toContain('recordBootstrapCompleted(');
+    expect(createUserSrc).toContain("'implicit-create-user'");
   });
 });

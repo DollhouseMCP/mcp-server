@@ -202,6 +202,8 @@ The MCP endpoint is available at `http://127.0.0.1:3000/mcp` by default.
 | `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` | `0` | Pre-warmed session pool size. `0` disables the pool. |
 | `DOLLHOUSE_HTTP_WEB_CONSOLE` | `true` | Start the web console alongside the HTTP transport. |
 
+> **HTTP keep-alive (cycle 24):** the server sets `keepAliveTimeout=120s` and `headersTimeout=130s` on the listening socket. Node.js's defaults (5s and 60s) caused transient "MCP ERROR" pop-ups in clients that hold a Streamable HTTP connection across short idle gaps (Gemini CLI confirmed). The 120s window matches reverse-proxy industry norms (AWS ALB 60s, GCP LB 600s, Cloudflare 100s) and is hard-coded — not env-var configurable today. Operators behind a reverse proxy whose idle timeout is shorter than 120s should align the upstream value; otherwise the proxy closes the socket before the app does.
+
 #### CLI overrides
 
 You can override transport settings on the command line without modifying environment files:
@@ -862,6 +864,28 @@ DOLLHOUSE_AUTH_JWKS_URI=https://your-tenant.example.com/custom/jwks
 
 The token's `sub` claim becomes the user's identity in DollhouseMCP. Most providers use a stable, opaque ID (for example, `auth0|64abc123`) — this becomes the user's key in the database.
 
+#### Optional: enforce RFC 9068 `typ: at+jwt` (`DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP`)
+
+The OIDC bridge validates every incoming JWT against the configured issuer + audience + signing algorithm allowlist + the `mcp` scope. By default it does **not** require the RFC 9068 `typ: at+jwt` header, because many managed IdPs (Auth0, Okta, Keycloak, AWS Cognito) do not stamp `typ` on access tokens. Hard-requiring it would break those deployments.
+
+Set this to `true` if your IdP **does** stamp `typ: at+jwt`:
+
+```bash
+DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP=true
+```
+
+**Why you might want it on.** Some IdPs issue both `id_token` and access-token JWTs for the same audience. id_tokens commonly carry `typ: JWT` or no `typ` at all, and depending on your IdP's configuration they may also surface scopes including `mcp` (Auth0 with custom claims, Keycloak with mapper rules). Without typ enforcement an id_token can satisfy the resource-server check and be replayed as an access token. When your IdP supports `typ: at+jwt`, enabling this option closes the gap.
+
+**Verify before flipping it on.** Mint a token from your IdP and decode it:
+
+```bash
+curl -s "$ISSUER/.well-known/openid-configuration" | jq .id_token_signing_alg_values_supported
+# obtain an access token via your IdP, then:
+echo "$ACCESS_TOKEN" | cut -d. -f1 | base64 -d | jq .typ
+```
+
+If `.typ` is `"at+jwt"`, you can enable the option. If it's `"JWT"` or missing, leave the option off (default) until you can configure your IdP to stamp the access-token typ.
+
 #### Auth0 example
 
 1. In the Auth0 dashboard, create a new **API**:
@@ -1025,6 +1049,7 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived)* | JWKS endpoint. Defaults to `<issuer>/.well-known/jwks.json`. Override only if your provider uses a non-standard path. |
+| `DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP` | `false` | When `true`, require RFC 9068 `typ: at+jwt` on incoming JWTs. Default off because many managed IdPs (Auth0, Okta, Keycloak, AWS Cognito) don't stamp typ on access tokens — hard-requiring it would break those deployments. Enable for hardening when your IdP stamps the typ; see [OIDC provider setup → Optional: enforce RFC 9068](#optional-enforce-rfc-9068-typ-atjwt-dollhouse_auth_oidc_require_typ) for the verification procedure. |
 | `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject for the startup convenience token printed to stderr. Defaults to your OS username. |
 
@@ -1045,8 +1070,35 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_TLS_CERT_PATH` | *(unset)* | Path to TLS certificate (PEM). Setting this AND `DOLLHOUSE_TLS_KEY_PATH` enables native HTTPS termination on this server. Leave unset when terminating TLS at an upstream proxy. |
 | `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
 | `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting that controls how `req.ip` resolves. `loopback` for native-HTTPS deployments; explicit CIDR (e.g. `10.0.0.0/8`) for hosted deployments behind a reverse proxy. **Misconfiguring this collapses per-IP rate limits to the proxy's egress IP.** |
+| `DOLLHOUSE_AUTH_OPEN_DCR` | `false` | When `true`, the `/reg` Dynamic Client Registration endpoint accepts unauthenticated registrations (no Initial Access Token required). **Localhost-only dev escape hatch** for MCP clients that auto-register without an IAT (Gemini CLI, claude.ai web). Default-off is the production shape. See [Dynamic Client Registration](#dynamic-client-registration-dollhouse_auth_open_dcr) for the trade-off and remote-deployment guidance. |
 
 > **Operator action — multi-replica HA:** if `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres` is set without `DOLLHOUSE_COOKIE_SIGNING_SECRET` and `DOLLHOUSE_INVITE_TOKEN_SECRET`, the server logs a warning at startup that brute-force protection is per-replica and that interaction sessions will not survive cross-replica routing. Set both env vars to the same value across all replicas.
+
+#### Dynamic Client Registration (`DOLLHOUSE_AUTH_OPEN_DCR`)
+
+The embedded AS supports RFC 7591 Dynamic Client Registration at `/reg`. MCP clients that don't have a pre-registered client_id — including Gemini CLI and claude.ai's web client — auto-register here on first connection to obtain a `client_id` they can use through the OAuth flow.
+
+DCR has two operating modes:
+
+**Default (`DOLLHOUSE_AUTH_OPEN_DCR=false`) — IAT-gated.** `/reg` requires an Initial Access Token (IAT) as a bearer credential. Random callers on the network cannot register clients. This is the production-target shape because it prevents a hostile caller from registering a client with an attacker-controlled `redirect_uri` and harvesting authorization codes intended for legitimate users. **IAT issuance is currently a deferred admin-channel feature** (see `L-R5-13` in `SECTION-8.1-STATUS.md`), so this mode effectively rejects MCP clients that don't already know a pre-registered `client_id`.
+
+**Escape hatch (`DOLLHOUSE_AUTH_OPEN_DCR=true`) — open registration.** `/reg` accepts unauthenticated registrations. Any caller who can reach the endpoint can self-register. Use this **only on loopback dev** where the AS is unreachable from the network.
+
+```bash
+# Localhost smoke test with Gemini CLI / claude.ai web:
+DOLLHOUSE_AUTH_OPEN_DCR=true
+DOLLHOUSE_HTTP_HOST=127.0.0.1
+```
+
+**Do not enable this on a deployment exposed to the public internet.** A remote attacker would be able to register a client with `redirect_uri=https://attacker.example.com/cb` and use that registration to phish authorization codes from legitimate user OAuth flows on your AS. Three paths exist for remote deployments that need MCP-client DCR support:
+
+1. **Tunnel the local AS** (Cloudflare Tunnel, ngrok). AS still binds loopback, `DOLLHOUSE_AUTH_OPEN_DCR=true` stays safe (nobody hits `/reg` directly — they hit the tunnel which proxies). MCP clients connect to the tunnel URL. This is the documented `npx dollhousemcp` shape.
+
+2. **Wait for constrained DCR.** Planned for §8.2: oidc-provider `features.registration.policies` to enforce `application_type: 'native'` + loopback-only `redirect_uris`. Lets Gemini CLI register but rejects attacker registrations regardless of network position.
+
+3. **Pre-registered client (no DCR).** The embedded AS pre-registers `DEFAULT_CLIENT_ID = 'dollhouse-claude-connector'` with native-app loopback policy. Claude Desktop and Claude Code can be configured to use this fixed `client_id` and skip DCR entirely. Gemini CLI does not currently expose configuration for a fixed `client_id`.
+
+Pre-cycle-24 deployments left DCR gated and the smoke-test of an MCP client that auto-registers (Gemini CLI) surfaced this gap. The cycle-24 docs above are the operator-facing answer.
 
 > **Operator action — admin bootstrap:** before the embedded AS will serve auth flows in any non-`trivial-consent` method, an operator must pre-claim the admin identity via `dollhouse-admin-bootstrap` (for `github` / `magic-link`) or via the first invocation of `dollhouse-create-user` (for `local-password`). `/readyz` returns 503 with `reason: "bootstrap_required"` until this completes.
 

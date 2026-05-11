@@ -70,6 +70,12 @@ export interface AuthConfig {
    * unless they specifically exercise the Postgres backend.
    */
   database?: DatabaseInstance;
+  /**
+   * Cycle 19 / security-#6: opt-in RFC 9068 `typ: at+jwt` enforcement on
+   * incoming OIDC-bridge tokens. Default false (compat with IdPs that
+   * don't stamp typ). Forwarded to `OidcAuthProvider`.
+   */
+  oidcRequireAccessTokenTyp?: boolean;
 }
 
 /**
@@ -156,6 +162,7 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       issuer: config.issuer,
       audience: config.audience,
       jwksUri: config.jwksUri,
+      requireAccessTokenTyp: config.oidcRequireAccessTokenTyp,
     });
   }
 
@@ -180,6 +187,7 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       // Read process.env directly rather than the cached env snapshot —
       // env is parsed at module load, so mutations after import (notably
       // in tests) wouldn't be visible. The default mirrors env.ts.
+      // eslint-disable-next-line no-restricted-syntax -- DMCP-ENV-001 documented exception: test-mutation visibility for the bindHost safety guard; cycle-23 security audit categorized as acceptable raw read
       const bindHost = process.env.DOLLHOUSE_HTTP_HOST?.trim() || env.DOLLHOUSE_HTTP_HOST;
       if (!isLoopbackHost(bindHost)) {
         throw new Error(
@@ -287,6 +295,7 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
 }
 
 function getDefaultSub(): string {
+  // eslint-disable-next-line no-restricted-syntax -- DMCP-ENV-001 documented exception: DOLLHOUSE_USER is intentionally not in env.ts schema (identity label, not a secret; integration tests legitimately mutate at runtime per tests/setupEnv.integration.cjs)
   const envUser = process.env.DOLLHOUSE_USER?.trim();
   if (envUser) return envUser;
   try {

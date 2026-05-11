@@ -43,11 +43,16 @@ describe('cookieSecret — H5 coverage', () => {
   });
 
   describe('loadOrGenerateCookieSigningKeys — env var path', () => {
+    // Cycle 22: env var resolution now happens at module load through
+    // Zod (env.DOLLHOUSE_COOKIE_SIGNING_SECRET). Runtime process.env
+    // mutation no longer reaches the call. Tests use the explicit
+    // `options.envSecret` override (the test injection point —
+    // mirrors createAuthStorage's `backend` option pattern).
+
     it('returns the env-var key when valid (32+ byte hex)', () => {
       const hex = randomBytes(32).toString('hex');
-      process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = hex;
       const filePath = path.join(tmpDir, 'unused.bin');
-      const keys = loadOrGenerateCookieSigningKeys(filePath);
+      const keys = loadOrGenerateCookieSigningKeys(filePath, { envSecret: hex });
       expect(keys).toHaveLength(1);
       expect(keys[0]).toBe(Buffer.from(hex, 'hex').toString('base64'));
       // File MUST NOT be created when env var path is taken.
@@ -56,9 +61,8 @@ describe('cookieSecret — H5 coverage', () => {
 
     it('rejects env-var values that decode to less than 32 bytes', () => {
       // 31 bytes hex = 62 hex chars
-      process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = 'a'.repeat(62);
       const filePath = path.join(tmpDir, 'unused.bin');
-      expect(() => loadOrGenerateCookieSigningKeys(filePath)).toThrow(
+      expect(() => loadOrGenerateCookieSigningKeys(filePath, { envSecret: 'a'.repeat(62) })).toThrow(
         /at least 32 bytes/,
       );
     });
@@ -69,8 +73,7 @@ describe('cookieSecret — H5 coverage', () => {
       fs.writeFileSync(filePath, randomBytes(32));
       // Set env var to a different valid value.
       const envHex = randomBytes(32).toString('hex');
-      process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = envHex;
-      const keys = loadOrGenerateCookieSigningKeys(filePath);
+      const keys = loadOrGenerateCookieSigningKeys(filePath, { envSecret: envHex });
       expect(keys[0]).toBe(Buffer.from(envHex, 'hex').toString('base64'));
     });
   });
@@ -139,9 +142,10 @@ describe('cookieSecret — H5 coverage', () => {
       const filePath = path.join(tmpDir, 'cookie.bin');
       // Pre-populate file.
       fs.writeFileSync(filePath, randomBytes(32));
-      // Set env var; rotation should leave the file alone.
-      process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET = randomBytes(32).toString('hex');
-      rotateCookieSecret(filePath);
+      // Cycle 22: env-supplied secret injected via the test override
+      // (mirrors the env routing pattern). Rotation should leave the
+      // file alone.
+      rotateCookieSecret(filePath, { envSecret: randomBytes(32).toString('hex') });
       expect(fs.existsSync(filePath)).toBe(true);
     });
   });

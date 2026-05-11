@@ -77,6 +77,30 @@ export async function createHttpOrHttpsServer(
     ? createHttpsServer(tlsOptions!, app)
     : createHttpServer(app);
 
+  // Cycle 24: Node has THREE separate HTTP timeouts; MCP Streamable HTTP
+  // trips on all of them differently. Defaults caused two distinct
+  // "MCP ERROR" pop-ups in Gemini CLI:
+  //
+  //   1. keepAliveTimeout (default 5s): TCP socket between requests.
+  //      Short idle gaps between user actions caused socket close →
+  //      next request got ECONNRESET. Bumped to 120s — matches
+  //      reverse-proxy industry norms (AWS ALB 60s, Cloudflare 100s).
+  //
+  //   2. headersTimeout (default 60s): must exceed keepAliveTimeout per
+  //      Node.js docs. Bumped to 130s (10s margin).
+  //
+  //   3. requestTimeout (default 300s/5min in Node 18+): per-request
+  //      timeout that ALSO applies to long-lived SSE GETs that MCP
+  //      Streamable HTTP holds open for server-to-client events. After
+  //      5 min idle, the GET was killed → Gemini CLI showed "MCP ERROR".
+  //      Disabled (0) because MCP session lifecycle is governed by
+  //      `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` (default 15min) at the
+  //      application layer; we don't want a lower HTTP-level timeout
+  //      preempting that.
+  server.keepAliveTimeout = 120_000;
+  server.headersTimeout = 130_000;
+  server.requestTimeout = 0;
+
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, host, () => {

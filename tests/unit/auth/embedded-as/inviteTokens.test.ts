@@ -116,16 +116,19 @@ describe('InviteTokenStore', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 
+    // Cycle 22: env var resolution now happens at module load through
+    // Zod (env.DOLLHOUSE_INVITE_TOKEN_SECRET). Runtime process.env
+    // mutation no longer reaches the call. Tests use the explicit
+    // `options.envSecret` override (the test injection point).
+
     it('reads a valid hex env var and returns the decoded buffer', () => {
       const hexSecret = randomBytes(32).toString('hex');
-      process.env[ENV_KEY] = hexSecret;
-      const buf = loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin'));
+      const buf = loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin'), { envSecret: hexSecret });
       expect(buf.toString('hex')).toBe(hexSecret);
     });
 
     it('rejects env-var values shorter than 16 bytes', () => {
-      process.env[ENV_KEY] = 'aa'.repeat(8); // 8 bytes, below the 16-byte floor
-      expect(() => loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin')))
+      expect(() => loadOrGenerateInviteSecret(path.join(tmpDir, 'unused.bin'), { envSecret: 'aa'.repeat(8) }))
         .toThrow(/at least 16 bytes/);
     });
 
@@ -134,8 +137,7 @@ describe('InviteTokenStore', () => {
       const fileSecret = randomBytes(32);
       fs.writeFileSync(filePath, fileSecret);
       const envHex = randomBytes(32).toString('hex');
-      process.env[ENV_KEY] = envHex;
-      const buf = loadOrGenerateInviteSecret(filePath);
+      const buf = loadOrGenerateInviteSecret(filePath, { envSecret: envHex });
       expect(buf.toString('hex')).toBe(envHex);
     });
 

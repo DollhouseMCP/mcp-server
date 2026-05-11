@@ -33,6 +33,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { env } from '../../config/env.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
@@ -224,10 +225,21 @@ export function defaultInviteSecretFilePath(legacyRoot?: string): string {
  * overrides the file — useful for multi-instance deployments where all
  * instances need to share the secret.
  */
-export function loadOrGenerateInviteSecret(filePath?: string): Buffer {
-  // Re-read at call time so tests and runtime reconfiguration observe
-  // the current env (Zod schema in env.ts validates the shape at load).
-  const envSecret = process.env.DOLLHOUSE_INVITE_TOKEN_SECRET?.trim();
+export function loadOrGenerateInviteSecret(
+  filePath?: string,
+  options?: { envSecret?: string },
+): Buffer {
+  // Cycle 22 / cycle-21 code-review HIGH: route through env.X (Zod
+  // schema in env.ts) instead of raw process.env. Earlier shape
+  // claimed "re-read so tests observe the current value" but in
+  // reality made the schema's typo-protection moot — a misspelled env
+  // var would silently fall through to file-based secret generation.
+  // Sibling-fix-miss class of cycle 19 / B2.
+  //
+  // The optional `envSecret` override is the test injection point —
+  // tests pass an explicit value instead of mutating process.env at
+  // runtime (which no longer reaches the env.X capture).
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
   if (envSecret && envSecret.length > 0) {
     const buf = Buffer.from(envSecret, 'hex');
     if (buf.length < 16) {

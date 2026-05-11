@@ -33,6 +33,7 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, createHmac } from 'node:crypto';
+import { logger } from '../../../utils/logger.js';
 import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
 
 /**
@@ -178,6 +179,20 @@ export class OidcProviderAdapter {
     // Only stamp on initial issue (no `ipHash` already on the payload)
     // so a rotated successor records the rotating client's hashes
     // rather than the previous token's.
+    //
+    // Cycle 19 / B1: when checkIpUa is on and we hit the initial-issue
+    // path WITHOUT a context, the IP/UA hashes never get stamped — and
+    // every subsequent find() falls through to time-only grace because
+    // the `recordIp/recordUa` legacy-data branch in ipUaGraceAllowed
+    // returns true. That's the silent-degradation mode the reviewer
+    // flagged. ALS DOES propagate from the EmbeddedAuthorizationServer
+    // wrapper through oidc-provider's Koa middleware (verified by the
+    // upstream test in OidcProviderAdapter.test.ts and the new
+    // EmbeddedAuthorizationServer.rotationContext.test.ts), but if a
+    // future oidc-provider release breaks the propagation OR if a new
+    // call site forgets to wrap, this warning makes the degradation
+    // visible instead of silent. Operators can grep for the message
+    // and treat it as a config bug rather than a security incident.
     if (
       this.checkIpUa
       && GRACE_ELIGIBLE_MODELS.has(this.model)
@@ -187,6 +202,16 @@ export class OidcProviderAdapter {
       const ctx = currentRotationRequestContext();
       if (ctx) {
         payload = { ...payload, ipHash: ctx.ipHash, uaHash: ctx.uaHash };
+      } else {
+        logger.warn(
+          '[OidcProviderAdapter] refreshRotationCheckIpUa is enabled but the ' +
+          'request context is missing during initial RefreshToken issue. The ' +
+          'token will fall back to time-only grace. This usually means an ' +
+          'auth-flow site is not wrapped in withRotationRequestContext, or an ' +
+          'upstream oidc-provider release broke AsyncLocalStorage propagation. ' +
+          'Investigate before relying on IP/UA-bound rotation security.',
+          { model: this.model, id },
+        );
       }
     }
     await this.storage.genericSet(this.model, id, payload, expiresIn);

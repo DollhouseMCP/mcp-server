@@ -19,6 +19,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomBytes } from 'node:crypto';
+import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 
@@ -59,11 +60,23 @@ export function defaultCookieSecretFilePath(legacyRoot?: string): string {
  *     require reading N keys from disk + a separate "promote a new key"
  *     CLI; tracked as a follow-up, not §8.1 scope.
  */
-export function loadOrGenerateCookieSigningKeys(filePath?: string): [string] {
-  // The Zod schema in env.ts validates the shape at config load.
-  // We re-read process.env here so tests (and runtime reconfiguration)
-  // observe the current value rather than the cached snapshot.
-  const envSecret = process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim();
+export function loadOrGenerateCookieSigningKeys(
+  filePath?: string,
+  options?: { envSecret?: string },
+): [string] {
+  // Cycle 22 / cycle-21 code-review HIGH: route through env.X (Zod
+  // schema with hex+length refine) instead of raw process.env. Earlier
+  // shape claimed "re-read so tests observe the current value" but in
+  // reality made the Zod validation moot — a typo in the env name (e.g.
+  // DOLLHOUSE_COOKIE_SIGNING_SECRT) would silently degrade to ephemeral
+  // file-based key generation with no operator signal. Sibling-fix-miss
+  // class of cycle 19 / B2.
+  //
+  // The optional `envSecret` override is the test injection point —
+  // mirrors `createAuthStorage`'s `backend` option pattern. Production
+  // callers omit it; tests use it instead of mutating `process.env` at
+  // runtime (which no longer reaches the env.X capture).
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
   if (envSecret && envSecret.length > 0) {
     const buf = Buffer.from(envSecret, 'hex');
     if (buf.length < 32) {
@@ -113,8 +126,14 @@ export function loadOrGenerateCookieSigningKeys(filePath?: string): [string] {
  * DOLLHOUSE_COOKIE_SIGNING_SECRET env override by NOT touching the file
  * (an env-supplied secret is the operator's responsibility to rotate).
  */
-export function rotateCookieSecret(filePath?: string): void {
-  if (process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim()) return;
+export function rotateCookieSecret(
+  filePath?: string,
+  options?: { envSecret?: string },
+): void {
+  // Cycle 22: same env routing + test override pattern as
+  // loadOrGenerateCookieSigningKeys.
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+  if (envSecret) return;
   const target = filePath ?? defaultCookieSecretFilePath();
   try {
     fs.unlinkSync(target);

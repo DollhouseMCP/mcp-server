@@ -43,10 +43,9 @@ function detectBackend(): AuthStorageBackend {
   // Mirror the resolution order in `createAuthStorage.pickBackend` —
   // explicit env wins, otherwise filesystem default. We do this
   // up-front so we know whether to open a database connection.
-  const envBackend = process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
-  if (envBackend === 'memory' || envBackend === 'filesystem' || envBackend === 'postgres') {
-    return envBackend;
-  }
+  // Cycle 19 / B2: env-var read goes through the Zod schema (env.ts);
+  // typos fail at config parse rather than silently falling through.
+  if (env.DOLLHOUSE_AUTH_STORAGE_BACKEND) return env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
   // Leave NODE_ENV=test → memory to createAuthStorage's own logic;
   // CLI processes typically don't run with NODE_ENV=test.
   return 'filesystem';

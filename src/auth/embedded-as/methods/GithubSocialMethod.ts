@@ -252,7 +252,7 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage);
+          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
         } catch (err) {
           next(err);
         }
@@ -472,12 +472,20 @@ export class GithubSocialMethod implements IAuthMethod {
       login: user.login,
       name: user.name,
       verifiedPrimaryEmail: verifiedPrimary.email,
-      // Don't store the full /user/emails array on rawProfile: it
-      // contains non-primary, non-verified addresses which are PII and
-      // contradict IAuthStorageLayer's documented "safe to include in
-      // audit-event payloads and operator dumps" contract for this
-      // field. Keep just the /user payload + the chosen email.
-      raw: { user, verifiedPrimaryEmail: verifiedPrimary.email },
+      // Cycle 19 / security-#3: explicit projection of /user payload
+      // into rawProfile. The TypeScript cast at line ~433 narrows the
+      // STATIC type but does NOT remove fields from the parsed JSON
+      // at runtime. GitHub's /user response carries email, bio,
+      // company, location, created_at, twitter_username, blog,
+      // gravatar_id, etc. — PII that contradicts IAuthStorageLayer's
+      // "safe to include in audit-event payloads and operator dumps"
+      // contract. Same drift class as the Phase 7 /user/emails PII
+      // trim — fix shape is identical: project explicitly rather than
+      // trust the cast.
+      raw: {
+        user: { id: user.id, login: user.login, name: user.name },
+        verifiedPrimaryEmail: verifiedPrimary.email,
+      },
     };
   }
 }

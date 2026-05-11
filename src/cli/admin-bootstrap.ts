@@ -30,7 +30,9 @@
 
 import { Command } from 'commander';
 import { createHash } from 'node:crypto';
+import { env } from '../config/env.js';
 import { openCliAuthStorage } from './cliAuthStorage.js';
+import { recordBootstrapCompleted, type BootstrapAdminMethod } from '../auth/embedded-as/bootstrapAdmin.js';
 
 interface BootstrapOptions {
   method: string;
@@ -60,7 +62,10 @@ async function resolveGithubUserId(username: string): Promise<number> {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
   };
-  const githubToken = process.env.GITHUB_TOKEN?.trim();
+  // Cycle 24 / cycle-23 security MEDIUM-2: route through env.X
+  // (Zod-validated) instead of raw process.env. Same sibling-fix-miss
+  // class as cycle 21's env-routing sweep.
+  const githubToken = env.GITHUB_TOKEN;
   if (githubToken) {
     headers.Authorization = `Bearer ${githubToken}`;
   }
@@ -194,6 +199,28 @@ async function main(): Promise<void> {
     }
     process.stderr.write(`Failed to mark bootstrap complete: ${msg}\n`);
     process.exit(2);
+  }
+
+  // Cycle 19 / test-M1 + cycle 22: route through the shared
+  // `recordBootstrapCompleted` helper so the assertion lives at the
+  // helper level (not duplicated inline) AND the CLI invocation can
+  // be tested by spying on the helper. The helper emits with
+  // `via: 'admin-bootstrap-cli'` to distinguish from the implicit
+  // `dollhouse-create-user` path.
+  try {
+    await recordBootstrapCompleted(
+      handle.storage,
+      adminSub,
+      adminMethod as BootstrapAdminMethod,
+      'admin-bootstrap-cli',
+    );
+  } catch (err) {
+    // Audit emission failure shouldn't fail the bootstrap itself —
+    // the bootstrap state was already persisted above. Log + continue.
+    process.stderr.write(
+      `[admin bootstrap] warning: failed to emit auth.bootstrap.completed audit event: ` +
+      `${err instanceof Error ? err.message : String(err)}\n`,
+    );
   }
 
   process.stdout.write(

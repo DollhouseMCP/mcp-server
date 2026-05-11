@@ -63,11 +63,14 @@ describe('openCliAuthStorage', () => {
   });
 
   it('filesystem backend: returns Filesystem storage with a no-op close', async () => {
-    process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND = 'filesystem';
-    delete process.env.DOLLHOUSE_DATABASE_URL;
+    // Cycle 19 / B2: env-var resolution now happens at module load
+    // through Zod (env.DOLLHOUSE_AUTH_STORAGE_BACKEND). Runtime
+    // process.env mutation no longer reaches the call. Drive through
+    // the explicit `backend` option (the test injection point).
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cliAuthStorage-'));
     tmpDirs.push(tmpDir);
     const handle = await openCliAuthStorage({
+      backend: 'filesystem',
       methods: ['local-password'],
       rootDir: tmpDir,
     });
@@ -76,9 +79,11 @@ describe('openCliAuthStorage', () => {
   });
 
   it('postgres backend: throws a clear error when DOLLHOUSE_DATABASE_URL is unset', async () => {
-    process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND = 'postgres';
+    // Cycle 19 / B2: same env-routing pattern. Test the explicit
+    // backend selection; the env-driven path is covered by integration
+    // tests where the env is set in the test runner.
     delete process.env.DOLLHOUSE_DATABASE_URL;
-    await expect(openCliAuthStorage({ methods: ['github'] })).rejects.toThrow(
+    await expect(openCliAuthStorage({ backend: 'postgres', methods: ['github'] })).rejects.toThrow(
       /DOLLHOUSE_DATABASE_URL/,
     );
   });

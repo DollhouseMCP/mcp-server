@@ -53,7 +53,16 @@ What are you doing?
 └─ Production-shape (hosted, durable, multi-method-ready) → Path D (Postgres)
 ```
 
-All four paths build on the same core. Pick the one that matches your goal; you can promote (A→B→C→D) by changing env vars and re-bootstrapping.
+All four paths build on the same core. Pick the one that matches your goal; you can promote (A→B→C→D) by changing env vars and re-bootstrapping. Operator setup time:
+
+| Path | Operator time (first time) | End-user time per sign-in |
+|---|---|---|
+| A (trivial-consent) | ~30 sec | 1 click |
+| B (local-password) | ~2 min + per-user invite-issue | enter password |
+| C (github) | ~3 min (register OAuth app) | click "Sign in with GitHub" |
+| D (Postgres + any method) | A/B/C time + `npm run db:setup` | same as A/B/C |
+
+**One thing to think about before picking**: which MCP clients will connect to your server? Most clients work with any path. But **Gemini CLI and claude.ai web** auto-register via DCR and need `DOLLHOUSE_AUTH_OPEN_DCR=true` set on the server. **Claude Desktop and Claude Code** use the pre-registered client_id and work everywhere. See [MCP client compatibility](#mcp-client-compatibility) for the full matrix.
 
 ---
 
@@ -71,10 +80,13 @@ DOLLHOUSE_AUTH_PROVIDER=embedded \
 DOLLHOUSE_AUTH_METHODS=trivial-consent \
 DOLLHOUSE_HTTP_HOST=127.0.0.1 \
 DOLLHOUSE_HTTP_PORT=3000 \
+DOLLHOUSE_AUTH_OPEN_DCR=true \
 npm run start:http
 ```
 
 Point your MCP client at `http://127.0.0.1:3000/mcp`. The client triggers OAuth, you click Approve, you have a token.
+
+**About `DOLLHOUSE_AUTH_OPEN_DCR=true`** — required if your MCP client auto-registers via DCR (Gemini CLI, claude.ai web). Safe on loopback. Claude Desktop / Claude Code use a pre-registered client_id and don't need it. See [MCP client compatibility](#mcp-client-compatibility).
 
 **Limits.** trivial-consent refuses to start on a non-loopback bind. It is for solo localhost only.
 
@@ -144,10 +156,22 @@ export DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=<from GitHub>
 export DOLLHOUSE_COOKIE_SIGNING_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
 export DOLLHOUSE_INVITE_TOKEN_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
 
-# 3. Pre-claim yourself as admin (numeric GitHub user ID; find via `curl https://api.github.com/users/<username> | jq .id`)
+# 3. Pre-claim yourself as admin
+#    OPTION A — by username (CLI looks up your numeric ID via GitHub's public API):
 npx dollhouse-admin-bootstrap --method github --github-username <your-username>
+#
+#    OPTION B — by numeric ID directly. USE THIS IF you have a stale GITHUB_TOKEN
+#    in your environment (the CLI uses it for higher rate limits but gets 401
+#    if it's invalid). Find your ID via:
+#      curl https://api.github.com/users/<your-username> | jq .id
+#    Then:
+npx dollhouse-admin-bootstrap --method github --github-id <numeric-id>
 
-# 4. Start
+# 4. (Optional) If your MCP client auto-registers via DCR (Gemini CLI, claude.ai web)
+#    enable the open-DCR escape hatch — loopback-only, see MCP client compatibility.
+export DOLLHOUSE_AUTH_OPEN_DCR=true
+
+# 5. Start
 npm run start:http
 
 # 5. MCP client → /authorize → bounced to GitHub → consent → token with roles:['admin'].
@@ -480,9 +504,63 @@ SELECT type, sub, created_at FROM auth_audit_events ORDER BY created_at DESC LIM
 
 ## Connecting an MCP client
 
+### What end users actually do
+
+Once the operator has finished one of Paths A–D above, every other person connecting to your server goes through the same short flow regardless of which auth method you chose:
+
+1. Add the server URL to their MCP client config (Claude Desktop config file, `gemini mcp add`, etc.)
+2. Trigger auth in the client (the client does it automatically on first tool call, or you can force it with e.g. `/mcp auth dollhouse` in Gemini CLI)
+3. A browser tab opens to your DollhouseMCP server's consent page
+4. They click "Sign in with GitHub" / "Approve Connector" / enter credentials, depending on the method
+5. The browser redirects back to the client's local callback
+6. The client has a token. MCP tools work.
+
+End users never run CLI commands, never touch env vars, never register OAuth apps. The operator does all that once.
+
+### MCP client compatibility
+
+Different MCP clients handle the OAuth-client-registration step differently. This matters because the DollhouseMCP AS supports two registration models, and the right one depends on the client.
+
+| Client | OAuth client model | Operator action |
+|---|---|---|
+| **Claude Desktop** | Uses the pre-registered `DEFAULT_CLIENT_ID` (`dollhouse-claude-connector`) with native-app loopback policy. No DCR. | None. Works out of the box. |
+| **Claude Code** | Same — pre-registered client_id, native loopback. | None. |
+| **Gemini CLI** | Auto-performs RFC 7591 Dynamic Client Registration (DCR) at `/reg` with no Initial Access Token. | Set `DOLLHOUSE_AUTH_OPEN_DCR=true` (loopback-only escape hatch). See "Dynamic Client Registration" below. |
+| **claude.ai web** | Same as Gemini — auto-DCR, no IAT support. | Same — `DOLLHOUSE_AUTH_OPEN_DCR=true`. |
+| **Custom SDK clients** | Whatever PKCE+token logic you implement — DollhouseMCP's discovery doc at `/.well-known/oauth-authorization-server` gives you all the endpoints. | None if you use the pre-registered `DEFAULT_CLIENT_ID`. |
+
+### Dynamic Client Registration (`DOLLHOUSE_AUTH_OPEN_DCR`)
+
+DollhouseMCP supports RFC 7591 Dynamic Client Registration so MCP clients that don't know a fixed `client_id` (Gemini CLI, claude.ai web) can register themselves and obtain one. DCR has two modes:
+
+| Mode | Operator setup | Security |
+|---|---|---|
+| `DOLLHOUSE_AUTH_OPEN_DCR=false` (default) | Production-target shape. `/reg` requires an Initial Access Token bearer. **IAT issuance is currently a deferred admin-channel feature** — until it lands, this mode effectively rejects MCP clients that auto-DCR. | Strong. Random callers cannot register clients. |
+| `DOLLHOUSE_AUTH_OPEN_DCR=true` | Localhost-dev escape hatch. `/reg` accepts unauthenticated registrations. | Acceptable on loopback bind; UNSAFE on a publicly-reachable AS — an attacker could register a client with their own `redirect_uri` and phish authorization codes. |
+
+```bash
+# For localhost smoke tests with Gemini CLI / claude.ai web:
+export DOLLHOUSE_AUTH_OPEN_DCR=true
+export DOLLHOUSE_HTTP_HOST=127.0.0.1
+```
+
+**For remote deployments that need auto-DCR clients**: tunnel your local AS (Cloudflare Tunnel, ngrok). The AS stays bound to loopback and open DCR stays safe because nobody hits `/reg` directly — they hit the tunnel which proxies. Clients connect to the tunnel URL. This is the documented `npx dollhousemcp` shape.
+
 ### Claude Desktop
 
-Configure DollhouseMCP as an MCP server in Claude Desktop's settings. Claude Desktop drives the OAuth flow automatically when it sees a 401 with the discovery document; you authenticate in your browser the first time, then Claude caches the token.
+Configure DollhouseMCP as an MCP server in Claude Desktop's settings file. Claude Desktop drives the OAuth flow automatically when it sees a 401 with the discovery document. You authenticate in your browser the first time, then Claude caches the token. **No `DOLLHOUSE_AUTH_OPEN_DCR` needed** — Claude Desktop uses the pre-registered `DEFAULT_CLIENT_ID`.
+
+### Gemini CLI
+
+```bash
+gemini mcp add dollhouse http://your.deployment/mcp
+gemini
+# inside gemini:
+/mcp auth dollhouse
+# Browser opens, you approve, you're in.
+```
+
+The server must have `DOLLHOUSE_AUTH_OPEN_DCR=true` for Gemini CLI's auto-DCR to succeed. Without it, you'll see `Client registration failed: 401 Unauthorized`.
 
 ### SDK / custom clients
 
@@ -499,7 +577,7 @@ const client = new Client({ name: 'my-client', version: '1.0.0' }, { capabilitie
 await client.connect(transport);
 ```
 
-The OAuth flow uses standard PKCE — your client library should follow the discovery document at `https://your.deployment/.well-known/oauth-authorization-server` to find `/authorize` and `/token`.
+The OAuth flow uses standard PKCE — your client library should follow the discovery document at `https://your.deployment/.well-known/oauth-authorization-server` to find `/authorize` and `/token`. If you can hard-code the client_id, use `dollhouse-claude-connector` (the pre-registered native-app client) and avoid DCR entirely.
 
 ---
 
@@ -544,6 +622,41 @@ Check the AS startup log for the `[NodemailerEmailSender] SMTP connection verifi
 ### Multi-replica HA: cookie-signed cookies fail across replicas
 
 Each replica generated its own cookie signing key. Set `DOLLHOUSE_COOKIE_SIGNING_SECRET` to the same value across all replicas (and `DOLLHOUSE_INVITE_TOKEN_SECRET` for invite + magic-link tokens).
+
+### Client gets `401 Unauthorized` from `/reg` ("Client registration failed")
+
+Your MCP client (Gemini CLI, claude.ai web) is trying to auto-register via DCR and the AS is rejecting because no Initial Access Token was provided. Set `DOLLHOUSE_AUTH_OPEN_DCR=true` for localhost dev (and tunnel the AS rather than exposing it for remote use). See "Dynamic Client Registration" in [Connecting an MCP client](#connecting-an-mcp-client).
+
+### Client gets `400 Bad Request: scope must only contain Authorization Server supported scope values`
+
+Pre-cycle-24 bug — the AS's `scopes` config was missing `mcp`/`profile`/`email`. Already fixed in current builds. If you see this, you're on an old build; pull latest and rebuild.
+
+### Approve button on the consent page does nothing / cycles to a new `/interaction/<uid>`
+
+Pre-cycle-24 bug — the grant's scope binding was single-dimension and oidc-provider re-prompted because half the scopes were missing from each dimension. Already fixed in current builds. If you see this loop, pull latest and rebuild.
+
+### `npx dollhouse-admin-bootstrap --method github --github-username …` returns "GitHub API 401 Unauthorized"
+
+A stale or invalid `GITHUB_TOKEN` in your environment is being sent to GitHub's API and rejected. Two fixes:
+
+1. **Clear `GITHUB_TOKEN` for the call**:
+   ```bash
+   GITHUB_TOKEN="" npx dollhouse-admin-bootstrap --method github --github-username insomnolence
+   ```
+2. **Skip the lookup, pass the numeric ID directly** (find via `curl https://api.github.com/users/<username> | jq .id`):
+   ```bash
+   npx dollhouse-admin-bootstrap --method github --github-id 1125822
+   ```
+
+### Transient "MCP ERROR" pop-ups in client during idle
+
+Pre-cycle-24 issue — Node's default HTTP `keepAliveTimeout=5s` and `requestTimeout=300s` killed long-lived MCP Streamable HTTP connections during idle. Cycle 24 bumped both at the server-side. If you're on an old build, update. If you're behind a reverse proxy, make sure the proxy's idle timeout exceeds 120 seconds.
+
+### I changed `DOLLHOUSE_AUTH_METHODS` and now all my clients are signed out
+
+That's intentional. The AS computes a mode-fingerprint from `(provider, methodIds, issuer, primaryKid, primaryCookieKey)` and any change triggers a deliberate invalidation: K/V state is cleared, JWKS rotates, cookie secret rotates. Outstanding tokens fail validation (must-fix #14). Clients re-auth via the new method on next connect. Account rows (`auth_accounts`) survive — users keep their identity and per-user data — only sessions and grants reset.
+
+If you're toggling between methods during testing and want to preserve auth state, don't change `DOLLHOUSE_AUTH_METHODS`; instead configure multiple methods at once and let the chooser handle which one the user picks (`DOLLHOUSE_AUTH_METHODS=github,local-password`).
 
 ---
 

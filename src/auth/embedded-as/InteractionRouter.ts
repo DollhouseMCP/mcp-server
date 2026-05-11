@@ -83,10 +83,20 @@ export interface InteractionRouterDeps {
    */
   methods: readonly IAuthMethod[];
   storage: IAuthStorageLayer;
+  /**
+   * Cycle 24 fix: the AS's resource URL, used as the fallback when an
+   * authorize request didn't include `resource=...` but did request a
+   * resource scope (e.g. `mcp`). Without this fallback, the grant gets
+   * an OIDC-scope binding but no resource-scope binding, oidc-provider
+   * re-prompts on every /auth resume, and the consent flow loops forever.
+   * Mirrors the same value oidc-provider's `resourceIndicators.defaultResource`
+   * callback returns.
+   */
+  defaultResource: string;
 }
 
 export function createInteractionRouter(deps: InteractionRouterDeps): Router {
-  const { provider, methods, storage } = deps;
+  const { provider, methods, storage, defaultResource } = deps;
   const router = express.Router();
   // Cycle-13 fix (HIGH): cap urlencoded body at 4kb to match the
   // per-method routers (LocalAccountMethod, MagicLinkMethod). The
@@ -106,7 +116,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): Router {
   });
 
   router.post('/:uid', (req, res, next) => {
-    handlePost(req, res, provider, methods, storage).catch(next);
+    handlePost(req, res, provider, methods, storage, defaultResource).catch(next);
   });
 
   return router;
@@ -221,6 +231,7 @@ async function handlePost(
   provider: OidcProviderForInteractions,
   methods: readonly IAuthMethod[],
   storage: IAuthStorageLayer,
+  defaultResource: string,
 ): Promise<void> {
   let details;
   try {
@@ -303,7 +314,7 @@ async function handlePost(
     return;
   }
 
-  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, storage);
+  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, storage, defaultResource);
 }
 
 /**
@@ -326,11 +337,23 @@ export async function finishInteractionWithIdentity(
   details: OidcInteractionDetails,
   accountId: string,
   storage: IAuthStorageLayer,
+  /**
+   * Cycle 24 fix: fallback resource URL applied when the client requested
+   * a resource scope (e.g. `mcp`) but didn't pass `resource=...` on the
+   * authorize request. Without this, the grant's resource-scope binding
+   * is empty, oidc-provider observes the grant doesn't satisfy the
+   * requested scopes, and re-prompts via a new interaction — looping
+   * forever. Mirrors the AS's `resourceIndicators.defaultResource`
+   * callback. Passed by callers from the AS's resource URL (`this.resource`).
+   */
+  defaultResource: string,
 ): Promise<void> {
   try {
     const requestedScope = String(details.params.scope ?? '');
     const clientId = String(details.params.client_id ?? '');
-    const requestedResource = details.params.resource;
+    // Use the explicitly-passed resource(s) when present; otherwise fall
+    // back to the AS's default resource. Cycle 24 fix.
+    const requestedResource = details.params.resource ?? defaultResource;
     const { oidcScopes, resourceScopes } = splitScopes(requestedScope);
 
     let grantId = details.grantId;
@@ -341,14 +364,24 @@ export async function finishInteractionWithIdentity(
     if (!grant) {
       grant = new provider.Grant({ accountId, clientId });
     }
-    if (oidcScopes.length > 0) {
-      grant.addOIDCScope(oidcScopes.join(' '));
-    }
-    if (resourceScopes.length > 0) {
+    // Cycle 24 fix: oidc-provider's prompt-resolution checks `missingOIDCScope`
+    // and `missingResourceScopes` independently. A scope that appears in BOTH
+    // `scopes` (the OIDC-level config) AND `getResourceServerInfo.scope` (the
+    // resource-server scope set) needs to be in BOTH grant dimensions or the
+    // prompt re-fires. Our `mcp` scope is in both. The earlier shape — using
+    // splitScopes to put OIDC standard scopes in one bucket and `mcp` in the
+    // other — left `mcp` out of the OIDC dimension and `openid` out of the
+    // resource dimension, looping the consent prompt forever. The honest
+    // resolution: add ALL requested scopes to BOTH dimensions. oidc-provider
+    // ignores scopes that aren't valid for a given dimension, so this is
+    // safe (and matches the behavior every other AS we've inspected does).
+    const allScopes = [...oidcScopes, ...resourceScopes];
+    if (allScopes.length > 0) {
+      grant.addOIDCScope(allScopes.join(' '));
       const resources = Array.isArray(requestedResource) ? requestedResource : [requestedResource];
       for (const r of resources) {
         if (typeof r === 'string' && r.length > 0) {
-          grant.addResourceScope(r, resourceScopes.join(' '));
+          grant.addResourceScope(r, allScopes.join(' '));
         }
       }
     }

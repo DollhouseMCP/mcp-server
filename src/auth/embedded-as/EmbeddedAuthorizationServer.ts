@@ -155,6 +155,30 @@ export interface EmbeddedAuthorizationServerOptions {
    * structural sender-binding answer).
    */
   refreshRotationCheckIpUa?: boolean;
+  /**
+   * Cycle 22 test injection point. When set, overrides
+   * `env.DOLLHOUSE_COOKIE_SIGNING_SECRET` for the multi-replica
+   * warn-when-unset check in `initialize()`. Production callers omit
+   * this; tests use it to drive the warn branch without mutating
+   * `process.env` at runtime (which no longer reaches the Zod-captured
+   * env value). Mirrors `cookieSecret.ts`'s `options.envSecret` shape.
+   */
+  cookieSecretEnvOverride?: string;
+
+  /**
+   * Cycle 24 test injection + operator escape hatch. When set, overrides
+   * `env.DOLLHOUSE_AUTH_OPEN_DCR` to control whether `/reg` (Dynamic
+   * Client Registration) requires an Initial Access Token. Default
+   * (undefined) falls back to the env-var; production deployments leave
+   * the env unset (gated) and the option undefined.
+   *
+   * `true` = open DCR (no IAT required, default for localhost dev when
+   * `DOLLHOUSE_AUTH_OPEN_DCR=true` is set). Unsafe on non-loopback binds.
+   *
+   * `false` = IAT-gated DCR (production target shape). Tests pass `true`
+   * to exercise the open-DCR code path without mutating env.
+   */
+  openDCR?: boolean;
 }
 
 interface InitializedState {
@@ -177,6 +201,8 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly keyFilePath: string;
   private readonly refreshRotationGraceMs: number | undefined;
   private readonly refreshRotationCheckIpUa: boolean;
+  private readonly cookieSecretEnvOverride: string | undefined;
+  private readonly openDCR: boolean;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -208,6 +234,8 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.keyFilePath = options.keyFilePath ?? defaultKeyFilePath();
     this.refreshRotationGraceMs = options.refreshRotationGraceMs;
     this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
+    this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
+    this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -422,6 +450,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         provider: s.provider,
         cookieKeys: s.cookieKeys,
       })),
+      // Cycle 24 fix: pass the AS's resource URL so social/magic-link
+      // callbacks can bind resource scopes to it via finishInteractionWithIdentity.
+      defaultResource: this.resource,
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);
@@ -778,7 +809,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
       token_endpoint_auth_methods_supported: ['none', 'client_secret_basic', 'client_secret_post'],
-      scopes_supported: ['openid', 'offline_access', 'mcp'],
+      // Cycle 24: include standard OIDC scopes (profile, email) so MCP
+      // clients that auto-register with these in their DCR payload
+      // (Gemini CLI, claude.ai, others) pass scope validation. These are
+      // no-op for resource access — the mcp scope check on /mcp is the
+      // gate (must-fix #15). profile/email map to id_token claims if the
+      // client requests them; without configured claims they're silent.
+      scopes_supported: ['openid', 'offline_access', 'mcp', 'profile', 'email'],
       subject_types_supported: ['public'],
       id_token_signing_alg_values_supported: [ALGORITHM],
     });
@@ -836,7 +873,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // mode change?" the same way. On mismatch we rotate three things —
     // K/V state, cookie secret, AND the JWKS signing key — then re-
     // persist the fingerprint reflecting the post-rotation state.
-    let cookieKeys = loadOrGenerateCookieSigningKeys();
+    let cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
 
     // Round 6 review fixup: when the operator opts into IP/UA-bound
     // rotation grace, the cookie key doubles as the HMAC salt for the
@@ -852,7 +889,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // env var is unset, log a warning naming the multi-replica risk.
     // Single-replica deployments are unaffected — the file-loaded
     // key stays stable across the AS lifetime.
-    if (this.refreshRotationCheckIpUa && !process.env.DOLLHOUSE_COOKIE_SIGNING_SECRET?.trim()) {
+    // Cycle 22: cookieSecretEnvOverride is the test injection point.
+    // Production callers omit it; the env.X value is the default.
+    const cookieSecretConfigured = this.cookieSecretEnvOverride ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+    if (this.refreshRotationCheckIpUa && !cookieSecretConfigured) {
       logger.warn(
         '[EmbeddedAuthorizationServer] refreshRotationCheckIpUa is enabled but ' +
         'DOLLHOUSE_COOKIE_SIGNING_SECRET is unset. The cookie signing key — used as ' +
@@ -883,9 +923,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // valid against the new mode. Clear-then-persist is crash-safe:
       // a crash mid-sequence means the next boot recomputes `changed:
       // true` and re-runs the idempotent clear.
+      // Cycle 24 / cycle-23 code LOW: forward cookieSecretEnvOverride
+      // to the mode-switch rotation calls so tests that exercise this
+      // path with the override observe the same env-driven semantics
+      // as the initial load. Production callers don't set the override,
+      // so this is a no-op outside tests.
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
-      rotateCookieSecret();
-      cookieKeys = loadOrGenerateCookieSigningKeys();
+      rotateCookieSecret(undefined, { envSecret: this.cookieSecretEnvOverride });
+      cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
       // Phase 9 H2/Q2: rotate the JWKS signing key too. Without this,
       // stateless JWT access tokens issued before the mode change keep
       // verifying until natural exp (1h), even though K/V was cleared
@@ -983,7 +1028,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         // issues IATs against this AS instance is follow-up work.
         // Until that lands, native MCP clients must use the pre-
         // registered DEFAULT_CLIENT_ID (loopback redirect_uris only).
-        registration: { enabled: true, initialAccessToken: true },
+        //
+        // Cycle 24 escape hatch: when `DOLLHOUSE_AUTH_OPEN_DCR=true`
+        // (or the constructor option openDCR=true for tests), /reg
+        // accepts unauthenticated registrations. This unblocks MCP
+        // clients that do automatic DCR without an IAT (Gemini CLI,
+        // claude.ai web). Acceptable on loopback dev where the AS is
+        // unreachable from the network; on remote binds it widens the
+        // attack surface. Operators must understand the trade-off.
+        registration: { enabled: true, initialAccessToken: !this.openDCR },
         // Disable oidc-provider's developer-only built-in interaction page;
         // we own /interaction/:uid via InteractionRouter.
         devInteractions: { enabled: false },
@@ -1039,11 +1092,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         }
         return Object.keys(extras).length > 0 ? extras : undefined;
       },
-      // Only OIDC standard scopes here. The `mcp` resource scope is declared
-      // via resourceIndicators.getResourceServerInfo below — keeping it out of
-      // this list prevents oidc-provider from treating it as a missing OIDC
-      // scope during the consent prompt.
-      scopes: ['openid', 'offline_access'],
+      // oidc-provider validates DCR-time AND authorize-time `scope` values
+      // against THIS list (not against the published `scopes_supported` in
+      // the well-known metadata — those are independent). Cycle 24: the
+      // earlier shape kept `mcp` out under the rationale that
+      // resourceIndicators.getResourceServerInfo would declare it; but MCP
+      // clients (Gemini CLI confirmed) send `scope=mcp` in their DCR
+      // payload alongside the OIDC standard scopes, and oidc-provider
+      // rejects the registration. The original consent-prompt concern is
+      // moot because devInteractions.enabled=false hands consent rendering
+      // to our InteractionRouter. profile+email added in cycle 24 too.
+      scopes: ['openid', 'offline_access', 'profile', 'email', 'mcp'],
       // PKCE is required for all clients; oidc-provider 9.x defaults to S256-only
       // when 'plain' is not in code_challenge_methods_supported (which it isn't).
       pkce: { required: () => true },
@@ -1181,6 +1240,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       provider,
       methods: this.methods,
       storage: this.storage,
+      // Cycle 24 fix: defaultResource so finishInteractionWithIdentity
+      // can bind resource scopes (like `mcp`) to a real resource server
+      // when the client didn't pass `resource=` on the authorize request.
+      // Without this, the grant ends up scope-empty for the resource
+      // dimension, oidc-provider re-prompts, and the consent flow loops.
+      defaultResource: this.resource,
     });
 
     return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };

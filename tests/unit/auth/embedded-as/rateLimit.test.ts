@@ -146,4 +146,87 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // were FIFO-evicted past the cap.
     expect(limiter.check(lockedSub, 'unknown').allowed).toBe(false);
   }, 30_000);
+
+  it('cycle 19 / H1: saturation guard resets when table drains below cap', async () => {
+    // The earlier shape latched accountSaturationFired = true forever
+    // after the first flood. A second wave (after the table aged out)
+    // produced no audit event — operators only ever saw the first flood.
+    // The cycle 19 fix resets the flag when boundAccounts observes the
+    // table back below the cap.
+    //
+    // Cycle 22: renamed from "second flood emits second audit" to
+    // match what the test actually pins. The end-to-end re-emission
+    // requires flooding 22k+ entries twice (~minutes); the focused
+    // assertion here is the flag reset itself, exercised through the
+    // production noteFailure path.
+    const internal = limiter as unknown as { accountSaturationFired: boolean; ipSaturationFired: boolean };
+    internal.accountSaturationFired = true;
+    internal.ipSaturationFired = true;
+
+    // Single failure → hits noteFailure → calls boundAccounts on a
+    // small table → early-returns with flag reset.
+    await limiter.noteFailure('local_drain_check', '10.0.0.99');
+
+    expect(internal.accountSaturationFired).toBe(false);
+    expect(internal.ipSaturationFired).toBe(false);
+  });
+
+  it('cycle 22 / re-emission: a second saturation after drain re-fires the audit event', async () => {
+    // End-to-end pin for the re-emission contract. Saturation requires
+    // the eviction loop to FIFO-evict an actively-locked entry — a
+    // flood of single-failure entries doesn't reach saturation
+    // because pass-2 (non-locked eviction) drops them. Direct-state
+    // manipulation creates 10_001 actively-locked entries, then
+    // triggers boundAccounts via noteFailure. A second cycle after
+    // drain proves the audit re-fires.
+    const internal = limiter as unknown as {
+      accounts: Map<string, { failures: number; firstFailureAt: number; bruteForceFired: boolean }>;
+      ips: Map<string, { failures: number; firstFailureAt: number; lockedUntil: number; bruteForceFired: boolean }>;
+    };
+
+    // Populate 10_001 actively-locked accounts (above MAX cap of 10k).
+    const now = Date.now();
+    for (let i = 0; i < 10_001; i += 1) {
+      internal.accounts.set(`locked1_${i}`, {
+        failures: 5, // at threshold = locked
+        firstFailureAt: now,
+        bruteForceFired: true, // already audited per-account, suppress noise
+      });
+    }
+
+    // Trigger boundAccounts via noteFailure. The single new failure
+    // pushes size to 10_002; pass 1 finds nothing safe-to-evict
+    // (within window + locked); pass 2 finds nothing non-locked;
+    // pass 3 FIFO-evicts a locked entry → saturation fires.
+    await limiter.noteFailure('saturation_trigger_1', '10.0.0.10');
+
+    let saturationEvents = (await storage.listIdentityEvents()).filter(
+      e => e.type === 'auth.local.rate_limit_saturated',
+    );
+    const eventsAfterFlood1 = saturationEvents.length;
+    expect(eventsAfterFlood1).toBeGreaterThanOrEqual(1);
+
+    // Drain: clear the locked entries (simulate natural ageing).
+    internal.accounts.clear();
+    internal.ips.clear();
+
+    // Triggering noteFailure on a small table → boundAccounts early-
+    // returns → resets the flag.
+    await limiter.noteFailure('drain_trigger', '10.0.0.42');
+
+    // Re-saturate with another locked-entry flood.
+    for (let i = 0; i < 10_001; i += 1) {
+      internal.accounts.set(`locked2_${i}`, {
+        failures: 5,
+        firstFailureAt: now,
+        bruteForceFired: true,
+      });
+    }
+    await limiter.noteFailure('saturation_trigger_2', '10.0.0.11');
+
+    saturationEvents = (await storage.listIdentityEvents()).filter(
+      e => e.type === 'auth.local.rate_limit_saturated',
+    );
+    expect(saturationEvents.length).toBeGreaterThan(eventsAfterFlood1);
+  }, 30_000);
 });

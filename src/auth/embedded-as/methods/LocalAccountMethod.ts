@@ -195,25 +195,19 @@ export class LocalAccountMethod implements IAuthMethod {
       return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     }
 
-    // Step 2 — hash the password BEFORE consuming. If hashing fails (OOM
-    // under load, etc.) the token stays consumable and the user can retry
-    // without needing the operator to re-issue a fresh invite. The
-    // earlier order (consume → hash) left the user with a dead invite
-    // and no account on hash failure.
-    let passwordHash: string;
-    try {
-      passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
-    } catch (err) {
-      logger.warn('[LocalAccountMethod] argon2 hash failed during invite consume', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return { kind: 'error', reason: 'failed to hash password, please try again' };
-    }
-
-    // Step 3 — consume. Race window between verify and consume is bounded
-    // by the argon2 hash time; concurrent submits of the same token still
-    // resolve via the InviteTokenStore's already-consumed check on the
-    // losing call.
+    // Step 2 — consume (CAS) BEFORE argon2 hashing. Cycle 19 / security-#1:
+    // the previous order (verify → hash → consume) paid the ~30ms argon2
+    // cost on every replay of a captured-but-already-consumed invite URL,
+    // creating a sustained-CPU-pin DoS surface. Hand-delivered invite URLs
+    // can leak (Slack DM forwards, screen-shares, email-forward) and the
+    // attacker keeps replaying for the 15-minute TTL. Reordering means
+    // replays cost only one DB read + the consumed-jti CAS check.
+    //
+    // Tradeoff: if argon2 fails AFTER successful consume (process pressure,
+    // OOM), the invite is gone and the user must request a fresh one from
+    // the operator. The DoS attack surface outweighs the rare-failure UX
+    // cost — we'd rather degrade one user's flow than open a CPU-pin
+    // primitive to anyone with a captured URL.
     const consume = await this.options.invites.consume(token);
     if (!consume.ok) {
       // rate-exceeded is server-side capacity, not a token problem; log so
@@ -227,6 +221,21 @@ export class LocalAccountMethod implements IAuthMethod {
     }
     if (consume.payload.purpose !== 'invite') {
       return { kind: 'error', reason: GENERIC_INVITE_INVALID };
+    }
+
+    // Step 3 — hash the password. By this point the invite is consumed
+    // and the CAS guarantees no other request can re-enter this path with
+    // the same token. Hash failures here cost the user the invite (they
+    // request another) but cannot be amplified into a DoS.
+    let passwordHash: string;
+    try {
+      passwordHash = await argon2.hash(newPassword, ARGON2_OPTIONS);
+    } catch (err) {
+      logger.warn('[LocalAccountMethod] argon2 hash failed AFTER invite consume — user must request a fresh invite', {
+        error: err instanceof Error ? err.message : String(err),
+        sub: consume.payload.sub,
+      });
+      return { kind: 'error', reason: 'failed to hash password, please request a new invite' };
     }
 
     const sub = consume.payload.sub;

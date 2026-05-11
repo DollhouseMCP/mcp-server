@@ -66,7 +66,7 @@ export function setHttpModeActive(active: boolean): void {
 }
 
 // Only log execution environment in debug mode
-if (process.env.DOLLHOUSE_DEBUG) {
+if (env.DOLLHOUSE_DEBUG) {
   console.error('[DollhouseMCP] Debug mode enabled');
 }
 
@@ -764,7 +764,7 @@ let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
 try {
   scriptPath = realpathSync(scriptPath);
 } catch {
-  if (process.env.DOLLHOUSE_DEBUG) {
+  if (env.DOLLHOUSE_DEBUG) {
     console.error(`[DEBUG] Symlink resolution failed for ${rawScriptPath} — using original path`);
   }
 }
@@ -781,8 +781,7 @@ const binName = path.basename(rawScriptPath);
 const isCliExecution = binName === 'dollhousemcp' || binName === 'mcp-server';
 const isTest = process.env.JEST_WORKER_ID; // This is set when Jest runs tests
 const isTestMode = process.env.TEST_MODE === 'true'; // Check for TEST_MODE environment variable
-const dollhouseDebugFlag = process.env.DOLLHOUSE_DEBUG?.toLowerCase();
-const isDebugStartupLogging = dollhouseDebugFlag === 'true' || dollhouseDebugFlag === '1';
+const isDebugStartupLogging = env.DOLLHOUSE_DEBUG;
 
 // Progressive startup with retries for npx/CLI execution
 const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
@@ -806,7 +805,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed",
-      process.env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
+      env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
     process.exit(1);
   }
 }
@@ -1236,7 +1235,7 @@ async function main(): Promise<void> {
   const isWebMode = process.argv.includes('--web');
 
   if (isWebMode) {
-    if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
+    if (!env.DOLLHOUSE_DEBUG && !env.ENABLE_DEBUG) {
       logger.setMinLevel('error');
     }
     return startWebStandaloneMode();
