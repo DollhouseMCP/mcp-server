@@ -1,18 +1,40 @@
 /**
  * ConfigManager - Centralized configuration management for DollhouseMCP
- * 
+ *
+ * Phase 4.5 storage completion: ConfigManager is now a thin façade over
+ * `IOperatorConfigStore` (per-host settings) + `IUserConfigStore` (per-user
+ * settings, RLS-isolated). The underlying stores are backend-selectable
+ * (filesystem / postgres / in-memory) per `DOLLHOUSE_STORAGE_BACKEND`.
+ *
+ * Hybrid caching: `initialize()` async-loads both stores and merges into
+ * the existing `DollhouseConfig` shape, cached per-user in a `Map`. Sync
+ * reads (`getConfig`, `getSetting`) hit the cache. Writes route through
+ * the appropriate store, then refresh the cache.
+ *
+ * **userId resolution:** every read/write resolves the effective userId
+ * from `ContextTracker.getSessionContext()`. When no session is active
+ * (stdio mode, boot context), falls back to `defaultUserId` — passed in
+ * at construction. In DB mode this should be the bootstrapped OS-user
+ * UUID (from `src/database/bootstrap.ts`); in filesystem mode any stable
+ * sentinel UUID works (per-user filesystem files, no FK constraints).
+ *
+ * **Public API preserved:** all 9 existing public methods keep their
+ * signatures so the 100+ existing call sites don't need updates. The
+ * single-user-config-file YAML semantics are gone; export/import still
+ * use YAML serialization for portability.
+ *
  * Features:
- * - YAML-based configuration file
+ * - Two-store backend (operator + user) selectable filesystem/postgres
  * - Default values with user overrides
  * - Migration from environment variables
  * - Validation and type safety
- * - Atomic updates with backup
+ * - Atomic updates (one write per affected store)
  * - Privacy-first defaults
  * - OAuth client ID storage for MCP client integration
  */
 
-import * as path from 'path';
 import * as os from 'os';
+import * as path from 'path';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
@@ -24,6 +46,52 @@ import {
 } from '../utils/securityUtils.js';
 import { env } from './env.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { IOperatorConfigStore, OperatorConfig } from '../storage/operatorConfig/IOperatorConfigStore.js';
+import type { IUserConfigStore, UserConfig as UserConfigPayload } from '../storage/userConfig/IUserConfigStore.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+
+/**
+ * Stable sentinel UUID for "no session active, default user." Used when
+ * `ContextTracker.getSessionContext()` returns null and no caller-supplied
+ * `defaultUserId` is available. In DB mode this UUID won't satisfy the
+ * `user_settings.user_id → users.id` FK on writes — by design, since
+ * boot/system contexts shouldn't be writing per-user state.
+ */
+export const DEFAULT_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+
+/**
+ * Helper for `mergeStorePayloads`: shallow-merge a stored jsonb section
+ * onto a defaults section, preserving nested defaults for keys the store
+ * payload doesn't override. The store payload is `Record<string, unknown>`
+ * (jsonb has no fixed shape); the defaults are typed.
+ *
+ * Two-level merge so common shapes like `{ individual: {...}, bulk: {...} }`
+ * preserve nested defaults. Beyond two levels, the store value wins
+ * verbatim — operators wanting deeper merges should write the full
+ * sub-section.
+ */
+function deepMergeSection<T extends Record<string, unknown>>(
+  defaults: T,
+  stored: Record<string, unknown>,
+): T {
+  const out: Record<string, unknown> = { ...defaults };
+  for (const [key, value] of Object.entries(stored)) {
+    const defaultValue = (defaults as Record<string, unknown>)[key];
+    if (
+      value !== null
+      && typeof value === 'object'
+      && !Array.isArray(value)
+      && defaultValue !== null
+      && typeof defaultValue === 'object'
+      && !Array.isArray(defaultValue)
+    ) {
+      out[key] = { ...defaultValue, ...value };
+    } else {
+      out[key] = value;
+    }
+  }
+  return out as T;
+}
 
 export interface UserConfig {
   username: string | null;
@@ -296,17 +364,29 @@ export interface ConfigActionResult {
 }
 
 export class ConfigManager {
-  private configDir: string;
-  private configPath: string;
-  private backupPath: string;
-  private config: DollhouseConfig | null = null;
   private readonly fileOperations: IFileOperationsService;
-  private os: typeof os;
+  private readonly os: typeof os;
+  private readonly operatorStore: IOperatorConfigStore;
+  private readonly userStore: IUserConfigStore;
+  private readonly contextTracker: ContextTracker | null;
+  private readonly defaultUserId: string;
+
+  /**
+   * Per-user merged DollhouseConfig cache. Populated by `initialize()`
+   * (and lazily by writes). Keyed by effective userId. Holding the merged
+   * shape (rather than separate operator+user objects) keeps `getConfig`
+   * and `getSetting` zero-allocation for the hot path.
+   */
+  private readonly mergedCache = new Map<string, DollhouseConfig>();
 
   /**
    * Extract console.port from raw YAML config content without full
    * ConfigManager initialization. Uses FAILSAFE_SCHEMA for security
    * (no code execution). Returns undefined if not found or invalid.
+   *
+   * Used by the legacy YAML-config startup path — kept for filesystem
+   * deployments that still have a `~/.dollhouse/config.yml` to read
+   * the port from before stores are constructed.
    */
   static readPortFromYaml(yamlContent: string): number | undefined {
     try {
@@ -320,20 +400,123 @@ export class ConfigManager {
     }
   }
 
-  constructor(fileOperations: IFileOperationsService, osModule: typeof os, configDir?: string) {
+  /**
+   * Pre-DI peek of `elements.enhanced_index.resources.advertise_resources`
+   * directly from `~/.dollhouse/config.yml`. Used by the MCP server
+   * constructor (a synchronous context that runs before the DI container
+   * and the storage layers exist) to decide whether to advertise the
+   * MCP resources capability.
+   *
+   * Returns `false` on any error (missing file, parse error, missing key)
+   * — the safe default (don't advertise).
+   *
+   * In DB-backend mode there's no config.yml; this returns false, and
+   * operators wanting resources advertised must configure it via the
+   * post-startup `dollhouse_config` flow. Acceptable trade-off — the
+   * advertise flag is an operator-set capability, not session-bound.
+   */
+  static peekResourcesAdvertiseFlag(): boolean {
+    try {
+      // Lazy require so import-time costs only apply to the rare advertise=true path
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('node:fs');
+      const configDir = process.env.TEST_CONFIG_DIR
+        ?? path.join(os.homedir(), '.dollhouse');
+      const configPath = path.join(configDir, 'config.yml');
+      const content = fs.readFileSync(configPath, 'utf8');
+      const parsed = yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA }) as Record<string, any> | null;
+      return parsed?.elements?.enhanced_index?.resources?.advertise_resources === true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Construct a ConfigManager backed by env-default stores (filesystem or
+   * postgres per `DOLLHOUSE_STORAGE_BACKEND`). Used by legacy non-DI
+   * callers that need ConfigManager outside the Container bootstrap flow.
+   *
+   * Production code should resolve `ConfigManager` from the DI container
+   * (where ContextTracker + defaultUserId are wired correctly). This
+   * static is a pragmatic alternative for one-shot scripts and pre-DI
+   * helpers.
+   */
+  static async createStandalone(
+    fileOperations: IFileOperationsService,
+    osModule: typeof os,
+  ): Promise<ConfigManager> {
+    const { createOperatorConfigStore } = await import('../storage/operatorConfig/createOperatorConfigStore.js');
+    const { createUserConfigStore } = await import('../storage/userConfig/createUserConfigStore.js');
+    const [operatorStore, userStore] = await Promise.all([
+      createOperatorConfigStore({}),
+      createUserConfigStore({}),
+    ]);
+    // No ContextTracker in standalone mode — uses DEFAULT_SYSTEM_USER_ID
+    // for the fallback userId. Per-user writes in this mode all land on
+    // the same sentinel row (filesystem) or fail FK (postgres) — by
+    // design, since standalone callers are typically operator-context.
+    return new ConfigManager(fileOperations, osModule, operatorStore, userStore, null);
+  }
+
+  constructor(
+    fileOperations: IFileOperationsService,
+    osModule: typeof os,
+    operatorStore: IOperatorConfigStore,
+    userStore: IUserConfigStore,
+    contextTracker: ContextTracker | null,
+    defaultUserId: string = DEFAULT_SYSTEM_USER_ID,
+  ) {
     this.fileOperations = fileOperations;
     this.os = osModule;
+    this.operatorStore = operatorStore;
+    this.userStore = userStore;
+    this.contextTracker = contextTracker;
+    this.defaultUserId = defaultUserId;
+  }
 
-    // Priority: explicit param (from DI/PathService) > test env > default
-    if (configDir) {
-      this.configDir = configDir;
-    } else if (env.NODE_ENV === 'test' && process.env.TEST_CONFIG_DIR) {
-      this.configDir = process.env.TEST_CONFIG_DIR;
-    } else {
-      this.configDir = path.join(this.os.homedir(), '.dollhouse');
+  /**
+   * Resolve the effective userId for the current async context. Returns
+   * the `SessionContext.userId` when a session is active, otherwise the
+   * configured `defaultUserId` (typically the bootstrapped OS-user UUID
+   * in DB mode, or the sentinel in filesystem mode).
+   */
+  private resolveUserId(): string {
+    if (this.contextTracker) {
+      const session = this.contextTracker.getSessionContext();
+      if (session?.userId) return session.userId;
     }
-    this.configPath = path.join(this.configDir, 'config.yml');
-    this.backupPath = path.join(this.configDir, 'config.yml.backup');
+    return this.defaultUserId;
+  }
+
+  /**
+   * Get the cached merged config for the current effective userId, or
+   * null if `initialize()` hasn't been called for that user yet.
+   * Internal getter — use `getConfig()` for the public throwing variant.
+   */
+  private getCachedConfig(): DollhouseConfig | null {
+    return this.mergedCache.get(this.resolveUserId()) ?? null;
+  }
+
+  /**
+   * Backwards-compat alias used by internal helpers (fixConfigTypes,
+   * setGitHubClientId, etc.) that expect a `this.config` field. Returns
+   * the cached config for the current effective userId or null.
+   */
+  private get config(): DollhouseConfig | null {
+    return this.getCachedConfig();
+  }
+
+  /**
+   * Set the cached config for the current effective userId. Internal —
+   * used by initialize/updateSetting/etc. when the merged config changes.
+   */
+  private set config(next: DollhouseConfig | null) {
+    const userId = this.resolveUserId();
+    if (next === null) {
+      this.mergedCache.delete(userId);
+    } else {
+      this.mergedCache.set(userId, next);
+    }
   }
 
   /**
@@ -472,130 +655,179 @@ export class ConfigManager {
    * Initialize configuration
    */
   public async initialize(): Promise<void> {
-    // Always reload config from disk if it exists, even if we have defaults in memory
-    // This ensures we pick up any manual edits or saved settings
-    
+    // Always reload from stores — picks up out-of-band changes (other
+    // replicas, direct DB edits, file edits). Same semantics as the old
+    // file-based "always reload from disk" behavior.
+    const userId = this.resolveUserId();
+
     try {
-      // Ensure config directory exists with proper permissions (0o700 = owner only)
-      await this.fileOperations.createDirectory(this.configDir);
-      // Set permissions on the directory
-      await this.fileOperations.chmod(this.configDir, 0o700, {
-        source: 'ConfigManager.initialize'
-      });
-      
-      // Load or create config
-      if (await this.configExists()) {
-        await this.loadConfig();
-      } else {
-        // Create default config
-        this.config = this.getDefaultConfig();
-        
-        // Try to migrate from environment variables
+      const [operatorPayload, userPayload] = await Promise.all([
+        this.operatorStore.load(),
+        this.userStore.load(userId),
+      ]);
+
+      let merged = this.mergeStorePayloads(operatorPayload, userPayload);
+
+      // First-start migration from environment variables — only when both
+      // stores look like fresh defaults (no operator config saved + no
+      // per-user config saved). Skips on re-init of an existing deployment
+      // so env vars can't silently overwrite operator-configured values.
+      const isFreshStart =
+        operatorPayload.updatedAt === 0 && userPayload.updatedAt === 0;
+      if (isFreshStart) {
+        // Stage merged into this.config so migrateFromEnvironment can
+        // mutate it through `this.config` (preserves the existing
+        // implementation pattern).
+        this.config = merged;
         await this.migrateFromEnvironment();
-        
-        // Save the config
-        await this.saveConfig();
-        
-        logger.info('Created new configuration file', {
-          path: this.configPath
-        });
+        merged = this.config!;
+        // Persist any env-derived changes back to the stores.
+        await this.persistMerged(userId, merged);
+      } else {
+        this.config = merged;
       }
+
+      // Fix any string booleans that might have been saved incorrectly
+      // (legacy YAML data shape recovery — mostly a no-op for fresh
+      // store-backed state, but cheap and defensive against bad data).
+      this.fixConfigTypes();
+
+      logger.debug('Configuration loaded successfully', {
+        userId,
+        username: this.config?.user.username,
+        syncEnabled: this.config?.sync.enabled,
+      });
     } catch (error) {
       logger.error('Failed to initialize configuration', {
-        error: error instanceof Error ? error.message : String(error)
+        userId,
+        error: error instanceof Error ? error.message : String(error),
       });
-      // Use defaults in memory
+      // Use defaults in memory so consumers don't crash on null config
       this.config = this.getDefaultConfig();
     }
   }
 
   /**
-   * Load configuration from file
+   * Load + cache the merged config for a specific userId. Used by HTTP
+   * handlers to preload a session's config before performing reads in
+   * sync downstream code paths. Idempotent — safe to call repeatedly.
    */
-  private async loadConfig(): Promise<void> {
-    try {
-      const content = await this.fileOperations.readFile(this.configPath, {
-        source: 'ConfigManager.loadConfig'
-      });
-      
-      /**
-       * IMPORTANT: Parser Selection for Different File Types
-       * 
-       * We use DIFFERENT parsers for different file types:
-       * 
-       * 1. js-yaml (used here) - For PURE YAML files:
-       *    - Configuration files (config.yml)
-       *    - Data files without markdown content
-       *    - Any .yml or .yaml file that's just YAML
-       *    Example format:
-       *    ```yaml
-       *    version: 1.0.0
-       *    user:
-       *      username: johndoe
-       *      email: john@example.com
-       *    ```
-       * 
-       * 2. SecureYamlParser - For MARKDOWN files with YAML frontmatter:
-       *    - Persona files (*.md in personas/)
-       *    - Skill files (*.md in skills/)
-       *    - Template files (*.md in templates/)
-       *    - Any .md file with frontmatter between --- markers
-       *    Example format:
-       *    ```markdown
-       *    ---
-       *    name: Creative Writer
-       *    description: A creative assistant
-       *    ---
-       *    # Instructions
-       *    You are a creative writer...
-       *    ```
-       * 
-       * The config file is PURE YAML, so we use js-yaml directly with FAILSAFE_SCHEMA
-       * for security (prevents code execution via YAML tags).
-       * SECURITY: This is NOT a vulnerability - FAILSAFE_SCHEMA prevents code execution
-       */
-      let loadedData: any;
-      try {
-        // Using yaml with FAILSAFE_SCHEMA is secure - prevents code execution
-        loadedData = yaml.load(content, {
-          schema: yaml.FAILSAFE_SCHEMA // Safe schema prevents code execution
-        });
-      } catch (yamlError) {
-        throw new Error(`Invalid YAML in configuration file: ${yamlError instanceof Error ? yamlError.message : String(yamlError)}`);
-      }
-      
-      if (!loadedData || typeof loadedData !== 'object') {
-        throw new Error('Invalid configuration format');
-      }
-      logger.debug('Loaded config from file', {
-        username: loadedData.user?.username,
-        email: loadedData.user?.email,
-        syncEnabled: loadedData.sync?.enabled
-      });
-      
-      this.config = this.mergeWithDefaults(loadedData);
-      
-      // Fix any string booleans that might have been saved incorrectly
-      this.fixConfigTypes();
-      
-      logger.debug('Configuration loaded successfully', {
-        username: this.config.user.username,
-        syncEnabled: this.config.sync.enabled
-      });
-      
-    } catch (error) {
-      logger.error('Failed to load configuration', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      throw error;
-    }
+  public async ensureUserConfigLoaded(userId: string): Promise<void> {
+    if (this.mergedCache.has(userId)) return;
+    const [operatorPayload, userPayload] = await Promise.all([
+      this.operatorStore.load(),
+      this.userStore.load(userId),
+    ]);
+    const merged = this.mergeStorePayloads(operatorPayload, userPayload);
+    this.mergedCache.set(userId, merged);
   }
 
   /**
-   * Check if config file exists
+   * Merge OperatorConfig + UserConfig payloads into the unified
+   * `DollhouseConfig` shape consumers expect. Section assignments mirror
+   * the per-user / per-host classification documented in the Phase 4.5
+   * plan: per-user → user payload sections; per-host → operator payload
+   * sections. Defaults fill gaps for any missing keys.
    */
-  private async configExists(): Promise<boolean> {
-    return this.fileOperations.exists(this.configPath);
+  private mergeStorePayloads(
+    operator: OperatorConfig,
+    user: UserConfigPayload,
+  ): DollhouseConfig {
+    const defaults = this.getDefaultConfig();
+    const userIdentity = user.userIdentityConfig as Partial<UserConfig>;
+    const merged: DollhouseConfig = {
+      version: ((operator.defaultsConfig as Record<string, unknown>).version as string)
+        ?? defaults.version,
+      user: {
+        username: userIdentity.username ?? defaults.user.username,
+        email: userIdentity.email ?? defaults.user.email,
+        display_name: userIdentity.display_name ?? defaults.user.display_name,
+      },
+      github: deepMergeSection(
+        defaults.github as unknown as Record<string, unknown>,
+        user.githubConfig,
+      ) as unknown as GitHubConfig,
+      sync: deepMergeSection(
+        defaults.sync as unknown as Record<string, unknown>,
+        user.syncConfig,
+      ) as unknown as SyncConfig,
+      collection: { ...defaults.collection, ...user.collectionConfig } as unknown as CollectionConfig,
+      autoLoad: { ...defaults.autoLoad, ...user.autoloadConfig } as unknown as AutoLoadConfig,
+      elements: {
+        auto_activate: { ...defaults.elements.auto_activate, ...user.autoActivateConfig },
+        default_element_dir: ((operator.defaultsConfig as Record<string, unknown>).default_element_dir as string)
+          ?? defaults.elements.default_element_dir,
+        enhanced_index: deepMergeSection(
+          (defaults.elements.enhanced_index ?? {}) as unknown as Record<string, unknown>,
+          operator.enhancedIndexConfig,
+        ) as unknown as EnhancedIndexConfig,
+      },
+      display: deepMergeSection(
+        defaults.display as unknown as Record<string, unknown>,
+        user.displayConfig,
+      ) as unknown as DisplayConfig,
+      wizard: { ...defaults.wizard, ...user.wizardConfig } as unknown as WizardConfig,
+      retentionPolicy: deepMergeSection(
+        defaults.retentionPolicy as unknown as Record<string, unknown>,
+        user.retentionConfig,
+      ) as unknown as RetentionPolicyConfig,
+      license: { ...defaults.license, ...operator.licenseConfig } as unknown as LicenseConfig,
+      console: { ...defaults.console, ...operator.consoleConfig } as unknown as ConsoleConfig,
+      source_priority: Object.keys(user.sourcePriorityConfig).length > 0
+        ? user.sourcePriorityConfig as unknown as SourcePriorityConfigData
+        : undefined,
+    };
+    return merged;
+  }
+
+  /**
+   * Inverse of `mergeStorePayloads`: split a merged DollhouseConfig back
+   * into operator + user payloads for store writes. Used by `updateSetting`,
+   * `resetConfig`, `importConfig`, `setGitHubClientId`, etc. — anywhere
+   * the in-memory config changes and needs to be persisted.
+   */
+  private splitForStores(merged: DollhouseConfig): {
+    operator: Omit<OperatorConfig, 'updatedAt'>;
+    user: Omit<UserConfigPayload, 'updatedAt'>;
+  } {
+    return {
+      operator: {
+        enhancedIndexConfig: merged.elements.enhanced_index as unknown as Record<string, unknown>,
+        consoleConfig: merged.console as unknown as Record<string, unknown>,
+        licenseConfig: merged.license as unknown as Record<string, unknown>,
+        defaultsConfig: {
+          version: merged.version,
+          default_element_dir: merged.elements.default_element_dir,
+        },
+        configVersion: 1,
+      },
+      user: {
+        githubConfig: merged.github as unknown as Record<string, unknown>,
+        syncConfig: merged.sync as unknown as Record<string, unknown>,
+        autoloadConfig: merged.autoLoad as unknown as Record<string, unknown>,
+        retentionConfig: merged.retentionPolicy as unknown as Record<string, unknown>,
+        wizardConfig: merged.wizard as unknown as Record<string, unknown>,
+        displayConfig: merged.display as unknown as Record<string, unknown>,
+        collectionConfig: merged.collection as unknown as Record<string, unknown>,
+        autoActivateConfig: merged.elements.auto_activate as unknown as Record<string, unknown>,
+        sourcePriorityConfig: (merged.source_priority ?? {}) as unknown as Record<string, unknown>,
+        userIdentityConfig: merged.user as unknown as Record<string, unknown>,
+        configVersion: 1,
+      },
+    };
+  }
+
+  /**
+   * Persist the merged config back to both stores in parallel. Always
+   * writes both stores — simpler than tracking which sections changed,
+   * and the cost is bounded (one INSERT/UPDATE per store).
+   */
+  private async persistMerged(userId: string, merged: DollhouseConfig): Promise<void> {
+    const split = this.splitForStores(merged);
+    await Promise.all([
+      this.operatorStore.save(split.operator),
+      this.userStore.save(userId, split.user),
+    ]);
   }
 
   /**
@@ -624,20 +856,21 @@ export class ConfigManager {
       );
     }
 
+    const userId = this.resolveUserId();
     if (!this.config) {
-      this.config = this.getDefaultConfig();
+      await this.initialize();
     }
 
     // Ensure github.auth object exists
-    if (!this.config.github) {
-      this.config.github = this.getDefaultConfig().github;
+    if (!this.config!.github) {
+      this.config = { ...this.config!, github: this.getDefaultConfig().github };
     }
-    if (!this.config.github.auth) {
-      this.config.github.auth = this.getDefaultConfig().github.auth;
+    if (!this.config!.github.auth) {
+      this.config!.github.auth = this.getDefaultConfig().github.auth;
     }
 
-    this.config.github.auth.client_id = clientId;
-    await this.saveConfig();
+    this.config!.github.auth.client_id = clientId;
+    await this.persistMerged(userId, this.config!);
   }
 
   /**
@@ -679,10 +912,11 @@ export class ConfigManager {
    * Now: Validates keys against forbidden properties before assignment
    */
   public async updateSetting(path: string, value: any): Promise<ConfigUpdateResult> {
+    const userId = this.resolveUserId();
     if (!this.config) {
       await this.initialize();
     }
-    
+
     // SECURITY: Validate path to prevent prototype pollution
     validatePropertyPath(path, 'path');
 
@@ -715,21 +949,21 @@ export class ConfigManager {
     // Set the value using secure property setter
     const lastKey = keys[keys.length - 1];
     safeSetProperty(current, lastKey, value);
-    
-    // Save the configuration
-    await this.saveConfig();
-    
+
+    // Persist to both stores (split + parallel save).
+    await this.persistMerged(userId, this.config!);
+
     logger.info('Configuration setting updated', {
       path,
       previousValue,
-      newValue: value
+      newValue: value,
     });
-    
+
     return {
       success: true,
       message: `Setting '${path}' updated successfully`,
       previousValue,
-      newValue: value
+      newValue: value,
     };
   }
 
@@ -756,75 +990,11 @@ export class ConfigManager {
     return clientIdPattern.test(clientId);
   }
 
-  /**
-   * Save configuration to file
-   */
-  private async saveConfig(): Promise<void> {
-    if (!this.config) {
-      throw new Error('No configuration to save');
-    }
-    
-    try {
-      // Create backup of existing config
-      if (await this.configExists()) {
-        await this.fileOperations.copyFile(this.configPath, this.backupPath, {
-          source: 'ConfigManager.saveConfig'
-        });
-      }
-
-      // Convert to YAML
-      // Note: We use js-yaml's dump() for pure YAML output (no frontmatter markers)
-      // This creates a standard YAML file, not a markdown file with frontmatter
-      const yamlContent = yaml.dump(this.config, {
-        indent: 2,
-        lineWidth: 120,
-        noRefs: true,
-        sortKeys: false
-        // Using default schema (not FAILSAFE) for dump to preserve types like booleans
-      });
-
-      // Write atomically with proper permissions (0o600 = owner read/write only)
-      const tempPath = `${this.configPath}.tmp`;
-      await this.fileOperations.writeFile(tempPath, yamlContent, {
-        source: 'ConfigManager.saveConfig'
-      });
-      await this.fileOperations.chmod(tempPath, 0o600, {
-        source: 'ConfigManager.saveConfig'
-      });
-      await this.fileOperations.renameFile(tempPath, this.configPath);
-      
-      logger.debug('Configuration saved successfully');
-      
-      // Log audit event for configuration update
-      logger.debug('Configuration update audit', {
-        event: 'CONFIG_UPDATED',
-        source: 'ConfigManager.saveConfig',
-        timestamp: new Date().toISOString()
-      });
-      
-    } catch (error) {
-      logger.error('Failed to save configuration', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      
-      // Try to restore backup
-      if (await this.backupExists()) {
-        await this.fileOperations.copyFile(this.backupPath, this.configPath, {
-          source: 'ConfigManager.saveConfig'
-        });
-        logger.info('Restored configuration from backup');
-      }
-      
-      throw error;
-    }
-  }
-
-  /**
-   * Check if backup exists
-   */
-  private async backupExists(): Promise<boolean> {
-    return this.fileOperations.exists(this.backupPath);
-  }
+  // Removed in Phase 4.5: saveConfig() and backupExists() — file persistence
+  // is now handled by the injected IOperatorConfigStore + IUserConfigStore
+  // (see persistMerged()). The previous file-write+temp-file+backup pattern
+  // moved into the FilesystemImpl of each store, where atomic writes and
+  // backup behavior are unified across all storage domains.
 
   /**
    * Fix incorrect types in config (e.g., string booleans, string "null")
@@ -1091,8 +1261,9 @@ export class ConfigManager {
    * Now: Validates keys against forbidden properties before assignment
    */
   public async resetConfig(section?: string): Promise<ConfigActionResult> {
+    const userId = this.resolveUserId();
     const defaults = this.getDefaultConfig();
-    
+
     if (section) {
       // Reset specific section
       if (!this.config) {
@@ -1114,21 +1285,21 @@ export class ConfigManager {
         // SECURITY: Use secure property setter to avoid prototype chain pollution
         safeSetProperty(current, lastKey, defaultSection[lastKey]);
       }
-      
-      await this.saveConfig();
-      
+
+      await this.persistMerged(userId, this.config!);
+
       return {
         success: true,
-        message: `Section '${section}' reset to defaults`
+        message: `Section '${section}' reset to defaults`,
       };
     } else {
       // Reset entire config
       this.config = defaults;
-      await this.saveConfig();
-      
+      await this.persistMerged(userId, defaults);
+
       return {
         success: true,
-        message: 'Configuration reset to defaults'
+        message: 'Configuration reset to defaults',
       };
     }
   }
@@ -1196,13 +1367,13 @@ export class ConfigManager {
       
       // Merge with defaults
       this.config = this.mergeWithDefaults(parsed.data as Partial<DollhouseConfig>);
-      
-      // Save the imported config
-      await this.saveConfig();
-      
+
+      // Persist split across both stores
+      await this.persistMerged(this.resolveUserId(), this.config);
+
       return {
         success: true,
-        message: `Configuration imported from ${filePath}`
+        message: `Configuration imported from ${filePath}`,
       };
     } catch (error) {
       return {

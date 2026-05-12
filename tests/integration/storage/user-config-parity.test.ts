@@ -50,6 +50,7 @@ function makeConfig(overrides: Partial<UserConfig> = {}): Omit<UserConfig, 'upda
     collectionConfig: { auto_submit: false },
     autoActivateConfig: { personas: [] },
     sourcePriorityConfig: { order: ['local', 'github', 'collection'] },
+    userIdentityConfig: { username: 'testuser', email: 'test@example.com', display_name: 'Test User' },
     configVersion: 1,
     ...overrides,
   };
@@ -86,6 +87,7 @@ function runContractSuite(
       expect(result.collectionConfig).toEqual({});
       expect(result.autoActivateConfig).toEqual({});
       expect(result.sourcePriorityConfig).toEqual({});
+      expect(result.userIdentityConfig).toEqual({});
       expect(result.configVersion).toBe(1);
     });
 
@@ -111,6 +113,7 @@ function runContractSuite(
       expect(loaded.collectionConfig).toEqual(cfg.collectionConfig);
       expect(loaded.autoActivateConfig).toEqual(cfg.autoActivateConfig);
       expect(loaded.sourcePriorityConfig).toEqual(cfg.sourcePriorityConfig);
+      expect(loaded.userIdentityConfig).toEqual(cfg.userIdentityConfig);
     });
 
     it('updatedAt is populated by save()', async () => {

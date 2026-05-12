@@ -104,27 +104,24 @@ export class DollhouseMCPServer implements IToolHandler {
       tools: {},
     };
 
-    // Check if resources should be advertised
-    // This is a future-proof implementation - resources are opt-in
+    // Check if resources should be advertised. Resources are opt-in.
+    //
+    // Phase 4.5: this runs before the DI container exists, so we can't
+    // resolve a real ConfigManager (which now requires async-constructed
+    // stores). Instead we peek the YAML file directly. In DB-backend mode
+    // the file doesn't exist and we get the safe default (false) — operators
+    // wanting advertise=true in DB mode would set it post-startup via the
+    // dollhouse_config tool, then restart for the capability to take effect.
     try {
-      // Initialize ConfigManager to check resource settings
-      // Note: Config may not be fully initialized yet, so we check synchronously
-      // If config is not initialized, defaults (advertise_resources: false) apply
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const configManager = new ConfigManager(fileOperations, os);
-      const resourcesConfig = configManager.getSetting<any>('elements.enhanced_index.resources');
-
-      if (resourcesConfig?.advertise_resources === true) {
+      if (ConfigManager.peekResourcesAdvertiseFlag()) {
         capabilities.resources = {};
         logger.info('[DollhouseMCP] MCP Resources capability advertised (enabled via config)');
       } else {
         logger.info('[DollhouseMCP] MCP Resources capability NOT advertised (disabled by default)');
       }
     } catch (error) {
-      // Config not initialized yet - use safe default (no resources)
       const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.debug(`[DollhouseMCP] Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
+      logger.debug(`[DollhouseMCP] Resources capability disabled by default: ${errorMessage}`);
     }
 
     this.server = new Server(

@@ -91,7 +91,19 @@ let configManager: InstanceType<typeof ConfigModule.ConfigManager>;
       renameFile: jest.fn().mockImplementation((oldPath: string, newPath: string) => mockRename(oldPath, newPath)),
     } as any;
 
-    configManager = new ConfigModule.ConfigManager(mockFileOperations, os as any);
+    // Phase 4.5: ConfigManager now requires injected stores. Use in-memory
+    // ones so the test stays isolated from disk + DB.
+    const { InMemoryOperatorConfigStore } = await import('../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js');
+    const { InMemoryUserConfigStore } = await import('../../../src/storage/userConfig/InMemoryUserConfigStore.js');
+    const operatorStore = new InMemoryOperatorConfigStore();
+    const userStore = new InMemoryUserConfigStore();
+    configManager = new ConfigModule.ConfigManager(
+      mockFileOperations,
+      os as any,
+      operatorStore,
+      userStore,
+      null,
+    );
     await configManager.initialize();
   });
 

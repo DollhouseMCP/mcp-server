@@ -52,6 +52,13 @@ export interface UserConfig {
   autoActivateConfig: Record<string, unknown>;
   /** `source_priority` (element source preference order). */
   sourcePriorityConfig: Record<string, unknown>;
+  /**
+   * `user.*` (operator-set / wizard-captured identity).
+   * Distinct from `users.username/email/displayName` which is the OAuth-
+   * canonical identity. ConfigManager exposes both at the `user.*` config
+   * path; the wizard writes here, OAuth populates the canonical fields.
+   */
+  userIdentityConfig: Record<string, unknown>;
   /** ConfigManager's config-file schema version; used by migration code. */
   configVersion: number;
   /** Epoch ms of the most recent write; populated by `save()`. */
@@ -73,6 +80,7 @@ export const DEFAULT_USER_CONFIG: UserConfig = Object.freeze({
   collectionConfig: {},
   autoActivateConfig: {},
   sourcePriorityConfig: {},
+  userIdentityConfig: {},
   configVersion: 1,
   updatedAt: 0,
 });

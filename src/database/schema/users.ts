@@ -44,6 +44,10 @@ export const userSettings = pgTable('user_settings', {
   collectionConfig: jsonb('collection_config').notNull().default({}),
   autoActivateConfig: jsonb('auto_activate_config').notNull().default({}),
   sourcePriorityConfig: jsonb('source_priority_config').notNull().default({}),
+  // Phase 4.5 / Phase G addendum: holds ConfigManager's `user.*` section
+  // (operator-set / wizard-captured identity). Distinct from users.username
+  // / users.email which is the OAuth-canonical identity.
+  userIdentityConfig: jsonb('user_identity_config').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 });

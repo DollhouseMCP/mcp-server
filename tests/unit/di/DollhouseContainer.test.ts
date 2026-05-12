@@ -7,7 +7,7 @@ describe('DollhouseContainer', () => {
     expect(container).toBeDefined();
   });
 
-  it('should register and resolve services', () => {
+  it('should register and resolve services', async () => {
     const container = new DollhouseContainer();
 
     // Test that core services are registered
@@ -16,6 +16,15 @@ describe('DollhouseContainer', () => {
 
     const collectionCache = container.resolve('CollectionCache');
     expect(collectionCache).toBeDefined();
+
+    // Phase 4.5: ConfigManager now depends on OperatorConfigStore +
+    // UserConfigStore, which are async-registered by StorageServiceRegistrar
+    // in preparePortfolio. Register them inline here so this unit test
+    // doesn't have to invoke the full preparePortfolio bootstrap.
+    const { InMemoryOperatorConfigStore } = await import('../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js');
+    const { InMemoryUserConfigStore } = await import('../../../src/storage/userConfig/InMemoryUserConfigStore.js');
+    container.register('OperatorConfigStore', () => new InMemoryOperatorConfigStore());
+    container.register('UserConfigStore', () => new InMemoryUserConfigStore());
 
     const configManager = container.resolve('ConfigManager');
     expect(configManager).toBeDefined();

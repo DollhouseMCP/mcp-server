@@ -66,13 +66,33 @@ export class CoreInfraServiceRegistrar {
       container.resolve('FileOperationsService'),
       { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },
     ));
-    container.register('ConfigManager', () => new ConfigManager(
-      container.resolve('FileOperationsService'),
-      os,
-      container.hasRegistration('PathService')
-        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('config')
-        : undefined,
-    ));
+    // Phase 4.5: ConfigManager is now a façade over IOperatorConfigStore +
+    // IUserConfigStore. The stores are async-registered in StorageServiceRegistrar
+    // (Container.preparePortfolio invokes that BEFORE consumers resolve
+    // ConfigManager), so by the time this factory fires they're available.
+    //
+    // ContextTracker is registered later by SecurityServiceRegistrar; same
+    // ordering — it's available when this factory actually fires.
+    //
+    // defaultUserId: in DB mode this should be the bootstrapped OS-user UUID
+    // from src/database/bootstrap.ts (resolvable via 'BootstrappedUserId' if
+    // a future Phase J registers one). For now we fall back to the
+    // DEFAULT_SYSTEM_USER_ID sentinel — operator reads work fine; per-user
+    // writes from system context fail FK in DB mode (intentional).
+    container.register('ConfigManager', () => {
+      const operatorStore = container.resolve<import('../../storage/operatorConfig/IOperatorConfigStore.js').IOperatorConfigStore>('OperatorConfigStore');
+      const userStore = container.resolve<import('../../storage/userConfig/IUserConfigStore.js').IUserConfigStore>('UserConfigStore');
+      const contextTracker = container.hasRegistration('ContextTracker')
+        ? container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        : null;
+      return new ConfigManager(
+        container.resolve('FileOperationsService'),
+        os,
+        operatorStore,
+        userStore,
+        contextTracker,
+      );
+    });
     // Issue #51: Generic retention policy service with strategy pattern
     container.register('RetentionPolicyService', () => {
       const service = new RetentionPolicyService(container.resolve('ConfigManager'));

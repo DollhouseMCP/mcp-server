@@ -35,6 +35,7 @@ export class InMemoryUserConfigStore implements IUserConfigStore {
       collectionConfig: { ...config.collectionConfig },
       autoActivateConfig: { ...config.autoActivateConfig },
       sourcePriorityConfig: { ...config.sourcePriorityConfig },
+      userIdentityConfig: { ...config.userIdentityConfig },
       configVersion: config.configVersion,
       updatedAt: Date.now(),
     });
@@ -52,6 +53,7 @@ function cloneConfig(c: UserConfig): UserConfig {
     collectionConfig: { ...c.collectionConfig },
     autoActivateConfig: { ...c.autoActivateConfig },
     sourcePriorityConfig: { ...c.sourcePriorityConfig },
+    userIdentityConfig: { ...c.userIdentityConfig },
     configVersion: c.configVersion,
     updatedAt: c.updatedAt,
   };

@@ -77,6 +77,7 @@ export class FilesystemUserConfigStore implements IUserConfigStore {
       collectionConfig: config.collectionConfig,
       autoActivateConfig: config.autoActivateConfig,
       sourcePriorityConfig: config.sourcePriorityConfig,
+      userIdentityConfig: config.userIdentityConfig,
       configVersion: config.configVersion,
       updatedAt: Date.now(),
     };
@@ -114,6 +115,7 @@ function cloneDefault(): UserConfig {
     collectionConfig: { ...DEFAULT_USER_CONFIG.collectionConfig },
     autoActivateConfig: { ...DEFAULT_USER_CONFIG.autoActivateConfig },
     sourcePriorityConfig: { ...DEFAULT_USER_CONFIG.sourcePriorityConfig },
+    userIdentityConfig: { ...DEFAULT_USER_CONFIG.userIdentityConfig },
     configVersion: DEFAULT_USER_CONFIG.configVersion,
     updatedAt: DEFAULT_USER_CONFIG.updatedAt,
   };
@@ -134,6 +136,7 @@ function isUserConfig(value: unknown): value is UserConfig {
     && isPlainObject(v.collectionConfig)
     && isPlainObject(v.autoActivateConfig)
     && isPlainObject(v.sourcePriorityConfig)
+    && isPlainObject(v.userIdentityConfig)
   );
 }
 

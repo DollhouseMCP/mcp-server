@@ -113,6 +113,13 @@
       "when": 1778930000000,
       "tag": "0015_auth_signing_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1778940000000,
+      "tag": "0016_user_identity_config",
+      "breakpoints": true
     }
   ]
 }

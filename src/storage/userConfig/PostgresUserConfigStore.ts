@@ -48,6 +48,7 @@ interface UserSettingsRow {
   collectionConfig: unknown;
   autoActivateConfig: unknown;
   sourcePriorityConfig: unknown;
+  userIdentityConfig: unknown;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -85,6 +86,7 @@ export class PostgresUserConfigStore implements IUserConfigStore {
       collectionConfig: config.collectionConfig,
       autoActivateConfig: config.autoActivateConfig,
       sourcePriorityConfig: config.sourcePriorityConfig,
+      userIdentityConfig: config.userIdentityConfig,
       updatedAt: now,
     };
 
@@ -104,6 +106,7 @@ export class PostgresUserConfigStore implements IUserConfigStore {
             collectionConfig: writeRow.collectionConfig,
             autoActivateConfig: writeRow.autoActivateConfig,
             sourcePriorityConfig: writeRow.sourcePriorityConfig,
+            userIdentityConfig: writeRow.userIdentityConfig,
             updatedAt: writeRow.updatedAt,
           },
         });
@@ -122,6 +125,7 @@ function cloneDefault(): UserConfig {
     collectionConfig: { ...DEFAULT_USER_CONFIG.collectionConfig },
     autoActivateConfig: { ...DEFAULT_USER_CONFIG.autoActivateConfig },
     sourcePriorityConfig: { ...DEFAULT_USER_CONFIG.sourcePriorityConfig },
+    userIdentityConfig: { ...DEFAULT_USER_CONFIG.userIdentityConfig },
     configVersion: DEFAULT_USER_CONFIG.configVersion,
     updatedAt: DEFAULT_USER_CONFIG.updatedAt,
   };
@@ -138,6 +142,7 @@ function rowToConfig(row: UserSettingsRow): UserConfig {
     collectionConfig: coerceObject(row.collectionConfig),
     autoActivateConfig: coerceObject(row.autoActivateConfig),
     sourcePriorityConfig: coerceObject(row.sourcePriorityConfig),
+    userIdentityConfig: coerceObject(row.userIdentityConfig),
     // The schema stores configVersion implicitly as the schema version
     // of the user_settings table itself — no per-row column. Map to the
     // default; future migrations may add a per-row config_version column

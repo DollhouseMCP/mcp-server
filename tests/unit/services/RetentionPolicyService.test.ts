@@ -120,8 +120,16 @@ describe('RetentionPolicyService', () => {
     const fileLockManager = new FileLockManager();
     fileOperations = new FileOperationsService(fileLockManager);
 
-    // Initialize config manager with test directory
-    configManager = new ConfigManager(fileOperations, os);
+    // Initialize config manager with in-memory stores (Phase 4.5).
+    const { InMemoryOperatorConfigStore } = await import('../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js');
+    const { InMemoryUserConfigStore } = await import('../../../src/storage/userConfig/InMemoryUserConfigStore.js');
+    configManager = new ConfigManager(
+      fileOperations,
+      os,
+      new InMemoryOperatorConfigStore(),
+      new InMemoryUserConfigStore(),
+      null,
+    );
     await configManager.initialize();
 
     // Create service
