@@ -111,12 +111,20 @@ export class IndexingServiceRegistrar {
       container.resolve('FileOperationsService')
     ));
 
-    container.register('CollectionIndexCache', () => new CollectionIndexCache(
-      container.resolve('GitHubClient'),
-      process.cwd(),
-      container.resolve('PerformanceMonitor'),
-      container.resolve('FileOperationsService')
-    ));
+    // Phase 4.5: when SharedCacheStore is registered (StorageServiceRegistrar
+    // runs before us in preparePortfolio), inject it so the cache routes
+    // through the store backend (filesystem or postgres). Falls back to the
+    // legacy direct-file path under cwd/.dollhousemcp/cache/ when the store
+    // isn't registered (e.g. unit-test containers that skip the full bootstrap).
+    container.register('CollectionIndexCache', () => new CollectionIndexCache({
+      githubClient: container.resolve('GitHubClient'),
+      baseDir: process.cwd(),
+      performanceMonitor: container.resolve('PerformanceMonitor'),
+      fileOperations: container.resolve('FileOperationsService'),
+      cache: container.hasRegistration('SharedCacheStore')
+        ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
+        : undefined,
+    }));
 
     container.register('UnifiedIndexManager', () => new UnifiedIndexManager({
       portfolioIndexManager: container.resolve('PortfolioIndexManager'),
