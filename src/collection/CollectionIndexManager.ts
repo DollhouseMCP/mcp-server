@@ -36,6 +36,15 @@ export interface CollectionIndexManagerConfig {
   /** Override the collection index URL. When set, fetches from this URL
    *  instead of the default DollhouseMCP GitHub Pages index. */
   indexUrl?: string;
+  /**
+   * Phase 4.5: optional shared cache store. When provided, all
+   * load/save/clear of the collection-index cache routes through it
+   * (postgres-backed in DB mode, filesystem-backed otherwise — both
+   * configured via DOLLHOUSE_STORAGE_BACKEND). When omitted, falls
+   * back to the legacy direct-file path at `<cacheDir>/collection-index.json`.
+   * Injected by CollectionServiceRegistrar from the DI container.
+   */
+  cache?: import('../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore;
 }
 
 export class CollectionIndexManager {
@@ -61,8 +70,17 @@ export class CollectionIndexManager {
   private readonly REFRESH_THRESHOLD = 0.8; // Refresh when 80% of TTL has passed
   private readonly JITTER_FACTOR = 0.25; // ±25% randomness for jitter
 
-  // File operations service for secure file I/O
+  // File operations service for secure file I/O (legacy path)
   private readonly fileOperations: IFileOperationsService;
+
+  // Phase 4.5: when set, takes precedence over fileOperations for cache I/O.
+  // null = legacy file-based path; non-null = store-backed (filesystem or postgres
+  // selected by the store factory's env-driven backend pick).
+  private readonly sharedCache: import('../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore | null;
+
+  // Stable cache key for the collection index — single-blob model, only
+  // one entry at this key in the shared_cache table.
+  private static readonly CACHE_KEY = 'collection-index';
 
   // Default configuration constants
   private readonly DEFAULT_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -85,15 +103,20 @@ export class CollectionIndexManager {
     // Initialize file operations service
     this.fileOperations = config.fileOperations;
 
+    // Phase 4.5: store-backed cache when injected; otherwise legacy file path.
+    this.sharedCache = config.cache ?? null;
+
     // Cache directory - use ~/.dollhouse/cache/collection-index.json as specified
+    // (legacy path; only used when sharedCache is null).
     const cacheDir = config.cacheDir || path.join(os.homedir(), '.dollhouse', 'cache');
     this.CACHE_FILE = path.join(cacheDir, 'collection-index.json');
 
     logger.debug('CollectionIndexManager initialized', {
       ttlMs: this.TTL_MS,
       fetchTimeoutMs: this.FETCH_TIMEOUT_MS,
-      cacheFile: this.CACHE_FILE,
-      maxRetries: this.MAX_RETRIES
+      cacheFile: this.sharedCache ? `(store: ${CollectionIndexManager.CACHE_KEY})` : this.CACHE_FILE,
+      maxRetries: this.MAX_RETRIES,
+      cacheBackend: this.sharedCache ? 'shared-cache-store' : 'filesystem-direct',
     });
   }
   
@@ -462,54 +485,103 @@ export class CollectionIndexManager {
   }
   
   /**
-   * Load cache from disk
+   * Load cache from the shared-cache store (if injected) or legacy disk
+   * file (fallback). Common validation/checksum logic in a helper after
+   * the dispatch.
    */
   private async loadFromDisk(): Promise<void> {
-    try {
-      const data = await this.fileOperations.readFile(this.CACHE_FILE, {
-        source: 'CollectionIndexManager.loadFromDisk'
-      });
-      const cached = JSON.parse(data) as CollectionIndexCacheEntry;
+    let cached: CollectionIndexCacheEntry | null = null;
 
-      // Validate cache structure
-      if (!cached.data || !cached.timestamp || !cached.version) {
-        logger.debug('Invalid cache structure, ignoring');
+    if (this.sharedCache) {
+      try {
+        const entry = await this.sharedCache.get(CollectionIndexManager.CACHE_KEY);
+        if (entry) {
+          // Map SharedCacheEntry → CollectionIndexCacheEntry. payload is the
+          // CollectionIndex; fetchedAt becomes timestamp; HTTP-conditional
+          // fields and version/checksum are preserved verbatim.
+          cached = {
+            data: entry.payload as CollectionIndex,
+            timestamp: entry.fetchedAt,
+            etag: entry.etag,
+            lastModified: entry.lastModified,
+            version: entry.version ?? 'unknown',
+            checksum: entry.checksum ?? '',
+          };
+        }
+      } catch (error) {
+        logger.debug('Failed to load cache from shared store', { error: this.getErrorMessage(error) });
+      }
+    } else {
+      try {
+        const data = await this.fileOperations.readFile(this.CACHE_FILE, {
+          source: 'CollectionIndexManager.loadFromDisk',
+        });
+        cached = JSON.parse(data) as CollectionIndexCacheEntry;
+      } catch (error) {
+        if ((error as any).code !== 'ENOENT') {
+          logger.debug('Failed to load cache from disk', { error: this.getErrorMessage(error) });
+        }
         return;
       }
+    }
 
-      // Verify checksum if available
-      if (cached.checksum) {
-        const expectedChecksum = this.calculateChecksum(cached.data);
-        if (cached.checksum !== expectedChecksum) {
-          logger.debug('Cache checksum mismatch, ignoring cached data');
-          return;
-        }
-      }
+    if (!cached) return;
 
-      this.cachedIndex = cached;
+    // Validate cache structure
+    if (!cached.data || !cached.timestamp || !cached.version) {
+      logger.debug('Invalid cache structure, ignoring');
+      return;
+    }
 
-      const age = Date.now() - cached.timestamp;
-      const isExpired = age > this.TTL_MS;
-
-      logger.debug('Loaded collection index from disk cache', {
-        version: cached.version,
-        age: Math.round(age / 1000),
-        isExpired,
-        totalElements: cached.data.total_elements
-      });
-
-    } catch (error) {
-      if ((error as any).code !== 'ENOENT') {
-        logger.debug('Failed to load cache from disk', { error: this.getErrorMessage(error) });
+    // Verify checksum if available
+    if (cached.checksum) {
+      const expectedChecksum = this.calculateChecksum(cached.data);
+      if (cached.checksum !== expectedChecksum) {
+        logger.debug('Cache checksum mismatch, ignoring cached data');
+        return;
       }
     }
+
+    this.cachedIndex = cached;
+
+    const age = Date.now() - cached.timestamp;
+    const isExpired = age > this.TTL_MS;
+
+    logger.debug('Loaded collection index from cache', {
+      backend: this.sharedCache ? 'store' : 'disk',
+      version: cached.version,
+      age: Math.round(age / 1000),
+      isExpired,
+      totalElements: cached.data.total_elements,
+    });
   }
-  
+
   /**
-   * Save cache to disk
+   * Save cache to the shared-cache store (if injected) or legacy disk
+   * file (fallback).
    */
   private async saveToDisk(): Promise<void> {
     if (!this.cachedIndex) return;
+
+    if (this.sharedCache) {
+      try {
+        await this.sharedCache.set({
+          cacheKey: CollectionIndexManager.CACHE_KEY,
+          payload: this.cachedIndex.data,
+          etag: this.cachedIndex.etag,
+          lastModified: this.cachedIndex.lastModified,
+          version: this.cachedIndex.version,
+          checksum: this.cachedIndex.checksum,
+          // expiresAt drives the optional sweep — TTL_MS past fetched-now.
+          expiresAt: this.cachedIndex.timestamp + this.TTL_MS,
+        });
+        logger.debug('Collection index cache saved to shared store');
+      } catch (error) {
+        logger.debug('Failed to save cache to shared store', { error: this.getErrorMessage(error) });
+        // Don't throw — cache persistence failures shouldn't break functionality
+      }
+      return;
+    }
 
     try {
       // Ensure cache directory exists
@@ -517,7 +589,7 @@ export class CollectionIndexManager {
 
       const cacheData = JSON.stringify(this.cachedIndex, null, this.JSON_INDENT);
       await this.fileOperations.writeFile(this.CACHE_FILE, cacheData, {
-        source: 'CollectionIndexManager.saveToDisk'
+        source: 'CollectionIndexManager.saveToDisk',
       });
 
       logger.debug('Collection index cache saved to disk');
@@ -620,9 +692,19 @@ export class CollectionIndexManager {
     this.cachedIndex = null;
     this.circuitBreakerFailures = 0;
 
+    if (this.sharedCache) {
+      try {
+        await this.sharedCache.delete(CollectionIndexManager.CACHE_KEY);
+        logger.debug('Collection index cache cleared from shared store');
+      } catch (error) {
+        logger.debug('Failed to clear cache from shared store', { error: this.getErrorMessage(error) });
+      }
+      return;
+    }
+
     try {
       await this.fileOperations.deleteFile(this.CACHE_FILE, undefined, {
-        source: 'CollectionIndexManager.clearCache'
+        source: 'CollectionIndexManager.clearCache',
       });
       logger.debug('Collection index cache file deleted');
     } catch (error) {

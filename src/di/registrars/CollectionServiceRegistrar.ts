@@ -55,9 +55,17 @@ export class CollectionServiceRegistrar {
     ));
 
     // CollectionIndexManager's index URL is overridable via DOLLHOUSE_COLLECTION_URL.
+    // Phase 4.5: when SharedCacheStore is registered (StorageServiceRegistrar runs
+    // before us in preparePortfolio), inject it so the cache routes through the
+    // store backend (filesystem or postgres). Falls back to the legacy direct-file
+    // path when the store isn't registered (e.g. in unit-test containers that
+    // skip the full bootstrap).
     container.register('CollectionIndexManager', () => new CollectionIndexManager({
       fileOperations: container.resolve('FileOperationsService'),
       indexUrl: env.DOLLHOUSE_COLLECTION_URL,
+      cache: container.hasRegistration('SharedCacheStore')
+        ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
+        : undefined,
     }));
 
     container.register('CollectionBrowser', () => new CollectionBrowser(
