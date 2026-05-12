@@ -107,7 +107,13 @@ export class ElementManagerServiceRegistrar {
     container.register('MigrationManager', () => new MigrationManager(
       container.resolve('PortfolioManager'),
       container.resolve('FileLockManager'),
-      container.resolve('FileOperationsService')
+      container.resolve('FileOperationsService'),
+      // Phase 4.5 follow-up: route the v1→v2 legacy-persona migration
+      // through the storage-layer factory so DB-mode upgraders land their
+      // migrated personas in Postgres rather than the filesystem.
+      container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     ));
 
     // BACKUP SERVICE (Issue #659: Universal backup for all element types)

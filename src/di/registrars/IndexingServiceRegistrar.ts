@@ -150,6 +150,11 @@ export class IndexingServiceRegistrar {
       downloader: container.resolve('PortfolioDownloader'),
       fileOperations: container.resolve('FileOperationsService'),
       tokenManager: container.resolve('TokenManager'),
+      // Phase 4.5 follow-up: route pulls through the storage-layer factory
+      // so DB-mode deployments persist to Postgres instead of tmpfs.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
 
     container.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(container.resolve<APICache>('APICache'), {
@@ -168,7 +173,12 @@ export class IndexingServiceRegistrar {
       portfolioRepoManager: container.resolve('PortfolioRepoManager'),
       indexer: container.resolve('GitHubPortfolioIndexer'),
       fileOperations: container.resolve('FileOperationsService'),
-      tokenManager: container.resolve('TokenManager')
+      tokenManager: container.resolve('TokenManager'),
+      // Phase 4.5 follow-up: route sync downloads through the storage-layer
+      // factory so DB-mode deployments persist to Postgres.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
   }
 }
