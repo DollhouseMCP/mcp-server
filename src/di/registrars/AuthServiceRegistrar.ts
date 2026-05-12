@@ -63,6 +63,13 @@ export class AuthServiceRegistrar {
     const signingKeyStore = await createSigningKeyStore({ database });
     container.register('SigningKeyStore', () => signingKeyStore);
 
+    // Phase I: forward the store into createAuthProvider so
+    // EmbeddedAuthorizationServer's load + rotate paths route through it.
+    // When DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem (or unset), this is
+    // a filesystem-backed store; the AS still routes through it (one file
+    // backend instead of file-direct in persistKeys/cookieSecret), so the
+    // dual-mode behavior is uniform across deployments.
+
     const provider = await createAuthProvider({
       enabled: true,
       provider: env.DOLLHOUSE_AUTH_PROVIDER,
@@ -77,6 +84,9 @@ export class AuthServiceRegistrar {
       database,
       // Cycle 19 / security-#6: opt-in OIDC-bridge typ enforcement.
       oidcRequireAccessTokenTyp: env.DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP,
+      // Phase 4.5: signing key store (filesystem or postgres backend
+      // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
+      signingKeyStore,
     });
 
     if (!provider) return;

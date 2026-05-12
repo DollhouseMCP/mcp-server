@@ -76,6 +76,13 @@ export interface AuthConfig {
    * don't stamp typ). Forwarded to `OidcAuthProvider`.
    */
   oidcRequireAccessTokenTyp?: boolean;
+  /**
+   * Phase 4.5: optional injected ISigningKeyStore. When present (DB mode
+   * with the store registered by AuthServiceRegistrar), JWKS + cookie
+   * keys persist via the store instead of the legacy filesystem path.
+   * Forwarded to EmbeddedAuthorizationServer; ignored by other providers.
+   */
+  signingKeyStore?: import('../storage/signingKeys/ISigningKeyStore.js').ISigningKeyStore;
 }
 
 /**
@@ -262,6 +269,10 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       keyFilePath: config.localKeyFile,
       methods: builtMethods,
       storage,
+      // Phase 4.5: forwarded by AuthServiceRegistrar in DB mode; undefined
+      // in filesystem mode → EmbeddedAuthorizationServer falls back to
+      // the legacy persistKeys / cookieSecret file paths.
+      signingKeyStore: config.signingKeyStore,
     });
   }
 

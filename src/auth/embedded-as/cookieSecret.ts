@@ -18,10 +18,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
+import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
 
 /**
  * Resolves to `<run-dir>/cookie-signing-secret.bin`. The run directory is
@@ -140,4 +141,79 @@ export function rotateCookieSecret(
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
+}
+
+// ─── Phase 4.5: store-backed companions ─────────────────────────────────
+//
+// Same dual-mode pattern as `persistKeys` — when EmbeddedAuthorizationServer
+// is constructed with a `signingKeyStore`, these store-backed paths replace
+// the file-based ones above.
+//
+// Env override (`DOLLHOUSE_COOKIE_SIGNING_SECRET`) still wins over the store
+// — multi-instance deployments pin the secret via env and bypass per-instance
+// storage entirely. The store is the persistence layer for the
+// generate-on-first-start case.
+
+/**
+ * Store-backed equivalent of `loadOrGenerateCookieSigningKeys`. Reads the
+ * active 'cookie' kind from the store; generates + rotates a fresh one when
+ * none exists. Honors the env override before consulting the store.
+ */
+export async function loadOrGenerateCookieSigningKeysViaStore(
+  store: ISigningKeyStore,
+  options?: { envSecret?: string },
+): Promise<[string]> {
+  // Env override path — same precedence as the file-based variant.
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+  if (envSecret && envSecret.length > 0) {
+    const buf = Buffer.from(envSecret, 'hex');
+    if (buf.length < 32) {
+      throw new Error('DOLLHOUSE_COOKIE_SIGNING_SECRET must decode to at least 32 bytes (hex)');
+    }
+    return [buf.toString('base64')];
+  }
+
+  const active = await store.getActive('cookie');
+  if (active) {
+    const stored = active.payload as { secret: string };
+    if (typeof stored.secret === 'string' && stored.secret.length > 0) {
+      const buf = Buffer.from(stored.secret, 'base64');
+      if (buf.length >= 32) return [stored.secret];
+      logger.warn(`[cookieSecret] active key in store is shorter than 32 bytes; regenerating. ` +
+        `Any previous cookies signed with the prior key will be invalidated.`);
+    }
+  }
+
+  // Generate fresh + rotate atomically into the store.
+  const fresh = randomBytes(32);
+  const base64 = fresh.toString('base64');
+  await store.rotate({
+    kid: `cookie-${randomUUID()}`,
+    kind: 'cookie',
+    payload: { secret: base64, length: 32 },
+  });
+  return [base64];
+}
+
+/**
+ * Store-backed equivalent of `rotateCookieSecret`. Generates a fresh secret
+ * and atomically rotates it in.
+ *
+ * Honors the env override by NOT touching the store — when an env-supplied
+ * secret is present, rotation is the operator's responsibility (mirrors the
+ * file-based variant).
+ */
+export async function rotateCookieSecretViaStore(
+  store: ISigningKeyStore,
+  options?: { envSecret?: string },
+): Promise<void> {
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
+  if (envSecret) return;
+  const fresh = randomBytes(32);
+  await store.rotate({
+    kid: `cookie-${randomUUID()}`,
+    kind: 'cookie',
+    payload: { secret: fresh.toString('base64'), length: 32 },
+  });
+  logger.warn('[cookieSecret] Rotated cookie signing key in store — prior cookies invalidated');
 }

@@ -43,10 +43,18 @@ import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
   loadOrGenerateSigningJwks,
+  loadOrGenerateSigningJwksViaStore,
   rotateSigningKey,
+  rotateSigningKeyViaStore,
   type SigningKeyset,
 } from './persistKeys.js';
-import { loadOrGenerateCookieSigningKeys, rotateCookieSecret } from './cookieSecret.js';
+import {
+  loadOrGenerateCookieSigningKeys,
+  loadOrGenerateCookieSigningKeysViaStore,
+  rotateCookieSecret,
+  rotateCookieSecretViaStore,
+} from './cookieSecret.js';
+import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
 import {
   checkModeFingerprint,
   persistModeFingerprint,
@@ -179,6 +187,18 @@ export interface EmbeddedAuthorizationServerOptions {
    * to exercise the open-DCR code path without mutating env.
    */
   openDCR?: boolean;
+
+  /**
+   * Phase 4.5: optional injected ISigningKeyStore. When present,
+   * `initialize()` loads JWKS + cookie keys from the store (postgres- or
+   * filesystem-backed per `DOLLHOUSE_AUTH_STORAGE_BACKEND`) and the
+   * mode-fingerprint mismatch path rotates them via the store. When
+   * absent, falls back to the legacy file-based persistKeys / cookieSecret
+   * paths — same dual-mode pattern §8.1's auth K/V uses.
+   *
+   * Wired in by AuthServiceRegistrar from the DI-resolved 'SigningKeyStore'.
+   */
+  signingKeyStore?: ISigningKeyStore;
 }
 
 interface InitializedState {
@@ -203,6 +223,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly refreshRotationCheckIpUa: boolean;
   private readonly cookieSecretEnvOverride: string | undefined;
   private readonly openDCR: boolean;
+  private readonly signingKeyStore: ISigningKeyStore | null;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -236,6 +257,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
+    this.signingKeyStore = options.signingKeyStore ?? null;
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -865,7 +887,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // support, and an admin endpoint would need to drive the promotion.
     // The current shape is "rotate by restart with token invalidation,"
     // which is honest but not zero-downtime.
-    let keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
+    // Phase 4.5: load via store when injected, else legacy file path.
+    let keyset = this.signingKeyStore
+      ? await loadOrGenerateSigningJwksViaStore(this.signingKeyStore)
+      : await loadOrGenerateSigningJwks(this.keyFilePath);
 
     // must-fix #14: mode-switch invalidation. Delegate the read-compare-
     // persist dance to checkAndPersistModeFingerprint so this AS and any
@@ -873,7 +898,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // mode change?" the same way. On mismatch we rotate three things —
     // K/V state, cookie secret, AND the JWKS signing key — then re-
     // persist the fingerprint reflecting the post-rotation state.
-    let cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
+    let cookieKeys = this.signingKeyStore
+      ? await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride })
+      : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
 
     // Round 6 review fixup: when the operator opts into IP/UA-bound
     // rotation grace, the cookie key doubles as the HMAC salt for the
@@ -929,15 +956,25 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // as the initial load. Production callers don't set the override,
       // so this is a no-op outside tests.
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
-      rotateCookieSecret(undefined, { envSecret: this.cookieSecretEnvOverride });
-      cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
-      // Phase 9 H2/Q2: rotate the JWKS signing key too. Without this,
-      // stateless JWT access tokens issued before the mode change keep
-      // verifying until natural exp (1h), even though K/V was cleared
-      // and the cookie secret rotated. Deleting the keyfile + reloading
-      // mints a fresh kid; old tokens fail kid-match in validate().
-      await rotateSigningKey(this.keyFilePath);
-      keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
+      // Phase 4.5: rotate via store when injected, else legacy file path.
+      // The store's rotate() is atomic (mark-old-inactive + insert-new in one
+      // transaction); the file path is unlink + regenerate-on-next-load.
+      if (this.signingKeyStore) {
+        await rotateCookieSecretViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
+        cookieKeys = await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
+        await rotateSigningKeyViaStore(this.signingKeyStore);
+        keyset = await loadOrGenerateSigningJwksViaStore(this.signingKeyStore);
+      } else {
+        rotateCookieSecret(undefined, { envSecret: this.cookieSecretEnvOverride });
+        cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
+        // Phase 9 H2/Q2: rotate the JWKS signing key too. Without this,
+        // stateless JWT access tokens issued before the mode change keep
+        // verifying until natural exp (1h), even though K/V was cleared
+        // and the cookie secret rotated. Deleting the keyfile + reloading
+        // mints a fresh kid; old tokens fail kid-match in validate().
+        await rotateSigningKey(this.keyFilePath);
+        keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
+      }
       // Persist with the post-rotation cookie key + new kid so the
       // next boot sees a stable fingerprint that already reflects the
       // rotation. Done LAST so a crash before this point re-triggers

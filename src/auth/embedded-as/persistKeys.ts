@@ -22,6 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { exportJWK, generateKeyPair, type JWK } from 'jose';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
+import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
 
 const ALGORITHM = 'ES256';
 
@@ -128,4 +129,88 @@ export async function rotateSigningKey(keyFilePath: string): Promise<void> {
     if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     // Already absent — nothing to rotate. Next load mints fresh anyway.
   }
+}
+
+// ─── Phase 4.5: store-backed companions ─────────────────────────────────
+//
+// When `EmbeddedAuthorizationServer` is constructed with a `signingKeyStore`,
+// these store-backed paths replace the file-based ones above. Same external
+// contract (return SigningKeyset from load; void from rotate), different
+// persistence — drop-in.
+//
+// Key behavior preserved across both backends:
+//   - First start: generate a fresh ES256 keypair, persist, return.
+//   - Subsequent starts: load existing key, return.
+//   - Rotation (mode-fingerprint mismatch): atomically replace the active
+//     key with a fresh one. Old kid no longer publishes on /jwks; previously
+//     issued JWTs fail validation on next request (must-fix #14).
+
+/**
+ * Store-backed equivalent of `loadOrGenerateSigningJwks`. Reads the active
+ * 'jwks' kind from the injected store; generates + rotates a new one when
+ * none exists.
+ */
+export async function loadOrGenerateSigningJwksViaStore(
+  store: ISigningKeyStore,
+): Promise<SigningKeyset> {
+  const active = await store.getActive('jwks');
+  if (active) {
+    const stored = active.payload as unknown as StoredKeyPair;
+    if (stored.kid && stored.privateKey && stored.publicKey) {
+      logger.info(`[persistKeys] Loaded signing key from store (kid=${stored.kid})`);
+      return {
+        kid: stored.kid,
+        jwks: { keys: [{ ...stored.privateKey, kid: stored.kid, alg: ALGORITHM, use: 'sig' }] },
+      };
+    }
+    logger.warn('[persistKeys] active jwks key in store is malformed; regenerating. ' +
+      'All previously-issued tokens will fail validation.');
+  }
+
+  // Generate fresh + rotate atomically into the store.
+  const stored = await generateNewKeypair();
+  await store.rotate({
+    kid: stored.kid,
+    kind: 'jwks',
+    payload: stored as unknown as Record<string, unknown>,
+  });
+  logger.info(`[persistKeys] Generated new signing key in store (kid=${stored.kid})`);
+
+  return {
+    kid: stored.kid,
+    jwks: { keys: [{ ...stored.privateKey }] },
+  };
+}
+
+/**
+ * Store-backed equivalent of `rotateSigningKey`. Generates a fresh keypair
+ * and atomically rotates it in (marking the old active key inactive in the
+ * same transaction, per ISigningKeyStore's rotation invariant).
+ */
+export async function rotateSigningKeyViaStore(store: ISigningKeyStore): Promise<void> {
+  const stored = await generateNewKeypair();
+  await store.rotate({
+    kid: stored.kid,
+    kind: 'jwks',
+    payload: stored as unknown as Record<string, unknown>,
+  });
+  logger.warn('[persistKeys] Rotated signing key in store — old kid invalidated; ' +
+    `new kid=${stored.kid}`);
+}
+
+/**
+ * Internal helper — generates a fresh ES256 keypair and packs it in the
+ * StoredKeyPair shape both file and store backends use.
+ */
+async function generateNewKeypair(): Promise<StoredKeyPair> {
+  const { privateKey, publicKey } = await generateKeyPair(ALGORITHM, { extractable: true });
+  const kid = `dh-${randomUUID()}`;
+  const privateJwk = await exportJWK(privateKey);
+  const publicJwk = await exportJWK(publicKey);
+  return {
+    kid,
+    privateKey: { ...privateJwk, kid, alg: ALGORITHM },
+    publicKey: { ...publicJwk, kid, alg: ALGORITHM, use: 'sig' },
+    generatedAt: new Date().toISOString(),
+  };
 }

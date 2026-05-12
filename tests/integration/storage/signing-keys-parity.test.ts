@@ -324,6 +324,10 @@ describe('FilesystemSigningKeyStore — durable across instances', () => {
     const a = new FilesystemSigningKeyStore({ rootDir: dir });
     const k1 = makeJwksWrite();
     await a.rotate(k1);
+    // Brief delay to ensure k2.createdAt > k1.createdAt — Date.now() has
+    // millisecond resolution and back-to-back rotations can collide,
+    // making listByKind's sort-by-createdAt-desc indeterminate.
+    await new Promise((r) => setTimeout(r, 5));
     const k2 = makeJwksWrite();
     await a.rotate(k2);
 
