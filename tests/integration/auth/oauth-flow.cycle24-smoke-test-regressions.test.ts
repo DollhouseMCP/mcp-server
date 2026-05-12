@@ -39,7 +39,6 @@ import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/Triv
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import {
   type ASHarness,
-  CookieJar,
   followToCodeRedirect,
   startASHarness,
   startAuthorizeFlow,

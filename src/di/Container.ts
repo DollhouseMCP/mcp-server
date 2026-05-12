@@ -289,6 +289,36 @@ export class DollhouseContainer {
     const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
     await new StorageServiceRegistrar().bootstrapAndRegister(this);
 
+    // Phase 4.5 / Phase J: auto-migrate legacy ~/.dollhouse/config.yml +
+    // keyfiles into the new stores in DB mode on first startup. Idempotent
+    // via marker file; throws on partial-migration failure (Container halts
+    // startup with the error rather than running with half-migrated state).
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      const { runConfigToDatabaseMigration } = await import('../storage/migration/configToDatabase.js');
+      const userId = this.hasRegistration('BootstrappedUserId')
+        ? this.resolve<string>('BootstrappedUserId')
+        : null;
+      if (userId) {
+        const result = await runConfigToDatabaseMigration({
+          operatorStore: this.resolve('OperatorConfigStore'),
+          userStore: this.resolve('UserConfigStore'),
+          // SigningKeyStore is registered later by AuthServiceRegistrar; resolve
+          // it lazily by constructing a dedicated one here against the same DB.
+          signingKeyStore: await (await import('../storage/signingKeys/createSigningKeyStore.js')).createSigningKeyStore({
+            database: this.resolve('DatabaseInstance'),
+          }),
+          userId,
+        });
+        if (result.status === 'migrated') {
+          logger.info('[Container] Phase 4.5 legacy config migrated to database', {
+            configMigrated: result.configMigrated,
+            jwksMigrated: result.jwksMigrated,
+            cookieSecretMigrated: result.cookieSecretMigrated,
+          });
+        }
+      }
+    }
+
     // Unified auth (JWT) — feature-flag gated (default: off).
     // Must run after SecurityServiceRegistrar (ContextTracker) and
     // DatabaseServiceRegistrar (UserIdentityService).

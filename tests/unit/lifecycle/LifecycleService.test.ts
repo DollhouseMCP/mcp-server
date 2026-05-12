@@ -42,6 +42,49 @@ describe('LifecycleService (Issue #1948)', () => {
     });
   });
 
+  describe('registerPeriodicTask (Phase 4.5 / Phase J)', () => {
+    afterEach(() => {
+      service.dispose();
+    });
+
+    it('runs the registered task on the configured interval', async () => {
+      jest.useFakeTimers();
+      const task = jest.fn(async () => {});
+      service.registerPeriodicTask(60_000, task, 'test-task');
+      expect(task).not.toHaveBeenCalled();
+      jest.advanceTimersByTime(60_000);
+      expect(task).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(60_000);
+      expect(task).toHaveBeenCalledTimes(2);
+      jest.useRealTimers();
+    });
+
+    it('catches task errors so a single failure does not break the timer chain', async () => {
+      jest.useFakeTimers();
+      const task = jest.fn(async () => { throw new Error('boom'); });
+      service.registerPeriodicTask(1000, task, 'failing-task');
+      jest.advanceTimersByTime(1000);
+      // Drain microtasks so the catch handler runs.
+      await Promise.resolve();
+      expect(task).toHaveBeenCalledTimes(1);
+      // Next tick should still fire (timer chain not broken).
+      jest.advanceTimersByTime(1000);
+      await Promise.resolve();
+      expect(task).toHaveBeenCalledTimes(2);
+      jest.useRealTimers();
+    });
+
+    it('dispose() clears all registered timers', async () => {
+      jest.useFakeTimers();
+      const task = jest.fn(async () => {});
+      service.registerPeriodicTask(1000, task, 'cleared-task');
+      service.dispose();
+      jest.advanceTimersByTime(5000);
+      expect(task).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+  });
+
   describe('installErrorHandlers idempotency', () => {
     it('should register handlers on first call', () => {
       service.installErrorHandlers();

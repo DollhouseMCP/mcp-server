@@ -16,10 +16,8 @@
  * `DatabaseServiceRegistrar` (so `DatabaseInstance` is resolvable) and
  * any consumer that needs the stores.
  *
- * **TODO (Phase J)**: register periodic-sweeper timers via
- * `LifecycleService.registerPeriodicTask` once that helper exists. For
- * now `shared_cache.expires_at < NOW()` rows accumulate until manually
- * pruned; bounded by operator-driven traffic, not user-driven.
+ * Registers a 1-hour periodic sweeper for `SharedCacheStore.sweepExpired`
+ * via `LifecycleService.registerPeriodicTask`.
  *
  * @module di/registrars/StorageServiceRegistrar
  */
@@ -54,6 +52,28 @@ export class StorageServiceRegistrar {
     container.register('OperatorConfigStore', () => operatorConfig);
     container.register('UserConfigStore', () => userConfig);
     container.register('SharedCacheStore', () => sharedCache);
+
+    // Phase 4.5 / Phase J: sweep expired shared-cache entries hourly.
+    // Filesystem + in-memory implementations no-op when nothing's expired;
+    // postgres deletes any rows where expires_at < NOW(). Without this,
+    // collection-index entries (and any future cached blobs) linger
+    // indefinitely after their TTL.
+    if (container.hasRegistration('LifecycleService')) {
+      const lifecycle = container.resolve<{
+        registerPeriodicTask(intervalMs: number, fn: () => Promise<void>, label: string): unknown;
+      }>('LifecycleService');
+      const ONE_HOUR_MS = 60 * 60 * 1000;
+      lifecycle.registerPeriodicTask(
+        ONE_HOUR_MS,
+        async () => {
+          const removed = await sharedCache.sweepExpired();
+          if (removed > 0) {
+            logger.debug(`[StorageServiceRegistrar] Swept ${removed} expired shared-cache entries`);
+          }
+        },
+        'sharedCache.sweepExpired',
+      );
+    }
 
     logger.info('[StorageServiceRegistrar] Phase 4.5 stores registered', {
       backend: database ? 'postgres' : 'filesystem-or-memory',

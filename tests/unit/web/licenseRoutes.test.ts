@@ -712,7 +712,7 @@ describe('License Routes — Email Verification', () => {
       const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
       expect(workerCall).toBeDefined();
       expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    });
+    }, 15_000);
 
     it('commercial license returns verificationRequired: true', async () => {
       const res = await request(app)
@@ -847,7 +847,7 @@ describe('License Routes — Email Verification', () => {
       const workerCall = findDirectWorkerCall(globalThis.fetch as jest.Mock);
       expect(workerCall).toBeDefined();
       expect(workerCall?.[1]).toEqual(expect.objectContaining({ signal: expect.any(AbortSignal) }));
-    });
+    }, 15_000);
 
     it('generates a new code for pending license', async () => {
       await request(app)

@@ -30,7 +30,6 @@ import {
   type UserConfig,
 } from '../../../src/storage/userConfig/index.js';
 import { PostgresUserConfigStore } from '../../../src/storage/userConfig/PostgresUserConfigStore.js';
-import { withSystemContext } from '../../../src/database/admin.js';
 import {
   closeTestDb,
   ensureTestUser,

@@ -418,7 +418,6 @@ export class ConfigManager {
   static peekResourcesAdvertiseFlag(): boolean {
     try {
       // Lazy require so import-time costs only apply to the rare advertise=true path
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const fs = require('node:fs');
       const configDir = process.env.TEST_CONFIG_DIR
         ?? path.join(os.homedir(), '.dollhouse');

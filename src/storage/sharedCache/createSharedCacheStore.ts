@@ -12,8 +12,6 @@
  * @module storage/sharedCache/createSharedCacheStore
  */
 
-import * as path from 'node:path';
-
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';

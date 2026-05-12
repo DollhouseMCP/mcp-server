@@ -18,6 +18,7 @@ import { logger } from '../utils/logger.js';
 export class LifecycleService {
   private _httpModeActive = false;
   private _handlersInstalled = false;
+  private readonly _periodicTimers = new Set<NodeJS.Timeout>();
 
   /** Check if HTTP mode error handling is active. */
   isHttpModeActive(): boolean {
@@ -80,4 +81,47 @@ export class LifecycleService {
   // StreamableHttpServer.ts where they're tied to the specific transport lifecycle.
   // A future LifecycleService.registerSignalHandlers() may consolidate them,
   // but that requires the service to hold a container reference for disposal.
+
+  /**
+   * Phase 4.5 / Phase J: register a periodic background task. Used by
+   * the storage layer registrars to schedule sweepers — `sharedCacheStore.sweepExpired`
+   * (every 1h) and `signingKeyStore.pruneRotatedBefore` (every 6h).
+   *
+   * The task is wrapped in try/catch so a single failure doesn't crash
+   * the timer chain. All registered timers are cleared during `dispose()`
+   * so they don't leak across container teardown (test isolation,
+   * graceful shutdown).
+   *
+   * @param intervalMs   How often to run the task, in milliseconds.
+   * @param task         The async task to run; errors are caught + logged.
+   * @param label        Short label used in log output for diagnostics.
+   * @returns the underlying timer handle (mostly for tests).
+   */
+  registerPeriodicTask(intervalMs: number, task: () => Promise<void>, label: string): NodeJS.Timeout {
+    const timer = setInterval(() => {
+      task().catch((err) => {
+        logger.error(`[LifecycleService] periodic task '${label}' threw`, {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }, intervalMs);
+    // Detach from the event loop's keep-alive ref-count — periodic
+    // sweepers shouldn't prevent the process from exiting on shutdown
+    // (signal handlers + dispose() handle cleanup explicitly).
+    timer.unref();
+    this._periodicTimers.add(timer);
+    logger.debug(`[LifecycleService] registered periodic task '${label}'`, { intervalMs });
+    return timer;
+  }
+
+  /**
+   * Stop all periodic tasks. Called by container.dispose() so test
+   * containers don't leak setInterval handles between suites.
+   */
+  dispose(): void {
+    for (const timer of this._periodicTimers) {
+      clearInterval(timer);
+    }
+    this._periodicTimers.clear();
+  }
 }

@@ -54,14 +54,30 @@ export class AuthServiceRegistrar {
     // 'SigningKeyStore' from the container — Phase I will wire
     // EmbeddedAuthorizationServer through createAuthProvider's option
     // surface. Registering early keeps Phase I a localized change.
-    //
-    // TODO (Phase J): register a periodic
-    //   signingKeyStore.pruneRotatedBefore(now - 30d)
-    // sweeper via LifecycleService.registerPeriodicTask once that helper
-    // lands. Without it, rotated keys accumulate as audit history (bounded
-    // by operator-triggered rotation, not user traffic).
     const signingKeyStore = await createSigningKeyStore({ database });
     container.register('SigningKeyStore', () => signingKeyStore);
+
+    // Phase 4.5 / Phase J: prune rotated signing keys older than 30 days
+    // every 6 hours. Without this, audit history accumulates unboundedly —
+    // rotated keys are kept for token-validation grace periods and the
+    // mode-fingerprint replay window, neither of which needs ≥30 days.
+    if (container.hasRegistration('LifecycleService')) {
+      const lifecycle = container.resolve<{
+        registerPeriodicTask(intervalMs: number, fn: () => Promise<void>, label: string): unknown;
+      }>('LifecycleService');
+      const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
+      const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
+      lifecycle.registerPeriodicTask(
+        SIX_HOURS_MS,
+        async () => {
+          const removed = await signingKeyStore.pruneRotatedBefore(Date.now() - THIRTY_DAYS_MS);
+          if (removed > 0) {
+            logger.info(`[AuthServiceRegistrar] Pruned ${removed} rotated signing key(s) older than 30 days`);
+          }
+        },
+        'signingKeyStore.pruneRotatedBefore',
+      );
+    }
 
     // Phase I: forward the store into createAuthProvider so
     // EmbeddedAuthorizationServer's load + rotate paths route through it.

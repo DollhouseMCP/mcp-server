@@ -38,8 +38,6 @@ import type { ConfigHandler } from "./handlers/ConfigHandler.js";
 import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
 import { ConfigManager } from "./config/ConfigManager.js";
-import { FileOperationsService } from "./services/FileOperationsService.js";
-import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 

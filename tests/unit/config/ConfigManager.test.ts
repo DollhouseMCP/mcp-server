@@ -4,7 +4,6 @@ import { ConfigManager } from '../../../src/config/ConfigManager.js';
 import { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { InMemoryOperatorConfigStore } from '../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
-import * as path from 'path';
 
 // Phase 4.5 / Phase G: ConfigManager is now a façade over IOperatorConfigStore +
 // IUserConfigStore. Tests that previously asserted against mocked file I/O
@@ -22,7 +21,6 @@ describe('ConfigManager', () => {
   let container: InstanceType<typeof DollhouseContainer>;
   let configManager: InstanceType<typeof ConfigManager>;
   const mockHomedir = '/home/testuser';
-  const configDir = path.join(mockHomedir, '.dollhouse');
 
   let mockFileOperations: jest.Mocked<IFileOperationsService>;
   let mockOs: any;
