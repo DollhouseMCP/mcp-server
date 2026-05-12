@@ -26,12 +26,24 @@ export const users = pgTable('users', {
 // Identity fields (username, email, displayName) live exclusively in the
 // users table. Join on users.id when display information is needed alongside
 // settings — the PK-to-FK join cost is negligible.
+//
+// Phase 4.5 extension: added wizard/display/collection/autoActivate/sourcePriority
+// jsonb sections so this table can hold the full ConfigManager per-user
+// surface (was previously only the four original sections, which had no
+// runtime references — the table was scaffolded in Phase 4 but never wired).
+// See migration 0013_user_settings_extension.sql.
 export const userSettings = pgTable('user_settings', {
   userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
   githubConfig: jsonb('github_config').notNull().default({}),
   syncConfig: jsonb('sync_config').notNull().default({}),
   autoloadConfig: jsonb('autoload_config').notNull().default({}),
   retentionConfig: jsonb('retention_config').notNull().default({}),
+  // Phase 4.5 additions:
+  wizardConfig: jsonb('wizard_config').notNull().default({}),
+  displayConfig: jsonb('display_config').notNull().default({}),
+  collectionConfig: jsonb('collection_config').notNull().default({}),
+  autoActivateConfig: jsonb('auto_activate_config').notNull().default({}),
+  sourcePriorityConfig: jsonb('source_priority_config').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 });

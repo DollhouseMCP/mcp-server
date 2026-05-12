@@ -16,3 +16,7 @@ export { ensembleMembers } from './ensembles.js';
 export { agentStates } from './agents.js';
 export { sessions } from './sessions.js';
 export { authAccounts, authIdentityEvents, authKv } from './auth.js';
+// Phase 4.5 storage completion:
+export { operatorSettings } from './operatorSettings.js';
+export { sharedCache } from './sharedCache.js';
+export { authSigningKeys } from './signingKeys.js';
