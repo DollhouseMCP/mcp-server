@@ -998,6 +998,10 @@ async function startStreamableHttpServer(
       displayName: authClaims?.displayName,
       email: authClaims?.email,
       tenantId: authClaims?.tenantId,
+      // JWT `roles` claim threads through here so ConfigManager can admin-gate
+      // per-host operator-config writes downstream. Round 5 pre-claim flow
+      // stamps `roles: ['admin']` on the JWT for the bootstrapped admin sub.
+      roles: authClaims?.roles,
     });
     const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);

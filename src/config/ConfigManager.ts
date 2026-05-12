@@ -830,6 +830,35 @@ export class ConfigManager {
   }
 
   /**
+   * Classify a setting path as per-host (operator_settings) vs per-user
+   * (user_settings). Single source of truth — used by `updateSetting`'s
+   * admin gate; must mirror the section split in `splitForStores` /
+   * `mergeStorePayloads`.
+   *
+   * Per-host paths (require 'admin' role to mutate):
+   *   - `version`
+   *   - `console.*`
+   *   - `license.*`
+   *   - `elements.enhanced_index.*`
+   *   - `elements.default_element_dir`
+   *
+   * Everything else under top-level sections (`user.*`, `github.*`,
+   * `sync.*`, `autoLoad.*`, `retentionPolicy.*`, `wizard.*`, `display.*`,
+   * `collection.*`, `elements.auto_activate.*`, `source_priority.*`) is
+   * per-user and RLS-scoped — those don't require admin.
+   */
+  public static isPerHostPath(path: string): boolean {
+    if (path === 'version') return true;
+    if (path === 'console' || path.startsWith('console.')) return true;
+    if (path === 'license' || path.startsWith('license.')) return true;
+    if (path === 'elements.default_element_dir') return true;
+    if (path === 'elements.enhanced_index' || path.startsWith('elements.enhanced_index.')) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
    * Get GitHub OAuth client ID
    * Environment variable takes precedence over config file
    */
@@ -918,6 +947,46 @@ export class ConfigManager {
 
     // SECURITY: Validate path to prevent prototype pollution
     validatePropertyPath(path, 'path');
+
+    // SECURITY: Admin-gate per-host (operator_settings) writes. Per-user
+    // settings stay unguarded — those land in RLS-scoped user_settings
+    // keyed to the caller's sub, so RLS enforces isolation. Per-host
+    // settings affect the entire deployment (console.port, license tier,
+    // enhanced_index limits, default_element_dir) and must require the
+    // 'admin' role.
+    //
+    // Enforcement policy:
+    //   - ContextTracker NULL → standalone mode (createStandalone factory,
+    //     pre-DI bootstrap, tests). No session identity is available, so
+    //     the caller is trusted by virtue of being in-process — no gate.
+    //   - ContextTracker present but no active session → reject (the
+    //     caller is wired into context-aware code but forgot to scope
+    //     itself; this is the "background task forgot runAsync" case
+    //     and defaulting to allow would be a privilege escalation).
+    //   - ContextTracker present + session has 'admin' role → allow.
+    //   - Stdio sessions implicitly carry 'admin' (operator is machine
+    //     owner in single-user local mode — see StdioSession.ts).
+    //   - HTTP sessions carry whatever the JWT `roles` claim grants —
+    //     typically empty unless the operator was pre-claimed via the
+    //     `dollhousemcp admin bootstrap` CLI.
+    if (ConfigManager.isPerHostPath(path) && this.contextTracker) {
+      const callerRoles = this.contextTracker.getSessionContext()?.roles ?? [];
+      if (!callerRoles.includes('admin')) {
+        const reason = `Configuration path '${path}' is server-wide and requires the 'admin' role.`;
+        logger.warn('[ConfigManager] Rejected non-admin operator-config write', {
+          path,
+          callerUserId: userId,
+          hasRoles: callerRoles.length > 0,
+        });
+        return {
+          success: false,
+          message: `${reason} Your session has roles: [${callerRoles.join(', ')}]. ` +
+            `Per-host settings can only be changed by an admin operator. ` +
+            `To grant admin role, run \`dollhousemcp admin bootstrap\` (CLI) or have ` +
+            `an existing admin add your sub to the bootstrap state.`,
+        };
+      }
+    }
 
     // Runtime validation for known typed settings (#1840)
     if (path === 'console.port') {

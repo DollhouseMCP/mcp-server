@@ -72,11 +72,18 @@ export class SecureErrorHandler {
         requestId
       };
     }
-    // Log the full error securely for debugging
+    // Log the full error securely for debugging.
+    // Phase 4.5 PoC verification fix: the previous shape passed the raw
+    // error object as `error: error`, which the structured logger
+    // rendered as `"Error occurred:"` with no visible detail — operators
+    // had no signal what actually failed unless they had server console
+    // access. Now: surface `message`, `name`, and `code` as scalar fields
+    // so the line includes the actual reason at warn/error level.
     logger.error('Error occurred:', {
-      error: error,
-      stack: error?.stack,
+      message: error?.message ?? String(error),
+      name: error?.name,
       code: error?.code,
+      stack: error?.stack,
       requestId
     });
 

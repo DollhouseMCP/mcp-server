@@ -44,5 +44,10 @@ export function createStdioSession(): Readonly<SessionContext> {
     tenantId: null,
     transport: 'stdio',
     createdAt: Date.now(),
+    // Stdio operator IS the machine owner in single-user local mode.
+    // Admin role is implicit — otherwise the operator couldn't configure
+    // their own dev environment via `dollhouse_config` (per-host
+    // operator_settings writes are admin-gated by ConfigManager).
+    roles: Object.freeze(['admin']),
   });
 }

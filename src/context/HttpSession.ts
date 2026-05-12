@@ -34,6 +34,13 @@ export interface HttpSessionOptions {
   displayName?: string;
   /** Email address from auth provider. */
   email?: string;
+  /**
+   * Authorization roles from the JWT `roles` claim. Used by
+   * ConfigManager.updateSetting to admin-gate per-host operator-config
+   * writes. Default: undefined (no admin role granted) — non-admin HTTP
+   * sessions can only mutate their own per-user config.
+   */
+  roles?: readonly string[];
 }
 
 /**
@@ -54,5 +61,6 @@ export function createHttpSession(options: HttpSessionOptions = {}): Readonly<Se
     createdAt: Date.now(),
     displayName: options.displayName,
     email: options.email,
+    roles: options.roles ? Object.freeze([...options.roles]) : undefined,
   });
 }

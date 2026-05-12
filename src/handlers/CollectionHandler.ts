@@ -269,15 +269,19 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
-          const sanitized = SecureErrorHandler.sanitizeError(error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${this.indicatorService.getPersonaIndicator()}❌ Error installing AI customization element: ${sanitized.message}`,
-              },
-            ],
-          };
+          // Phase 4.5 PoC verification fix: previously this catch swallowed
+          // the error into a text-response (with a sad-face emoji) and let
+          // the MCP-AQL dispatcher see "success". Operators saw "installed"
+          // in their MCP response while the install had actually thrown
+          // (validation, network, etc.) and nothing landed in storage.
+          //
+          // Now: still sanitize for safe logging, but re-throw so the
+          // dispatcher's outer catch converts the failure into the proper
+          // OperationFailure shape with the message preserved. The
+          // dispatcher already formats a user-readable error message; we
+          // don't duplicate that here.
+          SecureErrorHandler.sanitizeError(error); // logs the full detail
+          throw error;
         }
     }
 

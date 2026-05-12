@@ -41,6 +41,20 @@ export interface SessionContext {
 
   /** Email address, if available from auth provider. */
   readonly email?: string;
+
+  /**
+   * Authorization roles granted to this session. Sourced from the JWT
+   * `roles` claim for HTTP transport (e.g. `['admin']` when the operator
+   * was pre-claimed via `dollhousemcp admin bootstrap`); defaults to
+   * `['admin']` for stdio transport (the operator IS the machine owner
+   * in single-user local mode and must be able to configure server-wide
+   * settings without a separate auth step). Background-task contexts
+   * may have no roles.
+   *
+   * Used by ConfigManager.updateSetting to gate per-host operator-config
+   * writes — per-user writes are RLS-scoped and don't need this check.
+   */
+  readonly roles?: readonly string[];
 }
 
 /**

@@ -717,6 +717,33 @@ export class ContentValidator {
   }
 
   /**
+   * Per-field length policy. Identity-shaped fields keep the strict 1KB
+   * cap; long-form fields (`instructions`, `content`) get the same cap
+   * as element body content, since they ARE essentially content shaped
+   * as YAML frontmatter. Without this split, the install path rejected
+   * most non-trivial collection personas at 1024 chars on `instructions`
+   * — which is where the prompt definition actually lives.
+   *
+   * Caught during Phase 4.5 PoC verification on 2026-05-12 attempting to
+   * install `dollhouse-expert` from the public collection.
+   */
+  private static readonly METADATA_FIELD_LENGTH_LIMITS: Record<string, number> = {
+    // Long-form prompt / body fields. Match the create-path content limit
+    // (validateContentSize uses MAX_CONTENT_LENGTH) so a persona authored
+    // locally can also be installed from the collection.
+    instructions: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    content: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+    // Default for everything else (name, description, category, author,
+    // version, tags-as-string, custom fields) — strict 1KB cap to keep
+    // each YAML frontmatter field bounded.
+  };
+
+  private static fieldLengthLimit(fieldName: string): number {
+    return ContentValidator.METADATA_FIELD_LENGTH_LIMITS[fieldName]
+      ?? SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH;
+  }
+
+  /**
    * Validates persona metadata fields
    */
   static validateMetadata(metadata: any): ContentValidationResult {
@@ -725,13 +752,14 @@ export class ContentValidator {
     // Check all string fields in metadata
     const checkField = (fieldName: string, value: any) => {
       if (typeof value === 'string') {
+        const maxLen = ContentValidator.fieldLengthLimit(fieldName);
         // Check field length first
-        if (value.length > SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH) {
-          detectedPatterns.push(`${fieldName}: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`);
+        if (value.length > maxLen) {
+          detectedPatterns.push(`${fieldName}: Field exceeds maximum length of ${maxLen} characters (got ${value.length})`);
           return;
         }
-        
-        const result = this.validateAndSanitize(value);
+
+        const result = this.validateAndSanitize(value, { maxLength: maxLen });
         if (!result.isValid || result.detectedPatterns?.length) {
           detectedPatterns.push(`${fieldName}: ${result.detectedPatterns?.join(', ')}`);
         }
@@ -743,7 +771,7 @@ export class ContentValidator {
     checkField('description', metadata.description);
     checkField('category', metadata.category);
     checkField('author', metadata.author);
-    
+
     // Check any custom fields
     for (const [key, value] of Object.entries(metadata)) {
       if (!['name', 'description', 'category', 'author'].includes(key)) {
