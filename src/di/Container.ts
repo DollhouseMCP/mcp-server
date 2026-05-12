@@ -281,6 +281,14 @@ export class DollhouseContainer {
       await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
     }
 
+    // Phase 4.5 storage layers (operator config, user config, shared cache).
+    // Must run after DatabaseServiceRegistrar so DatabaseInstance is resolvable
+    // for the postgres backends; runs before consumers (ConfigManager façade in
+    // Phase G, CollectionIndexManager in Phase H) so they can resolve the stores
+    // when their factories fire.
+    const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
+    await new StorageServiceRegistrar().bootstrapAndRegister(this);
+
     // Unified auth (JWT) — feature-flag gated (default: off).
     // Must run after SecurityServiceRegistrar (ContextTracker) and
     // DatabaseServiceRegistrar (UserIdentityService).

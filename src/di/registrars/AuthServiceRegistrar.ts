@@ -35,6 +35,7 @@ export class AuthServiceRegistrar {
 
     const { createAuthProvider } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
+    const { createSigningKeyStore } = await import('../../storage/signingKeys/createSigningKeyStore.js');
 
     // Pull DatabaseInstance from the container if it has one. Required
     // when DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; the Postgres backend's
@@ -45,6 +46,22 @@ export class AuthServiceRegistrar {
     const database = container.hasRegistration('DatabaseInstance')
       ? container.resolve<DatabaseInstance>('DatabaseInstance')
       : undefined;
+
+    // Phase 4.5 / Phase F: register the SigningKeyStore so EmbeddedAuthorizationServer
+    // can consume it (Phase I). Selection mirrors the auth K/V backend selector
+    // (DOLLHOUSE_AUTH_STORAGE_BACKEND), since signing keys are AS-internal
+    // infrastructure paired with auth_kv. Today nothing reads
+    // 'SigningKeyStore' from the container — Phase I will wire
+    // EmbeddedAuthorizationServer through createAuthProvider's option
+    // surface. Registering early keeps Phase I a localized change.
+    //
+    // TODO (Phase J): register a periodic
+    //   signingKeyStore.pruneRotatedBefore(now - 30d)
+    // sweeper via LifecycleService.registerPeriodicTask once that helper
+    // lands. Without it, rotated keys accumulate as audit history (bounded
+    // by operator-triggered rotation, not user traffic).
+    const signingKeyStore = await createSigningKeyStore({ database });
+    container.register('SigningKeyStore', () => signingKeyStore);
 
     const provider = await createAuthProvider({
       enabled: true,
