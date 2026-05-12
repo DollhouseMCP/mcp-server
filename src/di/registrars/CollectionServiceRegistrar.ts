@@ -99,6 +99,14 @@ export class CollectionServiceRegistrar {
       sharedPoolInstaller: container.hasRegistration('SharedPoolInstaller')
         ? container.resolve('SharedPoolInstaller')
         : undefined,
+      // Phase 4.5 follow-up: route install_collection_content writes through
+      // the storage-layer factory so DB-mode deployments actually persist to
+      // Postgres instead of writing only to (often tmpfs) portfolio files.
+      // DatabaseServiceRegistrar overrides this registration when DB mode is
+      // selected — see DatabaseServiceRegistrar.ts.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
 
     container.register('PortfolioRepoManager', () => new PortfolioRepoManager(

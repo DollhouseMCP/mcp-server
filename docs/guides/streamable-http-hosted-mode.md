@@ -156,6 +156,14 @@ The `/healthz` response includes session telemetry:
 }
 ```
 
+## Session durability across restarts
+
+In `DOLLHOUSE_STORAGE_BACKEND=database` mode the JWKS signing key, the cookie-signing secret, and all OAuth state (sessions, grants, refresh tokens) live in Postgres. A `docker compose restart` of the MCP container preserves all of this — clients keep their bearer tokens, the JWKS `kid` does not change, and no user has to re-authenticate.
+
+In filesystem mode the same state lives under the `run` directory (`~/.dollhouse/run/oauth-signing-key.json`, `~/.dollhouse/run/cookie-signing-secret.bin`, plus the `auth_kv/` directory). Containerized filesystem-mode deployments must mount this directory on a durable volume — if it lives on `tmpfs` it is wiped on every restart, the regenerated JWKS gets a fresh `kid`, mode-fingerprint detection trips, and `auth_kv` is cleared. Every user has to re-OAuth.
+
+The PoC stack at `docker/poc/` defaults to DB mode for this reason. If you need to run filesystem-mode in a container, bind-mount the `run` directory or accept the per-restart re-auth cost.
+
 ## Security
 
 ### DNS Rebinding Protection

@@ -274,6 +274,44 @@ You should see in stderr:
 [StreamableHttpServer] listening on 127.0.0.1:3000
 ```
 
+### What lives in Postgres in DB mode
+
+When `DOLLHOUSE_STORAGE_BACKEND=database` is set, **all persistent server state lives in Postgres**. There is no fallback to filesystem for any persistent item — the deployment is honest about being all-DB.
+
+| State | Table |
+|---|---|
+| Element content (personas, skills, memories, agents, templates, ensembles) | `elements`, `memory_entries`, etc. |
+| Operator-level config (console port, enhanced-index limits, license attestation) | `operator_settings` (single row) |
+| Per-user config (sync prefs, GitHub PAT, autoload list, retention policy, wizard state, display prefs) | `user_settings` (one row per user, RLS-enforced) |
+| Collection index cache (public catalog) | `shared_cache` (TTL-aware) |
+| OAuth state (sessions, grants, refresh tokens, codes) | `auth_kv` (model-discriminated K/V) |
+| User accounts + identity | `auth_accounts`, `users` |
+| Audit log | `auth_identity_events` (append-only) |
+| JWKS signing key + cookie-signing secret | `auth_signing_keys` (rotation invariant: at most one active per kind) |
+
+**Container restart durability:** The `auth_signing_keys` table is the reason a containerized hosted deployment survives `docker compose restart` without invalidating user sessions. Filesystem-mode keyfiles in a `tmpfs` mount regenerate on every restart, which changes the JWKS `kid`, which trips mode-fingerprint detection, which wipes all `auth_kv` state — every user has to re-OAuth. DB-mode keys persist across restarts so the mode-fingerprint stays stable and tokens remain valid.
+
+### Filesystem-to-Postgres config migration
+
+When you switch an existing filesystem deployment to DB mode (e.g. `DOLLHOUSE_STORAGE_BACKEND=file` → `database`), the server auto-migrates `~/.dollhouse/config.yml` plus the JWKS keyfile and cookie-signing secret into the new tables on first startup. The operation is idempotent — rerunning is a no-op once the marker `~/.dollhouse/.migrated-to-db` is written. The original files are NOT deleted, so a roll-back is reversible.
+
+To inspect / dry-run / re-run the migration manually:
+
+```bash
+# Status: is the marker present?
+npx tsx scripts/migrate-config-to-database.ts status
+
+# Preview: parse the legacy state and print what would be migrated, no writes
+npx tsx scripts/migrate-config-to-database.ts preview
+
+# Execute: actually migrate. Idempotent.
+npx tsx scripts/migrate-config-to-database.ts execute
+```
+
+The JWKS keyfile is migrated with its **original `kid`** preserved, so any tokens issued before the migration remain valid. The cookie secret is migrated as the original byte sequence under a fresh opaque kid.
+
+User accounts created in filesystem auth-storage mode do NOT follow over — those are scoped to the auth backend (`DOLLHOUSE_AUTH_STORAGE_BACKEND`) and re-creating them is one CLI invocation per user.
+
 ---
 
 ## Storage backend: filesystem vs Postgres

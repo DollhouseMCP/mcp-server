@@ -99,6 +99,16 @@ export class ElementInstaller {
   // of writing to the user's per-user portfolio.
   private readonly sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
 
+  // Phase 4.5 follow-up: optional storage-layer factory. When present AND the
+  // factory produces a writable (database-backed) storage layer for the
+  // element type, installFromCollection writes through it instead of the
+  // legacy filesystem-only atomicWriteFile path. This closes the bug where
+  // `install_collection_content` succeeded at the filesystem level under
+  // DB-mode but never persisted to Postgres — meaning installs vanished on
+  // every container restart with tmpfs. Same correctness pattern as Phase H's
+  // CollectionIndexCache and CollectionIndexManager wiring.
+  private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
+
   constructor(
     githubClient: GitHubClient,
     options: {
@@ -106,6 +116,7 @@ export class ElementInstaller {
       unifiedIndexManager: UnifiedIndexManager;
       fileOperations?: IFileOperationsService;
       sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
+      storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
     }
   ) {
     this.githubClient = githubClient;
@@ -121,6 +132,7 @@ export class ElementInstaller {
     // Initialize file operations service
     this.fileOperations = options.fileOperations!;
     this.sharedPoolInstaller = options.sharedPoolInstaller;
+    this.storageLayerFactory = options.storageLayerFactory;
   }
 
   /**
@@ -759,14 +771,32 @@ export class ElementInstaller {
     }
 
     // STEP 4: ALL VALIDATION COMPLETE - NOW PERFORM ATOMIC WRITE OPERATION
-    await this.atomicWriteFile(localPath, sanitizedContent);
+    //
+    // Phase 4.5 follow-up: when a storage-layer factory is injected AND it
+    // produces a writable (database-backed) layer for this element type,
+    // route the write through it. That hits the same code path as
+    // create_element and ensures the install actually lands in Postgres in
+    // DB mode. Without this, atomicWriteFile would write to the per-user
+    // portfolio directory only — which is typically tmpfs in containerized
+    // DB-mode deployments, so the install vanishes on every restart.
+    // Filesystem-mode deployments fall through to the legacy atomicWriteFile
+    // path (factory either absent or produces a non-writable layer).
+    const persistedViaStorageLayer = await this.persistViaStorageLayerIfDbMode(
+      elementType,
+      metadata,
+      sanitizedContent,
+    );
+    if (!persistedViaStorageLayer) {
+      await this.atomicWriteFile(localPath, sanitizedContent);
+    }
 
     // ENHANCEMENT (PR #1453): Log successful installation
     logger.debug('Element installed successfully from collection', {
       elementName: metadata.name,
       elementType,
       filename,
-      localPath
+      localPath,
+      target: persistedViaStorageLayer ? 'storage-layer' : 'filesystem',
     });
 
     return {
@@ -776,6 +806,69 @@ export class ElementInstaller {
       filename,
       elementType
     };
+  }
+
+  /**
+   * Phase 4.5 follow-up: if a storage-layer factory is wired AND it produces
+   * a writable layer for this element type, persist the element through it
+   * (Postgres in DB mode). Returns true on success so the caller skips the
+   * filesystem fallback. Returns false when no factory is wired or when the
+   * layer isn't writable (filesystem mode) — the caller falls back to the
+   * legacy atomicWriteFile path.
+   */
+  private async persistViaStorageLayerIfDbMode(
+    elementType: ElementType,
+    metadata: IElementMetadata,
+    sanitizedContent: string,
+  ): Promise<boolean> {
+    if (!this.storageLayerFactory) {
+      return false;
+    }
+    const { isWritableStorageLayer } = await import('../storage/IStorageLayer.js');
+    // FileStorageOptions are only used by the filesystem backend; the
+    // database backend ignores them. Pass sensible values so the filesystem
+    // path stays consistent if someone wires this through it.
+    const layer = this.storageLayerFactory.createForElement(elementType, {
+      elementDir: this.portfolioManager.getElementDir(elementType),
+      fileExtension: '.md',
+      scanCooldownMs: 0,
+    });
+    if (!isWritableStorageLayer(layer)) {
+      return false;
+    }
+    await layer.writeContent(
+      elementType,
+      metadata.name ?? '',
+      sanitizedContent,
+      {
+        author: metadata.author ?? '',
+        version: metadata.version ?? '1.0.0',
+        description: metadata.description ?? '',
+        tags: (metadata as { tags?: string[] }).tags ?? [],
+      },
+      {
+        exclusive: true,
+        elementLabel: this.singularElementLabel(elementType),
+      },
+    );
+    return true;
+  }
+
+  /**
+   * Map element-type plural name to the human-readable singular for the
+   * "already exists" error message produced by writeContent's exclusive
+   * path. Memory → "Memory", personas → "Persona", etc.
+   */
+  private singularElementLabel(elementType: ElementType): string {
+    const singular: Record<string, string> = {
+      personas: 'Persona',
+      skills: 'Skill',
+      templates: 'Template',
+      agents: 'Agent',
+      memories: 'Memory',
+      ensembles: 'Ensemble',
+    };
+    return singular[elementType] ?? elementType;
   }
 
   /**
