@@ -1,28 +1,10 @@
 /**
  * Leak proof #2: challengestore-cross-user-leak
  *
- * Audit claim: ChallengeStore is registered as a root-level singleton
- * (InMemoryChallengeStore). All HTTP sessions share the same instance.
- * The `verificationStore` field in MCPAQLHandler.handlers is bound at
- * bootstrapHandlers() time from the root container.
- *
- * Consequence: a challenge code issued for session A can be consumed by
- * session B, bypassing per-session security isolation.
- *
- * This test:
- * 1. Directly resolves the ChallengeStore from the container.
- * 2. Inserts a fake challenge as if session A issued it.
- * 3. Asks session B (a different HTTP client) to verify it.
- * 4. If the verify_challenge call succeeds, the store is shared.
- *
- * We inject directly because the UI for issuing challenges (blocked agents,
- * deadlock relief) requires specific preconditions that would make the test
- * fragile. Injecting directly is valid — it proves the store is the same
- * object.
- *
- * EXPECTED (audit correct — leak proven): Bob can verify Alice's challenge.
- * EXPECTED (audit wrong): Bob gets "challenge not found" because he resolves
- *   a different store instance.
+ * Regression coverage for Step 2 of HTTP multi-user correctness:
+ * MCPAQLHandler must resolve ChallengeStore and DangerZoneEnforcer lazily
+ * from the active HTTP session child container, while stdio/background
+ * contexts continue to fall back to the root container.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
@@ -33,11 +15,14 @@ import { randomUUID } from 'node:crypto';
 import {
   createHttpTestEnvironment,
   connectHttpClient,
-  execute,
+  create,
   type HttpTestEnvironment,
   type HttpClientHandle,
 } from '../../../helpers/httpTransportHelper.js';
 import type { IChallengeStore } from '../../../../src/state/IChallengeStore.js';
+import type { SessionContainerRegistry } from '../../../../src/di/SessionContainerRegistry.js';
+import type { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
+import type { DangerZoneEnforcer } from '../../../../src/security/DangerZoneEnforcer.js';
 
 const ENV_STARTUP_TIMEOUT = 20_000;
 const TEST_TIMEOUT = 45_000;
@@ -45,7 +30,7 @@ const TEST_TIMEOUT = 45_000;
 const USER_A = 'alice';
 const USER_B = 'bob';
 
-describe('challengestore-cross-user-leak: shared ChallengeStore allows cross-session verification', () => {
+describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer are session-scoped', () => {
   let env: HttpTestEnvironment;
   let homeOverride: string;
   let handleA: HttpClientHandle;
@@ -78,8 +63,29 @@ describe('challengestore-cross-user-leak: shared ChallengeStore allows cross-ses
     console.log('[challengestore] ChallengeStore is a singleton:', store1 === store2);
   });
 
-  it('challenge injected for session A is visible to session B (proves shared store)', async () => {
-    const store = env.container.resolve<IChallengeStore>('ChallengeStore');
+  it('HTTP child containers resolve distinct ChallengeStore instances', () => {
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const childA = registry.get(env.sessionContexts[0].sessionId);
+    const childB = registry.get(env.sessionContexts[1].sessionId);
+
+    expect(childA).toBeDefined();
+    expect(childB).toBeDefined();
+
+    const rootStore = env.container.resolve<IChallengeStore>('ChallengeStore');
+    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
+
+    expect(storeA).not.toBe(rootStore);
+    expect(storeB).not.toBe(rootStore);
+    expect(storeA).not.toBe(storeB);
+  });
+
+  it('challenge injected for session A is not visible to session B via MCPAQLHandler', async () => {
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const childA = registry.get(env.sessionContexts[0].sessionId);
+    expect(childA).toBeDefined();
+
+    const store = childA!.resolve<IChallengeStore>('ChallengeStore');
     const challengeId = randomUUID();
     const code = 'ALICE01';
 
@@ -92,7 +98,7 @@ describe('challengestore-cross-user-leak: shared ChallengeStore allows cross-ses
 
     // Session B tries to consume Alice's challenge via verify_challenge.
     // The call goes over the wire through Bob's HTTP connection.
-    const result = await execute(handleB.client, {
+    const result = await create(handleB.client, {
       operation: 'verify_challenge',
       params: {
         challenge_id: challengeId,
@@ -102,47 +108,67 @@ describe('challengestore-cross-user-leak: shared ChallengeStore allows cross-ses
 
     console.log('[challengestore] Bob verify result:', result);
 
-    // LEAK PROVEN: if Bob can verify Alice's challenge, store is shared.
-    // "Verification failed" / "expired" / "not found" = store is isolated.
-    const leakProven = !result.toLowerCase().includes('not found')
-      && !result.toLowerCase().includes('expired')
-      && !result.toLowerCase().includes('failed')
-      && !result.toLowerCase().includes('error');
-
-    if (leakProven) {
-      // Explicitly fail with a descriptive message.
-      throw new Error(
-        `LEAK PROVEN: Session B (bob) successfully consumed a challenge that was ` +
-        `issued for Session A (alice). The ChallengeStore is shared across HTTP sessions.\n` +
-        `verify_challenge response: ${result}`
-      );
-    } else {
-      // Audit finding is disproved — challenge was not accessible cross-session.
-      console.log(
-        '[challengestore] AUDIT DISPROVED: Bob could not consume Alice\'s challenge.\n' +
-        'The ChallengeStore appears to have per-session isolation at the verification layer.'
-      );
-      expect(result).toMatch(/not found|expired|failed|error/i);
-    }
+    expect(result).toMatch(/not found|expired|failed|error/i);
   }, TEST_TIMEOUT);
 
-  it('ChallengeStore is NOT registered in child session container (no per-session override)', () => {
-    // Verify the child container does NOT override ChallengeStore.
-    // We cannot directly inspect a SessionContainer from outside, but we can
-    // check that the root container's singleton IS the one passed to MCPAQLHandler.
-    //
-    // The MCPAQLHandler stores handlers.verificationStore at construction time.
-    // Accessing it via the registered instance.
+  it('MCPAQLHandler lazy getters resolve active session services and root fallback', async () => {
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const contextTracker = env.container.resolve<ContextTracker>('ContextTracker');
     const mcpAqlHandler = env.container.resolve<{
-      handlers: { verificationStore?: IChallengeStore };
+      handlers: {
+        verificationStore?: IChallengeStore;
+        dangerZoneEnforcer?: DangerZoneEnforcer;
+      };
     }>('mcpAqlHandler');
-    const handlerStore = mcpAqlHandler.handlers.verificationStore;
+
     const rootStore = env.container.resolve<IChallengeStore>('ChallengeStore');
+    const rootEnforcer = env.container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const childA = registry.get(env.sessionContexts[0].sessionId);
+    const childB = registry.get(env.sessionContexts[1].sessionId);
 
-    console.log('[challengestore] MCPAQLHandler.verificationStore === root ChallengeStore:', handlerStore === rootStore);
+    expect(mcpAqlHandler.handlers.verificationStore).toBe(rootStore);
+    expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(rootEnforcer);
 
-    // If same instance: handler uses the shared root store (leak surface confirmed).
-    // If different: something per-session is wired (audit wrong).
-    expect(handlerStore).toBe(rootStore);
+    await contextTracker.runAsync(
+      contextTracker.createSessionContext('llm-request', env.sessionContexts[0], { toolName: 'mcp_aql_execute' }),
+      async () => {
+        expect(mcpAqlHandler.handlers.verificationStore).toBe(childA!.resolve<IChallengeStore>('ChallengeStore'));
+        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
+      },
+    );
+
+    await contextTracker.runAsync(
+      contextTracker.createSessionContext('llm-request', env.sessionContexts[1], { toolName: 'mcp_aql_execute' }),
+      async () => {
+        expect(mcpAqlHandler.handlers.verificationStore).toBe(childB!.resolve<IChallengeStore>('ChallengeStore'));
+        expect(mcpAqlHandler.handlers.dangerZoneEnforcer).toBe(childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer'));
+      },
+    );
   });
+
+  it('beetlejuice uses session-scoped ChallengeStore and DangerZoneEnforcer', async () => {
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const childA = registry.get(env.sessionContexts[0].sessionId);
+    const childB = registry.get(env.sessionContexts[1].sessionId);
+    expect(childA).toBeDefined();
+    expect(childB).toBeDefined();
+
+    const triggerText = await create(handleA.client, {
+      operation: 'beetlejuice_beetlejuice_beetlejuice',
+      params: { agent_name: 'session-a-danger-agent' },
+    });
+    const trigger = JSON.parse(triggerText) as { success?: boolean; data?: { challenge_id?: string } };
+    const challengeId = trigger.data?.challenge_id;
+    expect(challengeId).toBeTruthy();
+
+    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
+    const enforcerA = childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const enforcerB = childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+
+    expect(storeA.get(challengeId!)).toBeDefined();
+    expect(storeB.get(challengeId!)).toBeUndefined();
+    expect(enforcerA.check('session-a-danger-agent').blocked).toBe(true);
+    expect(enforcerB.check('session-a-danger-agent').blocked).toBe(false);
+  }, TEST_TIMEOUT);
 });

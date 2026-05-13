@@ -123,6 +123,7 @@ describe('github-userinfo-cache-leak: shared APICache allows cross-user identity
     );
 
     console.log('[userinfo-cache] APICache internal keys:', Object.keys(internalCache).join(', '));
+    expect(hasCacheKeys).toBe(false);
 
     // Set two values for the same URL — the second should overwrite the first,
     // proving there is no user-namespace partitioning.

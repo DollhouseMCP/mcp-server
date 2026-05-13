@@ -29,6 +29,8 @@ import {
   type IUserConfigStore,
   type UserConfig,
 } from '../../../src/storage/userConfig/index.js';
+import { FileLockManager } from '../../../src/security/fileLockManager.js';
+import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { PostgresUserConfigStore } from '../../../src/storage/userConfig/PostgresUserConfigStore.js';
 import {
   closeTestDb,
@@ -37,6 +39,10 @@ import {
   getTestDb,
   isDatabaseAvailable,
 } from '../database/test-db-helpers.js';
+
+function createFileOperationsService(): FileOperationsService {
+  return new FileOperationsService(new FileLockManager());
+}
 
 function makeConfig(overrides: Partial<UserConfig> = {}): Omit<UserConfig, 'updatedAt'> {
   return {
@@ -200,7 +206,13 @@ describe('IUserConfigStore contract: FilesystemUserConfigStore', () => {
   runContractSuite(
     async () => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'usercfg-fs-'));
-      return { store: new FilesystemUserConfigStore({ rootDir: dir }), userId: randomUUID() };
+      return {
+        store: new FilesystemUserConfigStore({
+          rootDir: dir,
+          fileOperations: createFileOperationsService(),
+        }),
+        userId: randomUUID(),
+      };
     },
     async (handle) => {
       const fsStore = handle.store as FilesystemUserConfigStore;
@@ -316,10 +328,16 @@ describe('FilesystemUserConfigStore — durable across instances', () => {
 
   it('config survives a fresh instance pointed at the same directory', async () => {
     const userId = randomUUID();
-    const a = new FilesystemUserConfigStore({ rootDir: dir });
+    const a = new FilesystemUserConfigStore({
+      rootDir: dir,
+      fileOperations: createFileOperationsService(),
+    });
     await a.save(userId, makeConfig({ syncConfig: { enabled: true } }));
 
-    const b = new FilesystemUserConfigStore({ rootDir: dir });
+    const b = new FilesystemUserConfigStore({
+      rootDir: dir,
+      fileOperations: createFileOperationsService(),
+    });
     const found = await b.load(userId);
     expect((found.syncConfig as Record<string, unknown>).enabled).toBe(true);
   });
@@ -327,7 +345,10 @@ describe('FilesystemUserConfigStore — durable across instances', () => {
   it('multiple users share the rootDir without collision', async () => {
     const userIdA = randomUUID();
     const userIdB = randomUUID();
-    const store = new FilesystemUserConfigStore({ rootDir: dir });
+    const store = new FilesystemUserConfigStore({
+      rootDir: dir,
+      fileOperations: createFileOperationsService(),
+    });
 
     await store.save(userIdA, makeConfig({ syncConfig: { tag: 'A' } }));
     await store.save(userIdB, makeConfig({ syncConfig: { tag: 'B' } }));
@@ -337,7 +358,10 @@ describe('FilesystemUserConfigStore — durable across instances', () => {
   });
 
   it('tolerates ENOENT on first load (returns default)', async () => {
-    const store = new FilesystemUserConfigStore({ rootDir: dir });
+    const store = new FilesystemUserConfigStore({
+      rootDir: dir,
+      fileOperations: createFileOperationsService(),
+    });
     const found = await store.load(randomUUID());
     expect(found.syncConfig).toEqual({});
   });

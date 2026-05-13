@@ -44,6 +44,8 @@ import {
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import type { ElementCRUDHandler } from '../../handlers/ElementCRUDHandler.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { SessionContainerRegistry } from '../SessionContainerRegistry.js';
+import type { DangerZoneBlocker } from '../../elements/agents/types.js';
 
 export class ElementManagerServiceRegistrar {
   public register(container: DiContainerFacade): void {
@@ -194,6 +196,20 @@ export class ElementManagerServiceRegistrar {
 
     container.register('TemplateRenderer', () => new TemplateRenderer(container.resolve('TemplateManager')));
 
+    const resolveActiveOrRoot = <T>(serviceName: string): T => {
+      const registry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+      const activeContainer = registry.getActiveContainer();
+      return (activeContainer ?? container).resolve<T>(serviceName);
+    };
+    const dangerZoneEnforcerProxy: DangerZoneBlocker = {
+      block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
+    };
+    const verificationStoreProxy = {
+      set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
+        resolveActiveOrRoot<{ set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }>('ChallengeStore')
+          .set(id, challenge),
+    };
+
     container.register('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
@@ -210,8 +226,8 @@ export class ElementManagerServiceRegistrar {
       activationRegistry: container.resolve('SessionActivationRegistry'),
       // Issue #1948: Instance-injected dependencies (replaces static resolvers)
       elementManagerResolver: (name: string) => container.resolve(name) as import('../../elements/agents/AgentManager.js').ResolvedElementManager,
-      dangerZoneEnforcer: container.resolve('DangerZoneEnforcer'),
-      verificationStore: container.resolve('ChallengeStore'),
+      dangerZoneEnforcer: dangerZoneEnforcerProxy,
+      verificationStore: verificationStoreProxy,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,

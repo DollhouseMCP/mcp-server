@@ -20,6 +20,7 @@ import {
   type StreamableHttpRuntimeHandle,
 } from '../../src/server/StreamableHttpServer.js';
 import { createHttpSession } from '../../src/context/HttpSession.js';
+import type { SessionContext } from '../../src/context/SessionContext.js';
 import { setHttpModeActive } from '../../src/index.js';
 import {
   createIngestRoutes,
@@ -56,6 +57,7 @@ export interface HttpTestEnvironment {
   runtime: StreamableHttpRuntimeHandle;
   container: DollhouseContainer;
   testDir: string;
+  sessionContexts: SessionContext[];
   cleanup: () => Promise<void>;
 }
 
@@ -120,6 +122,7 @@ export async function createHttpTestEnvironment(
   // When the sequence runs dry, subsequent sessions fall back to the
   // createHttpSession default ('http-user').
   let sessionUserIdIdx = 0;
+  const sessionContexts: SessionContext[] = [];
 
   // Create HTTP runtime with session factory
   const runtime = await createStreamableHttpRuntime(
@@ -128,6 +131,7 @@ export async function createHttpTestEnvironment(
       const sessionContext = userIdForSession !== undefined
         ? createHttpSession({ userId: userIdForSession })
         : createHttpSession();
+      sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
@@ -148,6 +152,7 @@ export async function createHttpTestEnvironment(
     runtime,
     container,
     testDir,
+    sessionContexts,
     cleanup: async () => {
       await runtime.close();
       await container.dispose().catch(() => {});
@@ -211,10 +216,12 @@ export async function createHttpTestEnvironmentWithConsole(
     logBroadcast: () => {},
   });
   ingestRoutes.registerConsoleSession();
+  const sessionContexts: SessionContext[] = [];
 
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
       const sessionContext = createHttpSession();
+      sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
@@ -241,6 +248,7 @@ export async function createHttpTestEnvironmentWithConsole(
     runtime,
     container,
     testDir,
+    sessionContexts,
     ingestRoutes,
     cleanup: async () => {
       await runtime.close();

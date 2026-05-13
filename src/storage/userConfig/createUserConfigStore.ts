@@ -56,6 +56,12 @@ export async function createUserConfigStore(
     case 'filesystem': {
       const rootDir = options.rootDir
         ?? path.join(resolveDataDirectory('state', { legacyRoot: options.legacyRoot }), 'user');
+      if (!options.fileOperations) {
+        throw new Error(
+          'FilesystemUserConfigStore requires FileOperationsService from the DI container. ' +
+          'Pass fileOperations when creating the filesystem user config store.',
+        );
+      }
       logger.info('[UserConfigStore] backend=filesystem', { rootDir });
       return new FilesystemUserConfigStore({ rootDir, fileOperations: options.fileOperations });
     }

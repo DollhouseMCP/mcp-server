@@ -15,8 +15,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { FileLockManager } from '../../security/fileLockManager.js';
-import { FileOperationsService, type IFileOperationsService } from '../../services/FileOperationsService.js';
+import type { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { logger } from '../../utils/logger.js';
 import type { IUserConfigStore, UserConfig } from './IUserConfigStore.js';
 import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
@@ -24,17 +23,16 @@ import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
 export interface FilesystemUserConfigStoreOptions {
   /** Root directory for per-user JSON files; the store appends `users/<userId>/config.json`. */
   rootDir: string;
-  fileOperations?: IFileOperationsService;
+  fileOperations: IFileOperationsService;
 }
 
 export class FilesystemUserConfigStore implements IUserConfigStore {
   private readonly rootDir: string;
-  private readonly locks = new FileLockManager();
   private readonly fileOperations: IFileOperationsService;
 
   constructor(options: FilesystemUserConfigStoreOptions) {
     this.rootDir = options.rootDir;
-    this.fileOperations = options.fileOperations ?? new FileOperationsService(this.locks);
+    this.fileOperations = options.fileOperations;
   }
 
   async load(userId: string): Promise<UserConfig> {
@@ -86,11 +84,9 @@ export class FilesystemUserConfigStore implements IUserConfigStore {
       updatedAt: Date.now(),
     };
 
-    await this.locks.withLock(`user-config:${configPath}`, async () => {
-      await this.ensureUserDir(userId);
-      await this.fileOperations.writeFile(configPath, JSON.stringify(payload, null, 2), {
-        source: 'FilesystemUserConfigStore.save',
-      });
+    await this.ensureUserDir(userId);
+    await this.fileOperations.writeFile(configPath, JSON.stringify(payload, null, 2), {
+      source: 'FilesystemUserConfigStore.save',
     });
   }
 

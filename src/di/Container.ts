@@ -48,9 +48,12 @@ import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import type { IActivationStateStore } from "../state/IActivationStateStore.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
+import { FileChallengeStore } from "../state/FileChallengeStore.js";
 import type { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
 import type { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
+import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
+import type { IChallengeStore } from "../state/IChallengeStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
@@ -1011,9 +1014,14 @@ export class DollhouseContainer {
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
     // Issue #402: Pass DangerZoneEnforcer via HandlerRegistry
-    // Build handler registry, then add lazy metricsSink getter.
+    // Build handler registry, then add lazy getters for session-scoped services.
     // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
     // so it isn't available at handler construction time — resolve on first access instead.
+    const sessionContainerRegistry = this.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const resolveActiveOrRoot = <T>(serviceName: string): T => {
+      const activeContainer = sessionContainerRegistry.getActiveContainer();
+      return (activeContainer ?? this).resolve<T>(serviceName);
+    };
     const handlerDeps: HandlerRegistry = {
       elementCRUD: elementCrudHandler,
       memoryManager: this.resolve('MemoryManager'),
@@ -1031,8 +1039,6 @@ export class DollhouseContainer {
       buildInfoService: this.resolve('BuildInfoService'),
       cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
       gatekeeper,  // Issue #452: Policy engine for enforce()
-      dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
-      verificationStore: this.resolve('ChallengeStore'),  // Issue #142, #1945: Verification codes via IChallengeStore
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
@@ -1045,6 +1051,16 @@ export class DollhouseContainer {
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(handlerDeps, 'dangerZoneEnforcer', {
+      get: () => resolveActiveOrRoot<DangerZoneEnforcer>('DangerZoneEnforcer'),
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(handlerDeps, 'verificationStore', {
+      get: () => resolveActiveOrRoot<IChallengeStore>('ChallengeStore'),
       configurable: true,
       enumerable: true,
     });
@@ -1184,10 +1200,14 @@ export class DollhouseContainer {
       const db = this.resolve<DatabaseInstance>('DatabaseInstance');
       const DbActivation = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
       const DbConfirmation = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
+      const DbChallenge = this.resolve<typeof DatabaseChallengeStore>('DatabaseChallengeStoreClass');
       child.register('ActivationStore', () =>
         new DbActivation(db, httpUserId, sid));
       child.register('ConfirmationStore', () =>
         new DbConfirmation(db, httpUserId, sid));
+      child.register('ChallengeStore', () =>
+        new DbChallenge(db, httpUserId, sid));
+      child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
     } else {
@@ -1195,8 +1215,19 @@ export class DollhouseContainer {
         new FileActivationStateStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('ConfirmationStore', () =>
         new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid));
+      child.register('ChallengeStore', () =>
+        new FileChallengeStore(this.resolve('FileOperationsService'), userStateDir, sid));
+      child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+    }
+
+    try {
+      await child.resolve<IChallengeStore>('ChallengeStore').initialize?.();
+    } catch (initError) {
+      logger.warn('[HTTP Session] ChallengeStore initialization failed — starting fresh', {
+        error: initError instanceof Error ? initError.message : String(initError),
+      });
     }
 
     // ── Per-user service overrides (Group B) ──────────────────────────
