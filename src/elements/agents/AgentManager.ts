@@ -134,6 +134,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
@@ -771,8 +772,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     const statePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
     try {
       // Back up the state file before deleting it
-      if (this.backupService) {
-        const result = await this.backupService.backupBeforeDelete(statePath, ElementType.AGENT);
+      const backupService = this.resolveBackupService();
+      if (backupService) {
+        const result = await backupService.backupBeforeDelete(statePath, ElementType.AGENT);
         if (!result.movedOriginal) {
           await this.fileOperations.deleteFile(statePath, ElementType.AGENT, {
             source: 'AgentManager.delete (state file)'

@@ -62,6 +62,8 @@ import { ElementResolver } from './ElementResolver.js';
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
 
+export type BackupServiceProvider = () => BackupService | undefined;
+
 export interface BaseElementManagerOptions {
   elementDirOverride?: string;
   eventDispatcher: ElementEventDispatcher;
@@ -72,6 +74,7 @@ export interface BaseElementManagerOptions {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  backupServiceProvider?: BackupServiceProvider;
   /** Issue #1946: ContextTracker for session-scoped activation state resolution */
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
@@ -111,6 +114,7 @@ export interface ElementManagerDeps {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  backupServiceProvider?: BackupServiceProvider;
   /** Issue #1946: ContextTracker for session-scoped activation state resolution */
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
@@ -194,6 +198,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
   protected readonly elementType: ElementType;
   protected readonly backupService?: BackupService;
+  private readonly backupServiceProvider?: BackupServiceProvider;
 
   /** Issue #1946: ContextTracker for session-scoped activation state */
   protected readonly contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
@@ -268,6 +273,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.fileOperations = fileOperationsService;
     this.fileWatchService = options.fileWatchService;
     this.backupService = options.backupService;
+    this.backupServiceProvider = options.backupServiceProvider;
     this.contextTracker = options.contextTracker;
     this.activationRegistry = options.activationRegistry;
     this.getCurrentUserId = options.getCurrentUserId;
@@ -628,8 +634,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses can override to no-op (e.g. MemoryManager has its own backup system).
    */
   protected async createBackupBeforeSave(absolutePath: string): Promise<void> {
-    if (!this.backupService) return;
-    await this.backupService.backupBeforeSave(absolutePath, this.elementType);
+    const backupService = this.resolveBackupService();
+    if (!backupService) return;
+    await backupService.backupBeforeSave(absolutePath, this.elementType);
   }
 
   /**
@@ -638,9 +645,19 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses can override to no-op (e.g. MemoryManager has its own backup system).
    */
   protected async createBackupBeforeDelete(absolutePath: string): Promise<boolean> {
-    if (!this.backupService) return false;
-    const result = await this.backupService.backupBeforeDelete(absolutePath, this.elementType);
+    const backupService = this.resolveBackupService();
+    if (!backupService) return false;
+    const result = await backupService.backupBeforeDelete(absolutePath, this.elementType);
     return !!result.movedOriginal;
+  }
+
+  /**
+   * Resolve the BackupService for the active execution context.
+   * HTTP sessions provide a per-user BackupService through SessionContainer;
+   * stdio/background/test contexts fall back to the constructor-injected root.
+   */
+  protected resolveBackupService(): BackupService | undefined {
+    return this.backupServiceProvider?.() ?? this.backupService;
   }
 
   // ============================================

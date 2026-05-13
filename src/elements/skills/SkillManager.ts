@@ -44,6 +44,7 @@ export class SkillManager extends BaseElementManager<Skill> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,

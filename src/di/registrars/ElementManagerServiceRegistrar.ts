@@ -92,6 +92,21 @@ export class ElementManagerServiceRegistrar {
       );
     });
 
+    const resolveActiveOrRoot = <T>(serviceName: string): T => {
+      const registry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+      const activeContainer = registry.getActiveContainer();
+      return (activeContainer ?? container).resolve<T>(serviceName);
+    };
+    const dangerZoneEnforcerProxy: DangerZoneBlocker = {
+      block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
+    };
+    const verificationStoreProxy = {
+      set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
+        resolveActiveOrRoot<{ set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }>('ChallengeStore')
+          .set(id, challenge),
+    };
+    const backupServiceProvider = () => resolveActiveOrRoot<BackupService>('BackupService');
+
     container.register('PersonaManager', () => new PersonaManager({
       portfolioManager: container.resolve('PortfolioManager'),
       indicatorConfig: container.resolve('IndicatorConfig'),
@@ -108,6 +123,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
@@ -170,6 +186,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
@@ -188,6 +205,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
@@ -195,20 +213,6 @@ export class ElementManagerServiceRegistrar {
     }));
 
     container.register('TemplateRenderer', () => new TemplateRenderer(container.resolve('TemplateManager')));
-
-    const resolveActiveOrRoot = <T>(serviceName: string): T => {
-      const registry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
-      const activeContainer = registry.getActiveContainer();
-      return (activeContainer ?? container).resolve<T>(serviceName);
-    };
-    const dangerZoneEnforcerProxy: DangerZoneBlocker = {
-      block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
-    };
-    const verificationStoreProxy = {
-      set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
-        resolveActiveOrRoot<{ set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }>('ChallengeStore')
-          .set(id, challenge),
-    };
 
     container.register('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
@@ -221,6 +225,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
@@ -243,6 +248,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
@@ -261,6 +267,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),

@@ -134,6 +134,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
