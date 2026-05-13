@@ -1,41 +1,58 @@
 import { describe, it, beforeEach, afterEach, expect, jest } from '@jest/globals';
 import { ElementFileOperations } from '../../../src/elements/base/ElementFileOperations.js';
-import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { promises as fs } from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-jest.mock('../../../src/security/fileLockManager.js');
 jest.mock('../../../src/security/securityMonitor.js');
 jest.mock('../../../src/utils/logger.js');
 
 describe('ElementFileOperations', () => {
   let tempDir: string;
   let fileOps: ElementFileOperations;
-  let fileLockManager: FileLockManager;
-  let readMock: jest.Mock<(filePath: string, options?: { encoding?: BufferEncoding }) => Promise<string | Buffer>>;
-  let writeMock: jest.Mock<(filePath: string, content: string, options?: { encoding?: BufferEncoding }) => Promise<void>>;
+  let fileOperationsService: IFileOperationsService;
+  let readMock: jest.Mock<(filePath: string, options?: { encoding?: BufferEncoding; maxSize?: number; source?: string }) => Promise<string>>;
+  let writeMock: jest.Mock<(filePath: string, content: string, options?: { encoding?: BufferEncoding; source?: string }) => Promise<void>>;
+  let createDirectoryMock: jest.Mock<(directoryPath: string) => Promise<void>>;
   let securityEventMock: jest.Mock;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'element-file-ops-'));
 
-    readMock = jest.fn<(filePath: string, options?: { encoding?: BufferEncoding }) => Promise<string | Buffer>>((filePath: string, options?: { encoding?: BufferEncoding }) =>
-      fs.readFile(filePath, options)
+    readMock = jest.fn<(filePath: string, options?: { encoding?: BufferEncoding; maxSize?: number; source?: string }) => Promise<string>>(async (filePath: string, options?: { encoding?: BufferEncoding; maxSize?: number; source?: string }) =>
+      fs.readFile(filePath, options?.encoding ?? 'utf-8')
     );
-    writeMock = jest.fn<(filePath: string, content: string, options?: { encoding?: BufferEncoding }) => Promise<void>>((filePath: string, content: string, options?: { encoding?: BufferEncoding }) =>
-      fs.writeFile(filePath, content, options)
+    writeMock = jest.fn<(filePath: string, content: string, options?: { encoding?: BufferEncoding; source?: string }) => Promise<void>>((filePath: string, content: string, options?: { encoding?: BufferEncoding; source?: string }) =>
+      fs.writeFile(filePath, content, options?.encoding ?? 'utf-8')
+    );
+    createDirectoryMock = jest.fn<(directoryPath: string) => Promise<void>>((directoryPath: string) =>
+      fs.mkdir(directoryPath, { recursive: true }).then(() => undefined)
     );
     securityEventMock = jest.fn();
 
-    // Create a mock FileLockManager
-    fileLockManager = new FileLockManager();
-    fileLockManager.atomicReadFile = readMock as any;
-    fileLockManager.atomicWriteFile = writeMock as any;
+    fileOperationsService = {
+      readFile: readMock,
+      readElementFile: jest.fn(),
+      writeFile: writeMock,
+      deleteFile: jest.fn(),
+      createDirectory: createDirectoryMock,
+      listDirectory: jest.fn(),
+      listDirectoryWithTypes: jest.fn(),
+      renameFile: jest.fn(),
+      exists: jest.fn(),
+      stat: jest.fn(),
+      resolvePath: jest.fn(),
+      validatePath: jest.fn(),
+      createFileExclusive: jest.fn(),
+      copyFile: jest.fn(),
+      chmod: jest.fn(),
+      appendFile: jest.fn(),
+    } as IFileOperationsService;
 
     // Create ElementFileOperations instance
-    fileOps = new ElementFileOperations(fileLockManager);
+    fileOps = new ElementFileOperations(fileOperationsService);
 
     (SecurityMonitor as any).logSecurityEvent = securityEventMock;
 
@@ -58,7 +75,11 @@ describe('ElementFileOperations', () => {
 
     expect(result.metadata).toMatchObject({ name: 'Sample' });
     expect(result.content.trim()).toBe('Body text');
-    expect(readMock).toHaveBeenCalledWith(fullPath, { encoding: 'utf-8' });
+    expect(readMock).toHaveBeenCalledWith(fullPath, {
+      encoding: 'utf-8',
+      maxSize: 1024 * 1024,
+      source: 'ElementFileOperations.readFileWithFrontmatter',
+    });
   });
 
   it('readFileWithFrontmatter should enforce maximum file size', async () => {
@@ -86,7 +107,10 @@ describe('ElementFileOperations', () => {
     expect(writeMock).toHaveBeenCalledWith(
       sanitizedPath,
       expect.any(String),
-      { encoding: 'utf-8' }
+      {
+        encoding: 'utf-8',
+        source: 'ElementFileOperations.writeFileWithFrontmatter',
+      }
     );
   });
 

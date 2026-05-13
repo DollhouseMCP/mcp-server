@@ -60,6 +60,7 @@ import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 import { validateUserId } from "../paths/validateUserId.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
+import { SessionContainerRegistry } from "./SessionContainerRegistry.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
 import { createStdioSession } from "../context/StdioSession.js";
@@ -1265,6 +1266,7 @@ export class DollhouseContainer {
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
       server,
@@ -1272,7 +1274,11 @@ export class DollhouseContainer {
         // Issue #1948: Child container disposal handles all session cleanup:
         // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
         // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
-        await child.dispose();
+        try {
+          await child.dispose();
+        } finally {
+          this.resolve<SessionContainerRegistry>('SessionContainerRegistry').unregister(sid);
+        }
       },
     };
   }

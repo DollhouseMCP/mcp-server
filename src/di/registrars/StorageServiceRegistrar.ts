@@ -42,10 +42,13 @@ export class StorageServiceRegistrar {
     const database = container.hasRegistration('DatabaseInstance')
       ? container.resolve<DatabaseInstance>('DatabaseInstance')
       : undefined;
+    const fileOperations = container.hasRegistration('FileOperationsService')
+      ? container.resolve<import('../../services/FileOperationsService.js').IFileOperationsService>('FileOperationsService')
+      : undefined;
 
     const [operatorConfig, userConfig, sharedCache] = await Promise.all([
       createOperatorConfigStore({ database }),
-      createUserConfigStore({ database }),
+      createUserConfigStore({ database, fileOperations }),
       createSharedCacheStore({ database }),
     ]);
 

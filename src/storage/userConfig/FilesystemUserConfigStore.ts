@@ -3,7 +3,7 @@
  *
  * Durable JSON-on-disk backend, one file per user. State lives at
  * `<rootDir>/users/<userId>/config.json`. Atomic write-temp + rename
- * via `FileLockManager.atomicWriteFile`; reads tolerate ENOENT (returns
+ * via `FileOperationsService.writeFile`; reads tolerate ENOENT (returns
  * default) and malformed JSON (logs and returns default).
  *
  * UserId is validated as a UUID before being interpolated into the
@@ -16,6 +16,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { FileLockManager } from '../../security/fileLockManager.js';
+import { FileOperationsService, type IFileOperationsService } from '../../services/FileOperationsService.js';
 import { logger } from '../../utils/logger.js';
 import type { IUserConfigStore, UserConfig } from './IUserConfigStore.js';
 import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
@@ -23,14 +24,17 @@ import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
 export interface FilesystemUserConfigStoreOptions {
   /** Root directory for per-user JSON files; the store appends `users/<userId>/config.json`. */
   rootDir: string;
+  fileOperations?: IFileOperationsService;
 }
 
 export class FilesystemUserConfigStore implements IUserConfigStore {
   private readonly rootDir: string;
   private readonly locks = new FileLockManager();
+  private readonly fileOperations: IFileOperationsService;
 
   constructor(options: FilesystemUserConfigStoreOptions) {
     this.rootDir = options.rootDir;
+    this.fileOperations = options.fileOperations ?? new FileOperationsService(this.locks);
   }
 
   async load(userId: string): Promise<UserConfig> {
@@ -84,7 +88,9 @@ export class FilesystemUserConfigStore implements IUserConfigStore {
 
     await this.locks.withLock(`user-config:${configPath}`, async () => {
       await this.ensureUserDir(userId);
-      await this.locks.atomicWriteFile(configPath, JSON.stringify(payload, null, 2));
+      await this.fileOperations.writeFile(configPath, JSON.stringify(payload, null, 2), {
+        source: 'FilesystemUserConfigStore.save',
+      });
     });
   }
 
@@ -96,7 +102,10 @@ export class FilesystemUserConfigStore implements IUserConfigStore {
   private async ensureUserDir(userId: string): Promise<void> {
     const dir = path.dirname(this.pathForUser(userId));
     try {
-      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await this.fileOperations.createDirectory(dir);
+      await this.fileOperations.chmod(dir, 0o700, {
+        source: 'FilesystemUserConfigStore.ensureUserDir',
+      });
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST') throw err;

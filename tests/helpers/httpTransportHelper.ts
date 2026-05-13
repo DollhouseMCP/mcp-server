@@ -34,11 +34,10 @@ export interface HttpTestEnvironmentOptions {
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
   /**
-   * Override `DOLLHOUSE_HOME_DIR` for the test. Useful for forcing per-user
-   * filesystem layout: pass a fresh temp dir that has no `.dollhouse/` legacy
-   * root so `LegacyDetectingPathResolver.detect()` picks per-user. Without
-   * this override the test inherits whatever layout the host machine has,
-   * which on developer machines is usually flat (legacy `~/.dollhouse/`).
+   * Override `DOLLHOUSE_HOME_DIR` for the test. By default the helper creates
+   * a fresh temp home with no `.dollhouse/` legacy root so
+   * `LegacyDetectingPathResolver.detect()` picks per-user layout anchored on
+   * the temp portfolio root.
    *
    * Restored on cleanup.
    */
@@ -96,23 +95,18 @@ export async function createHttpTestEnvironment(
 
   // Create isolated portfolio directory
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-parity-'));
+  const ownsHomeDir = options.homeDirOverride === undefined;
+  const testHomeDir = options.homeDirOverride ?? await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-home-'));
   await Promise.all(
     ELEMENT_TYPES.map(t => fs.mkdir(path.join(testDir, t), { recursive: true })),
   );
 
   // Configure env before container construction
   process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
+  process.env.DOLLHOUSE_HOME_DIR = testHomeDir;
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
-  // homeDirOverride is the per-user-layout knob: when set, the layout
-  // detector at PathsServiceRegistrar.bootstrapAndRegister() sees no
-  // legacy `~/.dollhouse/` under this home and picks per-user layout
-  // on the portfolio root. Default (no override) inherits the host
-  // machine's layout, which is usually flat on developer machines.
-  if (options.homeDirOverride !== undefined) {
-    process.env.DOLLHOUSE_HOME_DIR = options.homeDirOverride;
-  }
 
   // Bootstrap shared container (same pattern as startStreamableHttpServer)
   const container = new DollhouseContainer();
@@ -158,6 +152,9 @@ export async function createHttpTestEnvironment(
       await runtime.close();
       await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+      if (ownsHomeDir) {
+        await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {});
+      }
       setHttpModeActive(false);
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
@@ -183,17 +180,21 @@ export async function createHttpTestEnvironmentWithConsole(
 ): Promise<HttpTestEnvironmentWithConsole> {
   const savedEnv: Record<string, string | undefined> = {
     DOLLHOUSE_PORTFOLIO_DIR: process.env.DOLLHOUSE_PORTFOLIO_DIR,
+    DOLLHOUSE_HOME_DIR: process.env.DOLLHOUSE_HOME_DIR,
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
   };
 
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-'));
+  const ownsHomeDir = options.homeDirOverride === undefined;
+  const testHomeDir = options.homeDirOverride ?? await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-home-'));
   await Promise.all(
     ELEMENT_TYPES.map(t => fs.mkdir(path.join(testDir, t), { recursive: true })),
   );
 
   process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
+  process.env.DOLLHOUSE_HOME_DIR = testHomeDir;
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
@@ -245,6 +246,9 @@ export async function createHttpTestEnvironmentWithConsole(
       await runtime.close();
       await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+      if (ownsHomeDir) {
+        await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {});
+      }
       setHttpModeActive(false);
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {

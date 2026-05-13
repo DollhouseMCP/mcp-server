@@ -135,7 +135,7 @@ export class PathValidator {
     }
   }
 
-  async validatePersonaPath(userPath: string): Promise<string> {
+  private async resolveAndValidateWithinAllowedDirs(userPath: string): Promise<string> {
     if (!userPath || typeof userPath !== 'string') {
       throw new Error('Path must be a non-empty string');
     }
@@ -152,9 +152,21 @@ export class PathValidator {
 
     const realPath = await PathValidator.resolveSymlinks(resolvedPath, userPath);
     await this.validatePathIsAllowed(realPath, userPath);
+
+    return realPath;
+  }
+
+  async validatePersonaPath(userPath: string): Promise<string> {
+    const realPath = await this.resolveAndValidateWithinAllowedDirs(userPath);
     this.validateFilename(realPath);
 
     return realPath;
+  }
+
+  async enforceWritablePath(filePath: string): Promise<string> {
+    const validatedPath = await this.resolveAndValidateWithinAllowedDirs(filePath);
+    await this.validatePathIsWritable(validatedPath);
+    return validatedPath;
   }
 
   async safeReadFile(filePath: string): Promise<string> {

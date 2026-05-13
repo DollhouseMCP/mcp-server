@@ -1,0 +1,6 @@
+[
+  "src/auth/embedded-as/storage/FilesystemAuthStorageLayer.ts",
+  "src/storage/operatorConfig/FilesystemOperatorConfigStore.ts",
+  "src/storage/sharedCache/FilesystemSharedCacheStore.ts",
+  "src/storage/signingKeys/FilesystemSigningKeyStore.ts"
+]

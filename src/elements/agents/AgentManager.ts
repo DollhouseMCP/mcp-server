@@ -109,7 +109,6 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
 };
 
 export class AgentManager extends BaseElementManager<Agent> {
-  private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
@@ -144,7 +143,6 @@ export class AgentManager extends BaseElementManager<Agent> {
       deps.fileOperationsService,
       deps.validationRegistry,
     );
-    this.stateDir = path.join(this.elementDir, STATE_DIRECTORY);
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
@@ -153,6 +151,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     this._elementManagerResolver = deps.elementManagerResolver;
     this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
     this._verificationStore = deps.verificationStore;
+  }
+
+  /**
+   * State sidecars live under the active element directory. This must resolve
+   * dynamically because HTTP sessions route elementDir to a per-user subtree.
+   */
+  private get stateDir(): string {
+    return path.join(this.elementDir, STATE_DIRECTORY);
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */

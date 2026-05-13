@@ -180,8 +180,15 @@ describe('HTTP Smoke — Element CRUD (All Types)', () => {
     it('should create', async () => {
       const text = await create(handle.client, {
         operation: 'create_element',
-        params: { element_name: NAME, element_type: 'agent', description: 'HTTP smoke agent', content: '# Agent\nTest agent.' },
+        params: {
+          element_name: NAME,
+          element_type: 'agent',
+          description: 'HTTP smoke agent',
+          content: '# Agent\nTest agent.',
+        },
       });
+      expect(JSON.parse(text).success).toBe(true);
+      expect(JSON.stringify(JSON.parse(text).data).toLowerCase()).toMatch(/created agent|created.*success/);
       expect(text.toLowerCase()).toMatch(/created|success/);
     });
 
@@ -308,10 +315,17 @@ describe('HTTP Smoke — Agent Execution Lifecycle', () => {
     preConfirmAllOperations(env.container);
     handle = await connectHttpClient(env.runtime);
 
-    await create(handle.client, {
+    const created = await create(handle.client, {
       operation: 'create_element',
-      params: { element_name: AGENT_NAME, element_type: 'agent', description: 'Executable agent', content: '# Agent\nExecutable.' },
+      params: {
+        element_name: AGENT_NAME,
+        element_type: 'agent',
+        description: 'Executable agent',
+        content: '# Agent\nExecutable.',
+      },
     });
+    expect(JSON.parse(created).success).toBe(true);
+    expect(JSON.stringify(JSON.parse(created).data).toLowerCase()).toMatch(/created agent|created.*success/);
   }, ENV_STARTUP_TIMEOUT);
 
   afterAll(async () => {

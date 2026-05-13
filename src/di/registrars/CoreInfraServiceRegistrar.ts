@@ -29,6 +29,7 @@ import { ConfigManager } from '../../config/ConfigManager.js';
 import { IndexConfigManager } from '../../portfolio/config/IndexConfig.js';
 import { FileLockManager } from '../../security/fileLockManager.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
+import { SessionContainerRegistry } from '../SessionContainerRegistry.js';
 import { FileStorageLayerFactory, defaultMemoryFileFilter } from '../../storage/FileStorageLayerFactory.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import { RetentionPolicyService, MemoryRetentionStrategy } from '../../services/RetentionPolicyService.js';
@@ -61,7 +62,20 @@ export class CoreInfraServiceRegistrar {
     container.register('APICache', () => new APICache());
     container.register('RateLimitTracker', () => new Map<string, number[]>());
     container.register('FileLockManager', () => new FileLockManager());
-    container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    container.register('SessionContainerRegistry', () => new SessionContainerRegistry(() =>
+      container.hasRegistration('ContextTracker')
+        ? container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        : undefined
+    ));
+    container.register('FileOperationsService', () => {
+      const service = new FileOperationsService(container.resolve('FileLockManager'));
+      service.setSessionContainerRegistryProvider(() =>
+        container.hasRegistration('SessionContainerRegistry')
+          ? container.resolve<SessionContainerRegistry>('SessionContainerRegistry')
+          : undefined
+      );
+      return service;
+    });
     // Phase 4.5 follow-up: wire `FileStorageLayerFactory`'s
     // `elementDirResolverFactory` slot so per-element-type storage layers
     // get dynamic per-user dirs in HTTP multi-user mode. The factory is
