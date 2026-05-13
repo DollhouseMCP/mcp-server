@@ -1,5 +1,5 @@
 /**
- * Unit tests for LogHooks — Phase 4 Integration Hooks for Unified Logging System.
+ * Unit tests for LogHooks integration with the unified logging system.
  *
  * Tests the mapping of native events from 10 monitoring/logging systems into
  * UnifiedLogEntry objects routed through LogManager.
@@ -1035,6 +1035,42 @@ describe('LogHooks', () => {
       expect(entry.data).toMatchObject({
         operationId: 'PAYLOAD-CORR-789',
       });
+    });
+
+    it('should fall back to payload session attribution for ElementEventDispatcher fan-out', () => {
+      const mockOn = jest.fn();
+      const dispatcher = {
+        on: jest.fn((event, handler) => {
+          if (event === 'element:activate') {
+            mockOn.mockImplementation(handler);
+          }
+          return jest.fn();
+        }),
+      };
+      const mockContextTracker = {
+        getCorrelationId: jest.fn(() => undefined),
+        getSessionContext: jest.fn(() => undefined),
+      };
+      const container = makeMockContainer({
+        ElementEventDispatcher: dispatcher,
+        ContextTracker: mockContextTracker,
+      });
+
+      wireLogHooks(mockLogManager, container);
+
+      mockOn({
+        elementType: 'persona',
+        elementId: 'session-persona',
+        correlationId: 'PAYLOAD-CORR-SESSION',
+        userId: 'fanout-user',
+        sessionId: 'fanout-session',
+      });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      const entry = mockLogManager.logCalls[0];
+      expect(entry.correlationId).toBe('PAYLOAD-CORR-SESSION');
+      expect(entry.userId).toBe('fanout-user');
+      expect(entry.sessionId).toBe('fanout-session');
     });
   });
 

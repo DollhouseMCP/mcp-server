@@ -50,7 +50,13 @@ import type { DangerZoneBlocker } from '../../elements/agents/types.js';
 export class ElementManagerServiceRegistrar {
   public register(container: DiContainerFacade): void {
     container.register('ElementEventDispatcher', () => new ElementEventDispatcher(
-      container.resolve('ContextTracker')
+      container.resolve('ContextTracker'),
+      {
+        activeDispatcherProvider: () =>
+          container.resolve<SessionContainerRegistry>('SessionContainerRegistry')
+            .getActiveContainer()
+            ?.resolve<ElementEventDispatcher>('ElementEventDispatcher'),
+      },
     ));
 
     // PORTFOLIO & MANAGERS

@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { ElementType } from '../portfolio/types.js';
 import { IElement, IElementMetadata } from '../types/elements/IElement.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { SessionContext } from '../context/SessionContext.js';
 
 export type ElementLifecycleEvent =
   | 'element:load:start'
@@ -37,6 +38,26 @@ export interface ElementEventPayload {
 
 export type ElementEventHandler = (payload: ElementEventPayload) => void | Promise<void>;
 
+export interface ElementEventDispatcherOptions {
+  /**
+   * Root-dispatcher hook: when an HTTP session is active, route element events
+   * into that session's dispatcher instead of publishing them to every
+   * session-scoped listener registered on the root dispatcher.
+   */
+  activeDispatcherProvider?: () => ElementEventDispatcher | undefined;
+  /**
+   * Session-dispatcher hook: publish a pre-attributed copy to the root
+   * dispatcher for cross-cutting observers such as application logging.
+   */
+  fanoutDispatcher?: ElementEventDispatcher;
+  /**
+   * Fixed session attribution for a session-owned dispatcher. Used when an
+   * event is emitted outside AsyncLocalStorage but still belongs to the
+   * dispatcher-owning HTTP session.
+   */
+  boundSession?: Pick<SessionContext, 'userId' | 'sessionId'>;
+}
+
 /**
  * Lightweight dispatcher for element lifecycle events.
  * Provides minimal EventEmitter wrapper with immutable payload semantics.
@@ -49,7 +70,10 @@ export type ElementEventHandler = (payload: ElementEventPayload) => void | Promi
 export class ElementEventDispatcher {
   private readonly emitter = new EventEmitter();
 
-  constructor(private readonly contextTracker?: ContextTracker) {}
+  constructor(
+    private readonly contextTracker?: ContextTracker,
+    private readonly options: ElementEventDispatcherOptions = {},
+  ) {}
 
   /**
    * Subscribe to an event. Returns an unsubscribe function.
@@ -76,11 +100,15 @@ export class ElementEventDispatcher {
    * Session attribution is read from AsyncLocalStorage via ContextTracker.
    */
   emit(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
-    const session = this.contextTracker?.getSessionContext();
-    this.emitter.emit(event, {
-      ...payload,
-      ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
-    });
+    const enriched = this.withSessionAttribution(payload);
+    const activeDispatcher = this.options.activeDispatcherProvider?.();
+    if (activeDispatcher && activeDispatcher !== this) {
+      activeDispatcher.emitRouted(event, enriched);
+      return;
+    }
+
+    this.emitPreAttributed(event, enriched);
+    this.options.fanoutDispatcher?.emitPreAttributed(event, enriched);
   }
 
   /**
@@ -89,14 +117,34 @@ export class ElementEventDispatcher {
    * is lost across the boundary.
    */
   emitAsync(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
-    const session = this.contextTracker?.getSessionContext();
-    const cloned: ElementEventPayload = {
+    const cloned = this.withSessionAttribution(payload);
+    const activeDispatcher = this.options.activeDispatcherProvider?.();
+    setImmediate(() => {
+      if (activeDispatcher && activeDispatcher !== this) {
+        activeDispatcher.emitRouted(event, cloned);
+        return;
+      }
+
+      this.emitPreAttributed(event, cloned);
+      this.options.fanoutDispatcher?.emitPreAttributed(event, cloned);
+    });
+  }
+
+  private emitPreAttributed(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
+    this.emitter.emit(event, payload);
+  }
+
+  private emitRouted(event: ElementLifecycleEvent, payload: ElementEventPayload): void {
+    this.emitPreAttributed(event, payload);
+    this.options.fanoutDispatcher?.emitPreAttributed(event, payload);
+  }
+
+  private withSessionAttribution(payload: ElementEventPayload): ElementEventPayload {
+    const session = this.contextTracker?.getSessionContext() ?? this.options.boundSession;
+    return {
       ...payload,
       ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
     };
-    setImmediate(() => {
-      this.emitter.emit(event, cloned);
-    });
   }
 
   /**

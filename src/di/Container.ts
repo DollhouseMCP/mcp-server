@@ -52,6 +52,7 @@ import { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
 import { BuildInfoService } from "../services/BuildInfoService.js";
 import { InitializationService } from "../services/InitializationService.js";
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
+import { ElementEventDispatcher } from "../events/ElementEventDispatcher.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import type { IActivationStateStore } from "../state/IActivationStateStore.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
@@ -293,18 +294,17 @@ export class DollhouseContainer {
       await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
     }
 
-    // Phase 4.5 storage layers (operator config, user config, shared cache).
+    // Storage layers for operator config, user config, and shared cache.
     // Must run after DatabaseServiceRegistrar so DatabaseInstance is resolvable
     // for the postgres backends; runs before consumers (ConfigManager façade in
-    // Phase G, CollectionIndexManager in Phase H) so they can resolve the stores
-    // when their factories fire.
+    // particular) so they can resolve the stores when their factories fire.
     const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
     await new StorageServiceRegistrar().bootstrapAndRegister(this);
 
-    // Phase 4.5 / Phase J: auto-migrate legacy ~/.dollhouse/config.yml +
-    // keyfiles into the new stores in DB mode on first startup. Idempotent
-    // via marker file; throws on partial-migration failure (Container halts
-    // startup with the error rather than running with half-migrated state).
+    // Auto-migrate legacy ~/.dollhouse/config.yml and keyfiles into the new
+    // stores in DB mode on first startup. Idempotent via marker file; throws
+    // on partial-migration failure so startup halts rather than running with
+    // half-migrated state.
     if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
       const { runConfigToDatabaseMigration } = await import('../storage/migration/configToDatabase.js');
       const userId = this.hasRegistration('BootstrappedUserId')
@@ -498,8 +498,8 @@ export class DollhouseContainer {
    * Called by completeDeferredSetup() in MCP stdio mode, and directly
    * by the --web standalone path which IS the server (#1866).
    *
-   * Phase 4: this runs OUTSIDE any MCP tool-call's session scope (deferred
-   * post-connect work). Storage layers resolve `this.userId` from the active
+   * This runs outside any MCP tool-call's session scope during deferred
+   * post-connect work. Storage layers resolve `this.userId` from the active
    * ContextTracker session, so without a scope they'd throw. Wrap the whole
    * deferred batch in the stdio session's context so autoload, seed install,
    * and activation restore all see a valid user identity in DB mode.
@@ -1127,7 +1127,7 @@ export class DollhouseContainer {
     };
   }
 
-  // ── Shared-container HTTP session support (Phase 2) ────────────────────────
+  // ── Shared-container HTTP session support ─────────────────────────────────
 
   /** Root handler bundle bootstrapped once so shared root services are available in HTTP mode. */
   private httpRootHandlerBundle: HandlerBundle | null = null;
@@ -1149,10 +1149,8 @@ export class DollhouseContainer {
    *
    * Each HTTP session gets its own Server (SDK requirement), ToolRegistry,
    * and ServerSetup with a session-specific SessionResolver. Handlers are
-   * shared across sessions — they are stateless or session-aware (Phase 2 prereqs).
-   *
-   * Phase 3: Per-session ActivationStore. Currently all HTTP sessions
-   * share the container's global activation state.
+   * resolved from the session container when they capture session-owned state;
+   * shared root services must be stateless or session-aware.
    *
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
    * @returns Per-session Server instance plus a dispose callback
@@ -1184,6 +1182,31 @@ export class DollhouseContainer {
     const userBackupsDir = userPathResolver.getUserBackupsDir(httpUserId);
     const userSecurityDir = userPathResolver.getUserSecurityDir(httpUserId);
     const userPortfolioDir = userPathResolver.getUserPortfolioDir(httpUserId);
+
+    // ── Per-session element event dispatcher ────────────────────────
+    // Listener ownership model:
+    // - HTTP persona indicator caches subscribe to this child dispatcher, so
+    //   invalidations only observe events from this session.
+    // - Root application logging is a cross-cutting observer on the root
+    //   dispatcher; child dispatchers forward pre-attributed events to root so
+    //   logs and metrics get both userId and sessionId without listener-side
+    //   filtering discipline.
+    // - Session listeners should subscribe to the child dispatcher resolved
+    //   from SessionContainerRegistry; they never receive events from other
+    //   sessions.
+    child.register('ElementEventDispatcher', () => new ElementEventDispatcher(
+      contextTracker,
+      {
+        fanoutDispatcher: this.resolve<ElementEventDispatcher>('ElementEventDispatcher'),
+        boundSession: { userId: sessionContext.userId, sessionId: sid },
+      },
+    ));
+    child.register('PersonaIndicatorService', () => new PersonaIndicatorService(
+      this.resolve('PersonaManager'),
+      this.resolve('IndicatorConfig'),
+      this.resolve('StateChangeNotifier'),
+      child.resolve('ElementEventDispatcher'),
+    ));
 
     // ── Session-scoped PathValidator ────────────────────────────────
     // Restricts this session's file operations to the user's subtree.
@@ -1399,7 +1422,7 @@ export class DollhouseContainer {
   ): HandlerBundle {
     const personaManager = this.resolve<PersonaManager>('PersonaManager');
     const initService = this.resolve<InitializationService>('InitializationService');
-    const indicatorService = this.resolve<PersonaIndicatorService>('PersonaIndicatorService');
+    const indicatorService = child.resolve<PersonaIndicatorService>('PersonaIndicatorService');
     const personaExporter = new PersonaExporter(() => personaManager.getCurrentUserForAttribution());
     const personaImporter = new PersonaImporter(
       path.join(userPortfolioDir, ElementType.PERSONA),

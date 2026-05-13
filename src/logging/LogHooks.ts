@@ -1,5 +1,5 @@
 /**
- * Phase 4: Integration Hooks for Unified Logging System.
+ * Integration hooks for the unified logging system.
  *
  * Maps native events from 10 monitoring/logging systems into UnifiedLogEntry
  * objects and routes them through LogManager.  Each source system exposes a
@@ -242,7 +242,12 @@ export function wireLogHooks(
     for (const eventName of loggedEvents) {
       const unsub = dispatcher.on(eventName, (payload: any) => {
         const level = eventLevelMap[eventName] ?? 'debug';
-        const attribution = getRequestAttribution(contextTracker);
+        const requestAttribution = getRequestAttribution(contextTracker);
+        const attribution = {
+          correlationId: requestAttribution.correlationId ?? payload.correlationId,
+          userId: requestAttribution.userId ?? payload.userId,
+          sessionId: requestAttribution.sessionId ?? payload.sessionId,
+        };
         // Use elementId if available, fall back to filename from filePath
         const elementName = payload.elementId
           || (payload.filePath ? payload.filePath.replace(/\.[^.]+$/, '') : '');
@@ -259,7 +264,6 @@ export function wireLogHooks(
             ...(payload.filePath ? { filePath: payload.filePath } : {}),
           },
           ...attribution,
-          correlationId: attribution.correlationId ?? payload.correlationId,
         };
         logManager.log(entry);
       });

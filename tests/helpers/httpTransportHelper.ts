@@ -93,6 +93,7 @@ export async function createHttpTestEnvironment(
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
+    DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG,
   };
 
   // Create isolated portfolio directory
@@ -109,6 +110,10 @@ export async function createHttpTestEnvironment(
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+  // Suppress OS-native verification dialogs so unattended HTTP integration
+  // runs don't block on human input. Real dialogs still fire in stdio and
+  // production deployments where the env var is unset.
+  process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'true';
 
   // Bootstrap shared container (same pattern as startStreamableHttpServer)
   const container = new DollhouseContainer();
@@ -189,6 +194,7 @@ export async function createHttpTestEnvironmentWithConsole(
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
+    DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG,
   };
 
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-'));
@@ -203,6 +209,7 @@ export async function createHttpTestEnvironmentWithConsole(
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+  process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'true';
 
   const container = new DollhouseContainer();
   await container.preparePortfolio();
