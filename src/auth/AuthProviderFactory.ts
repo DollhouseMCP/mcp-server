@@ -249,11 +249,18 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
     let sharedInvites: import('./embedded-as/inviteTokens.js').InviteTokenStore | undefined;
     const ensureInvites = async () => {
       if (!sharedInvites) {
-        const { InviteTokenStore, loadOrGenerateInviteSecret } = await import('./embedded-as/inviteTokens.js');
+        const {
+          InviteTokenStore,
+          loadOrGenerateInviteSecret,
+          loadOrGenerateInviteSecretViaStore,
+        } = await import('./embedded-as/inviteTokens.js');
+        const inviteSecret = config.signingKeyStore
+          ? await loadOrGenerateInviteSecretViaStore(config.signingKeyStore)
+          : loadOrGenerateInviteSecret();
         // Storage-backed consumed-jti enforcement (H5): pass the same
         // storage layer the AS uses so single-use survives restart on
         // durable backends.
-        sharedInvites = new InviteTokenStore(loadOrGenerateInviteSecret(), storage);
+        sharedInvites = new InviteTokenStore(inviteSecret, storage);
       }
       return sharedInvites;
     };

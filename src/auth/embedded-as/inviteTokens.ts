@@ -32,9 +32,11 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
+import { logger } from '../../utils/logger.js';
+import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
@@ -270,6 +272,47 @@ export function loadOrGenerateInviteSecret(
   const fresh = randomBytes(32);
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, fresh, { mode: 0o600 });
+  return fresh;
+}
+
+/**
+ * Store-backed equivalent of `loadOrGenerateInviteSecret`. Reads the active
+ * 'invite' kind from the signing-key store; generates and rotates a fresh
+ * secret when none exists. The env override keeps highest precedence so
+ * operators can pin one shared secret explicitly across replicas.
+ */
+export async function loadOrGenerateInviteSecretViaStore(
+  store: ISigningKeyStore,
+  options?: { envSecret?: string },
+): Promise<Buffer> {
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
+  if (envSecret && envSecret.length > 0) {
+    const buf = Buffer.from(envSecret, 'hex');
+    if (buf.length < 16) {
+      throw new Error('DOLLHOUSE_INVITE_TOKEN_SECRET must decode to at least 16 bytes (hex)');
+    }
+    return buf;
+  }
+
+  const active = await store.getActive('invite');
+  if (active) {
+    const stored = active.payload as { secret?: unknown };
+    if (typeof stored.secret === 'string' && stored.secret.length > 0) {
+      const buf = Buffer.from(stored.secret, 'base64');
+      if (buf.length >= 16) return buf;
+      logger.warn(
+        '[inviteTokens] active invite secret in store is shorter than 16 bytes; regenerating. ' +
+        'Any previously-issued invite tokens signed with the prior key will be invalidated.',
+      );
+    }
+  }
+
+  const fresh = randomBytes(32);
+  await store.rotate({
+    kid: `invite-${randomUUID()}`,
+    kind: 'invite',
+    payload: { secret: fresh.toString('base64'), length: fresh.length },
+  });
   return fresh;
 }
 

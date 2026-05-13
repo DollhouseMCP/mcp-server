@@ -5,11 +5,13 @@
  * in `src/auth/embedded-as/persistKeys.ts` (JWKS) and `cookieSecret.ts`
  * (cookie HMAC secret) when the DB backend is selected.
  *
- * Two distinct kinds discriminated by `kind`:
+ * Key material is discriminated by `kind`:
  *   - `'jwks'`   — ECDSA signing keypair stored as a JWK (private + public)
  *                  for `/token` issuance + `/jwks` publication.
  *   - `'cookie'` — HMAC secret for signing interaction cookies (per-stream
  *                  ticket binding, consent CSRF, etc.)
+ *   - `'invite'` — HMAC secret for invite, magic-link, and password-reset
+ *                  token signatures.
  *
  * Exactly one row per kind is `active` at a time. `rotate()` marks the
  * current active row inactive and inserts a new active row in the same
@@ -33,7 +35,7 @@
  * @module storage/signingKeys/ISigningKeyStore
  */
 
-export type SigningKeyKind = 'jwks' | 'cookie';
+export type SigningKeyKind = 'jwks' | 'cookie' | 'invite';
 
 /**
  * A stored signing key. `payload` shape depends on `kind`:
@@ -42,6 +44,8 @@ export type SigningKeyKind = 'jwks' | 'cookie';
  *                  consumers strip `d` before publishing on /jwks.
  *   - `'cookie'` → `{ secret: <base64-encoded-bytes>, length: number }`
  *                  for the HMAC secret.
+ *   - `'invite'` → `{ secret: <base64-encoded-bytes>, length: number }`
+ *                  for invite-token HMAC signatures.
  */
 export interface SigningKey {
   /** Stable identifier. For `'jwks'` this is the JWK `kid`; for `'cookie'` opaque. */

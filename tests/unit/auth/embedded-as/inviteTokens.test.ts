@@ -6,8 +6,10 @@ import * as path from 'node:path';
 import {
   InviteTokenStore,
   loadOrGenerateInviteSecret,
+  loadOrGenerateInviteSecretViaStore,
 } from '../../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 describe('InviteTokenStore', () => {
   let store: InviteTokenStore;
@@ -160,6 +162,66 @@ describe('InviteTokenStore', () => {
       const first = loadOrGenerateInviteSecret(filePath);
       const second = loadOrGenerateInviteSecret(filePath);
       expect(first.equals(second)).toBe(true);
+    });
+  });
+
+  describe('loadOrGenerateInviteSecretViaStore', () => {
+    it('generates and reuses an invite secret from the signing-key store', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+
+      const first = await loadOrGenerateInviteSecretViaStore(keyStore);
+      const second = await loadOrGenerateInviteSecretViaStore(keyStore);
+
+      expect(first.length).toBe(32);
+      expect(first.equals(second)).toBe(true);
+      const active = await keyStore.getActive('invite');
+      expect(active?.kind).toBe('invite');
+      expect(active?.payload.secret).toBe(first.toString('base64'));
+    });
+
+    it('allows independent runtimes sharing the store to verify each other\'s tokens', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      const runtimeASecret = await loadOrGenerateInviteSecretViaStore(keyStore);
+      const runtimeBSecret = await loadOrGenerateInviteSecretViaStore(keyStore);
+      const runtimeA = new InviteTokenStore(runtimeASecret, storage);
+      const runtimeB = new InviteTokenStore(runtimeBSecret, storage);
+
+      const token = runtimeA.issue({ sub: 'replica-user', email: 'replica@example.com', purpose: 'invite' });
+
+      const verifiedByB = runtimeB.verify(token);
+      expect(verifiedByB.ok).toBe(true);
+      if (verifiedByB.ok) {
+        expect(verifiedByB.payload.sub).toBe('replica-user');
+      }
+    });
+
+    it('env var takes precedence over the signing-key store', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      const storeSecret = await loadOrGenerateInviteSecretViaStore(keyStore);
+      const envSecret = randomBytes(32);
+
+      const resolved = await loadOrGenerateInviteSecretViaStore(keyStore, {
+        envSecret: envSecret.toString('hex'),
+      });
+
+      expect(resolved.equals(envSecret)).toBe(true);
+      expect(resolved.equals(storeSecret)).toBe(false);
+    });
+
+    it('regenerates when the active stored invite secret is too short', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      await keyStore.rotate({
+        kid: 'invite-short',
+        kind: 'invite',
+        payload: { secret: randomBytes(8).toString('base64'), length: 8 },
+      });
+
+      const resolved = await loadOrGenerateInviteSecretViaStore(keyStore);
+
+      expect(resolved.length).toBe(32);
+      const active = await keyStore.getActive('invite');
+      expect(active?.kid).not.toBe('invite-short');
+      expect(active?.payload.secret).toBe(resolved.toString('base64'));
     });
   });
 

@@ -62,6 +62,18 @@ function makeCookieWrite(overrides: Partial<SigningKeyWrite> = {}): SigningKeyWr
   };
 }
 
+function makeInviteWrite(overrides: Partial<SigningKeyWrite> = {}): SigningKeyWrite {
+  return {
+    kid: freshKid('invite'),
+    kind: 'invite',
+    payload: {
+      secret: 'aW52aXRlLXNlY3JldC1iYXNlNjQ=',
+      length: 32,
+    },
+    ...overrides,
+  };
+}
+
 function runContractSuite(
   factory: () => Promise<ISigningKeyStore>,
   cleanup: (store: ISigningKeyStore) => Promise<void>,
@@ -138,15 +150,31 @@ function runContractSuite(
     it('does not affect keys of other kinds', async () => {
       const jwks = makeJwksWrite();
       const cookie = makeCookieWrite();
+      const invite = makeInviteWrite();
       await store.rotate(jwks);
       await store.rotate(cookie);
+      await store.rotate(invite);
 
-      // Rotating jwks again should NOT mark the cookie key inactive.
+      // Rotating jwks again should NOT mark the HMAC keys inactive.
       const newJwks = makeJwksWrite();
       await store.rotate(newJwks);
 
       const cookieFound = await store.getByKid(cookie.kid);
       expect(cookieFound?.active).toBe(true);
+      const inviteFound = await store.getByKid(invite.kid);
+      expect(inviteFound?.active).toBe(true);
+    });
+
+    it('supports invite keys as an independent active kind', async () => {
+      const oldInvite = makeInviteWrite();
+      const newInvite = makeInviteWrite();
+      await store.rotate(oldInvite);
+      await store.rotate(newInvite);
+
+      expect((await store.getByKid(oldInvite.kid))?.active).toBe(false);
+      const active = await store.getActive('invite');
+      expect(active?.kid).toBe(newInvite.kid);
+      expect(active?.payload).toEqual(newInvite.payload);
     });
 
     it('throws when rotating with a duplicate kid', async () => {

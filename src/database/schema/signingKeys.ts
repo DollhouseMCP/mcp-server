@@ -6,11 +6,13 @@
  * `src/auth/embedded-as/cookieSecret.ts` (cookie HMAC secret) when the
  * DB backend is selected.
  *
- * Two distinct key kinds discriminated by `kind`:
+ * Key material is discriminated by `kind`:
  *   'jwks'   — ECDSA signing keypair stored as a JWK (private + public)
  *              for /token issuance + /jwks publication.
  *   'cookie' — HMAC secret for signing interaction cookies (per-stream
  *              ticket binding, consent CSRF, etc.)
+ *   'invite' — HMAC secret for invite, magic-link, and password-reset
+ *              token signatures.
  *
  * Rotation marks the current row inactive WITHOUT deletion (audit trail).
  * A partial unique index enforces at most one active row per kind. See
@@ -34,9 +36,9 @@ import { sql } from 'drizzle-orm';
 export const authSigningKeys = pgTable('auth_signing_keys', {
   /** Stable key identifier. For JWKS this is the JWK `kid`; for cookie kind it's an opaque id. */
   kid: varchar('kid', { length: 255 }).primaryKey(),
-  /** Discriminator: 'jwks' or 'cookie'. */
+  /** Discriminator: 'jwks', 'cookie', or 'invite'. */
   kind: varchar('kind', { length: 32 }).notNull(),
-  /** The key material. For 'jwks' this is the full JWK (private + public). For 'cookie' it's {secret: base64}. */
+  /** The key material. For 'jwks' this is the full JWK (private + public). HMAC kinds store {secret: base64}. */
   payload: jsonb('payload').notNull(),
   /** Exactly one row per kind is active at a time (enforced by partial unique index). */
   active: boolean('active').notNull().default(false),

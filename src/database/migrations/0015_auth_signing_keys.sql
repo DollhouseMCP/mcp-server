@@ -22,6 +22,8 @@
 --              for /token + /jwks endpoints
 --   'cookie' — HMAC secret for signing interaction cookies (per-stream
 --              ticket binding, consent CSRF, etc.)
+--   'invite' — HMAC secret for invite, magic-link, and password-reset
+--              token signatures.
 --
 -- Rotation marks the old row inactive WITHOUT deletion (audit trail);
 -- rotated_at captures when. One row per (kind, active=true) at a time —

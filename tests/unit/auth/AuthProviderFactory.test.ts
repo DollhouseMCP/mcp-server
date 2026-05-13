@@ -9,6 +9,8 @@ import {
   AuthMethodFactory,
   createDefaultAuthMethodFactory,
 } from '../../../src/auth/embedded-as/AuthMethodFactory.js';
+import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 describe('AuthProviderFactory two-level structure', () => {
   describe('selectAuthMode', () => {
@@ -128,6 +130,27 @@ describe('AuthProviderFactory two-level structure', () => {
       // Cast through unknown to assert runtime behavior on a string the type
       // system would otherwise reject.
       expect(factory.has('oidc-bridge' as unknown as Parameters<typeof factory.has>[0])).toBe(false);
+    });
+  });
+
+  describe('invite secret store wiring', () => {
+    it('uses the injected signing-key store for local-password invites', async () => {
+      const storage = new InMemoryAuthStorageLayer();
+      const signingKeyStore = new InMemorySigningKeyStore();
+
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['local-password'],
+        storage,
+        signingKeyStore,
+        publicBaseUrl: 'http://127.0.0.1:65530',
+      });
+
+      expect(provider).toBeDefined();
+      const active = await signingKeyStore.getActive('invite');
+      expect(active).not.toBeNull();
+      expect(active?.payload.secret).toEqual(expect.any(String));
     });
   });
 
