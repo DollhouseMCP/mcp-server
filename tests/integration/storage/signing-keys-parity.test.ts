@@ -26,7 +26,7 @@ import {
 } from '../../../src/storage/signingKeys/index.js';
 import { PostgresSigningKeyStore } from '../../../src/storage/signingKeys/PostgresSigningKeyStore.js';
 import { withSystemContext } from '../../../src/database/admin.js';
-import { closeTestDb, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 let kidCounter = 0;
 function freshKid(prefix: string = 'kid'): string {
@@ -299,7 +299,7 @@ const describePg = pgRequired ? describe : describe.skip;
 
 describePg('ISigningKeyStore contract: PostgresSigningKeyStore', () => {
   const reset = async () => {
-    const db = getTestDb();
+    const db = getTestAdminDb();
     await withSystemContext(db, async (tx) => {
       await tx.execute(sql`DELETE FROM auth_signing_keys`);
     });
@@ -317,7 +317,7 @@ describePg('ISigningKeyStore contract: PostgresSigningKeyStore', () => {
   runContractSuite(
     async () => {
       await reset();
-      return new PostgresSigningKeyStore({ db: getTestDb() });
+      return new PostgresSigningKeyStore({ db: getTestAdminDb() });
     },
     async () => {
       if (pgAvailable) await reset();

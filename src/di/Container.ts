@@ -317,7 +317,9 @@ export class DollhouseContainer {
           // SigningKeyStore is registered later by AuthServiceRegistrar; resolve
           // it lazily by constructing a dedicated one here against the same DB.
           signingKeyStore: await (await import('../storage/signingKeys/createSigningKeyStore.js')).createSigningKeyStore({
-            database: this.resolve('DatabaseInstance'),
+            database: this.hasRegistration('SystemDatabaseInstance')
+              ? this.resolve('SystemDatabaseInstance')
+              : this.resolve('DatabaseInstance'),
           }),
           userId,
         });

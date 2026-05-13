@@ -55,8 +55,8 @@ export function getTestDb(): DatabaseInstance {
   return dbConnection.db;
 }
 
-/** Get or create an admin connection for identity bootstrap. */
-function getAdminDb(): DatabaseInstance {
+/** Get or create an admin connection for identity bootstrap and system-context tests. */
+export function getTestAdminDb(): DatabaseInstance {
   adminConnection ??= createDatabaseConnection({
     connectionUrl: TEST_DB_ADMIN_URL,
     poolSize: 2,
@@ -71,7 +71,7 @@ function getAdminDb(): DatabaseInstance {
  * connection because users is RLS-protected (self_read only for app role).
  */
 async function ensureUser(username: string): Promise<string> {
-  const db = getAdminDb();
+  const db = getTestAdminDb();
   const existing = await db
     .select({ id: users.id })
     .from(users)

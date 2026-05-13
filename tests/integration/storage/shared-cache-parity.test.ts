@@ -22,7 +22,7 @@ import {
 } from '../../../src/storage/sharedCache/index.js';
 import { PostgresSharedCacheStore } from '../../../src/storage/sharedCache/PostgresSharedCacheStore.js';
 import { withSystemContext } from '../../../src/database/admin.js';
-import { closeTestDb, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 function makeEntry(overrides: Partial<SharedCacheWriteEntry> = {}): SharedCacheWriteEntry {
   return {
@@ -239,7 +239,7 @@ const describePg = pgRequired ? describe : describe.skip;
 
 describePg('ISharedCacheStore contract: PostgresSharedCacheStore', () => {
   const reset = async () => {
-    const db = getTestDb();
+    const db = getTestAdminDb();
     await withSystemContext(db, async (tx) => {
       await tx.execute(sql`DELETE FROM shared_cache`);
     });
@@ -257,7 +257,7 @@ describePg('ISharedCacheStore contract: PostgresSharedCacheStore', () => {
   runContractSuite(
     async () => {
       await reset();
-      return new PostgresSharedCacheStore({ db: getTestDb() });
+      return new PostgresSharedCacheStore({ db: getTestAdminDb() });
     },
     async () => {
       if (pgAvailable) await reset();

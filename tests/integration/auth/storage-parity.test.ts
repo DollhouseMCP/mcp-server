@@ -21,7 +21,7 @@ import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storag
 import { PostgresAuthStorageLayer } from '../../../src/auth/embedded-as/storage/PostgresAuthStorageLayer.js';
 import { withSystemContext } from '../../../src/database/admin.js';
 import type { IAuthStorageLayer, StoredAccount } from '../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
-import { closeTestDb, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -757,7 +757,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
   // dollhouse_app has DML only — no TRUNCATE — so DELETE FROM is the
   // right reset between tests.
   const reset = async () => {
-    const db = getTestDb();
+    const db = getTestAdminDb();
     await withSystemContext(db, async (tx) => {
       await tx.execute(sql`DELETE FROM auth_kv`);
       await tx.execute(sql`DELETE FROM auth_identity_events`);
@@ -781,7 +781,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
   runContractSuite(
     async () => {
       await reset();
-      return new PostgresAuthStorageLayer({ db: getTestDb() });
+      return new PostgresAuthStorageLayer({ db: getTestAdminDb() });
     },
     async () => {
       if (pgAvailable) await reset();

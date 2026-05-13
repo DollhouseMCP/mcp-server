@@ -593,7 +593,7 @@ Two roles exist:
 | `dollhouse` | Superuser, `BYPASSRLS` | Migrations, admin bootstrap |
 | `dollhouse_app` | `NOBYPASSRLS` | All runtime application queries |
 
-The application pool (`DOLLHOUSE_DATABASE_URL`) connects as `dollhouse_app`. The admin pool (`DOLLHOUSE_DATABASE_ADMIN_URL`) connects as `dollhouse` and is used only for identity bootstrap (creating the initial user row) and running migrations.
+The application pool (`DOLLHOUSE_DATABASE_URL`) connects as `dollhouse_app`. The admin/system pool (`DOLLHOUSE_DATABASE_ADMIN_URL`) connects as `dollhouse` and is used for identity bootstrap, migrations, and system-internal infrastructure tables that intentionally do not carry tenant RLS policies.
 
 ### FORCE ROW LEVEL SECURITY
 
@@ -636,13 +636,21 @@ export async function withUserRead<T>(db, userId, fn) {
 ```typescript
 export async function withSystemContext<T>(db, fn) {
   return db.transaction(async (tx) => {
+    const [role] = await tx.select({
+      currentUser: sql<string>`current_user`,
+      canBypassRls: sql<boolean>`EXISTS (
+        SELECT 1 FROM pg_roles
+        WHERE rolname = current_user AND (rolsuper OR rolbypassrls)
+      )`,
+    });
+    if (!role?.canBypassRls) throw new Error('withSystemContext requires SUPERUSER or BYPASSRLS');
     await tx.execute(sql`SELECT set_config('app.current_user_id', '', true)`);
     return fn(tx);
   });
 }
 ```
 
-`withSystemContext` sets `app.current_user_id` to an empty string. If the calling code uses the `dollhouse_app` role, RLS policies that cast this to `uuid` will throw `invalid_text_representation` rather than silently returning data. This fail-visible design is intentional: a background task that forgets to use the admin role will get a clear error rather than unexpectedly reading across tenant boundaries.
+`withSystemContext` first verifies that the current PostgreSQL role is a superuser or has `BYPASSRLS`. This is a fail-loud tripwire for system-internal tables such as `auth_accounts`, `auth_kv`, `auth_signing_keys`, operator settings, and shared cache, which intentionally do not have per-user RLS policies. Accidentally wiring the `dollhouse_app` role into one of those stores fails before any query runs.
 
 `withSystemContext` is physically separated into `admin.ts` so any import of it in a code review immediately flags the question: "why does this code need to bypass tenant isolation?"
 

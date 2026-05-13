@@ -61,6 +61,7 @@ export class DatabaseServiceRegistrar {
     // Dynamic imports — drizzle-orm stays out of the static module graph
     // so file-mode deployments and tests never load it.
     const { bootstrapDatabase } = await import('../../database/bootstrap.js');
+    const { createDatabaseConnection } = await import('../../database/connection.js');
     const { createUserIdResolver } = await import('../../database/UserContext.js');
 
     const result = await bootstrapDatabase({
@@ -74,6 +75,16 @@ export class DatabaseServiceRegistrar {
     container.register('DatabaseConnection', () => result.connection);
     // Drizzle instance (resolved by stores and storage layers)
     container.register('DatabaseInstance', () => result.db);
+
+    const systemConnection = env.DOLLHOUSE_DATABASE_ADMIN_URL
+      ? createDatabaseConnection({
+          connectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
+          poolSize: Math.min(env.DOLLHOUSE_DATABASE_POOL_SIZE, 2),
+          ssl: env.DOLLHOUSE_DATABASE_SSL,
+        })
+      : result.connection;
+    container.register('SystemDatabaseConnection', () => systemConnection);
+    container.register('SystemDatabaseInstance', () => systemConnection.db);
 
     // Storage layer factory + state store classes — loaded here (async context)
     // so drizzle-orm stays out of the static import graph entirely. File-mode

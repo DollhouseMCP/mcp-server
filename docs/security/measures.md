@@ -49,6 +49,11 @@ See [Security Testing Guide](./testing.md) for details.
   - OAuth helper persists tokens securely and refreshes them from encrypted storage when required.
   - Retry backoff and rate-limit awareness keep GitHub API usage within safe limits.
 
+- **Database Auth State Isolation**
+  - Embedded authorization-server tables such as `auth_accounts`, `auth_kv`, and `auth_signing_keys` are system-internal infrastructure and intentionally do not use per-user RLS policies.
+  - All access to those tables goes through `withSystemContext`, which now verifies the PostgreSQL role has `SUPERUSER` or `BYPASSRLS` before running work.
+  - Hosted database deployments use a separate admin/system connection for this state; the normal app role (`NOBYPASSRLS`) fails loudly if it is accidentally wired into system-context auth storage.
+
 ### Content Security
 
 - **Input Validation Pipeline**

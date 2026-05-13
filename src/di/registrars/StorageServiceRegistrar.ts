@@ -3,9 +3,9 @@
  *
  * Wires the Phase 4.5 storage layers — operator config, user config, and
  * shared cache — into the DI container. Selects the backend per
- * `DOLLHOUSE_STORAGE_BACKEND`; resolves `DatabaseInstance` from the
- * container when in DB mode (DatabaseServiceRegistrar must have run
- * first).
+ * `DOLLHOUSE_STORAGE_BACKEND`; resolves `DatabaseInstance` and
+ * `SystemDatabaseInstance` from the container when in DB mode
+ * (DatabaseServiceRegistrar must have run first).
  *
  * Signing keys live in `AuthServiceRegistrar` instead, paired with the
  * rest of the AS infrastructure (separate env-var selector
@@ -42,14 +42,17 @@ export class StorageServiceRegistrar {
     const database = container.hasRegistration('DatabaseInstance')
       ? container.resolve<DatabaseInstance>('DatabaseInstance')
       : undefined;
+    const systemDatabase = container.hasRegistration('SystemDatabaseInstance')
+      ? container.resolve<DatabaseInstance>('SystemDatabaseInstance')
+      : database;
     const fileOperations = container.hasRegistration('FileOperationsService')
       ? container.resolve<import('../../services/FileOperationsService.js').IFileOperationsService>('FileOperationsService')
       : undefined;
 
     const [operatorConfig, userConfig, sharedCache] = await Promise.all([
-      createOperatorConfigStore({ database }),
+      createOperatorConfigStore({ database: systemDatabase }),
       createUserConfigStore({ database, fileOperations }),
-      createSharedCacheStore({ database }),
+      createSharedCacheStore({ database: systemDatabase }),
     ]);
 
     container.register('OperatorConfigStore', () => operatorConfig);

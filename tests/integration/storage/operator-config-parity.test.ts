@@ -26,7 +26,7 @@ import {
 } from '../../../src/storage/operatorConfig/index.js';
 import { PostgresOperatorConfigStore } from '../../../src/storage/operatorConfig/PostgresOperatorConfigStore.js';
 import { withSystemContext } from '../../../src/database/admin.js';
-import { closeTestDb, getTestDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
+import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
 function makeConfig(overrides: Partial<OperatorConfig> = {}): Omit<OperatorConfig, 'updatedAt'> {
   return {
@@ -199,7 +199,7 @@ const describePg = pgRequired ? describe : describe.skip;
 
 describePg('IOperatorConfigStore contract: PostgresOperatorConfigStore', () => {
   const reset = async () => {
-    const db = getTestDb();
+    const db = getTestAdminDb();
     await withSystemContext(db, async (tx) => {
       await tx.execute(sql`DELETE FROM operator_settings`);
     });
@@ -218,7 +218,7 @@ describePg('IOperatorConfigStore contract: PostgresOperatorConfigStore', () => {
   runContractSuite(
     async () => {
       await reset();
-      return new PostgresOperatorConfigStore({ db: getTestDb() });
+      return new PostgresOperatorConfigStore({ db: getTestAdminDb() });
     },
     async () => {
       if (pgAvailable) await reset();

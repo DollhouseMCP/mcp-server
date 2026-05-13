@@ -43,7 +43,9 @@ export class AuthServiceRegistrar {
     // AuthServiceRegistrar in Container bootstrap, so when DB-mode is
     // configured the registration is present. Filesystem and in-memory
     // backends ignore the value.
-    const database = container.hasRegistration('DatabaseInstance')
+    const database = container.hasRegistration('SystemDatabaseInstance')
+      ? container.resolve<DatabaseInstance>('SystemDatabaseInstance')
+      : container.hasRegistration('DatabaseInstance')
       ? container.resolve<DatabaseInstance>('DatabaseInstance')
       : undefined;
 
