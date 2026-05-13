@@ -18,6 +18,7 @@ import type { SessionActivationRegistry } from '../state/SessionActivationState.
 // Forward declaration — avoids circular import with Container.ts
 interface ParentContainer {
   resolve<T>(name: string): T;
+  hasRegistration(name: string): boolean;
 }
 
 /**
@@ -76,6 +77,14 @@ export class SessionContainer {
       );
     }
     this.services.set(name, { factory: factory as () => unknown, instance: null });
+  }
+
+  /**
+   * Check whether a service is available in this session scope or its parent.
+   * Does not instantiate the service.
+   */
+  hasRegistration(name: string): boolean {
+    return this.services.has(name) || this.parent.hasRegistration(name);
   }
 
   /**

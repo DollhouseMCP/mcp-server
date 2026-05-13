@@ -1,4 +1,5 @@
 import { PACKAGE_VERSION } from "../generated/version.js";
+import * as path from "node:path";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
 import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
@@ -32,12 +33,19 @@ import { DisplayConfigHandler } from "../handlers/DisplayConfigHandler.js";
 import { IdentityHandler } from "../handlers/IdentityHandler.js";
 import { ConfigHandler } from "../handlers/ConfigHandler.js";
 import { SyncHandler } from "../handlers/SyncHandlerV2.js";
+import { PortfolioPullHandler } from "../handlers/PortfolioPullHandler.js";
 import { ToolRegistry } from "../handlers/ToolRegistry.js";
 import { ServerSetup } from "../server/index.js";
 import { PathValidator } from "../security/pathValidator.js";
 import { logger } from "../utils/logger.js";
 import { ErrorHandler } from "../utils/ErrorHandler.js";
 import { SubmitToPortfolioTool } from "../tools/portfolio/submitToPortfolioTool.js";
+import { GitHubAuthManager } from "../auth/GitHubAuthManager.js";
+import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
+import { PortfolioRepoManager } from "../portfolio/PortfolioRepoManager.js";
+import { GitHubPortfolioIndexer } from "../portfolio/GitHubPortfolioIndexer.js";
+import { PortfolioSyncManager } from "../portfolio/PortfolioSyncManager.js";
+import { getPortfolioRepositoryName } from "../config/portfolioConfig.js";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { IndexConfigManager } from "../portfolio/config/IndexConfig.js";
 import { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
@@ -1121,8 +1129,8 @@ export class DollhouseContainer {
 
   // ── Shared-container HTTP session support (Phase 2) ────────────────────────
 
-  /** Cached handler bundle bootstrapped once for HTTP mode. */
-  private httpHandlerBundle: HandlerBundle | null = null;
+  /** Root handler bundle bootstrapped once so shared root services are available in HTTP mode. */
+  private httpRootHandlerBundle: HandlerBundle | null = null;
 
   /**
    * Bootstrap handlers once for HTTP mode and cache the bundle.
@@ -1132,8 +1140,8 @@ export class DollhouseContainer {
    * a ToolRegistry or Server — those are per-session (see createServerForHttpSession).
    */
   public async bootstrapHttpHandlers(): Promise<HandlerBundle> {
-    this.httpHandlerBundle ??= await this.bootstrapHandlers();
-    return this.httpHandlerBundle;
+    this.httpRootHandlerBundle ??= await this.bootstrapHandlers();
+    return this.httpRootHandlerBundle;
   }
 
   /**
@@ -1153,13 +1161,12 @@ export class DollhouseContainer {
     server: Server;
     dispose: () => Promise<void>;
   }> {
-    if (!this.httpHandlerBundle) {
+    if (!this.httpRootHandlerBundle) {
       throw new Error(
         'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
       );
     }
 
-    const bundle = this.httpHandlerBundle;
     const contextTracker = this.resolve<ContextTracker>('ContextTracker');
     const sid = sessionContext.sessionId;
 
@@ -1249,6 +1256,59 @@ export class DollhouseContainer {
       this.resolve('FileOperationsService'), userSecurityDir
     ));
 
+    // ── Per-session GitHub/portfolio coordinators ───────────────────
+    // These services hold user-attributable state or capture TokenManager.
+    // Register them in the child so HTTP handlers resolve the active user's
+    // auth, repository, and sync collaborators instead of root singletons.
+    child.register('GitHubAuthManager', () => new GitHubAuthManager(
+      this.resolve('APICache'),
+      this.resolve('ConfigManager'),
+      child.resolve('TokenManager'),
+    ));
+    child.register('GitHubRateLimiter', () => new GitHubRateLimiter(
+      child.resolve('TokenManager'),
+    ));
+    child.register('PortfolioRepoManager', () => new PortfolioRepoManager(
+      child.resolve('TokenManager'),
+      getPortfolioRepositoryName(),
+    ));
+    child.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
+      child.resolve('PortfolioRepoManager'),
+    ));
+    child.register('PortfolioPullHandler', () => new PortfolioPullHandler({
+      portfolioManager: this.resolve('PortfolioManager'),
+      indexManager: this.resolve('PortfolioIndexManager'),
+      githubIndexer: child.resolve('GitHubPortfolioIndexer'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      syncComparer: this.resolve('PortfolioSyncComparer'),
+      downloader: this.resolve('PortfolioDownloader'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+      storageLayerFactory: this.hasRegistration('StorageLayerFactory')
+        ? this.resolve('StorageLayerFactory')
+        : undefined,
+    }));
+    child.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(this.resolve('APICache'), {
+      authManager: child.resolve('GitHubAuthManager'),
+      portfolioManager: this.resolve('PortfolioManager'),
+      portfolioIndexManager: this.resolve('PortfolioIndexManager'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      rateLimiter: child.resolve('GitHubRateLimiter'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+    }));
+    child.register('PortfolioSyncManager', () => new PortfolioSyncManager({
+      configManager: this.resolve('ConfigManager'),
+      portfolioManager: this.resolve('PortfolioManager'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      indexer: child.resolve('GitHubPortfolioIndexer'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+      storageLayerFactory: this.hasRegistration('StorageLayerFactory')
+        ? this.resolve('StorageLayerFactory')
+        : undefined,
+    }));
+
     // Bridge: attach per-session activation store to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
     const httpSessionState = activationRegistry.getOrCreate(sid);
@@ -1265,6 +1325,17 @@ export class DollhouseContainer {
       });
     }
     gatekeeper.registerSession(sid, httpGkSession);
+
+    const bundle = this.createHttpSessionHandlerBundle(child, userPortfolioDir);
+
+    child.register('ElementCRUDHandler', () => bundle.elementCrudHandler);
+    child.register('CollectionHandler', () => bundle.collectionHandler);
+    child.register('PortfolioHandler', () => bundle.portfolioHandler);
+    child.register('GitHubAuthHandler', () => bundle.githubAuthHandler);
+    child.register('ConfigHandler', () => bundle.configHandler);
+    child.register('SyncHandler', () => bundle.syncHandler);
+    child.register('mcpAqlHandler', () => bundle.mcpAqlHandler);
+    child.resolve<MCPAQLHandler>('mcpAqlHandler');
 
     // Per-session Server, ServerSetup, ToolRegistry — registered in child container
     const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
@@ -1311,6 +1382,198 @@ export class DollhouseContainer {
           this.resolve<SessionContainerRegistry>('SessionContainerRegistry').unregister(sid);
         }
       },
+    };
+  }
+
+  /**
+   * Build the handler graph for a single HTTP session.
+   *
+   * Root bootstrap still owns stdio/web-console handlers. HTTP sessions get
+   * fresh coordinator handlers so captured dependencies such as TokenManager,
+   * PortfolioRepoManager, and GitHubAuthManager resolve through the child
+   * SessionContainer.
+   */
+  private createHttpSessionHandlerBundle(
+    child: SessionContainer,
+    userPortfolioDir: string,
+  ): HandlerBundle {
+    const personaManager = this.resolve<PersonaManager>('PersonaManager');
+    const initService = this.resolve<InitializationService>('InitializationService');
+    const indicatorService = this.resolve<PersonaIndicatorService>('PersonaIndicatorService');
+    const personaExporter = new PersonaExporter(() => personaManager.getCurrentUserForAttribution());
+    const personaImporter = new PersonaImporter(
+      path.join(userPortfolioDir, ElementType.PERSONA),
+      () => personaManager.getCurrentUserForAttribution(),
+      undefined,
+      this.resolve('FileOperationsService'),
+    );
+    const activePersonaAccessor = {
+      get: () => personaManager.getActivePersona()?.filename || null,
+      set: (value: string | null) => {
+        if (value) {
+          personaManager.activatePersona(value).catch(err =>
+            logger.error(`[Container] HTTP persona activation failed for "${value}" — state accessor may be stale:`, err)
+          );
+        } else {
+          personaManager.deactivatePersona();
+        }
+      },
+    };
+
+    const personaHandler = new PersonaHandler(
+      personaManager,
+      personaExporter,
+      personaImporter,
+      initService,
+      indicatorService,
+      activePersonaAccessor,
+    );
+
+    const elementCrudHandler = new ElementCRUDHandler(
+      this.resolve('SkillManager'),
+      this.resolve('TemplateManager'),
+      this.resolve('TemplateRenderer'),
+      this.resolve('AgentManager'),
+      this.resolve('MemoryManager'),
+      this.resolve('EnsembleManager'),
+      personaManager,
+      this.resolve('PortfolioManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+      this.resolve('ElementQueryService'),
+      this.resolve('ValidationRegistry'),
+      child.resolve<IActivationStateStore>('ActivationStore'),
+      child.resolve('BackupService'),
+      this.resolve('PolicyExportService'),
+      this.resolve('SessionActivationRegistry'),
+      this.resolve('ContextTracker'),
+      this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+    );
+
+    const collectionHandler = new CollectionHandler(
+      this.resolve('CollectionBrowser'),
+      this.resolve('CollectionSearch'),
+      this.resolve('PersonaDetails'),
+      this.resolve('ElementInstaller'),
+      this.resolve('CollectionCache'),
+      this.resolve('PortfolioManager'),
+      this.resolve('APICache'),
+      personaManager,
+      child.resolve('SubmitToPortfolioTool'),
+      this.resolve('UnifiedIndexManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+    );
+
+    child.resolve<SubmitToPortfolioTool>('SubmitToPortfolioTool')
+      .setAutoSubmitCheck(() => collectionHandler.isAutoSubmitEnabled());
+
+    const portfolioHandler = new PortfolioHandler(
+      child.resolve('GitHubAuthManager'),
+      this.resolve('PortfolioManager'),
+      child.resolve('PortfolioPullHandler'),
+      this.resolve('PortfolioIndexManager'),
+      this.resolve('UnifiedIndexManager'),
+      initService,
+      indicatorService,
+      this.resolve('ConfigManager'),
+      this.resolve('FileOperationsService'),
+      child.resolve('TokenManager'),
+      child.resolve('PortfolioRepoManager'),
+      collectionHandler,
+    );
+
+    const githubAuthHandler = new GitHubAuthHandler(
+      child.resolve('GitHubAuthManager'),
+      this.resolve('ConfigManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+    );
+
+    const displayConfigHandler = new DisplayConfigHandler(
+      personaManager,
+      initService,
+      indicatorService,
+    );
+
+    const identityHandler = new IdentityHandler(
+      personaManager,
+      initService,
+      indicatorService,
+      this.resolve('ContextTracker'),
+    );
+    if (this.hasRegistration('UserIdentityService')) {
+      identityHandler.setDatabaseIdentityServices(
+        this.resolve('UserIdentityService'),
+        this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      );
+    }
+
+    const configHandler = new ConfigHandler(
+      this.resolve('ConfigManager'),
+      initService,
+      indicatorService,
+    );
+    const syncHandler = new SyncHandler(
+      child.resolve('PortfolioSyncManager'),
+      this.resolve('ConfigManager'),
+      indicatorService,
+    );
+    const enhancedIndexHandler = new EnhancedIndexHandler(
+      this.resolve('EnhancedIndexManager'),
+      indicatorService,
+    );
+
+    const handlerDeps: HandlerRegistry = {
+      elementCRUD: elementCrudHandler,
+      memoryManager: this.resolve('MemoryManager'),
+      agentManager: this.resolve('AgentManager'),
+      templateRenderer: this.resolve('TemplateRenderer'),
+      elementQueryService: this.resolve('ElementQueryService'),
+      collectionHandler,
+      portfolioHandler,
+      authHandler: githubAuthHandler,
+      configHandler,
+      enhancedIndexHandler,
+      personaHandler,
+      syncHandler,
+      buildInfoService: this.resolve('BuildInfoService'),
+      cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
+      gatekeeper: this.resolve('gatekeeper'),
+      dangerZoneEnforcer: child.resolve('DangerZoneEnforcer'),
+      verificationStore: child.resolve('ChallengeStore'),
+      verificationNotifier: this.resolve('VerificationNotifier'),
+      memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),
+      performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
+      gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
+      circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
+      resilienceMetrics: this.resolve<ResilienceMetricsTracker>('ResilienceMetricsTracker'),
+      activationRegistry: this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      isDbMode: this.hasRegistration('DatabaseInstance'),
+    };
+    Object.defineProperty(handlerDeps, 'metricsSink', {
+      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+
+    return {
+      personaHandler,
+      elementCrudHandler,
+      collectionHandler,
+      portfolioHandler,
+      githubAuthHandler,
+      displayConfigHandler,
+      identityHandler,
+      configHandler,
+      syncHandler,
+      toolRegistry: undefined as unknown as ToolRegistry,
+      enhancedIndexHandler,
+      mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
     };
   }
 
