@@ -8,6 +8,7 @@ import type { InitializationService } from '../../../src/services/Initialization
 import type { PersonaIndicatorService } from '../../../src/services/PersonaIndicatorService.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import type { GitHubAuthHandler } from '../../../src/handlers/GitHubAuthHandler.js';
+import type { PathService } from '../../../src/paths/PathService.js';
 
 const { GitHubAuthHandler: GitHubAuthHandlerClass } = await import('../../../src/handlers/GitHubAuthHandler.js');
 
@@ -59,6 +60,20 @@ describe('GitHubAuthHandler (DI)', () => {
   let indicatorService: jest.Mocked<PersonaIndicatorService>;
   let fileOperations: jest.Mocked<FileOperationsService>;
   let handler: GitHubAuthHandler;
+
+  function handlerWithAuthDir(authDir: string): GitHubAuthHandler {
+    const pathService = {
+      getUserAuthDir: jest.fn().mockReturnValue(authDir)
+    } as unknown as PathService;
+    return new GitHubAuthHandlerClass(
+      authManager,
+      configManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      pathService
+    );
+  }
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -261,6 +276,71 @@ describe('GitHubAuthHandler (DI)', () => {
       }
       spawnSpy.mockRestore();
     });
+
+    it('writes OAuth helper state under each session auth dir when PathService is injected', async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-user-state-'));
+      const helperPath = path.join(tempRoot, 'oauth-helper.mjs');
+      await fs.writeFile(helperPath, 'console.log(\"helper\");', 'utf-8');
+      const originalHelper = process.env.DOLLHOUSE_OAUTH_HELPER;
+      process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
+
+      const aliceAuthDir = path.join(tempRoot, 'users', 'alice', 'auth');
+      const bobAuthDir = path.join(tempRoot, 'users', 'bob', 'auth');
+      const aliceHandler = handlerWithAuthDir(aliceAuthDir);
+      const bobHandler = handlerWithAuthDir(bobAuthDir);
+      const aliceSpawn = jest.spyOn(aliceHandler as any, 'spawnHelperProcess').mockReturnValue({
+        pid: 1111,
+        unref: jest.fn()
+      } as any);
+      const bobSpawn = jest.spyOn(bobHandler as any, 'spawnHelperProcess').mockReturnValue({
+        pid: 2222,
+        unref: jest.fn()
+      } as any);
+
+      try {
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false } as any);
+        authManager.resolveClientId.mockResolvedValue('Ov23liClient');
+        authManager.initiateDeviceFlow
+          .mockResolvedValueOnce({
+            device_code: 'alice-device',
+            user_code: 'ALICE-CODE',
+            verification_uri: 'https://github.com/login/device',
+            expires_in: 900,
+            interval: 5
+          } as any)
+          .mockResolvedValueOnce({
+            device_code: 'bob-device',
+            user_code: 'BOB-CODE',
+            verification_uri: 'https://github.com/login/device',
+            expires_in: 900,
+            interval: 5
+          } as any);
+
+        await aliceHandler.setupGitHubAuth();
+        await bobHandler.setupGitHubAuth();
+
+        const aliceState = JSON.parse(
+          await fs.readFile(path.join(aliceAuthDir, 'oauth-helper-state.json'), 'utf-8')
+        );
+        const bobState = JSON.parse(
+          await fs.readFile(path.join(bobAuthDir, 'oauth-helper-state.json'), 'utf-8')
+        );
+
+        expect(aliceState.deviceCode).toBe('alice-device');
+        expect(aliceState.userCode).toBe('ALICE-CODE');
+        expect(bobState.deviceCode).toBe('bob-device');
+        expect(bobState.userCode).toBe('BOB-CODE');
+        expect(aliceSpawn).toHaveBeenCalledTimes(1);
+        expect(bobSpawn).toHaveBeenCalledTimes(1);
+      } finally {
+        aliceSpawn.mockRestore();
+        bobSpawn.mockRestore();
+        if (originalHelper === undefined) delete process.env.DOLLHOUSE_OAUTH_HELPER;
+        else process.env.DOLLHOUSE_OAUTH_HELPER = originalHelper;
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    });
+
   });
 
   describe('checkGitHubAuth helper states', () => {

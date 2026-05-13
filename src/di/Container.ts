@@ -969,7 +969,8 @@ export class DollhouseContainer {
       this.resolve('ConfigManager'),
       initService,
       indicatorService,
-      this.resolve('FileOperationsService')
+      this.resolve('FileOperationsService'),
+      this.resolve('PathService')
     );
 
     const displayConfigHandler = new DisplayConfigHandler(
@@ -1515,6 +1516,7 @@ export class DollhouseContainer {
       initService,
       indicatorService,
       this.resolve('FileOperationsService'),
+      this.resolve('PathService'),
     );
 
     const displayConfigHandler = new DisplayConfigHandler(
