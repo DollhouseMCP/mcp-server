@@ -93,55 +93,45 @@ describe('github-portfolio-indexer-leak: shared GitHubPortfolioIndexer cache sto
     console.log('[indexer-leak] GitHubPortfolioIndexer is singleton:', idx1 === idx2);
   });
 
-  it('Alice\'s cache entry is visible to Bob because the cache is an instance field on the singleton', () => {
+  it('Alice\'s cache entry is not visible through Bob\'s user-keyed cache slot', () => {
     const indexer = env.container.resolve<GitHubPortfolioIndexer>('GitHubPortfolioIndexer');
 
-    // Directly inject Alice's portfolio index into the singleton's cache.
+    // Directly inject Alice's portfolio index into the singleton's per-user cache.
     const aliceIndex = makeFakeIndex('alice-github');
     const indexerInternal = indexer as unknown as {
-      cache: GitHubPortfolioIndex | null;
-      lastFetch: Date | null;
+      cacheByUser: Map<string, GitHubPortfolioIndex>;
+      lastFetchByUser: Map<string, Date>;
     };
-    indexerInternal.cache = aliceIndex;
-    indexerInternal.lastFetch = new Date();
+    indexerInternal.cacheByUser.set(USER_A, aliceIndex);
+    indexerInternal.lastFetchByUser.set(USER_A, new Date());
 
-    // Now resolve from the same container as Bob would (same object reference).
+    // Now resolve from the same container as Bob would (same object reference),
+    // but inspect Bob's distinct user-keyed cache slot.
     const indexerForBob = env.container.resolve<GitHubPortfolioIndexer>('GitHubPortfolioIndexer');
-    const bobSeesCache = (indexerForBob as unknown as { cache: GitHubPortfolioIndex | null }).cache;
+    const bobSeesCache = (indexerForBob as unknown as {
+      cacheByUser: Map<string, GitHubPortfolioIndex>;
+    }).cacheByUser.get(USER_B);
 
     console.log('[indexer-leak] Cache username visible to Bob:', bobSeesCache?.username);
 
-    // LEAK PROVEN: Bob's resolution sees Alice's username.
-    if (bobSeesCache?.username === 'alice-github') {
-      throw new Error(
-        'CACHE LEAK PROVEN: GitHubPortfolioIndexer.cache is an instance field on a ' +
-        'root-scoped singleton. Alice\'s cached portfolio (username: alice-github, ' +
-        `sha: ${bobSeesCache.sha}) is visible to Bob's session within the 15-minute TTL. ` +
-        'Bob\'s portfolio operations would show Alice\'s repo listing.'
-      );
-    }
-
-    // If we reach here, Bob got null or a different cache entry.
-    console.log('[indexer-leak] AUDIT DISPROVED: Bob did not see Alice\'s cache entry.');
     expect(bobSeesCache?.username).not.toBe('alice-github');
   }, TEST_TIMEOUT);
 
-  it('index TTL check is not user-aware (lastFetch is shared, not per-user)', () => {
+  it('index TTL state is tracked per user', () => {
     const indexer = env.container.resolve<GitHubPortfolioIndexer>('GitHubPortfolioIndexer');
     const indexerInternal = indexer as unknown as {
-      cache: GitHubPortfolioIndex | null;
-      lastFetch: Date | null;
+      cacheByUser: Map<string, GitHubPortfolioIndex>;
+      lastFetchByUser: Map<string, Date>;
       ttl: number;
     };
 
     // Set a fresh fetch time for Alice.
-    indexerInternal.lastFetch = new Date();
-    indexerInternal.cache = makeFakeIndex('alice-github');
+    indexerInternal.lastFetchByUser.set(USER_A, new Date());
+    indexerInternal.cacheByUser.set(USER_A, makeFakeIndex('alice-github'));
 
-    // The TTL check is done against `this.lastFetch` which is a single field.
-    // Bob's fetch within the TTL window would use Alice's cached data.
     const ttlMs = indexerInternal.ttl;
-    const lastFetch = indexerInternal.lastFetch;
+    const lastFetch = indexerInternal.lastFetchByUser.get(USER_A)!;
+    const bobLastFetch = indexerInternal.lastFetchByUser.get(USER_B);
     const ageMs = Date.now() - lastFetch.getTime();
     const isWithinTtl = ageMs < ttlMs;
 
@@ -151,12 +141,7 @@ describe('github-portfolio-indexer-leak: shared GitHubPortfolioIndexer cache sto
       '| Is within TTL:', isWithinTtl
     );
 
-    // Within TTL: Bob would get Alice's stale cache. This is the impersonation window.
     expect(isWithinTtl).toBe(true);
-    console.log(
-      '[indexer-leak] CONFIRMED: Bob\'s request within',
-      Math.round(ttlMs / 60_000),
-      'minutes of Alice\'s last fetch would return Alice\'s index.'
-    );
+    expect(bobLastFetch).toBeUndefined();
   });
 });

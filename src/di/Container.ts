@@ -1297,6 +1297,7 @@ export class DollhouseContainer {
     ));
     child.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
       child.resolve('PortfolioRepoManager'),
+      () => httpUserId,
     ));
     child.register('PortfolioPullHandler', () => new PortfolioPullHandler({
       portfolioManager: this.resolve('PortfolioManager'),

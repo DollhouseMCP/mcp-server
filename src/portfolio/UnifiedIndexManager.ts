@@ -2094,6 +2094,7 @@ export class UnifiedIndexManager {
    */
   private createCacheKey(options: UnifiedSearchOptions): string {
     return JSON.stringify({
+      namespace: this.getCacheNamespace(),
       query: options.query,
       includeLocal: options.includeLocal,
       includeGitHub: options.includeGitHub,
@@ -2254,7 +2255,7 @@ export class UnifiedIndexManager {
    * @returns true if source is enabled
    */
   private isSourceEnabled(source: ElementSource, options: UnifiedSearchOptions): boolean {
-    const cacheKey = `${source}-${options.includeLocal}-${options.includeGitHub}-${options.includeCollection}`;
+    const cacheKey = `${this.getCacheNamespace()}-${source}-${options.includeLocal}-${options.includeGitHub}-${options.includeCollection}`;
 
     if (this.sourceAvailabilityCache.has(cacheKey)) {
       return this.sourceAvailabilityCache.get(cacheKey)!;
@@ -2331,19 +2332,25 @@ export class UnifiedIndexManager {
    * @param duration - Duration in milliseconds
    */
   private recordSourceUsage(source: 'local' | 'github' | 'collection', resultCount: number, duration: number): void {
-    const existing = this.sourceUsageTelemetry.get(source) ?? {
+    const telemetryKey = `${this.getCacheNamespace()}:${source}`;
+    const existing = this.sourceUsageTelemetry.get(telemetryKey) ?? {
       searchCount: 0,
       resultCount: 0,
       totalDuration: 0,
       lastUsed: new Date()
     };
 
-    this.sourceUsageTelemetry.set(source, {
+    this.sourceUsageTelemetry.set(telemetryKey, {
       searchCount: existing.searchCount + 1,
       resultCount: existing.resultCount + resultCount,
       totalDuration: existing.totalDuration + duration,
       lastUsed: new Date()
     });
+  }
+
+  private getCacheNamespace(): string {
+    const manager = this.localIndexManager as unknown as { getCacheNamespace?: () => string };
+    return manager.getCacheNamespace?.() ?? 'system';
   }
 
   /**

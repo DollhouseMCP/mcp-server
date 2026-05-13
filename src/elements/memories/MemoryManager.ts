@@ -528,6 +528,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
+  private memoryHashKey(rawKey: string): string {
+    return `${this.getCacheNamespace()}:${rawKey}`;
+  }
+
   /**
    * Get all date folders in memories directory.
    * Phase 2: Removed local cache — MemoryStorageLayer scan cooldown handles the hot path.
@@ -587,7 +591,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Deduplication telemetry: emit MEMORY_DUPLICATE_DETECTED if this element's
     // content hash matches a previously saved memory (informational — does not block).
     const contentHash = this.calculateContentHash(element);
-    const existingIndexKey = this.contentHashIndex.get(contentHash);
+    const namespacedContentHash = this.memoryHashKey(contentHash);
+    const existingIndexKey = this.contentHashIndex.get(namespacedContentHash);
     if (existingIndexKey) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_DUPLICATE_DETECTED,
@@ -736,8 +741,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const indexKey = isWritableStorageLayer(this.storageLayer)
       ? filePath
       : path.join(this.memoriesDir, filePath);
-    this.contentHashIndex.set(contentHash, indexKey);
-    this.contentHashByPath.set(indexKey, contentHash);
+    const namespacedContentHash = this.memoryHashKey(contentHash);
+    const namespacedIndexKey = this.memoryHashKey(indexKey);
+    this.contentHashIndex.set(namespacedContentHash, indexKey);
+    this.contentHashByPath.set(namespacedIndexKey, namespacedContentHash);
 
     // Audit event: successful memory save (with entry count for observability)
     const stats = element.getStats();
@@ -1574,10 +1581,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const indexKey = isWritableStorageLayer(this.storageLayer)
         ? resolvedRelative
         : path.join(this.memoriesDir, resolvedRelative);
-      const hash = this.contentHashByPath.get(indexKey);
+      const namespacedIndexKey = this.memoryHashKey(indexKey);
+      const hash = this.contentHashByPath.get(namespacedIndexKey);
       if (hash) {
         this.contentHashIndex.delete(hash);
-        this.contentHashByPath.delete(indexKey);
+        this.contentHashByPath.delete(namespacedIndexKey);
       }
     } catch (error) {
       // Preserve idempotent delete semantics: ENOENT is not an error

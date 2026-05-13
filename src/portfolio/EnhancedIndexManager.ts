@@ -61,6 +61,7 @@ import {
   IndexOptions,
   ElementPath
 } from './types/IndexTypes.js';
+import type { PathService } from '../paths/PathService.js';
 
 // Re-export types for backward compatibility
 export type {
@@ -80,9 +81,8 @@ export type {
 
 
 export class EnhancedIndexManager {
-  private index: EnhancedIndex | null = null;
-  private indexPath: string;
-  private lastLoaded: Date | null = null;
+  private readonly indexByNamespace = new Map<string, EnhancedIndex>();
+  private readonly lastLoadedByNamespace = new Map<string, Date>();
   private TTL_MS: number;
   private isBuilding = false;  // Track if index is being built
   private nlpScoring: NLPScoringManager;
@@ -91,7 +91,7 @@ export class EnhancedIndexManager {
   private config: IndexConfigManager;
   private readonly configManager: ConfigManager;
   private readonly portfolioIndexManager: PortfolioIndexManager;
-  private fileLock: FileLock;
+  private readonly fileLocks = new Map<string, FileLock>();
   private memoryCleanupInterval: NodeJS.Timeout | null = null;
   private lastMemoryCleanup: Date = new Date();
   private readonly elementDefinitionBuilder: ElementDefinitionBuilder;
@@ -116,11 +116,9 @@ export class EnhancedIndexManager {
     verbTriggerManager: VerbTriggerManager,
     relationshipManager: RelationshipManager,
     helpers: EnhancedIndexHelpers,
-    fileOperations: FileOperationsService
+    fileOperations: FileOperationsService,
+    private readonly pathService?: PathService
   ) {
-    const portfolioPath = path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
-    this.indexPath = path.join(portfolioPath, 'capability-index.yaml');
-
     // Initialize configuration
     this.config = indexConfigManager;
     this.configManager = configManager;
@@ -153,9 +151,6 @@ export class EnhancedIndexManager {
       persistIndex: (index) => this.writeToFile(index)
     });
 
-    // Initialize file lock
-    this.fileLock = new FileLock(this.indexPath);
-
     logger.debug('EnhancedIndexManager initialized', {
       indexPath: this.indexPath,
       config: {
@@ -166,6 +161,51 @@ export class EnhancedIndexManager {
 
     // Start automatic memory cleanup to prevent leaks
     this.startMemoryCleanup();
+  }
+
+  private get index(): EnhancedIndex | null {
+    return this.indexByNamespace.get(this.indexPath) ?? null;
+  }
+
+  private set index(value: EnhancedIndex | null) {
+    const namespace = this.indexPath;
+    if (value) {
+      this.indexByNamespace.set(namespace, value);
+    } else {
+      this.indexByNamespace.delete(namespace);
+    }
+  }
+
+  private get lastLoaded(): Date | null {
+    return this.lastLoadedByNamespace.get(this.indexPath) ?? null;
+  }
+
+  private set lastLoaded(value: Date | null) {
+    const namespace = this.indexPath;
+    if (value) {
+      this.lastLoadedByNamespace.set(namespace, value);
+    } else {
+      this.lastLoadedByNamespace.delete(namespace);
+    }
+  }
+
+  public get indexPath(): string {
+    let portfolioPath: string;
+    try {
+      portfolioPath = this.pathService?.getUserPortfolioDir() ?? path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
+    } catch {
+      portfolioPath = this.pathService?.resolveDataDir('portfolio-root') ?? path.join(process.env.HOME || '', '.dollhouse', 'portfolio');
+    }
+    return path.join(portfolioPath, 'capability-index.yaml');
+  }
+
+  private getFileLock(indexPath: string): FileLock {
+    let lock = this.fileLocks.get(indexPath);
+    if (!lock) {
+      lock = new FileLock(indexPath);
+      this.fileLocks.set(indexPath, lock);
+    }
+    return lock;
   }
 
   public async dispose(): Promise<void> {
@@ -184,10 +224,10 @@ export class EnhancedIndexManager {
 
     this.metricsTracker.dispose();
 
-    // Dispose of file lock
-    if (this.fileLock) {
-      this.fileLock.dispose();
+    for (const lock of this.fileLocks.values()) {
+      lock.dispose();
     }
+    this.fileLocks.clear();
 
     logger.debug('Disposed EnhancedIndexManager timers and caches');
   }
@@ -306,7 +346,9 @@ export class EnhancedIndexManager {
   private async buildIndex(options: IndexOptions = {}): Promise<void> {
     // Use file locking to prevent concurrent builds
     const config = this.config.getConfig();
-    const lockAcquired = await this.fileLock.acquire({
+    const indexPath = this.indexPath;
+    const fileLock = this.getFileLock(indexPath);
+    const lockAcquired = await fileLock.acquire({
       timeout: config.index.lockTimeoutMs,
       stale: 60000  // 1 minute
     });
@@ -405,7 +447,7 @@ export class EnhancedIndexManager {
 
     } finally {
       this.isBuilding = false;
-      await this.fileLock.release();
+      await fileLock.release();
     }
   }
 
@@ -713,8 +755,18 @@ export class EnhancedIndexManager {
   /**
    * Telemetry tracking infrastructure
    */
-  private telemetryMetrics: Map<string, any> = new Map();
+  private readonly telemetryMetricsByNamespace: Map<string, Map<string, any>> = new Map();
   private telemetryTimer: NodeJS.Timeout | null = null;
+
+  private get telemetryMetrics(): Map<string, any> {
+    const namespace = this.indexPath;
+    let metrics = this.telemetryMetricsByNamespace.get(namespace);
+    if (!metrics) {
+      metrics = new Map<string, any>();
+      this.telemetryMetricsByNamespace.set(namespace, metrics);
+    }
+    return metrics;
+  }
 
   /**
    * Start telemetry tracking for an operation
@@ -743,8 +795,9 @@ export class EnhancedIndexManager {
     const duration = Date.now() - startTime;
 
     // Aggregate metrics
-    if (!this.telemetryMetrics.has(operationName)) {
-      this.telemetryMetrics.set(operationName, {
+    const telemetryMetrics = this.telemetryMetrics;
+    if (!telemetryMetrics.has(operationName)) {
+      telemetryMetrics.set(operationName, {
         count: 0,
         totalDuration: 0,
         avgDuration: 0,
@@ -754,7 +807,7 @@ export class EnhancedIndexManager {
       });
     }
 
-    const stats = this.telemetryMetrics.get(operationName);
+    const stats = telemetryMetrics.get(operationName);
     stats.count++;
     stats.totalDuration += duration;
     stats.avgDuration = stats.totalDuration / stats.count;
@@ -800,11 +853,12 @@ export class EnhancedIndexManager {
    * Report aggregated telemetry metrics
    */
   private reportTelemetry(): void {
-    if (this.telemetryMetrics.size === 0) return;
+    const telemetryMetrics = this.telemetryMetrics;
+    if (telemetryMetrics.size === 0) return;
 
     const report = {
       timestamp: new Date().toISOString(),
-      metrics: Object.fromEntries(this.telemetryMetrics),
+      metrics: Object.fromEntries(telemetryMetrics),
     };
 
     // Log summary report
@@ -816,7 +870,7 @@ export class EnhancedIndexManager {
     // }
 
     // Clear metrics after reporting
-    this.telemetryMetrics.clear();
+    telemetryMetrics.clear();
   }
 
   /**
@@ -826,7 +880,8 @@ export class EnhancedIndexManager {
   private async writeToFile(index: EnhancedIndex): Promise<void> {
     try {
       // Ensure directory exists
-      const dir = path.dirname(this.indexPath);
+      const indexPath = this.indexPath;
+      const dir = path.dirname(indexPath);
       await this.fileOperations.createDirectory(dir);
 
       // Convert to YAML with nice formatting
@@ -843,7 +898,7 @@ export class EnhancedIndexManager {
         throw new Error(`Unicode issues in index: ${validation.detectedIssues.join(', ')}`);
       }
 
-      await this.fileOperations.writeFile(this.indexPath, yamlContent, {
+      await this.fileOperations.writeFile(indexPath, yamlContent, {
         source: 'EnhancedIndexManager.writeToFile'
       });
 
@@ -1382,9 +1437,9 @@ export class EnhancedIndexManager {
       (this.nlpScoring as any).dispose();
     }
 
-    // Release file lock if held
-    if (this.fileLock) {
-      await this.fileLock.release().catch(() => {});
+    // Release file locks if held
+    for (const lock of this.fileLocks.values()) {
+      await lock.release().catch(() => {});
     }
   }
 }

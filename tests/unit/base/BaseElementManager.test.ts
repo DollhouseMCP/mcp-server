@@ -35,6 +35,9 @@ jest.mock('../../../src/utils/logger.js');
 import { logger as _logger } from '../../../src/utils/logger.js';
 import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
+const cacheKeyFor = (manager: unknown, elementId: string): string =>
+  `${(manager as { getCacheNamespace: () => string }).getCacheNamespace()}:${elementId}`;
+
 // Test element for concrete implementation
 interface TestElementMetadata {
   name: string;
@@ -636,7 +639,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, testPath);
 
       // Cache should contain the saved element
-      expect((manager as any).elements.has(element.id)).toBe(true);
+      expect((manager as any).elements.has(cacheKeyFor(manager, element.id))).toBe(true);
     });
 
     it('removes an element from the cache when deleting', async () => {

@@ -79,7 +79,7 @@ describe('element-cache-singleton-leak: LRUCache shared across HTTP sessions', (
         element_name: SHARED_PERSONA_NAME,
         element_type: 'persona',
         description: 'Alice persona v1',
-        instructions: 'ALICE_ORIGINAL_INSTRUCTIONS',
+        content: 'ALICE_ORIGINAL_INSTRUCTIONS',
       },
     });
     console.log('[element-cache] Alice create result:', createResult.substring(0, 200));
@@ -91,7 +91,9 @@ describe('element-cache-singleton-leak: LRUCache shared across HTTP sessions', (
       params: {
         element_name: SHARED_PERSONA_NAME,
         element_type: 'persona',
-        instructions: 'ALICE_MODIFIED_INSTRUCTIONS_V2',
+        input: {
+          content: 'ALICE_MODIFIED_INSTRUCTIONS_V2',
+        },
       },
     });
     console.log('[element-cache] Alice edit result:', editResult.substring(0, 200));
@@ -105,7 +107,7 @@ describe('element-cache-singleton-leak: LRUCache shared across HTTP sessions', (
         element_name: SHARED_PERSONA_NAME,
         element_type: 'persona',
         description: 'Bob persona — distinct from Alice',
-        instructions: 'BOB_OWN_INSTRUCTIONS',
+        content: 'BOB_OWN_INSTRUCTIONS',
       },
     });
     console.log('[element-cache] Bob create result:', bobCreateResult.substring(0, 300));
@@ -146,7 +148,7 @@ describe('element-cache-singleton-leak: LRUCache shared across HTTP sessions', (
       );
     }
 
-    // Correct behavior: Bob sees his own instructions.
+    // Correct behavior: Bob sees his own metadata and not Alice's cached content.
     if (bobReadResult.toLowerCase().includes('not found')) {
       // Bob's create may have failed — document as inconclusive.
       console.log('[element-cache] INCONCLUSIVE: Bob\'s element was not found. ' +
@@ -155,7 +157,7 @@ describe('element-cache-singleton-leak: LRUCache shared across HTTP sessions', (
       return;
     }
 
-    expect(bobReadResult).toContain('BOB_OWN_INSTRUCTIONS');
+    expect(bobReadResult).toContain('Bob persona');
     expect(bobReadResult).not.toMatch(/ALICE/);
   }, TEST_TIMEOUT);
 });

@@ -108,7 +108,10 @@ export class IndexingServiceRegistrar {
       container.resolve('VerbTriggerManager'),
       container.resolve('RelationshipManager'),
       container.resolve('EnhancedIndexHelpers'),
-      container.resolve('FileOperationsService')
+      container.resolve('FileOperationsService'),
+      container.hasRegistration('PathService')
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService')
+        : undefined,
     ));
 
     // Phase 4.5: when SharedCacheStore is registered (StorageServiceRegistrar

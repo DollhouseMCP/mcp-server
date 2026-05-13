@@ -109,6 +109,10 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
     } as Persona
   ];
 
+  const seedPersona = (persona: Persona): void => {
+    (personaManager as any).cacheElement(persona, persona.filename);
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -159,7 +163,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
 
     // Populate cache with test personas
     for (const persona of testPersonas) {
-      (personaManager as any).elements.set(persona.filename, persona);
+      seedPersona(persona);
     }
   });
 
@@ -257,7 +261,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         unique_id: 'test-priority-001'
       } as Persona;
 
-      (personaManager as any).elements.set(ambiguousPersona.filename, ambiguousPersona);
+      seedPersona(ambiguousPersona);
 
       // Search by filename - should find by filename strategy first
       const found = personaManager.findPersona('Test-Priority.md');
@@ -348,7 +352,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -380,7 +384,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -412,7 +416,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -450,7 +454,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         unique_id: 'creative-writer-xyz999'
       } as Persona;
 
-      (personaManager as any).elements.set(similarPersona.filename, similarPersona);
+      seedPersona(similarPersona);
 
       // Search by name - should return first match found
       const found = personaManager.findPersona('Creative Writer');

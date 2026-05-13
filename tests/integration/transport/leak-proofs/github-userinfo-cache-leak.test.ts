@@ -24,7 +24,7 @@
  * GitHubClient.fetchFromGitHub.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -77,10 +77,10 @@ describe('github-userinfo-cache-leak: shared APICache allows cross-user identity
     expect(authManagerCache).toBe(apiCache1);
   });
 
-  it('a /user response cached under Alice\'s context is visible to Bob\'s session', () => {
+  it('a raw /user URL cache entry is not used for token-scoped userinfo lookups', async () => {
     const apiCache = env.container.resolve<APICache>('APICache');
+    const authManager = env.container.resolve<GitHubAuthManager>('GitHubAuthManager');
 
-    // APICache stores responses by URL key. Inject a fake Alice response.
     const aliceIdentity = {
       login: 'alice-github',
       id: 1001,
@@ -88,53 +88,59 @@ describe('github-userinfo-cache-leak: shared APICache allows cross-user identity
       email: 'alice@example.com',
     };
 
-    // Inject Alice's response into the shared cache at the /user URL.
-    // APICache.set signature: set(key, data, ttlMs?)
-    apiCache.set(GITHUB_USER_URL, aliceIdentity, 60_000);
+    apiCache.set(GITHUB_USER_URL, aliceIdentity);
 
-    // Now retrieve from the same cache with no token context (as Bob would see it).
-    const cached = apiCache.get(GITHUB_USER_URL);
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockResolvedValue({
+      ok: true,
+      json: async () => ({ login: 'bob-github', id: 2002, name: 'Bob GitHub User' }),
+      headers: { get: () => 'public_repo, read:user' },
+    } as unknown as Response);
 
-    console.log('[userinfo-cache] Cached at /user URL:', JSON.stringify(cached));
+    try {
+      const bobInfo = await (authManager as unknown as {
+        fetchUserInfo(token: string): Promise<{ login?: string }>;
+      }).fetchUserInfo('bob-token');
 
-    // LEAK PROVEN: Bob's session can read Alice's identity from the cache,
-    // because the cache key is the URL only, not URL+token.
-    if (cached && (cached as { login?: string }).login === 'alice-github') {
-      throw new Error(
-        'CACHE LEAK PROVEN: The shared APICache serves Alice\'s /user response ' +
-        'without any token or user-scoped key. Bob\'s session would receive Alice\'s ' +
-        'GitHub identity (login: alice-github) from cache.\n' +
-        `Cached value: ${JSON.stringify(cached)}`
-      );
+      expect(bobInfo.login).toBe('bob-github');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      fetchMock.mockRestore();
     }
-
-    // If we reach here, the cache returned nothing (TTL expired, cache miss, or
-    // different key structure) — document as inconclusive.
-    console.log('[userinfo-cache] Cache miss — unable to prove or disprove leak without real tokens.');
   });
 
-  it('APICache has no per-user key partitioning (URL is the sole cache key)', () => {
-    const apiCache = env.container.resolve<APICache>('APICache');
+  it('GitHubAuthManager uses distinct cache keys for distinct tokens', async () => {
+    env.container.resolve<APICache>('APICache').clear();
+    const authManager = env.container.resolve<GitHubAuthManager>('GitHubAuthManager');
+    const responses = new Map([
+      ['Bearer alice-token', { login: 'alice-github', id: 1001 }],
+      ['Bearer bob-token', { login: 'bob-github', id: 2002 }],
+    ]);
 
-    // Inspect the APICache internals to determine if it has userId awareness.
-    const internalCache = apiCache as unknown as Record<string, unknown>;
-    const hasCacheKeys = Object.keys(internalCache).some(k =>
-      k.toLowerCase().includes('user') && k !== 'set' && k !== 'get'
-    );
+    const fetchMock = jest.spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      const authHeader = (init as RequestInit | undefined)?.headers instanceof Headers
+        ? (init as RequestInit).headers.get('Authorization')
+        : ((init as RequestInit | undefined)?.headers as Record<string, string> | undefined)?.Authorization;
+      return {
+        ok: true,
+        json: async () => responses.get(authHeader ?? '') ?? { login: 'unknown' },
+        headers: { get: () => 'public_repo, read:user' },
+      } as unknown as Response;
+    });
 
-    console.log('[userinfo-cache] APICache internal keys:', Object.keys(internalCache).join(', '));
-    expect(hasCacheKeys).toBe(false);
+    try {
+      const internal = authManager as unknown as {
+        fetchUserInfo(token: string): Promise<{ login?: string }>;
+      };
+      const aliceInfo = await internal.fetchUserInfo('alice-token');
+      const bobInfo = await internal.fetchUserInfo('bob-token');
+      const aliceInfoAgain = await internal.fetchUserInfo('alice-token');
 
-    // Set two values for the same URL — the second should overwrite the first,
-    // proving there is no user-namespace partitioning.
-    apiCache.set(GITHUB_USER_URL, { login: 'first-user' }, 60_000);
-    apiCache.set(GITHUB_USER_URL, { login: 'second-user' }, 60_000);
-
-    const result = apiCache.get(GITHUB_USER_URL);
-    console.log('[userinfo-cache] After two sets at same URL:', result);
-
-    // Only one value can exist at a given key — second overwrites first.
-    // This proves that if Alice sets /user and Bob reads /user, Bob gets Alice's data.
-    expect((result as { login?: string } | null)?.login).toBe('second-user');
+      expect(aliceInfo.login).toBe('alice-github');
+      expect(bobInfo.login).toBe('bob-github');
+      expect(aliceInfoAgain.login).toBe('alice-github');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 });

@@ -216,7 +216,7 @@ export class ElementLoader<T extends IElement> {
    * Load an element snapshot from the database for validation (e.g., canDelete guard).
    */
   async loadElementSnapshotFromDb(relativePath: string): Promise<T> {
-    const cached = this.cache.elements.get(relativePath);
+    const cached = this.cache.getCachedByPath(relativePath);
     if (cached) return cached;
 
     const raw = await (this.storageLayer as IWritableStorageLayer).readContent(relativePath);

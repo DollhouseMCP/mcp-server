@@ -11,6 +11,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { env } from '../config/env.js';
+import { createHash } from 'node:crypto';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -62,6 +63,11 @@ export class GitHubAuthManager {
   private apiCache: APICache;
   private activePolling: AbortController | null = null;
   private tokenManager: TokenManager;
+
+  private userInfoCacheKey(token: string): string {
+    const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
+    return `${this.USER_URL}:token:${tokenHash}`;
+  }
 
   constructor(apiCache: APICache, configManager: ConfigManager, tokenManager: TokenManager) {
     this.apiCache = apiCache;
@@ -639,7 +645,8 @@ export class GitHubAuthManager {
    */
   private async fetchUserInfo(token: string): Promise<any> {
     // Check cache first
-    const cached = this.apiCache.get(this.USER_URL);
+    const cacheKey = this.userInfoCacheKey(token);
+    const cached = this.apiCache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -709,7 +716,7 @@ export class GitHubAuthManager {
     });
     
     // Cache the result
-    this.apiCache.set(this.USER_URL, data);
+    this.apiCache.set(cacheKey, data);
     
     return data;
   }

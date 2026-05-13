@@ -155,7 +155,7 @@ export class ElementListOperations<T extends IElement> {
       const elements = await Promise.all(
         summaries.map(async (summary) => {
           try {
-            const cached = this.cache.elements.get(summary.filePath);
+            const cached = this.cache.getCachedByPath(summary.filePath);
             if (cached) return cached;
             return await this.host.load(summary.filePath);
           } catch {

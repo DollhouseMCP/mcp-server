@@ -58,6 +58,17 @@ const { GitHubPortfolioIndexer } = await import('../../../src/portfolio/GitHubPo
 
 type DirectoryOverrides = Partial<Record<ElementType, any[]>>;
 
+function setIndexerCache(indexer: any, index: GitHubPortfolioIndex | null, lastFetch: Date | null = new Date()): void {
+  indexer.cacheByUser.clear();
+  indexer.lastFetchByUser.clear();
+  if (index) {
+    indexer.cacheByUser.set('system', index);
+  }
+  if (lastFetch) {
+    indexer.lastFetchByUser.set('system', lastFetch);
+  }
+}
+
 function mockSuccessfulGitHubRestResponses(overrides: DirectoryOverrides = {}): void {
   const nowIso = new Date().toISOString();
 
@@ -128,8 +139,7 @@ describe('GitHubPortfolioIndexer', () => {
         sha: 'abc123'
       };
       
-      (indexer as any).cache = mockIndex;
-      (indexer as any).lastFetch = new Date();
+      setIndexerCache(indexer, mockIndex);
       
       const result = await indexer.getIndex();
       
@@ -138,8 +148,7 @@ describe('GitHubPortfolioIndexer', () => {
     });
 
     it('should fetch fresh data when cache is stale', async () => {
-      (indexer as any).cache = null;
-      (indexer as any).lastFetch = new Date(Date.now() - 20 * 60 * 1000);
+      setIndexerCache(indexer, null, new Date(Date.now() - 20 * 60 * 1000));
 
       mockCheckPortfolioExists.mockResolvedValue(true);
       mockSuccessfulGitHubRestResponses();
@@ -158,8 +167,14 @@ describe('GitHubPortfolioIndexer', () => {
     });
 
     it('should clear all cached data', () => {
-      (indexer as any).cache = { some: 'data' };
-      (indexer as any).lastFetch = new Date();
+      setIndexerCache(indexer, {
+        username: 'testuser',
+        repository: 'dollhouse-portfolio',
+        lastUpdated: new Date(),
+        elements: new Map(),
+        totalElements: 0,
+        sha: 'abc123',
+      });
       
       indexer.clearCache();
       
@@ -418,8 +433,7 @@ invalid yaml here
         sha: 'old123'
       };
       
-      (indexer as any).cache = staleCache;
-      (indexer as any).lastFetch = new Date(Date.now() - 30 * 60 * 1000);
+      setIndexerCache(indexer, staleCache, new Date(Date.now() - 30 * 60 * 1000));
       
       // Mock fetch failure
       mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
@@ -432,8 +446,7 @@ invalid yaml here
 
     it('should return empty index as last resort', async () => {
       // No cache available
-      (indexer as any).cache = null;
-      (indexer as any).lastFetch = null;
+      setIndexerCache(indexer, null, null);
       
       // Mock fetch failure
       mockFetchFromGitHub.mockRejectedValue(new Error('Network error'));
@@ -457,9 +470,8 @@ invalid yaml here
         sha: 'abc123'
       };
       
-      (indexer as any).cache = mockCache;
-      (indexer as any).lastFetch = new Date();
-      (indexer as any).recentUserAction = true;
+      setIndexerCache(indexer, mockCache);
+      (indexer as any).recentUserActionByUser.set('system', true);
 
       const stats = indexer.getCacheStats();
 

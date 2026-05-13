@@ -115,7 +115,9 @@ export class CollectionServiceRegistrar {
     ));
 
     container.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
-      container.resolve('PortfolioRepoManager')
+      container.resolve('PortfolioRepoManager'),
+      () => container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        .getSessionContext()?.userId ?? 'system',
     ));
   }
 }

@@ -308,6 +308,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const cacheHost = {
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       get elementDir() { return self.elementDir; },
+      getCacheNamespace: () => this.getCacheNamespace(),
     };
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this; // NOSONAR — needed for object literal getters where `this` rebinds
@@ -582,8 +583,29 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._cache.getCachedByAbsolutePath(absolutePath);
   }
 
+  protected getCachedElementsForCurrentNamespace(): T[] {
+    return this._cache.getScopedValues();
+  }
+
   protected getCacheStats(): { elementCount: number; pathMappings: number } {
     return this._cache.getCacheStats();
+  }
+
+  protected getCacheNamespace(): string {
+    if (this.contextTracker) {
+      const session = this.contextTracker.getSessionContext();
+      if (session?.userId) {
+        return session.userId;
+      }
+    }
+    if (this.getCurrentUserId) {
+      try {
+        return this.getCurrentUserId();
+      } catch {
+        // Fall through to the process-local namespace for startup and tests outside a session.
+      }
+    }
+    return 'system';
   }
 
   clearCache(): void {
