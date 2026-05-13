@@ -33,6 +33,24 @@ export interface HttpTestEnvironmentOptions {
   rateLimitWindowMs?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  /**
+   * Override `DOLLHOUSE_HOME_DIR` for the test. Useful for forcing per-user
+   * filesystem layout: pass a fresh temp dir that has no `.dollhouse/` legacy
+   * root so `LegacyDetectingPathResolver.detect()` picks per-user. Without
+   * this override the test inherits whatever layout the host machine has,
+   * which on developer machines is usually flat (legacy `~/.dollhouse/`).
+   *
+   * Restored on cleanup.
+   */
+  homeDirOverride?: string;
+  /**
+   * Sequence of userIds to inject into successive HTTP sessions. The session
+   * factory pulls userIds[N] for the Nth incoming connection. When the
+   * sequence is exhausted, subsequent sessions fall back to the default
+   * (`http-user`). Allows a single test to exercise multi-user semantics
+   * without a full auth-middleware setup.
+   */
+  userIdSequence?: string[];
 }
 
 export interface HttpTestEnvironment {
@@ -70,6 +88,7 @@ export async function createHttpTestEnvironment(
   // Save env vars for restoration
   const savedEnv: Record<string, string | undefined> = {
     DOLLHOUSE_PORTFOLIO_DIR: process.env.DOLLHOUSE_PORTFOLIO_DIR,
+    DOLLHOUSE_HOME_DIR: process.env.DOLLHOUSE_HOME_DIR,
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
@@ -86,6 +105,14 @@ export async function createHttpTestEnvironment(
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+  // homeDirOverride is the per-user-layout knob: when set, the layout
+  // detector at PathsServiceRegistrar.bootstrapAndRegister() sees no
+  // legacy `~/.dollhouse/` under this home and picks per-user layout
+  // on the portfolio root. Default (no override) inherits the host
+  // machine's layout, which is usually flat on developer machines.
+  if (options.homeDirOverride !== undefined) {
+    process.env.DOLLHOUSE_HOME_DIR = options.homeDirOverride;
+  }
 
   // Bootstrap shared container (same pattern as startStreamableHttpServer)
   const container = new DollhouseContainer();
@@ -95,10 +122,18 @@ export async function createHttpTestEnvironment(
 
   setHttpModeActive(true);
 
+  // Index into options.userIdSequence consumed per incoming session.
+  // When the sequence runs dry, subsequent sessions fall back to the
+  // createHttpSession default ('http-user').
+  let sessionUserIdIdx = 0;
+
   // Create HTTP runtime with session factory
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
-      const sessionContext = createHttpSession();
+      const userIdForSession = options.userIdSequence?.[sessionUserIdIdx++];
+      const sessionContext = userIdForSession !== undefined
+        ? createHttpSession({ userId: userIdForSession })
+        : createHttpSession();
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };

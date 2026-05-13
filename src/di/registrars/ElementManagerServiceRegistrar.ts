@@ -53,10 +53,28 @@ export class ElementManagerServiceRegistrar {
 
     // PORTFOLIO & MANAGERS
     container.register('PortfolioManager', () => {
-      const config = container.hasRegistration('PathService')
-        ? { baseDir: container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('portfolio-root') }
+      // Phase 4.5 follow-up: inject PathService + ContextTracker so
+      // getElementDir(type) routes through the per-user resolver when a
+      // session context is active. Flat-layout resolvers return the
+      // shared base path (byte-identical to legacy behavior). Without
+      // these injections — e.g. in standalone CLI / test harnesses that
+      // skip PathService registration — PortfolioManager falls back to
+      // the legacy flat path.
+      const hasPathService = container.hasRegistration('PathService');
+      const pathService = hasPathService
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService')
         : undefined;
-      return new PortfolioManager(container.resolve('FileOperationsService'), config);
+      const config = hasPathService
+        ? { baseDir: pathService!.resolveDataDir('portfolio-root') }
+        : undefined;
+      const contextTracker = container.hasRegistration('ContextTracker')
+        ? container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        : null;
+      return new PortfolioManager(
+        container.resolve('FileOperationsService'),
+        config,
+        { pathService, contextTracker },
+      );
     });
 
     container.register('PersonaImporter', () => {

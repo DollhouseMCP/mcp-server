@@ -158,7 +158,28 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected fileLockManager: FileLockManager;
   protected fileOperations: FileOperationsService;
   protected fileWatchService?: FileWatchService;
-  protected elementDir: string;
+  /**
+   * Phase 4.5 follow-up: `elementDir` used to be a string field
+   * captured once at construction from `portfolioManager.getElementDir(type)`.
+   * That made HTTP per-user filesystem isolation impossible because the
+   * captured value was the SHARED flat path (no session was active at
+   * root-container construction time). It's now a dynamic getter that
+   * re-queries PortfolioManager on every access — when a session is
+   * active PortfolioManager delegates to `PathService.getUserElementDir(type)`
+   * which routes through the per-user resolver in per-user layout.
+   *
+   * Construction captures the initial value into `staticElementDir`
+   * as a defensive fallback for the rare paths that construct a
+   * manager without a real PortfolioManager (some unit tests).
+   */
+  private staticElementDir: string;
+  protected get elementDir(): string {
+    if (this.portfolioManager
+        && typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {
+      return (this.portfolioManager as { getElementDir(t: ElementType): string }).getElementDir(this.elementType);
+    }
+    return this.staticElementDir;
+  }
 
   /** Specialized validator for this element type. */
   protected validator: ElementValidator;
@@ -256,9 +277,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.validator = validationRegistry.getValidator(elementType);
 
     if (options.elementDirOverride) {
-      this.elementDir = options.elementDirOverride;
-    } else if (typeof (this.portfolioManager as any).getElementDir === 'function') {
-      this.elementDir = (this.portfolioManager as any).getElementDir(elementType);
+      this.staticElementDir = options.elementDirOverride;
+    } else if (typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {
+      this.staticElementDir = (this.portfolioManager as { getElementDir(t: ElementType): string }).getElementDir(elementType);
     } else {
       throw new Error(
         `Unable to resolve element directory for ${elementType}. ` +

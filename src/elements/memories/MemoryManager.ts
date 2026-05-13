@@ -87,7 +87,21 @@ interface ParsedMemoryData {
 }
 
 export class MemoryManager extends BaseElementManager<Memory> {
-  private readonly memoriesDir: string;
+  /**
+   * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
+   * `this.elementDir` (the dynamic getter on BaseElementManager added
+   * for per-user filesystem isolation). Capturing this once at
+   * construction time was the original intent — but now the underlying
+   * `elementDir` resolves per-call to the current session's per-user
+   * dir, so this getter must re-resolve too. Otherwise the captured
+   * value is the flat root (no session active at root-container
+   * construction) while every other consumer of `elementDir` sees the
+   * per-user dir, splitting reads from writes across two filesystem
+   * subtrees.
+   */
+  private get memoriesDir(): string {
+    return this.elementDir;
+  }
   // Phase 2: Bounded content hash index replaces unbounded Map
   private contentHashIndex = new LRUCache<string>({
     name: 'memory:contentHash',
@@ -129,7 +143,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       deps.fileOperationsService,
       deps.validationRegistry,
     );
-    this.memoriesDir = this.elementDir;
+    // Phase 4.5 follow-up: `memoriesDir` is now a getter that delegates to
+    // `this.elementDir`, so no construction-time capture is needed. See the
+    // getter declaration above for the rationale.
     this.metadataService = deps.metadataService;
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();

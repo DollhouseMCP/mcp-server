@@ -62,9 +62,23 @@ export class CoreInfraServiceRegistrar {
     container.register('RateLimitTracker', () => new Map<string, number[]>());
     container.register('FileLockManager', () => new FileLockManager());
     container.register('FileOperationsService', () => new FileOperationsService(container.resolve('FileLockManager')));
+    // Phase 4.5 follow-up: wire `FileStorageLayerFactory`'s
+    // `elementDirResolverFactory` slot so per-element-type storage layers
+    // get dynamic per-user dirs in HTTP multi-user mode. The factory is
+    // only consulted when PathService is registered (PathsServiceRegistrar
+    // runs before this one in Container.preparePortfolio), and in flat
+    // layout `FlatPathResolver` returns the shared baseDir — byte-identical
+    // to legacy behavior. When omitted, ElementStorageLayer / MemoryStorageLayer
+    // keep using the static elementDir captured at construction.
+    const elementDirResolverFactory = container.hasRegistration('PathService')
+      ? (elementType: string) => () =>
+          container.resolve<import('../../paths/PathService.js').PathService>('PathService')
+            .getUserElementDir(elementType as import('../../portfolio/types.js').ElementType)
+      : undefined;
     container.register<IStorageLayerFactory>('StorageLayerFactory', () => new FileStorageLayerFactory(
       container.resolve('FileOperationsService'),
       { indexDebounceMs: getValidatedIndexDebounce(), fileFilter: defaultMemoryFileFilter },
+      elementDirResolverFactory,
     ));
     // Phase 4.5: ConfigManager is now a façade over IOperatorConfigStore +
     // IUserConfigStore. The stores are async-registered in StorageServiceRegistrar

@@ -188,9 +188,24 @@ describe('Phase 3.4 — Cross-Session Integration Tests', () => {
     expect(detailsA).not.toContain('secret-b');
   }, ISOLATION_TIMEOUT);
 
-  it('both sessions see shared portfolio elements (file-level data is shared)', async () => {
-    // Elements are stored in a shared portfolio — both sessions can read them.
-    // What's isolated is activation state, not the underlying file storage.
+  it('flat layout: both sessions see shared portfolio elements', async () => {
+    // FLAT-LAYOUT CONTRACT (single-user legacy install). In flat layout
+    // (`~/.dollhouse/` present, no `.dollhouse-per-user-migrated` marker),
+    // there is one shared portfolio directory and all HTTP sessions read
+    // and write the same files. What IS isolated even in flat layout is
+    // activation state and session-scoped caches — see earlier tests in
+    // this describe block.
+    //
+    // PER-USER LAYOUT (fresh installs or migrated operators) is the
+    // multi-user-safe path. Its isolation contract is pinned by
+    // `tests/integration/transport/per-user-filesystem-isolation.test.ts`,
+    // which forces per-user layout via `homeDirOverride` and asserts the
+    // INVERSE of these assertions — user A's elements never leak to user B.
+    //
+    // This test boots without a `homeDirOverride`, so it inherits the host
+    // machine's layout (usually flat on developer machines). DB mode has
+    // its own contract via Postgres RLS — see
+    // `tests/integration/database/rls-isolation.test.ts`.
     const detailsFromB = await read(handleB.client, {
       operation: 'get_element_details',
       params: { element_name: 'iso-a-persona', element_type: 'persona' },
