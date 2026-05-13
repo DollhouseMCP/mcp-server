@@ -2725,6 +2725,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       riskScore: params.riskScore,
       dangerZoneEnforcer: this._dangerZoneEnforcer,
       verificationStore: this._verificationStore,
+      sessionId: this.contextTracker?.getSessionContext()?.sessionId,
       goalDescription: activeGoal.description,
       goalId: activeGoal.id,
     });

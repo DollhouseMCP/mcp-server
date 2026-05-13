@@ -436,7 +436,8 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
           goalDescription: context.goalDescription,
           goalId: context.goalId,
           safetyFactors: factors,
-        }
+        },
+        context.sessionId,
       );
 
       SecurityMonitor.logSecurityEvent({

@@ -16,9 +16,12 @@ import {
   createHttpTestEnvironment,
   connectHttpClient,
   create,
+  del,
+  execute,
   type HttpTestEnvironment,
   type HttpClientHandle,
 } from '../../../helpers/httpTransportHelper.js';
+import { preConfirmAllOperations } from '../../../helpers/portfolioTestHelper.js';
 import type { IChallengeStore } from '../../../../src/state/IChallengeStore.js';
 import type { SessionContainerRegistry } from '../../../../src/di/SessionContainerRegistry.js';
 import type { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
@@ -42,6 +45,7 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
       homeDirOverride: homeOverride,
       userIdSequence: [USER_A, USER_B],
     });
+    preConfirmAllOperations(env.container);
 
     handleA = await connectHttpClient(env.runtime);
     handleB = await connectHttpClient(env.runtime);
@@ -170,5 +174,86 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
     expect(storeB.get(challengeId!)).toBeUndefined();
     expect(enforcerA.check('session-a-danger-agent').blocked).toBe(true);
     expect(enforcerB.check('session-a-danger-agent').blocked).toBe(false);
+  }, TEST_TIMEOUT);
+
+  it('autonomy danger-zone challenges carry session ownership and cannot be verified cross-session', async () => {
+    const registry = env.container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const childA = registry.get(env.sessionContexts[0].sessionId);
+    const childB = registry.get(env.sessionContexts[1].sessionId);
+    expect(childA).toBeDefined();
+    expect(childB).toBeDefined();
+
+    const agentName = 'session-a-autonomy-danger-agent';
+
+    await del(handleA.client, {
+      operation: 'delete_element',
+      params: { element_name: agentName, element_type: 'agent' },
+    }).catch(() => {});
+
+    const createText = await create(handleA.client, {
+      operation: 'create_element',
+      params: {
+        element_name: agentName,
+        element_type: 'agent',
+        description: 'Session A autonomy challenge owner test',
+        content: '# Agent\nSession A autonomy challenge owner test.',
+      },
+    });
+    expect(JSON.parse(createText).success).toBe(true);
+
+    const executeText = await execute(handleA.client, {
+      operation: 'execute_agent',
+      params: { element_name: agentName, parameters: { objective: 'exercise danger zone session ownership' } },
+    });
+    expect(JSON.parse(executeText).success).toBe(true);
+
+    const stepText = await create(handleA.client, {
+      operation: 'record_execution_step',
+      params: {
+        element_name: agentName,
+        stepDescription: 'Completed setup',
+        outcome: 'success',
+        nextActionHint: 'rm -rf /tmp/session-a-autonomy-danger',
+        riskScore: 100,
+      },
+    });
+    const step = JSON.parse(stepText) as {
+      success?: boolean;
+      data?: {
+        autonomy?: {
+          verification?: { verificationId?: string };
+        };
+      };
+    };
+    const challengeId = step.data?.autonomy?.verification?.verificationId;
+    expect(step.success).toBe(true);
+    expect(challengeId).toBeTruthy();
+
+    const storeA = childA!.resolve<IChallengeStore>('ChallengeStore');
+    const storeB = childB!.resolve<IChallengeStore>('ChallengeStore');
+    const enforcerA = childA!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const enforcerB = childB!.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+
+    const challenge = storeA.get(challengeId!);
+    expect(challenge).toBeDefined();
+    expect(storeB.get(challengeId!)).toBeUndefined();
+
+    const blockA = enforcerA.check(agentName);
+    expect(blockA.blocked).toBe(true);
+    expect(blockA.verificationId).toBe(challengeId);
+    expect(blockA.sessionId).toBe(env.sessionContexts[0].sessionId);
+    expect(enforcerB.check(agentName).blocked).toBe(false);
+
+    const bobResult = await create(handleB.client, {
+      operation: 'verify_challenge',
+      params: {
+        challenge_id: challengeId,
+        code: challenge!.code,
+      },
+    });
+
+    expect(bobResult).toMatch(/not found|expired|failed|error/i);
+    expect(enforcerA.check(agentName).blocked).toBe(true);
+    expect(storeA.get(challengeId!)).toBeDefined();
   }, TEST_TIMEOUT);
 });

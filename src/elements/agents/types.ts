@@ -571,6 +571,8 @@ export interface AutonomyContext {
   verificationStore?: {
     set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void;
   };
+  /** Active HTTP session that owns any challenge/block created during evaluation. */
+  sessionId?: string;
   /** Active goal description (Issue #404: forwarded for audit context) */
   goalDescription?: string;
   /** Active goal ID (Issue #404: forwarded for audit context) */
