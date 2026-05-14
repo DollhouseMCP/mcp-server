@@ -143,7 +143,7 @@ If you're setting up your own instance, follow the administrator instructions ab
 1. **Device Flow**: When you authenticate, the server uses GitHub's device flow (an OAuth 2.0 authentication method for devices without browsers, where you enter a code on another device)
 2. **User Code**: You'll receive a code like `AB12-CD34`
 3. **Authorization**: Visit https://github.com/login/device and enter your code
-4. **Token Storage**: Once authorized, your token is stored securely in `~/.dollhouse/.auth/`
+4. **Token Storage**: Once authorized, your token is stored securely in your user auth directory as `github_token.enc` in file mode, or in the database `user_oauth_tokens` table with envelope encryption when `DOLLHOUSE_STORAGE_BACKEND=database`
 5. **Persistence**: Authentication persists across server restarts
 
 ## Testing Your OAuth Setup

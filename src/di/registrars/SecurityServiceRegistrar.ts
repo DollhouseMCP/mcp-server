@@ -29,6 +29,7 @@ import { BackgroundValidator } from '../../security/validation/BackgroundValidat
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { SecurityTelemetry } from '../../security/telemetry/SecurityTelemetry.js';
 import { TokenManager } from '../../security/tokenManager.js';
+import type { ITokenStore } from '../../security/tokenStores/ITokenStore.js';
 import { PathValidator } from '../../security/pathValidator.js';
 import { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
 import { ContentValidator } from '../../security/contentValidator.js';
@@ -86,7 +87,8 @@ export class SecurityServiceRegistrar {
     container.register('SecurityTelemetry', () => new SecurityTelemetry());
 
     container.register('TokenManager', () => new TokenManager(
-      container.resolve('FileOperationsService')
+      () => container.resolve<ITokenStore>('TokenStore'),
+      () => container.resolve<() => string>('UserIdResolver')()
     ));
 
     // Issue #1948: PathValidator as DI-managed singleton (replaces static class state)

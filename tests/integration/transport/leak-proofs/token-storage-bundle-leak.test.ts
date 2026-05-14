@@ -53,19 +53,11 @@ describe('token-storage-bundle-leak: HTTP GitHub auth handlers use session Token
     const authManager = env.container.resolve<GitHubAuthManager>('GitHubAuthManager');
     const authManagerInternal = authManager as unknown as { tokenManager: TokenManager };
     const authManagerTokenManager = authManagerInternal.tokenManager;
-    const rootTokenDir = (rootTokenManager as unknown as { tokenDir: string }).tokenDir;
-    const authTokenDir = (authManagerTokenManager as unknown as { tokenDir: string }).tokenDir;
-    const defaultOpPath = path.join(os.homedir(), '.dollhouse', '.auth');
-
-    console.log('[token-storage-bundle-leak] rootTokenDir:', rootTokenDir);
-    console.log('[token-storage-bundle-leak] authTokenDir:', authTokenDir);
-    console.log('[token-storage-bundle-leak] os.homedir() default:', defaultOpPath);
 
     expect(authManagerTokenManager).toBe(rootTokenManager);
-    expect(authTokenDir).toEqual(defaultOpPath);
   });
 
-  it('per-session GitHubAuthManager and handler use user-scoped TokenManagers', () => {
+  it('per-session GitHubAuthManager and handler use user-scoped TokenManagers', async () => {
     const userPathResolver = env.container.resolve<import('../../../../src/paths/IUserPathResolver.js').IUserPathResolver>('UserPathResolver');
     const aliceAuthDir = userPathResolver.getUserAuthDir(USER_A);
     const bobAuthDir = userPathResolver.getUserAuthDir(USER_B);
@@ -86,8 +78,6 @@ describe('token-storage-bundle-leak: HTTP GitHub auth handlers use session Token
     console.log('[token-storage-bundle-leak] bob authDir:', bobAuthDir);
 
     expect(aliceAuthDir).not.toEqual(bobAuthDir);
-    expect((tokenManagerA as unknown as { tokenDir: string }).tokenDir).toEqual(aliceAuthDir);
-    expect((tokenManagerB as unknown as { tokenDir: string }).tokenDir).toEqual(bobAuthDir);
     expect(tokenManagerA).not.toBe(tokenManagerB);
 
     const defaultOpPath = path.join(os.homedir(), '.dollhouse', '.auth');
@@ -95,5 +85,11 @@ describe('token-storage-bundle-leak: HTTP GitHub auth handlers use session Token
     expect(bobAuthDir).not.toEqual(defaultOpPath);
     expect(authHandlerA.githubAuthManager).toBe(authManagerA);
     expect(authHandlerB.githubAuthManager).toBe(authManagerB);
+
+    await tokenManagerA.storeGitHubToken('ghp_ALICETOKEN000000000000000000000000000001');
+    await tokenManagerB.storeGitHubToken('ghp_BOBTOKEN00000000000000000000000000000002');
+
+    await expect(fs.access(path.join(aliceAuthDir, 'github_token.enc'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(bobAuthDir, 'github_token.enc'))).resolves.toBeUndefined();
   });
 });

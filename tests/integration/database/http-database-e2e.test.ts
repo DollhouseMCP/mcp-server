@@ -39,6 +39,7 @@ const TEST_TIMEOUT = 30_000;
 const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
 const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
+const TEST_MASTER_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString('base64');
 
 // Matches the server's startup log line: "[DollhouseMCP] Streamable HTTP server listening on <url>"
 const SERVER_READY_REGEX = /Streamable HTTP server listening on (https?:\/\/[^\s]+)/;
@@ -209,6 +210,7 @@ describe('MCP HTTP+Database E2E Tests', () => {
       DOLLHOUSE_DATABASE_ADMIN_URL: DB_ADMIN_URL,
       DOLLHOUSE_DATABASE_POOL_SIZE: '5',
       DOLLHOUSE_DATABASE_SSL: 'disable',
+      DOLLHOUSE_MASTER_ENCRYPTION_KEY: TEST_MASTER_ENCRYPTION_KEY,
       // Shorten the log flush interval so errors reach application-*.log
       // within the test teardown window (default is 5000ms; we SIGTERM
       // the child faster than that on failure).

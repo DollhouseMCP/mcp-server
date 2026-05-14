@@ -120,6 +120,13 @@
       "when": 1778940000000,
       "tag": "0016_user_identity_config",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1778950000000,
+      "tag": "0017_user_oauth_tokens",
+      "breakpoints": true
     }
   ]
 }

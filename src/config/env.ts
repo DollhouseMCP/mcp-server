@@ -193,6 +193,9 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   /** SSL mode for database connection. */
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+  /** Base64-encoded 32-byte key used to wrap DB-stored OAuth token DEKs. Required in database mode. */
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   // ============================================================================
   // Auth Storage Configuration (§8.1)

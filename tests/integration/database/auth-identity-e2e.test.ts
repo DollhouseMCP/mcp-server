@@ -32,6 +32,7 @@ const TEST_TIMEOUT = 30_000;
 const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
 const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
 const SERVER_READY_REGEX = /Streamable HTTP server listening on (https?:\/\/[^\s]+)/;
+const TEST_MASTER_ENCRYPTION_KEY = Buffer.alloc(32, 14).toString('base64');
 
 function resultText(result: Awaited<ReturnType<Client['callTool']>>): string {
   const content = result.content as Array<{ type: string; text?: string }>;
@@ -163,6 +164,7 @@ describe('Auth Identity E2E Tests', () => {
       DOLLHOUSE_DATABASE_ADMIN_URL: DB_ADMIN_URL,
       DOLLHOUSE_DATABASE_POOL_SIZE: '5',
       DOLLHOUSE_DATABASE_SSL: 'disable',
+      DOLLHOUSE_MASTER_ENCRYPTION_KEY: TEST_MASTER_ENCRYPTION_KEY,
       DOLLHOUSE_AUTH_ENABLED: 'true',
       DOLLHOUSE_AUTH_PROVIDER: 'local',
       DOLLHOUSE_AUTH_LOCAL_KEY_FILE: keyFilePath,

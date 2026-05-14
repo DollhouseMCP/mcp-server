@@ -40,7 +40,9 @@ See [Security Testing Guide](./testing.md) for details.
 ### Token & OAuth Protection
 
 - **Secure Token Handling**
-  - GitHub tokens are encrypted at rest under `~/.dollhouse/.auth/` via the `TokenManager`.
+  - In file mode, GitHub tokens are encrypted at rest under each user's auth directory as `github_token.enc` via `TokenManager` and `FileTokenStore`.
+  - In database mode, GitHub tokens are stored in `user_oauth_tokens` with per-token envelope encryption: a fresh DEK encrypts the token, and `DOLLHOUSE_MASTER_ENCRYPTION_KEY` wraps the DEK.
+  - Existing filesystem token files are not auto-migrated into the database. When database mode detects a legacy `github_token.enc`, it logs a high-severity security event; operators should manually re-authenticate or explicitly migrate after auditing the source file.
   - Automatic redaction in all logs and error messages.
   - Format validation plus rate-limited scope checks prevent brute-force validation attempts.
 

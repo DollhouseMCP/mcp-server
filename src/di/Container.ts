@@ -79,6 +79,7 @@ import { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver } from "../context/SessionContext.js";
 import { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
+import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
 import type { UnifiedConsoleResult } from "../web/console/UnifiedConsole.js";
 import { PolicyExportService } from '../services/PolicyExportService.js';
 import { LogManager } from '../logging/LogManager.js';
@@ -1265,10 +1266,10 @@ export class DollhouseContainer {
 
     // ── Per-user service overrides (Group B) ──────────────────────────
     // TokenManager, BackupService, and DangerZoneEnforcer are root-scoped
-    // for stdio (single user). HTTP sessions override them with per-user
-    // instances so auth tokens, backups, and security blocks are isolated.
+    // for stdio (single user). HTTP sessions override stateful/session-owned
+    // services so auth tokens, backups, and security blocks are isolated.
     child.register('TokenManager', () => new TokenManager(
-      this.resolve('FileOperationsService'), userAuthDir
+      () => child.resolve<ITokenStore>('TokenStore'), () => httpUserId
     ));
     child.register('BackupService', () => new BackupService(
       this.resolve('FileOperationsService'),

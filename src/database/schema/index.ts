@@ -20,3 +20,4 @@ export { authAccounts, authIdentityEvents, authKv } from './auth.js';
 export { operatorSettings } from './operatorSettings.js';
 export { sharedCache } from './sharedCache.js';
 export { authSigningKeys } from './signingKeys.js';
+export { userOauthTokens } from './userOauthTokens.js';
