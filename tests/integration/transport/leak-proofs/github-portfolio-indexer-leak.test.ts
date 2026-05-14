@@ -93,28 +93,50 @@ describe('github-portfolio-indexer-leak: shared GitHubPortfolioIndexer cache sto
     console.log('[indexer-leak] GitHubPortfolioIndexer is singleton:', idx1 === idx2);
   });
 
-  it('Alice\'s cache entry is not visible through Bob\'s user-keyed cache slot', () => {
+  it('per-user cache slots are mutually exclusive — each user only sees their own injected entry', () => {
     const indexer = env.container.resolve<GitHubPortfolioIndexer>('GitHubPortfolioIndexer');
 
-    // Directly inject Alice's portfolio index into the singleton's per-user cache.
+    // Inject DIFFERENT portfolio indexes for both users into the singleton's
+    // per-user cache. After Step 7, the cache must be Map<userId, …>, so
+    // each user reads back their own entry — never the other's.
     const aliceIndex = makeFakeIndex('alice-github');
+    const bobIndex = makeFakeIndex('bob-github');
     const indexerInternal = indexer as unknown as {
       cacheByUser: Map<string, GitHubPortfolioIndex>;
       lastFetchByUser: Map<string, Date>;
     };
     indexerInternal.cacheByUser.set(USER_A, aliceIndex);
+    indexerInternal.cacheByUser.set(USER_B, bobIndex);
     indexerInternal.lastFetchByUser.set(USER_A, new Date());
+    indexerInternal.lastFetchByUser.set(USER_B, new Date());
 
-    // Now resolve from the same container as Bob would (same object reference),
-    // but inspect Bob's distinct user-keyed cache slot.
+    // Same singleton across both lookups (sanity).
     const indexerForBob = env.container.resolve<GitHubPortfolioIndexer>('GitHubPortfolioIndexer');
-    const bobSeesCache = (indexerForBob as unknown as {
-      cacheByUser: Map<string, GitHubPortfolioIndex>;
-    }).cacheByUser.get(USER_B);
+    expect(indexerForBob).toBe(indexer);
 
-    console.log('[indexer-leak] Cache username visible to Bob:', bobSeesCache?.username);
+    const aliceSlot = indexerInternal.cacheByUser.get(USER_A);
+    const bobSlot = indexerInternal.cacheByUser.get(USER_B);
 
-    expect(bobSeesCache?.username).not.toBe('alice-github');
+    console.log('[indexer-leak] alice slot username:', aliceSlot?.username);
+    console.log('[indexer-leak] bob slot username:', bobSlot?.username);
+
+    try {
+      // STRONG positive assertions — these would all fail if the cache regressed
+      // to a single shared slot (alice's last write would overwrite bob's, or
+      // both lookups would return the same instance).
+      expect(aliceSlot).toBeDefined();
+      expect(bobSlot).toBeDefined();
+      expect(aliceSlot!.username).toBe('alice-github');
+      expect(bobSlot!.username).toBe('bob-github');
+      expect(aliceSlot).not.toBe(bobSlot);
+    } finally {
+      // Clean up so subsequent tests in this suite see a fresh per-user cache.
+      // The indexer is a root singleton — state leaks across tests otherwise.
+      indexerInternal.cacheByUser.delete(USER_A);
+      indexerInternal.cacheByUser.delete(USER_B);
+      indexerInternal.lastFetchByUser.delete(USER_A);
+      indexerInternal.lastFetchByUser.delete(USER_B);
+    }
   }, TEST_TIMEOUT);
 
   it('index TTL state is tracked per user', () => {

@@ -39,6 +39,7 @@ import {
 } from '../../../helpers/httpTransportHelper.js';
 import { preConfirmAllOperations } from '../../../helpers/portfolioTestHelper.js';
 import { EnhancedIndexManager } from '../../../../src/portfolio/EnhancedIndexManager.js';
+import type { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 
 const ENV_STARTUP_TIMEOUT = 20_000;
 const TEST_TIMEOUT = 60_000;
@@ -109,37 +110,36 @@ describe('enhanced-index-singleton-leak: EnhancedIndexManager hardcoded path and
     expect(indexPath).not.toBe(expectedHardcodedPath);
   });
 
-  it('EnhancedIndexManager indexPath is also not per-user even under DOLLHOUSE_HOME_DIR override', () => {
+  it('EnhancedIndexManager indexPath resolves per-user via PathService (different paths under different sessions)', async () => {
     const mgr = env.container.resolve<EnhancedIndexManager>('EnhancedIndexManager');
-    const indexPath = (mgr as unknown as { indexPath: string }).indexPath;
+    const contextTracker = env.container.resolve<ContextTracker>('ContextTracker');
 
-    // The test was launched with homeDirOverride, which sets DOLLHOUSE_HOME_DIR.
-    // If EnhancedIndexManager used PathService/DOLLHOUSE_HOME_DIR, indexPath would
-    // reference homeOverride. Let's check.
-    const usesHomeOverride = indexPath.startsWith(homeOverride);
-    const usesPortfolioDir = env.testDir !== undefined && indexPath.startsWith(env.testDir);
-    const usesAlicePath = indexPath.includes(USER_A);
-    const usesBobPath = indexPath.includes(USER_B);
+    // Capture indexPath under each user's session scope. After Step 7, the
+    // EnhancedIndexManager.indexPath getter resolves through PathService,
+    // which threads ContextTracker → active session userId → per-user
+    // portfolio dir. Two different sessions MUST yield different paths.
+    const aliceIndexPath = await contextTracker.runAsync(
+      contextTracker.createSessionContext('llm-request', env.sessionContexts[0], { toolName: 'enhanced_index_probe' }),
+      async () => (mgr as unknown as { indexPath: string }).indexPath,
+    );
+    const bobIndexPath = await contextTracker.runAsync(
+      contextTracker.createSessionContext('llm-request', env.sessionContexts[1], { toolName: 'enhanced_index_probe' }),
+      async () => (mgr as unknown as { indexPath: string }).indexPath,
+    );
 
-    console.log('[eindex-leak] indexPath starts with homeOverride:', usesHomeOverride);
-    console.log('[eindex-leak] indexPath starts with testDir:', usesPortfolioDir);
-    console.log('[eindex-leak] indexPath contains "alice":', usesAlicePath);
-    console.log('[eindex-leak] indexPath contains "bob":', usesBobPath);
+    console.log('[eindex-leak] alice indexPath:', aliceIndexPath);
+    console.log('[eindex-leak] bob indexPath:', bobIndexPath);
 
-    // If the path contains neither user's name and doesn't use the override dir,
-    // it confirms the hardcoded path is in effect regardless of per-user layout.
-    const isPerUser = usesAlicePath || usesBobPath || usesHomeOverride || usesPortfolioDir;
-
-    if (!isPerUser) {
-      console.log(
-        '[eindex-leak] CONFIRMED HARDCODED: indexPath does not use per-user dirs or the ' +
-        'DOLLHOUSE_HOME_DIR override. All sessions share:', indexPath
-      );
-    }
-    // Not asserting fail/pass here — the structural test above already throws.
-    // This test provides supplementary evidence about the path.
-    expect(typeof indexPath).toBe('string');
-    expect(indexPath.endsWith('capability-index.yaml')).toBe(true);
+    // Real assertions — not tautologies. If Step 7's per-namespace routing
+    // regressed to a shared path, both would be equal and these would fail.
+    expect(aliceIndexPath).not.toBe(bobIndexPath);
+    expect(aliceIndexPath).toContain(USER_A);
+    expect(bobIndexPath).toContain(USER_B);
+    expect(aliceIndexPath).not.toContain(USER_B);
+    expect(bobIndexPath).not.toContain(USER_A);
+    // Both paths still terminate at the index file (sanity).
+    expect(aliceIndexPath.endsWith('capability-index.yaml')).toBe(true);
+    expect(bobIndexPath.endsWith('capability-index.yaml')).toBe(true);
   });
 
   it('Alice creates element and it appears in list for Bob (shared in-memory index if both use same singleton)', async () => {
