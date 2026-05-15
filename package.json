@@ -23,7 +23,7 @@
     "rebuild": "npm run clean && npm run build",
     "setup": "npm install && npm run build",
     "sync:shrinkwrap": "cp -f npm-shrinkwrap.json package-lock.json",
-    "verify:shrinkwrap": "npm install --package-lock-only --ignore-scripts && npm run sync:shrinkwrap && git diff --exit-code -- npm-shrinkwrap.json package-lock.json || (echo 'ERROR: lockfiles stale or divergent. Run: npm install && npm run sync:shrinkwrap, commit npm-shrinkwrap.json + package-lock.json, then republish.' && exit 1)",
+    "verify:shrinkwrap": "test -f npm-shrinkwrap.json && test -f package-lock.json && diff -q package-lock.json npm-shrinkwrap.json || { echo 'ERROR: npm-shrinkwrap.json must exist and be byte-identical to package-lock.json (it ships to npm consumers; package-lock.json does not). Run: npm install && npm run sync:shrinkwrap, then commit both.'; exit 1; }",
     "prepublishOnly": "npm run verify:shrinkwrap && (cp README.md README.md.backup 2>/dev/null || true) && cp README.npm.md README.md && BUILD_TYPE=npm npm run build",
     "postpublish": "if [ -f README.md.backup ]; then mv README.md.backup README.md; else echo 'No backup found, README.md unchanged'; fi",
     "test": "cross-env \"NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs",
