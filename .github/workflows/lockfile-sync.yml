@@ -23,6 +23,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Verify package-lock.json == npm-shrinkwrap.json
+        shell: bash
         run: |
           if [ ! -f npm-shrinkwrap.json ]; then
             echo "::error::npm-shrinkwrap.json is missing. It must be committed and ship to npm consumers."

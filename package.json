@@ -24,7 +24,7 @@
     "setup": "npm install && npm run build",
     "sync:shrinkwrap": "cp -f npm-shrinkwrap.json package-lock.json",
     "verify:shrinkwrap": "npm install --package-lock-only --ignore-scripts && npm run sync:shrinkwrap && git diff --exit-code -- npm-shrinkwrap.json package-lock.json || (echo 'ERROR: lockfiles stale or divergent. Run: npm install && npm run sync:shrinkwrap, commit npm-shrinkwrap.json + package-lock.json, then republish.' && exit 1)",
-    "prepublishOnly": "npm run verify:shrinkwrap && cp README.md README.md.backup 2>/dev/null || true && cp README.npm.md README.md && BUILD_TYPE=npm npm run build",
+    "prepublishOnly": "npm run verify:shrinkwrap && (cp README.md README.md.backup 2>/dev/null || true) && cp README.npm.md README.md && BUILD_TYPE=npm npm run build",
     "postpublish": "if [ -f README.md.backup ]; then mv README.md.backup README.md; else echo 'No backup found, README.md unchanged'; fi",
     "test": "cross-env \"NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs",
     "test:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs --watch",
