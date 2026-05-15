@@ -1,0 +1,40 @@
+name: Lockfile Sync Check
+
+# Ensures package-lock.json and npm-shrinkwrap.json stay byte-identical.
+# npm-shrinkwrap.json is the lockfile that ships to npm consumers (package-lock.json
+# is not published), so the two must never diverge — otherwise installed users would
+# get a different (potentially vulnerable) dependency tree than CI tests.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - package-lock.json
+      - npm-shrinkwrap.json
+      - package.json
+
+permissions:
+  contents: read
+
+jobs:
+  lockfile-sync:
+    name: Lockfiles in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify package-lock.json == npm-shrinkwrap.json
+        run: |
+          if [ ! -f npm-shrinkwrap.json ]; then
+            echo "::error::npm-shrinkwrap.json is missing. It must be committed and ship to npm consumers."
+            exit 1
+          fi
+          if [ ! -f package-lock.json ]; then
+            echo "::error::package-lock.json is missing."
+            exit 1
+          fi
+          if ! diff -q package-lock.json npm-shrinkwrap.json > /dev/null; then
+            echo "::error::package-lock.json and npm-shrinkwrap.json differ. Run 'npm install && npm run sync:shrinkwrap', then commit both. The shipped npm-shrinkwrap.json must match the tested package-lock.json."
+            diff package-lock.json npm-shrinkwrap.json | head -50 || true
+            exit 1
+          fi
+          echo "Lockfiles are in sync."
