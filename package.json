@@ -248,6 +248,9 @@
     "brace-expansion@>=2.0.0 <2.0.3": "2.0.3",
     "express": {
       "path-to-regexp": "8.4.2"
+    },
+    "giget": {
+      "tar": "7.5.15"
     }
   }
 }
