@@ -1214,6 +1214,59 @@ describe('Web console cleanup regressions', () => {
     cleanup();
   });
 
+  it('shows admin-configured permission audit artifact status in the permissions header', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            activeElementCount: 0,
+            hasAllowlist: false,
+            denyPatterns: [],
+            allowPatterns: [],
+            confirmPatterns: [],
+            denyRules: [],
+            allowRules: [],
+            confirmRules: [],
+            elements: [],
+            knownSessions: [],
+            recentDecisions: [],
+            permissionPromptActive: false,
+            permissionAuditArtifact: {
+              enabled: true,
+              available: true,
+              destination: {
+                type: 'localFile',
+                path: '/Users/admin/.dollhouse/audit/permission-audit.md',
+              },
+              lastWriteAt: '2026-05-06T20:00:00.000Z',
+            },
+          }),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(DEFAULT_WAIT_MS);
+
+    const auditDot = win.document.getElementById('perm-dot-audit-artifact') as HTMLElement | null;
+    const auditLabel = auditDot?.parentElement?.querySelector('.perm-status-label') as HTMLElement | null;
+    expect(auditDot?.dataset.status).toBe('active');
+    expect(auditLabel?.textContent).toBe('Audit file active');
+    expect(auditLabel?.getAttribute('title')).toBe('/Users/admin/.dollhouse/audit/permission-audit.md');
+
+    cleanup();
+  });
+
   it('surfaces malformed permissions JSON through the dashboard error boundary', async () => {
     const { window: win, cleanup } = createDom(`
       <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>

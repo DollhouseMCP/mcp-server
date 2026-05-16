@@ -216,7 +216,9 @@
     const serverDot = document.getElementById('perm-dot-server');
     const ensembleDot = document.getElementById('perm-dot-ensemble');
     const hookDot = document.getElementById('perm-dot-hook');
+    const auditDot = document.getElementById('perm-dot-audit-artifact');
     const hookLabel = hookDot ? hookDot.parentElement.querySelector('.perm-status-label') : null;
+    const auditLabel = auditDot ? auditDot.parentElement.querySelector('.perm-status-label') : null;
     const updated = document.getElementById('perm-last-updated');
 
     if (serverDot) {
@@ -261,6 +263,26 @@
       } else {
         hookDot.dataset.status = 'warning';
         hookLabel.textContent = 'Policies loaded, not enforced';
+      }
+    }
+    if (auditDot && auditLabel) {
+      const artifact = data.permissionAuditArtifact;
+      if (!artifact || !artifact.enabled) {
+        auditDot.dataset.status = 'inactive';
+        auditLabel.textContent = 'Audit file off';
+        auditLabel.removeAttribute('title');
+      } else if (artifact.available) {
+        auditDot.dataset.status = 'active';
+        auditLabel.textContent = 'Audit file active';
+        if (artifact.destination?.path) {
+          auditLabel.setAttribute('title', artifact.destination.path);
+        }
+      } else {
+        auditDot.dataset.status = 'warning';
+        auditLabel.textContent = 'Audit file needs attention';
+        if (artifact.lastError) {
+          auditLabel.setAttribute('title', artifact.lastError);
+        }
       }
     }
     if (updated) {
@@ -834,6 +856,10 @@
           <div class="perm-status-indicator">
             <span class="perm-status-dot" id="perm-dot-hook" data-status="inactive"></span>
             <span class="perm-status-label">Policies</span>
+          </div>
+          <div class="perm-status-indicator">
+            <span class="perm-status-dot" id="perm-dot-audit-artifact" data-status="inactive"></span>
+            <span class="perm-status-label">Audit file off</span>
           </div>
         <span class="perm-status-spacer"></span>
         <span class="perm-status-updated">Updated: <span id="perm-last-updated">--:--:--</span></span>
