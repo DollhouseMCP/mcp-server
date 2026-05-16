@@ -127,6 +127,13 @@
       "when": 1778950000000,
       "tag": "0017_user_oauth_tokens",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1778960000000,
+      "tag": "0018_agent_states_session_scope",
+      "breakpoints": true
     }
   ]
 }

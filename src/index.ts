@@ -914,6 +914,12 @@ async function startHttpConsole(
   const unifiedAuthMiddleware = container.hasRegistration('AuthMiddleware')
     ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
     : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container.hasRegistration('ContextTracker')
+    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    : undefined;
 
   // Start the web server
   const { startWebServer } = await import('./web/server.js');
@@ -927,12 +933,19 @@ async function startHttpConsole(
     additionalRouters: [ingestResult.router],
     tokenStore,
     unifiedAuthMiddleware,
+    contextTracker,
   });
 
   // Wire WebSSELogSink so live log entries reach the browser
   if (webResult.logBroadcast && logManager) {
     const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
     logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
   }
 
   return ingestResult;
@@ -1175,6 +1188,12 @@ async function startWebStandaloneMode(): Promise<void> {
   const unifiedAuthMiddleware = container?.hasRegistration('AuthMiddleware')
     ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
     : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container?.hasRegistration('ContextTracker')
+    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    : undefined;
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
     portfolioDir,
@@ -1188,11 +1207,18 @@ async function startWebStandaloneMode(): Promise<void> {
     sessionId: sessionIdentity.sessionId,
     runtimeSessionId: sessionIdentity.runtimeSessionId,
     unifiedAuthMiddleware,
+    contextTracker,
   });
 
   if (webResult.logBroadcast && logManager) {
     const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
     logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
   }
 
   listenForQuitCommands();

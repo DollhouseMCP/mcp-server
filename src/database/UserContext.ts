@@ -50,6 +50,15 @@ export class UserContextMissingError extends Error {
 export type UserIdResolver = () => string;
 
 /**
+ * Function returning the current MCP session id.
+ *
+ * Agent runtime state is session-scoped in database mode. Unlike user ids,
+ * session ids are not guaranteed to be UUIDs: stdio intentionally defaults
+ * to "default", and tests/operators may provide stable text ids.
+ */
+export type SessionIdResolver = () => string;
+
+/**
  * Build a UserIdResolver that reads the current userId from the given
  * ContextTracker's SessionContext.
  *
@@ -99,5 +108,32 @@ export function createUserIdResolver(
     const userId = session.userId;
     validateUserId(userId);
     return userId;
+  };
+}
+
+/**
+ * Build a SessionIdResolver that reads the current session id from the active
+ * ContextTracker scope. Throws loudly when called outside a session for the
+ * same reason as createUserIdResolver: silently falling back would merge
+ * unrelated sessions' runtime state.
+ */
+export function createSessionIdResolver(
+  contextTracker: ContextTracker,
+): SessionIdResolver {
+  return () => {
+    const session = contextTracker.getSessionContext();
+    if (!session) {
+      logger.error(
+        '[UserContext] No session context is active. Every per-session database ' +
+        'operation must run inside ContextTracker.runAsync().',
+      );
+      throw new UserContextMissingError('No active session context for database operation');
+    }
+
+    if (!session.sessionId || session.sessionId.length === 0) {
+      throw new UserContextMissingError('Active session context has no sessionId');
+    }
+
+    return session.sessionId;
   };
 }

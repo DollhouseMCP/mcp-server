@@ -108,6 +108,10 @@ import { ElementManagerServiceRegistrar } from './registrars/ElementManagerServi
 import { CollectionServiceRegistrar } from './registrars/CollectionServiceRegistrar.js';
 import { IndexingServiceRegistrar } from './registrars/IndexingServiceRegistrar.js';
 import { ServerServiceRegistrar } from './registrars/ServerServiceRegistrar.js';
+import {
+  AGENT_STATE_MAX_YAML_SIZE,
+  FileAgentStateStore,
+} from '../storage/FileAgentStateStore.js';
 
 // State is owned by PersonaManager and services
 
@@ -1254,6 +1258,15 @@ export class DollhouseContainer {
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+
+      child.register('AgentStateStore', () => new FileAgentStateStore({
+        stateDir: path.join(userPortfolioDir, ElementType.AGENT, '.state'),
+        fileLockManager: this.resolve('FileLockManager'),
+        fileOperations: this.resolve('FileOperationsService'),
+        serializationService: this.resolve('SerializationService'),
+        stateCache: new Map(),
+        maxYamlSize: AGENT_STATE_MAX_YAML_SIZE,
+      }));
     }
 
     try {

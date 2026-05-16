@@ -34,6 +34,10 @@ import type { ConsoleTokenStore } from './console/consoleToken.js';
 import { createAuthMiddleware } from './middleware/authMiddleware.js';
 import { withJwtFallthrough } from '../auth/authMiddleware.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
+import { randomUUID } from 'node:crypto';
+import type { RequestHandler } from 'express';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { SessionContext } from '../context/SessionContext.js';
 
 /**
  * Public path prefixes that never require authentication (#1780).
@@ -151,6 +155,14 @@ export interface WebServerOptions {
   tokenStore?: ConsoleTokenStore;
   /** Unified JWT auth middleware (from src/auth). When provided, mounted on /api before console token auth. */
   unifiedAuthMiddleware?: import('express').RequestHandler;
+  /**
+   * ContextTracker for wrapping each authenticated /api request in a
+   * per-session ContextTracker.runAsync() scope so downstream DB operations
+   * satisfy UserContext.assertHasContext(). Mirrors what ServerSetup does for
+   * MCP request handlers. When absent, /api handlers run outside any session
+   * scope and any DB op they trigger will throw "No session context is active".
+   */
+  contextTracker?: ContextTracker;
   /** Stable Dollhouse session identity shown in the web console UI. */
   sessionId?: string;
   /** Runtime-unique session identity for diagnostics. */
@@ -307,6 +319,49 @@ export async function startWebServer(options: WebServerOptions): Promise<WebServ
     logger.info(
       `[WebUI] Console auth middleware mounted ${(env.DOLLHOUSE_WEB_AUTH_ENABLED || !!options.unifiedAuthMiddleware) ? 'ENFORCING' : 'pass-through (flag off)'}`,
     );
+
+    // Per-session ContextTracker scope. After auth resolves res.locals.authClaims,
+    // wrap each /api request in a ContextTracker.runAsync() frame so downstream
+    // DB operations satisfy UserContext.assertHasContext(). Mirrors the wrap
+    // ServerSetup applies to MCP request handlers (src/server/ServerSetup.ts:90,135).
+    //
+    // Without this, every web-console /api handler that touches the DB throws
+    // "No session context is active" — visible as "Failed to list elements
+    // from database" log spew at the SPA's polling cadence. Discovered via
+    // tunneled OAuth-gate testing where the SPA's /api/permissions/status poll
+    // surfaced the gap.
+    if (options.contextTracker) {
+      const tracker = options.contextTracker;
+      const sessionScope: RequestHandler = (req, res, next) => {
+        const claims = res.locals.authClaims;
+        if (!claims) {
+          // No claims = unauthenticated path (e.g. PUBLIC_PATH_PREFIXES) OR
+          // a request that the upstream middleware will 401 next. Either way
+          // there's no identity to scope to, so just pass through.
+          return next();
+        }
+        const sessionContext: SessionContext = {
+          userId: claims.sub,
+          sessionId: randomUUID(),
+          tenantId: claims.tenantId ?? null,
+          transport: 'http',
+          createdAt: Date.now(),
+          displayName: claims.displayName,
+          email: claims.email,
+          roles: claims.roles,
+        };
+        const ctx = tracker.createSessionContext('llm-request', sessionContext, {
+          route: req.path,
+          method: req.method,
+        });
+        // Use sync `run()` (not `runAsync()`): next() returns void, and
+        // AsyncLocalStorage propagates the frame to any async work the
+        // downstream handler chains off `next()` regardless.
+        tracker.run(ctx, () => next());
+      };
+      app.use('/api', sessionScope);
+      logger.info('[WebUI] Per-request session scope mounted on /api');
+    }
 
     // TOTP enrollment routes (#1794). Mounted AFTER the /api auth middleware
     // because the router adds its own always-on auth guard — the global auth

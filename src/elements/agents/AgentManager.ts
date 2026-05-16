@@ -45,6 +45,8 @@ import {
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { AGENT_STATE_MAX_YAML_SIZE, FileAgentStateStore } from '../../storage/FileAgentStateStore.js';
+import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
 
 /**
  * Minimal interface for an element manager resolved by name.
@@ -64,6 +66,7 @@ export interface ResolvedElementManager {
 
 export interface AgentManagerDeps extends ElementManagerDeps {
   baseDir: string;
+  stateStore?: IAgentStateStore;
   /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
   elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
@@ -91,8 +94,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
-const STATE_FILE_EXTENSION = '.state.yaml';
-const MAX_YAML_SIZE = 64 * 1024;
+const MAX_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
 const MAX_FILE_SIZE = 100 * 1024;
 
 // Issue #83: Centralized active element limits (configurable via env vars)
@@ -110,6 +112,8 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
 
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateCache: Map<string, AgentState> = new Map();
+  private readonly stateStore: IAgentStateStore;
+  private readonly hydratedAgents = new WeakSet<Agent>();
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
@@ -121,6 +125,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
   private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  private static warnedDbModeOrphanedStateFiles = false;
 
   constructor(deps: AgentManagerDeps) {
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
@@ -148,6 +153,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validationService = deps.validationRegistry.getValidationService();
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
+    this.stateStore = deps.stateStore || this.createDefaultStateStore(deps);
     // Issue #1948: Instance-injected dependencies (replaces static resolvers)
     this._elementManagerResolver = deps.elementManagerResolver;
     this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
@@ -160,6 +166,17 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private get stateDir(): string {
     return path.join(this.elementDir, STATE_DIRECTORY);
+  }
+
+  private createDefaultStateStore(deps: AgentManagerDeps): IAgentStateStore {
+    return new FileAgentStateStore({
+      stateDir: () => this.stateDir,
+      fileLockManager: deps.fileLockManager,
+      fileOperations: deps.fileOperationsService,
+      serializationService: deps.serializationService,
+      stateCache: this.stateCache,
+      maxYamlSize: MAX_YAML_SIZE,
+    });
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */
@@ -399,13 +416,24 @@ export class AgentManager extends BaseElementManager<Agent> {
       // shape. Passing a filename straight to load() breaks in DB mode where
       // load expects the element UUID, not a ".md" path.
       const found = await this.findByName(sanitizedName);
-      if (found) return found;
+      if (found) {
+        await this.ensureStateHydrated(found);
+        return found;
+      }
       // Fallback: flexible matching via list scan (#607) — for legacy files
       // whose on-disk name diverges from their metadata name.
-      return this.readFlexibly(name);
+      const flexible = await this.readFlexibly(name);
+      if (flexible) {
+        await this.ensureStateHydrated(flexible);
+      }
+      return flexible;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this.readFlexibly(name);
+        const flexible = await this.readFlexibly(name);
+        if (flexible) {
+          await this.ensureStateHydrated(flexible);
+        }
+        return flexible;
       }
       throw error;
     }
@@ -678,7 +706,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     filePath: string,
   ): Promise<void> {
-    await this.hydrateAgentState(agent, this.stripExtension(filePath));
+    if (isWritableStorageLayer(this.storageLayer)) {
+      await this.warnOnceForDbModeOrphanedStateFiles();
+    } else {
+      await this.hydrateAgentState(agent, this.stripExtension(filePath));
+    }
 
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_LOADED',
@@ -706,7 +738,6 @@ export class AgentManager extends BaseElementManager<Agent> {
       ? sanitizeInput(filePath, 255)
       : this.normalizeAgentFilePath(filePath);
 
-    await this.ensureStateDirectory();
     await super.save(agent, sanitizedPath, options);
 
     // State persistence uses the agent's logical name (not path/UUID) so that
@@ -715,9 +746,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       const stateName = isDb
         ? agent.metadata.name
         : this.stripExtension(sanitizedPath);
-      const newVersion = await this.saveAgentState(stateName, agent.getState());
+      const newVersion = await this.saveAgentState(agent, stateName, agent.getState());
       agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
       agent.markStatePersisted();
+      this.hydratedAgents.add(agent);
     }
   }
 
@@ -742,9 +774,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       return false;
     }
 
-    const newVersion = await this.saveAgentState(name, agent.getState());
+    const newVersion = await this.saveAgentState(agent, name, agent.getState());
     agent[COMMIT_PERSISTED_VERSION](newVersion);
     agent.markStatePersisted();
+    this.hydratedAgents.add(agent);
     return true;
   }
 
@@ -762,36 +795,14 @@ export class AgentManager extends BaseElementManager<Agent> {
       : this.normalizeAgentFilePath(filePath);
     // State-file name derives from the agent's logical name in DB mode, or
     // from the stripped filename in file mode.
+    const existing = await this.load(sanitizedPath).catch(() => null);
     const name = isDb
-      ? sanitizedPath // UUID — state file lookup below uses its own path anyway
+      ? existing?.metadata.name ?? sanitizedPath
       : this.stripExtension(sanitizedPath);
+    const agentElementId = isDb ? sanitizedPath : existing?.id ?? sanitizedPath;
     await super.delete(sanitizedPath);
 
-    // FIX: Normalize name for consistent state file deletion
-    const normalizedName = this.normalizeFilename(name);
-    const statePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
-    try {
-      // Back up the state file before deleting it
-      const backupService = this.resolveBackupService();
-      if (backupService) {
-        const result = await backupService.backupBeforeDelete(statePath, ElementType.AGENT);
-        if (!result.movedOriginal) {
-          await this.fileOperations.deleteFile(statePath, ElementType.AGENT, {
-            source: 'AgentManager.delete (state file)'
-          });
-        }
-      } else {
-        await this.fileOperations.deleteFile(statePath, ElementType.AGENT, {
-          source: 'AgentManager.delete (state file)'
-        });
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-    }
-    // FIX: Use normalized name as cache key for consistent cache cleanup
-    this.stateCache.delete(normalizedName);
+    await this.stateStore.delete({ name, agentElementId });
   }
 
   private normalizeAgentFilePath(filePath: string): string {
@@ -1764,78 +1775,21 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns The new state version after successful save
    * @protected Only accessible by subclasses (e.g., TestableAgentManager for testing)
    */
-  protected async saveAgentState(name: string, state: AgentState): Promise<number> {
-    await this.ensureStateDirectory();
-
-    // FIX: Normalize name for consistent state file naming
-    const normalizedName = this.normalizeFilename(name);
-    const filePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
-
-    // FIX (Issue #107 - CRIT-2): Acquire file lock to prevent TOCTOU race condition
-    // The lock covers the entire read-compare-write sequence to ensure atomicity
-    await this.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
-      // FIX: Optimistic locking check (Issue #24)
-      // Load existing state to compare versions before overwriting
-      const existingState = await this.loadAgentState(name);
-      if (existingState && existingState.stateVersion !== undefined && state.stateVersion !== undefined) {
-        // Check if our state is based on the current version
-        // If versions don't match, it means another process updated the state
-        if (existingState.stateVersion > state.stateVersion) {
-          logger.warn(`State version conflict detected for agent ${name}`, {
-            existingVersion: existingState.stateVersion,
-            attemptedVersion: state.stateVersion
-          });
-
-          SecurityMonitor.logSecurityEvent({
-            type: 'MEMORY_SAVE_FAILED',
-            severity: 'MEDIUM',
-            source: 'AgentManager.saveAgentState',
-            details: `State version conflict: attempted to save stale state`,
-            additionalData: {
-              agentName: name,
-              existingVersion: existingState.stateVersion,
-              attemptedVersion: state.stateVersion
-            }
-          });
-
-          throw new Error(
-            `State version conflict: current version is ${existingState.stateVersion}, ` +
-            `but attempted to save version ${state.stateVersion}. ` +
-            `State may have been modified concurrently.`
-          );
-        }
-      }
-
-      // FIX (Issue #123): Increment version BEFORE serialization, not during operations
-      // This ensures version only increments on successful save
-      state.stateVersion = (state.stateVersion || 0) + 1;
-
-      const serializedState = this.prepareStateForSerialization(state);
-
-      const yamlContent = this.serializationService.dumpYaml(serializedState, {
-        schema: 'json',  // Fix #914: failsafe corrupts booleans/numbers in agent state
-        noRefs: true,
-        sortKeys: true
-      });
-
-      // Validate size
-      this.serializationService.validateSize(yamlContent, MAX_YAML_SIZE, 'Agent state');
-
-      await this.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
-      // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
-
-      logger.debug(`Agent state saved successfully`, {
-        agentName: name,
-        normalizedName,
-        stateVersion: state.stateVersion,
-        goalCount: state.goals?.length ?? 0
-      });
-    });
-
-    // Return the new version for caller to sync agent's internal state
-    // stateVersion is guaranteed to be a number after the increment above
-    return state.stateVersion!;
+  protected async saveAgentState(name: string, state: AgentState): Promise<number>;
+  protected async saveAgentState(agent: Agent, name: string, state: AgentState): Promise<number>;
+  protected async saveAgentState(
+    agentOrName: Agent | string,
+    nameOrState: string | AgentState,
+    maybeState?: AgentState,
+  ): Promise<number> {
+    const agent = typeof agentOrName === 'string' ? null : agentOrName;
+    const name = typeof agentOrName === 'string' ? agentOrName : nameOrState as string;
+    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState!;
+    return this.stateStore.save(
+      { name, agentElementId: agent ? this.getAgentElementId(agent, name) : name },
+      state,
+      state.stateVersion ?? 0,
+    );
   }
 
   /**
@@ -1848,8 +1802,15 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.loadAgentState(name);
+    const state = await this.stateStore.load({
+      name,
+      agentElementId: this.getAgentElementId(agent, name),
+    });
     if (!state) {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        agent[COMMIT_PERSISTED_VERSION](0);
+      }
+      this.hydratedAgents.add(agent);
       return;
     }
 
@@ -1857,46 +1818,39 @@ export class AgentManager extends BaseElementManager<Agent> {
     serialized.state = state;
     agent.deserialize(JSON.stringify(serialized));
     agent.markStatePersisted();
+    this.hydratedAgents.add(agent);
   }
 
-  private async loadAgentState(name: string): Promise<AgentState | null> {
-    // FIX: Normalize name for consistent state file lookups
-    const normalizedName = this.normalizeFilename(name);
-
-    if (this.stateCache.has(normalizedName)) {
-      return this.stateCache.get(normalizedName)!;
+  private getAgentElementId(agent: Agent, name: string): string {
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return agent.id;
     }
-
-    const stateFilename = `${normalizedName}${STATE_FILE_EXTENSION}`;
-    const statePath = path.join(this.stateDir, stateFilename);
-
-    try {
-      const content = await this.fileOperations.readFile(statePath, { encoding: 'utf-8' });
-
-      // Use SerializationService for YAML parsing
-      // State files are pure YAML but parseFrontmatter handles both formats
-      const result = this.serializationService.parseFrontmatter(content, {
-        maxYamlSize: MAX_YAML_SIZE,
-        validateContent: true,
-        source: 'AgentManager.loadAgentState'
-      });
-
-      const state = result.data as AgentState;
-      this.normalizeLoadedState(state);
-      // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
-      return state;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      logger.error(`Failed to load agent state: ${name}`, error);
-      return null;
-    }
+    return this.storageLayer.getPathByName(agent.metadata.name)
+      ?? this.storageLayer.getPathByName(name)
+      ?? agent.id;
   }
 
-  private async ensureStateDirectory(): Promise<void> {
-    await this.fileOperations.createDirectory(this.stateDir);
+  async ensureStateHydrated(agent: Agent): Promise<void> {
+    if (!isWritableStorageLayer(this.storageLayer) || this.hydratedAgents.has(agent)) {
+      return;
+    }
+    await this.hydrateAgentState(agent, agent.metadata.name);
+  }
+
+  private async warnOnceForDbModeOrphanedStateFiles(): Promise<void> {
+    if (AgentManager.warnedDbModeOrphanedStateFiles) {
+      return;
+    }
+    AgentManager.warnedDbModeOrphanedStateFiles = true;
+    const defaultFileStore = new FileAgentStateStore({
+      stateDir: () => this.stateDir,
+      fileLockManager: this.fileLockManager,
+      fileOperations: this.fileOperations,
+      serializationService: this.serializationService,
+      stateCache: this.stateCache,
+      maxYamlSize: MAX_YAML_SIZE,
+    });
+    await defaultFileStore.warnIfOrphanedStateFiles();
   }
 
   protected override async parseMetadata(data: any): Promise<AgentMetadata> {
@@ -2532,93 +2486,6 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private getCurrentUserForAttribution(): string {
     return this.metadataService.getCurrentUser();
-  }
-
-  private prepareStateForSerialization(state: AgentState): Record<string, unknown> {
-    return {
-      ...state,
-      lastActive: state.lastActive instanceof Date ? state.lastActive.toISOString() : state.lastActive,
-      sessionCount: String(state.sessionCount ?? 0),
-      stateVersion: state.stateVersion !== undefined ? String(state.stateVersion) : '1',  // Include version for optimistic locking
-      goals: state.goals.map(goal => ({
-        ...goal,
-        createdAt: goal.createdAt instanceof Date ? goal.createdAt.toISOString() : goal.createdAt,
-        updatedAt: goal.updatedAt instanceof Date ? goal.updatedAt.toISOString() : goal.updatedAt,
-        completedAt: goal.completedAt instanceof Date ? goal.completedAt.toISOString() : goal.completedAt,
-        importance: goal.importance !== undefined ? String(goal.importance) : undefined,
-        urgency: goal.urgency !== undefined ? String(goal.urgency) : undefined,
-        estimatedEffort: goal.estimatedEffort !== undefined ? String(goal.estimatedEffort) : undefined
-      })),
-      decisions: state.decisions.map(decision => ({
-        ...decision,
-        timestamp: decision.timestamp instanceof Date ? decision.timestamp.toISOString() : decision.timestamp,
-        confidence: decision.confidence !== undefined ? String(decision.confidence) : undefined
-      }))
-    };
-  }
-
-  private normalizeLoadedState(state: AgentState): void {
-    // FIX (Issue #123): Default missing arrays to prevent TypeError
-    // If state file is missing goals/decisions/context, default to empty arrays/objects
-    if (!state.goals) {
-      state.goals = [];
-    }
-    if (!state.decisions) {
-      state.decisions = [];
-    }
-    if (!state.context) {
-      state.context = {};
-    }
-
-    if (state.sessionCount !== undefined) {
-      state.sessionCount = Number.parseInt(String(state.sessionCount), 10);
-    }
-
-    // Parse stateVersion for optimistic locking (Issue #24)
-    if (state.stateVersion !== undefined) {
-      state.stateVersion = Number.parseInt(String(state.stateVersion), 10);
-    } else {
-      // Default to version 1 if not present (for backward compatibility)
-      state.stateVersion = 1;
-    }
-
-    if (state.lastActive) {
-      state.lastActive = new Date(state.lastActive);
-    }
-
-    if (state.goals) {
-      state.goals.forEach(goal => {
-        if (goal.importance !== undefined) {
-          goal.importance = Number.parseInt(String(goal.importance), 10);
-        }
-        if (goal.urgency !== undefined) {
-          goal.urgency = Number.parseInt(String(goal.urgency), 10);
-        }
-        if (goal.estimatedEffort !== undefined) {
-          goal.estimatedEffort = Number.parseFloat(String(goal.estimatedEffort));
-        }
-        if (goal.createdAt) {
-          goal.createdAt = new Date(goal.createdAt);
-        }
-        if (goal.updatedAt) {
-          goal.updatedAt = new Date(goal.updatedAt);
-        }
-        if (goal.completedAt) {
-          goal.completedAt = new Date(goal.completedAt);
-        }
-      });
-    }
-
-    if (state.decisions) {
-      state.decisions.forEach(decision => {
-        if (decision.confidence !== undefined) {
-          decision.confidence = Number.parseFloat(String(decision.confidence));
-        }
-        if (decision.timestamp) {
-          decision.timestamp = new Date(decision.timestamp);
-        }
-      });
-    }
   }
 
   /**

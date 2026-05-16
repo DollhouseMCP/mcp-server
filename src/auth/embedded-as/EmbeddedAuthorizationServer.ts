@@ -1083,6 +1083,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         resourceIndicators: {
           enabled: true,
           defaultResource: () => this.resource,
+          // Force resource binding for grants that didn't explicitly pass
+          // an RFC 8707 `resource=...` parameter, so generic OAuth clients
+          // (e.g. oauth2-proxy fronting the web console behind a forward-
+          // auth gate) still receive JWT-format access tokens bound to
+          // this.resource. Without this, oidc-provider defaults to opaque
+          // tokens for any grant where the client didn't pass resource= —
+          // which means anything but a resource-aware MCP client lands on
+          // a token shape unifiedAuthMiddleware can't validate.
+          //
+          // Companion config required on the consuming side: oauth2-proxy
+          // MUST NOT call the AS's /me (userinfo) endpoint with these
+          // resource-bound tokens — set OAUTH2_PROXY_SKIP_CLAIMS_FROM_PROFILE_URL=true
+          // — because oidc-provider correctly rejects "for-resource-X"
+          // tokens at the OP's own userinfo endpoint (RFC 8707).
+          useGrantedResource: () => true,
           getResourceServerInfo: () => ({
             scope: 'mcp openid offline_access',
             accessTokenFormat: 'jwt',

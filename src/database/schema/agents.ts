@@ -14,6 +14,7 @@ import {
   uuid,
   jsonb,
   integer,
+  text,
   timestamp,
   index,
   uniqueIndex,
@@ -25,6 +26,7 @@ export const agentStates = pgTable('agent_states', {
   id: uuid('id').primaryKey().defaultRandom(),
   agentId: uuid('agent_id').notNull().references(() => elements.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull(),
   goals: jsonb('goals').notNull().default([]),
   decisions: jsonb('decisions').notNull().default([]),
   context: jsonb('context').notNull().default({}),
@@ -32,6 +34,7 @@ export const agentStates = pgTable('agent_states', {
   sessionCount: integer('session_count').notNull().default(0),
   stateVersion: integer('state_version').notNull().default(1),
 }, (table) => [
-  uniqueIndex('idx_agent_states_agent').on(table.agentId),
+  uniqueIndex('idx_agent_states_agent_session').on(table.agentId, table.sessionId),
   index('idx_agent_states_user').on(table.userId),
+  index('idx_agent_states_session').on(table.sessionId),
 ]);

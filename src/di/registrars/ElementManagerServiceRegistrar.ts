@@ -42,6 +42,11 @@ import {
   DollhouseToAnthropicConverter,
 } from '../../converters/index.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
+import {
+  AGENT_STATE_MAX_YAML_SIZE,
+  FileAgentStateStore,
+} from '../../storage/FileAgentStateStore.js';
+import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
 import type { ElementCRUDHandler } from '../../handlers/ElementCRUDHandler.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { SessionContainerRegistry } from '../SessionContainerRegistry.js';
@@ -105,6 +110,12 @@ export class ElementManagerServiceRegistrar {
     };
     const dangerZoneEnforcerProxy: DangerZoneBlocker = {
       block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
+    };
+    const agentStateStoreProxy: IAgentStateStore = {
+      load: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').load(key),
+      save: (key, state, expectedVersion) =>
+        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion),
+      delete: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key),
     };
     const verificationStoreProxy = {
       set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
@@ -220,6 +231,18 @@ export class ElementManagerServiceRegistrar {
 
     container.register('TemplateRenderer', () => new TemplateRenderer(container.resolve('TemplateManager')));
 
+    container.register('AgentStateStore', () => {
+      const portfolioManager = container.resolve<PortfolioManager>('PortfolioManager');
+      return new FileAgentStateStore({
+        stateDir: path.join(portfolioManager.getElementDir(ElementType.AGENT), '.state'),
+        fileLockManager: container.resolve('FileLockManager'),
+        fileOperations: container.resolve('FileOperationsService'),
+        serializationService: container.resolve('SerializationService'),
+        stateCache: new Map(),
+        maxYamlSize: AGENT_STATE_MAX_YAML_SIZE,
+      });
+    });
+
     container.register('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
       fileLockManager: container.resolve('FileLockManager'),
@@ -239,6 +262,7 @@ export class ElementManagerServiceRegistrar {
       elementManagerResolver: (name: string) => container.resolve(name) as import('../../elements/agents/AgentManager.js').ResolvedElementManager,
       dangerZoneEnforcer: dangerZoneEnforcerProxy,
       verificationStore: verificationStoreProxy,
+      stateStore: agentStateStoreProxy,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
