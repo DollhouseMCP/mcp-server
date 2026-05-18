@@ -48,13 +48,13 @@ describe('FileTokenStore', () => {
 
     expect(fileOps.writeFile).toHaveBeenNthCalledWith(
       1,
-      path.join('/tmp/dollhouse-test/alice/auth', 'github_token.enc'),
+      path.join('/tmp/dollhouse-test/alice/auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
       expect.any(String),
       expect.any(Object),
     );
     expect(fileOps.writeFile).toHaveBeenNthCalledWith(
       2,
-      path.join('/tmp/dollhouse-test/bob/auth', 'github_token.enc'),
+      path.join('/tmp/dollhouse-test/bob/auth', 'github_token.enc'), // NOSONAR — assertion arg against mocked writeFile; never touches disk
       expect.any(String),
       expect.any(Object),
     );

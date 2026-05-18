@@ -18,11 +18,10 @@ const IPV4_LOOPBACK_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
 export function normalizeBaseUrl(rawUrl: string): string {
   const parsed = new URL(rawUrl);
-  // NOSONAR (next two regexes) — anchored single-quantifier on URL-parser-normalized strings; no backtracking
-  parsed.pathname = parsed.pathname.replace(/\/+$/, '');
+  parsed.pathname = parsed.pathname.replace(/\/+$/, ''); // NOSONAR — anchored single-quantifier on URL-parser-normalized path; no backtracking
   parsed.search = '';
   parsed.hash = '';
-  return parsed.toString().replace(/\/$/, '');
+  return parsed.toString().replace(/\/$/, ''); // NOSONAR — anchored single-quantifier; no backtracking
 }
 
 export function isLoopbackHost(hostname: string): boolean {

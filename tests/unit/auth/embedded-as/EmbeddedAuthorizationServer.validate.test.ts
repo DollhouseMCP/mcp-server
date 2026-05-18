@@ -27,7 +27,7 @@ import { loadOrGenerateSigningJwks } from '../../../../src/auth/embedded-as/pers
 interface TokenOpts {
   alg?: string;
   typ?: string;
-  kid?: string | undefined;
+  kid?: string;
   crit?: string[];
   iss?: string;
   aud?: string;

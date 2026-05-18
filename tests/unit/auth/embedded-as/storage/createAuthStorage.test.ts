@@ -122,7 +122,7 @@ describe('createAuthStorage', () => {
 
   describe('DURABLE_AUTH_METHODS', () => {
     it('contains exactly the methods whose state must survive restart', () => {
-      expect([...DURABLE_AUTH_METHODS].sort()).toEqual(['local-password', 'magic-link']);
+      expect([...DURABLE_AUTH_METHODS].sort()).toEqual(['local-password', 'magic-link']); // NOSONAR — codepoint sort over fixed 2-element constant array
     });
   });
 

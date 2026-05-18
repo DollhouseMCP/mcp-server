@@ -120,7 +120,7 @@ function lineFor(source: string, offset: number): number {
 function extractChildRegistrations(source: string): string[] {
   return [...source.matchAll(/child\.register(?:<[^>]+>)?\(\s*['"]([^'"]+)['"]/g)]
     .map(match => match[1])
-    .sort();
+    .sort(); // NOSONAR — codepoint sort over TypeScript identifier strings; locale-aware comparison not needed
 }
 
 function findMethodBody(source: string, methodName: string): { start: number; end: number } {

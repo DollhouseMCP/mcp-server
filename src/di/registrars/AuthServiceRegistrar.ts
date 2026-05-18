@@ -43,11 +43,12 @@ export class AuthServiceRegistrar {
     // AuthServiceRegistrar in Container bootstrap, so when DB-mode is
     // configured the registration is present. Filesystem and in-memory
     // backends ignore the value.
-    const database = container.hasRegistration('SystemDatabaseInstance')
-      ? container.resolve<DatabaseInstance>('SystemDatabaseInstance')
-      : container.hasRegistration('DatabaseInstance')
-      ? container.resolve<DatabaseInstance>('DatabaseInstance')
-      : undefined;
+    let database: DatabaseInstance | undefined;
+    if (container.hasRegistration('SystemDatabaseInstance')) {
+      database = container.resolve<DatabaseInstance>('SystemDatabaseInstance');
+    } else if (container.hasRegistration('DatabaseInstance')) {
+      database = container.resolve<DatabaseInstance>('DatabaseInstance');
+    }
 
     // Phase 4.5 / Phase F: register the SigningKeyStore so EmbeddedAuthorizationServer
     // can consume it (Phase I). Selection mirrors the auth K/V backend selector

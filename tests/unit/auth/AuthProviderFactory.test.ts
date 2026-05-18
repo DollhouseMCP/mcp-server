@@ -217,7 +217,7 @@ describe('AuthProviderFactory two-level structure', () => {
         enabled: true,
         provider: 'embedded',
         methods: ['trivial-consent'],
-        publicBaseUrl: 'http://[::1]:65530',
+        publicBaseUrl: 'http://[::1]:65530', // NOSONAR — test asserts http:// IS accepted on loopback per assertSafePublicBaseUrl spec
       });
       expect(provider).toBeDefined();
     });

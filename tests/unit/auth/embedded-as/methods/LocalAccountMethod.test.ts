@@ -35,7 +35,7 @@ describe('LocalAccountMethod', () => {
   });
 
   it('issues an invite URL and the user can redeem it (must-fix #17)', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/interaction/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/interaction/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite');
     expect(inviteToken).toBeTruthy();
 
@@ -54,7 +54,7 @@ describe('LocalAccountMethod', () => {
   });
 
   it('rejects passwords shorter than 12 characters', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     const result = await method.completeInteraction(CTX, {
       formBody: { action: 'set-password', invite: inviteToken, password: 'short' },
@@ -63,7 +63,7 @@ describe('LocalAccountMethod', () => {
   });
 
   it('rejects re-use of an invite token (single-use)', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
       formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -76,7 +76,7 @@ describe('LocalAccountMethod', () => {
 
   it('verifies a password and returns authenticated', async () => {
     // Set up the account first.
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
       formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -90,7 +90,7 @@ describe('LocalAccountMethod', () => {
   });
 
   it('rejects wrong password and notes the failure for rate limiting', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
       formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -132,7 +132,7 @@ describe('LocalAccountMethod', () => {
     // the rest of the suite) and any lazy-init cost on the unknown branch
     // only makes the `unknownMs >= wrongPasswordMs/2` assertion easier
     // to satisfy.
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x');
+    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
       formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -156,7 +156,7 @@ describe('LocalAccountMethod', () => {
 
   describe('consumeInvite (out-of-band CLI invite redemption)', () => {
     it('verifies + creates the account when called directly (used by /auth/local/invite POST)', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
       const result = await method.consumeInvite(token, 'a-very-long-password');
@@ -173,7 +173,7 @@ describe('LocalAccountMethod', () => {
     });
 
     it('rejects re-use of the same invite (single-use)', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
       await method.consumeInvite(token, 'a-very-long-password');
       const second = await method.consumeInvite(token, 'a-very-long-password');
@@ -181,7 +181,7 @@ describe('LocalAccountMethod', () => {
     });
 
     it('rejects passwords shorter than 12 characters with a clear reason', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
       const result = await method.consumeInvite(token, 'short');
       expect(result.kind).toBe('error');
@@ -190,7 +190,7 @@ describe('LocalAccountMethod', () => {
     });
 
     it('verifyInvite returns the email without consuming the token', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
       const verified = method.verifyInvite(token);
       expect(verified.ok).toBe(true);
@@ -209,7 +209,7 @@ describe('LocalAccountMethod', () => {
       // means the user requests a fresh invite (rare path, single-user
       // UX cost) instead of opening the DoS surface (security cost,
       // applies to anyone with a leaked URL).
-      const url = method.issueInvite('local_carol', 'carol@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_carol', 'carol@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
       const spy = jest.spyOn(argon2, 'hash').mockRejectedValueOnce(new Error('argon2 OOM'));
@@ -237,7 +237,7 @@ describe('LocalAccountMethod', () => {
       // successfully, then replay it many times and assert argon2.hash
       // is NEVER invoked on the replays. If a future change reorders
       // back to verify→hash→consume, this test fails loudly.
-      const url = method.issueInvite('local_dosvictim', 'victim@example.com', 'http://app/auth/local/invite');
+      const url = method.issueInvite('local_dosvictim', 'victim@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
       // First (legitimate) consume — succeeds.
@@ -263,7 +263,7 @@ describe('LocalAccountMethod', () => {
 
   describe('credential isolation (B4 — passwordHash off rawProfile)', () => {
     it('writes the argon2 hash to credentials.passwordHash, NOT rawProfile', async () => {
-      const url = method.issueInvite('local_dave', 'dave@example.com', 'http://app/i/x');
+      const url = method.issueInvite('local_dave', 'dave@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
         formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -278,7 +278,7 @@ describe('LocalAccountMethod', () => {
       // credentials masked. Asserts the credential is on a typed sibling
       // field that's straightforward to redact, rather than buried inside
       // an opaque rawProfile blob.
-      const url = method.issueInvite('local_eve', 'eve@example.com', 'http://app/i/x');
+      const url = method.issueInvite('local_eve', 'eve@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
         formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
@@ -291,7 +291,7 @@ describe('LocalAccountMethod', () => {
     });
 
     it('login still verifies against credentials.passwordHash', async () => {
-      const url = method.issueInvite('local_finn', 'finn@example.com', 'http://app/i/x');
+      const url = method.issueInvite('local_finn', 'finn@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
         formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },

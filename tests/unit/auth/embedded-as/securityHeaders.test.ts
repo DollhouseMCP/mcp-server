@@ -20,6 +20,7 @@ import { securityHeaders } from '../../../../src/auth/embedded-as/securityHeader
 
 async function bootApp(): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
+  app.disable('x-powered-by');
   app.use(securityHeaders());
   app.get('/x', (_req, res) => {
     res.type('html').send('<!doctype html><html><body>ok</body></html>');

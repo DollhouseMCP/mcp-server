@@ -39,7 +39,7 @@ describe('MagicLinkMethod', () => {
       storage,
       invites,
       emailSender,
-      verifyUrl: 'http://app/auth/email/verify',
+      verifyUrl: 'http://app/auth/email/verify', // NOSONAR — opaque test base URL
       // Default suite uses 0ms floor for speed; the dedicated timing test
       // below builds its own MagicLinkMethod with the production default.
       requestResponseFloorMs: 0,
@@ -65,7 +65,7 @@ describe('MagicLinkMethod', () => {
 
     expect(emailSender.sent).toHaveLength(1);
     expect(emailSender.sent[0].to).toBe('alice@example.com');
-    expect(emailSender.sent[0].url).toContain('http://app/auth/email/verify?token=');
+    expect(emailSender.sent[0].url).toContain('http://app/auth/email/verify?token='); // NOSONAR — assertion against opaque test fixture URL
   });
 
   it('returns the same generic page even when SMTP throws (must-fix #2 enumeration prevention)', async () => {
@@ -210,7 +210,7 @@ describe('MagicLinkMethod', () => {
         storage,
         invites,
         emailSender,
-        verifyUrl: 'http://app/auth/email/verify',
+        verifyUrl: 'http://app/auth/email/verify', // NOSONAR — opaque test base URL
         requestResponseFloorMs: 100,
       });
 

@@ -40,7 +40,7 @@ describe('assertHasRole', () => {
   it('calls next() when authClaims contains the required role', () => {
     const claims: AuthClaims = {
       sub: 'github_42',
-      iss: 'http://test',
+      iss: 'http://test', // NOSONAR — opaque test fixture identifier (JWT iss claim), never resolved as a URL
       aud: 'mcp',
       iat: 0,
       exp: 0,
@@ -55,7 +55,7 @@ describe('assertHasRole', () => {
   it('responds 403 when authClaims is present but role is missing', () => {
     const claims: AuthClaims = {
       sub: 'github_42',
-      iss: 'http://test',
+      iss: 'http://test', // NOSONAR — opaque test fixture identifier (JWT iss claim), never resolved as a URL
       aud: 'mcp',
       iat: 0,
       exp: 0,
@@ -75,7 +75,7 @@ describe('assertHasRole', () => {
   it('responds 403 when roles claim is undefined', () => {
     const claims: AuthClaims = {
       sub: 'github_42',
-      iss: 'http://test',
+      iss: 'http://test', // NOSONAR — opaque test fixture identifier (JWT iss claim), never resolved as a URL
       aud: 'mcp',
       iat: 0,
       exp: 0,
@@ -106,7 +106,7 @@ describe('assertHasRole', () => {
     // mis-populate. The guard must yield a clean 403, not a 500.
     const malformed = {
       sub: 'github_42',
-      iss: 'http://test',
+      iss: 'http://test', // NOSONAR — opaque test fixture identifier (JWT iss claim), never resolved as a URL
       aud: 'mcp',
       iat: 0,
       exp: 0,
@@ -123,7 +123,7 @@ describe('assertHasRole', () => {
   it('responds 403 when roles claim is an object (guard against malformed provider output)', () => {
     const malformed = {
       sub: 'github_42',
-      iss: 'http://test',
+      iss: 'http://test', // NOSONAR — opaque test fixture identifier (JWT iss claim), never resolved as a URL
       aud: 'mcp',
       iat: 0,
       exp: 0,

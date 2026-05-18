@@ -44,7 +44,7 @@ function makeReadOnlyLayer(): IStorageLayer {
 }
 
 const FILE_OPTIONS: FileStorageOptions = {
-  elementDir: '/tmp/test-element-dir',
+  elementDir: '/tmp/test-element-dir', // NOSONAR — opaque test fixture; factory mocked, no real fs writes
   fileExtension: '.md',
   scanCooldownMs: 0,
 };

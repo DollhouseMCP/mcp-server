@@ -70,6 +70,7 @@ function cloneDefault(): UserConfig {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function assertValidUserId(userId: string): void {
   if (typeof userId !== 'string' || !UUID_RE.test(userId)) {
-    throw new Error(`IUserConfigStore: userId must be a UUID; got ${typeof userId === 'string' ? `"${userId}"` : typeof userId}`);
+    const got = typeof userId === 'string' ? `"${userId}"` : typeof userId;
+    throw new Error(`IUserConfigStore: userId must be a UUID; got ${got}`);
   }
 }

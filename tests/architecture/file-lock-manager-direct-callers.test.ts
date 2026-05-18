@@ -44,5 +44,5 @@ async function listTypeScriptFiles(dir: string): Promise<string[]> {
 function stripComments(source: string): string {
   return source
     .replaceAll(/\/\*[\s\S]*?\*\//g, '')
-    .replaceAll(/(^|[^:])\/\/.*$/gm, '$1');
+    .replaceAll(/(^|[^:])\/\/.*$/gm, '$1'); // NOSONAR — strips // comments from source at test time; input is repo files, not attacker-supplied
 }

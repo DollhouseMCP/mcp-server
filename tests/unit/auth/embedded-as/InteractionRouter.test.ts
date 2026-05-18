@@ -68,6 +68,7 @@ async function startHarness(
   details: OidcInteractionDetails,
 ): Promise<HarnessResult> {
   const app = express();
+  app.disable('x-powered-by');
   const router = createInteractionRouter({
     provider: fakeProvider({ details }),
     methods,

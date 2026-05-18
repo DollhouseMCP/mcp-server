@@ -246,7 +246,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
       });
       jar.ingest(followed.headers);
       const location = followed.headers.get('location');
-      if (location && location.startsWith('http://127.0.0.1/callback')) {
+      if (location?.startsWith('http://127.0.0.1/callback')) {
         code = new URL(location).searchParams.get('code');
         break;
       }

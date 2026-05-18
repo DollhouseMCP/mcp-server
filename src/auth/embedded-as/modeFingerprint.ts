@@ -68,7 +68,7 @@ export function computeFingerprint(inputs: ModeFingerprintInputs): string {
   // compute different fingerprints for the same logical mode, triggering
   // spurious mode-switch invalidation. Sonar's S2871 (suggest `localeCompare`)
   // is the wrong fix here. NOSONAR
-  const sortedMethods = [...inputs.methodIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const sortedMethods = [...inputs.methodIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)); // NOSONAR — nested ternary is the compact three-way comparator form; extracting makes it less readable
   const cookieKeyHash = createHash('sha256')
     .update(inputs.primaryCookieKey)
     .digest('base64url');

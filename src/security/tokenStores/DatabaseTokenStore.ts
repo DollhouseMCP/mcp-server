@@ -120,7 +120,8 @@ function decrypt(payload: { ciphertext: Buffer; iv: Buffer; tag: Buffer }, key: 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function assertUuid(userId: string): void {
   if (typeof userId !== 'string' || !UUID_RE.test(userId)) {
-    throw new Error(`DatabaseTokenStore: userId must be a UUID; got ${typeof userId === 'string' ? `"${userId}"` : typeof userId}`);
+    const got = typeof userId === 'string' ? `"${userId}"` : typeof userId;
+    throw new Error(`DatabaseTokenStore: userId must be a UUID; got ${got}`);
   }
 }
 

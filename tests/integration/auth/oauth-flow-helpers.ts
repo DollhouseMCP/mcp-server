@@ -147,6 +147,7 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
   }
 
   const app = express();
+  app.disable('x-powered-by');
   app.use(as.createRouter());
   const server = app.listen(port, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve));
@@ -233,7 +234,7 @@ export async function followToCodeRedirect(opts: {
     });
     opts.jar.ingest(followed.headers);
     const location = followed.headers.get('location');
-    if (location && location.startsWith(opts.redirectUriPrefix)) {
+    if (location?.startsWith(opts.redirectUriPrefix)) {
       const code = new URL(location).searchParams.get('code');
       if (code) return code;
     }
