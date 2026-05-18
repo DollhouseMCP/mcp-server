@@ -288,6 +288,9 @@ When `DOLLHOUSE_STORAGE_BACKEND=database` is set, **all persistent server state 
 | User accounts + identity | `auth_accounts`, `users` |
 | Audit log | `auth_identity_events` (append-only) |
 | JWKS signing key + cookie-signing secret | `auth_signing_keys` (rotation invariant: at most one active per kind) |
+| Agent runtime state (goals, decisions, context) | `agent_states` (RLS-enforced; uniquely keyed by `(agent_id, session_id)`, with `user_id` FK for ownership) |
+
+**Agent runtime state is session-scoped in DB mode.** Concurrent MCP sessions for the same user and the same agent get independent goal/decision/context streams — switching tabs or opening a second client doesn't merge agent execution histories. `session_id` is part of the unique index, so sessions are isolated even within a single user account.
 
 **Container restart durability:** The `auth_signing_keys` table is the reason a containerized hosted deployment survives `docker compose restart` without invalidating user sessions. Filesystem-mode keyfiles in a `tmpfs` mount regenerate on every restart, which changes the JWKS `kid`, which trips mode-fingerprint detection, which wipes all `auth_kv` state — every user has to re-OAuth. DB-mode keys persist across restarts so the mode-fingerprint stays stable and tokens remain valid.
 

@@ -596,6 +596,22 @@ DOLLHOUSE_DATABASE_POOL_SIZE=25
 
 **Do not use the admin role for runtime.** Only set `DOLLHOUSE_DATABASE_ADMIN_URL` — the server uses it for bootstrap only, then discards it. Use a separate, non-superuser credential for `DOLLHOUSE_DATABASE_URL`.
 
+### Managed Postgres providers
+
+If you don't want to operate Postgres yourself, any standards-compliant managed provider works. Choose based on what your deployment already touches:
+
+| Provider | Notes |
+|---|---|
+| **Supabase** | Postgres + connection pooler (pgbouncer) bundled. Use the direct connection string for migrations (`DOLLHOUSE_DATABASE_ADMIN_URL`) and the pooler string at runtime (`DOLLHOUSE_DATABASE_URL` with `?pgbouncer=true&connection_limit=1`). |
+| **Neon** | Serverless Postgres; auto-scales, suspends on idle. Cold-start adds ~1s on first connection after suspension. Free tier sufficient for a hobbyist deploy. |
+| **AWS RDS / Google Cloud SQL / Azure Database** | Standard managed Postgres. Pair with VPC peering or private IP from your app host. Use `DOLLHOUSE_DATABASE_SSL=require` (or `verify-full` if your CA is configured). |
+| **Crunchy Bridge** | Postgres-experts vendor with point-in-time recovery on by default. Quality-of-life small-team option. |
+| **Self-hosted on a separate VM** | You own backups, replication, version upgrades. Cheapest, most work. Use SSL `require` and firewall the PG port to your app host. |
+
+Whatever you pick, set `DOLLHOUSE_DATABASE_SSL=require` (or stricter) and constrain `DOLLHOUSE_DATABASE_POOL_SIZE` to fit inside the provider's `max_connections` allowance — serverless providers often have lower caps than self-hosted.
+
+For a production deploy walkthrough that includes the managed-PG bootstrap path, see the [Production Hosting Runbook](./production-hosting-runbook.md).
+
 ---
 
 ## Per-User Data Isolation
@@ -1475,6 +1491,23 @@ All variables are optional unless marked **required**. Variables with no default
 ---
 
 ## Common Deployment Scenarios
+
+> **For a real production deploy with a public hostname**, follow the [Production Hosting Runbook](./production-hosting-runbook.md). It's the end-to-end "I have mcp.example.com, here's how to deploy" walkthrough covering DNS, reverse proxy + Let's Encrypt, Postgres bootstrap, secret generation, GitHub OAuth on a stable URL, admin pre-claim, smoke verification, log location, and a production checklist. The scenarios below are starting points; the runbook is the full operational picture.
+
+### Container vs bare binary on a host
+
+For HTTP-mode deployments, you have two supervisor options:
+
+| | Container (Docker Compose) | Bare binary (Node + systemd) |
+|---|---|---|
+| **Best for** | Operators comfortable with Docker; multi-service deployments | Operators with existing Node infrastructure or managed-PG customers |
+| **Setup** | One compose file, one command | systemd unit + log rotation + user setup |
+| **Updates** | `docker compose pull && docker compose up -d` | `git pull && npm ci && npm run build && systemctl restart` |
+| **Process supervision** | Docker daemon (`restart: unless-stopped`) | systemd (`Restart=on-failure`) |
+| **Logging surface** | `docker compose logs` + JSON log drivers | `journalctl -u dollhousemcp` + `/var/log/dollhousemcp/` |
+| **Image reproducibility** | Pinned digest = same code everywhere | Whatever's checked out + built |
+
+**Default recommendation: container.** Removes the "right Node version" class of issue and gives a reproducible deploy unit. Bare binary makes sense if you already operate Node services this way. Both paths are documented in the [Production Hosting Runbook](./production-hosting-runbook.md).
 
 ### Local development (defaults, zero configuration)
 

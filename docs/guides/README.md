@@ -34,8 +34,10 @@ Task-oriented guides for DollhouseMCP. Each guide walks through common workflows
 | [OAuth Setup — Portfolio Sync](oauth-setup.md) | Configure GitHub OAuth for the legacy portfolio-sync feature (server → GitHub, device flow) |
 | [Auth Server Setup](auth-server-setup.md) | Configure the embedded OAuth/OIDC authorization server for HTTP transport (filesystem vs Postgres, methods, tunnels, HTTPS, security) |
 | [Deployment Configuration](deployment-configuration.md) | Full env-var reference for all transports and auth providers |
+| [Production Hosting Runbook](production-hosting-runbook.md) | End-to-end "deploy to a real domain" walkthrough — DNS, reverse proxy + Let's Encrypt, Postgres bootstrap, secrets, GitHub OAuth, admin pre-claim, smoke verify, container vs bare-binary, production checklist |
+| [Secret Rotation Runbook](secret-rotation-runbook.md) | Per-secret rotation procedures: cookie signing, invite token, JWKS, GitHub OAuth, Postgres passwords, console token |
 | [Retention Policy](retention-policy.md) | Automatic cleanup of expired memory entries |
-| [Logging](logging.md) | Configure, query, and read DollhouseMCP server logs |
+| [Logging](logging.md) | Configure, query, and read DollhouseMCP server logs — includes operational logging for production deploys |
 | [Telemetry](telemetry.md) | Privacy policy and opt-in controls for operational telemetry |
 
 ## Migration & Compatibility
