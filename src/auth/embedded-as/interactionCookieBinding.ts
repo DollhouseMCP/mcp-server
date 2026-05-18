@@ -129,7 +129,7 @@ function keygripSign(data: string, key: string): string {
     .digest('base64')
     .replace(/\//g, '_')
     .replace(/\+/g, '-')
-    .replace(/=+$/, '');
+    .replace(/=+$/, ''); // NOSONAR — anchored single-quantifier on a bounded base64 digest; no backtracking possible
 }
 
 /**

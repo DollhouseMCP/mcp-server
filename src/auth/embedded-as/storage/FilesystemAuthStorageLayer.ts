@@ -54,7 +54,7 @@ import type {
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
 
-const SAFE_ID_RE = /^[A-Za-z0-9_\-]+$/;
+const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
 const SAFE_MODEL_RE = /^[A-Za-z][A-Za-z0-9]*$/;
 
 interface KvRecord {
@@ -321,7 +321,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       if (!record) continue;
       if (record.exp !== null && record.exp <= now) continue;
       const payload = record.value as { accountId?: string } | null;
-      if (payload && payload.accountId === sub) ids.push(id);
+      if (payload?.accountId === sub) ids.push(id);
     }
     return ids;
   }
@@ -469,7 +469,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
         }
         if (!record) continue;
         const payload = record.value as { grantId?: string } | null;
-        if (payload && payload.grantId === grantId) {
+        if (payload?.grantId === grantId) {
           await this.unlinkKv(model, id);
         }
       }
@@ -565,7 +565,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       if (!record) continue;
       if (record.exp !== null && record.exp <= now) continue;
       const payload = record.value as { uid?: string } | null;
-      if (payload && payload.uid === uid) return record.value;
+      if (payload?.uid === uid) return record.value;
     }
     return null;
   }

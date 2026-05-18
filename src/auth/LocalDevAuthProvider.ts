@@ -90,7 +90,7 @@ export class LocalDevAuthProvider implements IAuthProvider {
       // exclusively so a token issued under DOLLHOUSE_AUTH_PROVIDER=local
       // can be verified by the embedded AS (which requires `scope`).
       const scopes = extractScopes(payload);
-      if (!scopes || !scopes.includes('mcp')) {
+      if (!scopes?.includes('mcp')) {
         return { ok: false, reason: 'token missing mcp scope' };
       }
 

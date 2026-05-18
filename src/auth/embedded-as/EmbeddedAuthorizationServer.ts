@@ -892,12 +892,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       ? await loadOrGenerateSigningJwksViaStore(this.signingKeyStore)
       : await loadOrGenerateSigningJwks(this.keyFilePath);
 
-    // must-fix #14: mode-switch invalidation. Delegate the read-compare-
-    // persist dance to checkAndPersistModeFingerprint so this AS and any
-    // out-of-band tooling (the dashboard, ops scripts) compute "did the
-    // mode change?" the same way. On mismatch we rotate three things —
-    // K/V state, cookie secret, AND the JWKS signing key — then re-
-    // persist the fingerprint reflecting the post-rotation state.
+    // Mode-switch invalidation. The split API (checkModeFingerprint +
+    // persistModeFingerprint) lets the AS and out-of-band tooling (dashboard,
+    // ops scripts) compute "did the mode change?" the same way. On mismatch
+    // we rotate three things — K/V state, cookie secret, AND the JWKS signing
+    // key — then persist the fingerprint reflecting the post-rotation state.
     let cookieKeys = this.signingKeyStore
       ? await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride })
       : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
@@ -944,12 +943,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // First run: nothing to invalidate, just record the fingerprint.
       await persistModeFingerprint(this.storage, fingerprintInputs);
     } else if (fingerprintResult.changed) {
-      // Cycle-16 fix: invalidate FIRST, then persist the new fingerprint.
-      // The earlier "checkAndPersist" wrote the new fingerprint before
-      // clearing OAuth state — a crash between the two left stale tokens
-      // valid against the new mode. Clear-then-persist is crash-safe:
-      // a crash mid-sequence means the next boot recomputes `changed:
-      // true` and re-runs the idempotent clear.
+      // Invalidate FIRST, then persist the new fingerprint. Persisting
+      // before clearing would leave stale tokens valid against the new
+      // mode if a crash hit between the two. Clear-then-persist is
+      // crash-safe: a crash mid-sequence means the next boot recomputes
+      // `changed: true` and re-runs the idempotent clear.
       // Cycle 24 / cycle-23 code LOW: forward cookieSecretEnvOverride
       // to the mode-switch rotation calls so tests that exercise this
       // path with the override observe the same env-driven semantics

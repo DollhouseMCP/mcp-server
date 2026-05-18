@@ -47,7 +47,7 @@ export interface FileOperationOptions {
  * DEPENDENCY INJECTION: Requires FileOperationsService for atomic operations
  */
 export class ElementFileOperations {
-  private fileOperations: IFileOperationsService;
+  private readonly fileOperations: IFileOperationsService;
 
   /**
    * Constructor - accepts FileOperationsService for centralized file operations

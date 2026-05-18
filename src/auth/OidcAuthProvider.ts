@@ -141,7 +141,7 @@ export class OidcAuthProvider implements IAuthProvider {
       // for our audience but lacking `mcp` represents a different
       // permission surface (e.g. an admin console token) and must not
       // satisfy the resource-server check here.
-      if (!scopes || !scopes.includes('mcp')) {
+      if (!scopes?.includes('mcp')) {
         return { ok: false, reason: 'token missing mcp scope' };
       }
 

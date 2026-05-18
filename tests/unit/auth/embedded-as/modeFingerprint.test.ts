@@ -10,7 +10,6 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import {
   computeFingerprint,
-  checkAndPersistModeFingerprint,
   checkModeFingerprint,
   persistModeFingerprint,
   OAUTH_STATE_MODELS,
@@ -72,70 +71,14 @@ describe('computeFingerprint', () => {
   });
 });
 
-describe('checkAndPersistModeFingerprint', () => {
-  let storage: InMemoryAuthStorageLayer;
-
-  beforeEach(() => {
-    storage = new InMemoryAuthStorageLayer();
-  });
-
-  it('first run: persists the fingerprint and reports firstRun=true', async () => {
-    const result = await checkAndPersistModeFingerprint(storage, baseInputs);
-    expect(result.changed).toBe(false);
-    expect(result.firstRun).toBe(true);
-    expect(result.previous).toBeUndefined();
-    expect(result.current).toBeTruthy();
-
-    // Persisted to storage
-    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
-      | { fingerprint?: string } | null;
-    expect(stored?.fingerprint).toBe(result.current);
-  });
-
-  it('subsequent run with identical inputs: changed=false, firstRun=false', async () => {
-    await checkAndPersistModeFingerprint(storage, baseInputs);
-    const result = await checkAndPersistModeFingerprint(storage, baseInputs);
-    expect(result.changed).toBe(false);
-    expect(result.firstRun).toBe(false);
-    expect(result.previous).toBe(result.current);
-  });
-
-  it('subsequent run with changed methods: changed=true with previous + current populated', async () => {
-    await checkAndPersistModeFingerprint(storage, baseInputs);
-    const result = await checkAndPersistModeFingerprint(storage, {
-      ...baseInputs,
-      methodIds: ['local-password'],
-    });
-    expect(result.changed).toBe(true);
-    expect(result.firstRun).toBe(false);
-    expect(result.previous).toBeTruthy();
-    expect(result.current).toBeTruthy();
-    expect(result.previous).not.toBe(result.current);
-
-    // The new fingerprint is now persisted
-    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
-      | { fingerprint?: string } | null;
-    expect(stored?.fingerprint).toBe(result.current);
-  });
-
-  it('subsequent run with changed issuer: changed=true', async () => {
-    await checkAndPersistModeFingerprint(storage, baseInputs);
-    const result = await checkAndPersistModeFingerprint(storage, {
-      ...baseInputs,
-      issuer: 'https://other.example.com',
-    });
-    expect(result.changed).toBe(true);
-  });
-});
-
 /**
- * Cycle-17: cycle-16 introduced the split API (checkModeFingerprint +
- * persistModeFingerprint) so the caller can run invalidation work
- * BETWEEN the read and the write — a crash mid-sequence then re-runs
- * the idempotent invalidation on next boot. The deprecated
- * checkAndPersistModeFingerprint (above) is the legacy combined form.
+ * The split API (checkModeFingerprint + persistModeFingerprint) lets the caller
+ * run invalidation work BETWEEN the read and the write — a crash mid-sequence
+ * then re-runs the idempotent invalidation on next boot. Replaces the earlier
+ * combined `checkAndPersistModeFingerprint` which persisted before the caller's
+ * invalidation could run.
  */
-describe('checkModeFingerprint + persistModeFingerprint (cycle-16 split API)', () => {
+describe('checkModeFingerprint + persistModeFingerprint', () => {
   let storage: InMemoryAuthStorageLayer;
 
   beforeEach(() => {

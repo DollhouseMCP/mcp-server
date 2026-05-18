@@ -234,7 +234,7 @@ describe('GitHubAuthHandler (DI)', () => {
       process.env.USERPROFILE = tempHome;
       process.env.DOLLHOUSE_HOME_DIR = tempHome;
       const helperPath = path.join(tempHome, 'oauth-helper.mjs');
-      await fs.writeFile(helperPath, 'console.log(\"helper\");', 'utf-8');
+      await fs.writeFile(helperPath, 'console.log("helper");', 'utf-8');
       process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
 
       const unref = jest.fn();
@@ -280,7 +280,7 @@ describe('GitHubAuthHandler (DI)', () => {
     it('writes OAuth helper state under each session auth dir when PathService is injected', async () => {
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-user-state-'));
       const helperPath = path.join(tempRoot, 'oauth-helper.mjs');
-      await fs.writeFile(helperPath, 'console.log(\"helper\");', 'utf-8');
+      await fs.writeFile(helperPath, 'console.log("helper");', 'utf-8');
       const originalHelper = process.env.DOLLHOUSE_OAUTH_HELPER;
       process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
 

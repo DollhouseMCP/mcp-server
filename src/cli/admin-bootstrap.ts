@@ -106,7 +106,7 @@ function magicLinkSubFromEmail(email: string): string {
 }
 
 function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); // NOSONAR — anchored email regex; quantifiers separated by literal anchors (@ and .); CLI input bounded by operator-typed length
 }
 
 async function main(): Promise<void> {
@@ -230,7 +230,7 @@ async function main(): Promise<void> {
   await handle.close();
 }
 
-main().catch((err) => {
+main().catch((err) => { // NOSONAR — top-level await breaks the Jest CJS transform; .catch() is required here
   process.stderr.write(
     `admin bootstrap failed: ${err instanceof Error ? err.message : String(err)}\n`,
   );

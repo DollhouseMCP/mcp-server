@@ -388,6 +388,10 @@ export async function createStreamableHttpRuntime(
     assertSafePublicBaseUrl(publicBaseUrl);
   }
   const app = createMcpExpressApp({ host, allowedHosts });
+  // Defense-in-depth: suppress Express's default `X-Powered-By` header on
+  // every response. Doesn't change auth posture but avoids version-disclosing
+  // fingerprinting via response headers.
+  app.disable('x-powered-by');
 
   // Round 5 / H2 + H4: hosted multi-tenant safety guards.
   // See assertHostedDeploymentSafety for the full rationale; the

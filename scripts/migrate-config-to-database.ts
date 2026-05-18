@@ -139,7 +139,7 @@ function printResult(r: Awaited<ReturnType<typeof runConfigToDatabaseMigration>>
   }
 }
 
-main().catch((err) => {
+main().catch((err) => { // NOSONAR — top-level await breaks the Jest CJS transform; .catch() is required here
   logger.error('migrate-config-to-database failed', {
     error: err instanceof Error ? err.message : String(err),
   });

@@ -176,7 +176,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * as a defensive fallback for the rare paths that construct a
    * manager without a real PortfolioManager (some unit tests).
    */
-  private staticElementDir: string;
+  private readonly staticElementDir: string;
   protected get elementDir(): string {
     if (this.portfolioManager
         && typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {

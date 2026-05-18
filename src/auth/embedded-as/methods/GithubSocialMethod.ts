@@ -293,7 +293,7 @@ export class GithubSocialMethod implements IAuthMethod {
       GITHUB_PROVIDER,
       String(profile.id),
     );
-    if (existing && existing.email && existing.email !== profile.verifiedPrimaryEmail) {
+    if (existing?.email && existing.email !== profile.verifiedPrimaryEmail) {
       // H14: when the upstream identity-to-email mapping moves, revoke
       // any active grants for this sub. Without this, refresh tokens
       // issued before the change keep working until natural TTL expiry

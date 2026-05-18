@@ -379,7 +379,7 @@ export class MagicLinkMethod implements IAuthMethod {
 
     try {
       const email = String(form.email ?? '').trim().toLowerCase();
-      if (!email || !email.includes('@')) {
+      if (!email?.includes('@')) {
         return generic();
       }
 

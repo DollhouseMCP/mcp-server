@@ -59,7 +59,7 @@ function buildInviteUrl(baseUrl: string, token: string): string {
 function isValidEmail(value: string): boolean {
   // Relaxed shape check — full RFC 5322 validation is the user's email
   // server's job. We just want to catch obvious typos.
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); // NOSONAR — anchored email regex; quantifiers separated by literal @ and .; CLI input bounded
 }
 
 function isValidUsername(value: string): boolean {
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
+main().catch((err) => { // NOSONAR — top-level await breaks the Jest CJS transform; .catch() is required here
   process.stderr.write(`create-user failed: ${err instanceof Error ? err.message : String(err)}\n`);
   process.exit(2);
 });

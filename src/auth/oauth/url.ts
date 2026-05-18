@@ -18,6 +18,7 @@ const IPV4_LOOPBACK_RE = /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
 export function normalizeBaseUrl(rawUrl: string): string {
   const parsed = new URL(rawUrl);
+  // NOSONAR (next two regexes) — anchored single-quantifier on URL-parser-normalized strings; no backtracking
   parsed.pathname = parsed.pathname.replace(/\/+$/, '');
   parsed.search = '';
   parsed.hash = '';

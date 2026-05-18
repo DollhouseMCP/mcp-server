@@ -1,4 +1,4 @@
-import * as path from 'path';
+import * as path from 'node:path';
 
 import type { AgentState } from '../elements/agents/types.js';
 import { ElementType } from '../portfolio/types.js';
@@ -71,7 +71,7 @@ export class FileAgentStateStore implements IAgentStateStore {
 
     await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
       const existingState = await this.load(key);
-      if (existingState && existingState.stateVersion !== undefined && state.stateVersion !== undefined) {
+      if (existingState?.stateVersion !== undefined && state.stateVersion !== undefined) {
         if (existingState.stateVersion > state.stateVersion) {
           logger.warn(`State version conflict detected for agent ${key.name}`, {
             existingVersion: existingState.stateVersion,
@@ -175,7 +175,7 @@ export class FileAgentStateStore implements IAgentStateStore {
       .toLowerCase()
       .replace(/[^a-z0-9-]/g, '-')
       .replace(/-+/g, '-')
-      .replace(/^-+|-+$/g, '');
+      .replace(/^-+|-+$/g, ''); // NOSONAR — anchored alternation, each branch has a single quantifier; no overlap, no backtracking
   }
 
   private prepareStateForSerialization(state: AgentState): Record<string, unknown> {

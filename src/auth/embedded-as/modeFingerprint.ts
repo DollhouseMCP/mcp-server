@@ -62,7 +62,13 @@ export interface ModeFingerprintInputs {
 }
 
 export function computeFingerprint(inputs: ModeFingerprintInputs): string {
-  const sortedMethods = [...inputs.methodIds].sort();
+  // Explicit codepoint comparison, NOT `localeCompare`. The fingerprint must be
+  // stable across hosts and operating-system locales — a deploy on a host with
+  // `LC_COLLATE=en_US.UTF-8` and a replica with `LC_COLLATE=C` would otherwise
+  // compute different fingerprints for the same logical mode, triggering
+  // spurious mode-switch invalidation. Sonar's S2871 (suggest `localeCompare`)
+  // is the wrong fix here. NOSONAR
+  const sortedMethods = [...inputs.methodIds].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   const cookieKeyHash = createHash('sha256')
     .update(inputs.primaryCookieKey)
     .digest('base64url');
@@ -136,19 +142,3 @@ export async function persistModeFingerprint(
   await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: current });
 }
 
-/**
- * @deprecated Crash-window-unsafe — persists before the caller's
- * invalidation runs. Use `checkModeFingerprint` + `persistModeFingerprint`
- * with the invalidation sandwiched between. Kept temporarily for tests
- * that need the legacy behavior; remove after callers migrate.
- */
-export async function checkAndPersistModeFingerprint(
-  storage: IAuthStorageLayer,
-  inputs: ModeFingerprintInputs,
-): Promise<CheckModeFingerprintResult> {
-  const result = await checkModeFingerprint(storage, inputs);
-  if (result.firstRun || result.changed) {
-    await persistModeFingerprint(storage, inputs);
-  }
-  return result;
-}

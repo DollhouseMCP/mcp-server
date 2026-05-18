@@ -163,7 +163,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
       if (!key.startsWith('Grant|')) continue;
       if (record.expiresAt && record.expiresAt <= now) continue;
       const payload = record.payload as { accountId?: string } | null;
-      if (payload && payload.accountId === sub) {
+      if (payload?.accountId === sub) {
         grants.push(key.slice('Grant|'.length));
       }
     }
@@ -294,7 +294,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     // well-defined.
     for (const [key, record] of this.genericStore.entries()) {
       const payload = record.payload as { grantId?: string } | null;
-      if (payload && payload.grantId === grantId) {
+      if (payload?.grantId === grantId) {
         this.genericStore.delete(key);
       }
     }
