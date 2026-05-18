@@ -126,7 +126,7 @@ Setup time: ~30 min. Free tier supports up to 50 users.
 
 #### Pattern 3: `oauth2-proxy` sidecar applied to all paths
 
-The PoC stack's `oauth2-proxy` gate, generalized to all paths instead of just the web console. Same `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` allowlist. Reach: both MCP and console.
+Run [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as a reverse-proxy sidecar in front of the MCP server. Configure it as an OIDC client of the embedded AS (or against an external IdP) and gate all paths — MCP and console — behind an `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` allowlist.
 
 For MCP clients to bypass the oauth2-proxy interactive flow, they need to present a pre-issued token that oauth2-proxy treats as valid (via `OAUTH2_PROXY_SKIP_AUTH_ROUTES` for specific paths, or via a Bearer-token validation extension). The straight-up "MCP client uses GitHub OAuth via the AS, then sends its JWT as Bearer" pattern works only if oauth2-proxy passes the request through unmolested — which it doesn't by default for paths it gates.
 
