@@ -42,6 +42,7 @@ import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
 import { normalizeIp } from '../rateLimit.js';
 
 const PROVIDER_NAME = 'magic-link';
@@ -101,6 +102,14 @@ export interface MagicLinkMethodOptions {
    * the suite fast; production should never override.
    */
   requestResponseFloorMs?: number;
+  /**
+   * Sign-in allowlist enforcement. Mirrors `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`.
+   * When `true`, an empty allowlist means "bootstrap admin only"; when
+   * `false` (default), an empty allowlist means "no gate". Bootstrap admin
+   * always passes regardless. See `allowlistGate.ts` for the full decision
+   * rules.
+   */
+  allowlistRequired?: boolean;
 }
 
 interface RequestRateBucket {
@@ -254,6 +263,14 @@ export class MagicLinkMethod implements IAuthMethod {
             res.status(400).type('html').send(renderMagicLinkError(consume.reason));
             return;
           }
+          if (consume.kind === 'denied') {
+            // Sign-in allowlist denied this identity. Audit event already
+            // emitted inside the gate. Render the dedicated denied page
+            // (rather than renderMagicLinkError, which reads as "your
+            // link broke" — wrong message).
+            res.status(403).type('html').send(renderAllowlistDeniedPage());
+            return;
+          }
           if (!consume.interactionId) {
             // Token was issued without an interactionId (CLI-issued, or an
             // older client that didn't stamp it). The user is authenticated
@@ -301,6 +318,7 @@ export class MagicLinkMethod implements IAuthMethod {
    */
   async consumeMagicLink(token: string): Promise<
     | { kind: 'ok'; interactionId: string | undefined; identity: AuthenticatedIdentity }
+    | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
     const consume = await this.options.invites.consume(token);
@@ -319,6 +337,25 @@ export class MagicLinkMethod implements IAuthMethod {
     const sub = consume.payload.sub;
     const email = consume.payload.email;
     const now = Date.now();
+
+    // Sign-in allowlist gate. Runs BEFORE the account upsert so a denied
+    // sign-in leaves no persistent account state. Bootstrap admin always
+    // passes via checkAllowlistGate's rule 1. The token has already been
+    // consumed at this point (consume.ok above), so a denied user can't
+    // replay the link.
+    const gate = await checkAllowlistGate(
+      {
+        sub,
+        method: 'magic-link',
+        email,
+        provider: PROVIDER_NAME,
+        externalSub: hashEmail(email),
+      },
+      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
 
     // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
     // pre-claimed this email's sub before the gate opened. If we match,

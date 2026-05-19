@@ -36,6 +36,7 @@ import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLa
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
 
 const LOCAL_PROVIDER = 'local';
 /** Single error reason returned to users; precise causes go to logs only. */
@@ -85,6 +86,16 @@ export interface LocalAccountMethodOptions {
   storage: IAuthStorageLayer;
   invites: InviteTokenStore;
   rateLimiter: LocalLoginRateLimiter;
+  /**
+   * Sign-in allowlist enforcement. Mirrors `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`.
+   * When `true`, an empty allowlist means "bootstrap admin only"; when
+   * `false` (default), an empty allowlist means "no gate". Bootstrap admin
+   * always passes. The gate fires on invite-redemption (account creation)
+   * AND on password login — the latter means even with a valid existing
+   * account, an operator can revoke access by removing the user from the
+   * allowlist.
+   */
+  allowlistRequired?: boolean;
 }
 
 export class LocalAccountMethod implements IAuthMethod {
@@ -177,6 +188,7 @@ export class LocalAccountMethod implements IAuthMethod {
    */
   async consumeInvite(token: string, newPassword: string): Promise<
     | { kind: 'ok'; sub: string; email: string }
+    | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
     if (!token || newPassword.length < MIN_PASSWORD_LENGTH) {
@@ -242,6 +254,26 @@ export class LocalAccountMethod implements IAuthMethod {
     const externalSub = sub.replace(/^local_/, '');
     const now = Date.now();
 
+    // Sign-in allowlist gate. Runs AFTER the invite has been consumed
+    // (the operator-issued token is the cost of admission to even
+    // reach this point) but BEFORE the account is created — a denied
+    // invite-redemption leaves no account row. The invite itself is
+    // burned in the consume call above; a re-allowlisted user needs a
+    // fresh invite. Bootstrap admin always passes via rule 1.
+    const gate = await checkAllowlistGate(
+      {
+        sub,
+        method: 'local-password',
+        email: consume.payload.email,
+        provider: LOCAL_PROVIDER,
+        externalSub,
+      },
+      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
+
     // Bootstrap admin claim (must-fix #22 / spec L923): if the
     // bootstrap-state pre-claim names this sub as the admin, the
     // account being created here gets `roles: ['admin']`. The pre-
@@ -300,6 +332,12 @@ export class LocalAccountMethod implements IAuthMethod {
           step: { kind: 'render-html', html: renderError(result.reason), csrfToken: '' },
         };
       }
+      return { kind: 'denied', reason: result.reason };
+    }
+    if (result.kind === 'denied') {
+      // Allowlist gate denied this identity; audit event already recorded.
+      // The OAuth interaction terminates with a denial — the invite token
+      // was already consumed in the call above so re-submitting won't work.
       return { kind: 'denied', reason: result.reason };
     }
     return {
@@ -363,6 +401,14 @@ export class LocalAccountMethod implements IAuthMethod {
             res.status(400).type('html').send(renderInviteError(result.reason));
             return;
           }
+          if (result.kind === 'denied') {
+            // Allowlist denied the redemption. Render the dedicated
+            // denied page (rather than renderInviteError, which reads
+            // as "your invite is broken" — the invite was fine; the
+            // identity just isn't allowlisted).
+            res.status(403).type('html').send(renderAllowlistDeniedPage());
+            return;
+          }
           res.type('html').send(this.renderInviteSuccess(result.email));
         } catch (err) {
           next(err);
@@ -424,6 +470,27 @@ export class LocalAccountMethod implements IAuthMethod {
 
     if (!verified) {
       await this.options.rateLimiter.noteFailure(sub, ip);
+      return { kind: 'denied', reason: 'invalid credentials' };
+    }
+
+    // Sign-in allowlist gate. Runs AFTER password verification succeeds
+    // so we don't leak "this user is on the allowlist" via timing/error
+    // to a brute-forcer. An operator who removes a user from the allowlist
+    // can lock out future logins even when the credentials still work.
+    // Bootstrap admin always passes via rule 1.
+    const gate = await checkAllowlistGate(
+      {
+        sub,
+        method: 'local-password',
+        email: account?.email,
+        provider: LOCAL_PROVIDER,
+        externalSub: sub.replace(/^local_/, ''),
+      },
+      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+    );
+    if (!gate.allowed) {
+      // Generic message — don't disclose whether the failure was credentials
+      // or allowlist. Audit event was recorded by the gate.
       return { kind: 'denied', reason: 'invalid credentials' };
     }
 

@@ -224,6 +224,29 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
       }
     }
 
+    // Sign-in allowlist enforcement warning. When the allowlist is OFF
+    // (REQUIRED=false → empty list means "no gate") AND the AS binds to
+    // a non-loopback host AND a social method is configured, anyone with
+    // a GitHub account / verified email can complete sign-in. Most
+    // operators want to gate that; nudge them toward the secure setting.
+    //
+    // Skip for loopback bind (dev/CI doesn't need the warning) and for
+    // method-only deploys that already gate sign-in (local-password is
+    // operator-issued-invites-only, so it's safe without an allowlist).
+    if (!env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED) {
+      const hasSocialMethod = methods.includes('github') || methods.includes('magic-link');
+      // eslint-disable-next-line no-restricted-syntax -- DMCP-ENV-001 documented exception: same raw-read pattern as the trivial-consent guard above
+      const bindHost = process.env.DOLLHOUSE_HTTP_HOST?.trim() || env.DOLLHOUSE_HTTP_HOST;
+      if (hasSocialMethod && !isLoopbackHost(bindHost)) {
+        logger.warn(
+          '[AuthProviderFactory] Sign-in allowlist is disabled (DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=false). ' +
+          `With ${methods.filter(m => m === 'github' || m === 'magic-link').join('/')} configured on a non-loopback ` +
+          `bind '${bindHost}', anyone who completes the auth method's identity check can sign in. ` +
+          'Set DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true to gate sign-in by allowlist (bootstrap admin always passes).',
+        );
+      }
+    }
+
     // Storage is the substrate the embedded AS, all methods, and the
     // oidc-provider K/V adapter share. Tests inject InMemoryAuthStorageLayer
     // directly; production resolves the backend via env (default filesystem)
@@ -383,6 +406,7 @@ async function buildAuthMethod(
         clientSecret,
         callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
         storage,
+        allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
       });
     }
 
@@ -391,7 +415,12 @@ async function buildAuthMethod(
       const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
       const invites = await ensureInvites();
       const rateLimiter = new LocalLoginRateLimiter({ storage });
-      return new LocalAccountMethod({ storage, invites, rateLimiter });
+      return new LocalAccountMethod({
+        storage,
+        invites,
+        rateLimiter,
+        allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+      });
     }
 
     case 'magic-link': {
@@ -418,7 +447,13 @@ async function buildAuthMethod(
       await emailSender.verify();
       const invites = await ensureInvites();
       const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
-      return new MagicLinkMethod({ storage, invites, emailSender, verifyUrl });
+      return new MagicLinkMethod({
+        storage,
+        invites,
+        emailSender,
+        verifyUrl,
+        allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+      });
     }
 
     case 'trivial-consent': {

@@ -428,6 +428,52 @@ const envSchema = z.object({
    */
   DOLLHOUSE_AUTH_OPEN_DCR: envBool(false),
 
+  /**
+   * Sign-in allowlist enforcement mode.
+   *
+   * When `false` (initial default for back-compat): an empty allowlist
+   * means "no gate" — anyone who clears the auth method's identity check
+   * (GitHub OAuth, magic-link, local-password invite) can sign in. The
+   * gate only activates once the operator adds a first entry.
+   *
+   * When `true` (secure-by-default mode): an empty allowlist means
+   * "bootstrap admin only" — the pre-claimed admin can always sign in,
+   * but everyone else is denied until the operator adds them. Production
+   * hosted deploys should set this to `true` so a deploy-and-forget
+   * doesn't sit open to anyone with a GitHub account.
+   *
+   * The bootstrap admin always passes regardless of this setting or the
+   * allowlist contents — operators cannot lock themselves out.
+   *
+   * A startup warning fires when this is `false` AND the AS binds to a
+   * non-loopback host AND a social method (github / magic-link) is
+   * configured — naming the open-sign-in risk.
+   */
+  DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: envBool(false),
+
+  /**
+   * Optional path to a JSON seed file for the sign-in allowlist. When
+   * set, the AS reads the file on startup and idempotently upserts each
+   * entry into the active storage backend (Postgres or filesystem).
+   * Lets operators who manage configuration in source control keep the
+   * allowlist alongside the rest of their infrastructure.
+   *
+   * File format:
+   * ```json
+   * {
+   *   "entries": [
+   *     { "kind": "email", "value": "todd@example.com", "note": "founder" },
+   *     { "kind": "github_username", "value": "insomnolence" }
+   *   ]
+   * }
+   * ```
+   *
+   * Re-runs are no-ops for entries that already exist. Existing entries
+   * not in the seed file are NOT removed — the seed file is additive, not
+   * authoritative. To remove an entry, use the admin CRUD ops.
+   */
+  DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE: z.string().optional(),
+
   /** Key pair file path for local dev provider. */
   DOLLHOUSE_AUTH_LOCAL_KEY_FILE: z.string().optional(),
 

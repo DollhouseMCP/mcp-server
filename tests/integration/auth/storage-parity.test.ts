@@ -694,6 +694,151 @@ function runContractSuite(
       expect(await storage.sweepExpiredKv()).toBe(0);
     });
   });
+
+  describe('sign-in allowlist', () => {
+    it('empty store: list() returns [], matches returns false', async () => {
+      expect(await storage.allowlistList()).toEqual([]);
+      expect(await storage.allowlistMatchesIdentity({ email: 'a@b.com' })).toBe(false);
+    });
+
+    it('add() persists and round-trips via list() and find()', async () => {
+      const entry = await storage.allowlistAdd({
+        kind: 'email',
+        value: 'alice@example.com',
+        note: 'founder',
+        createdBy: 'github_1',
+      });
+      expect(entry.id).toBeTruthy();
+      expect(entry.kind).toBe('email');
+      expect(entry.value).toBe('alice@example.com');
+      expect(entry.note).toBe('founder');
+      expect(entry.createdBy).toBe('github_1');
+      expect(entry.createdAt).toBeInstanceOf(Date);
+
+      const list = await storage.allowlistList();
+      expect(list).toHaveLength(1);
+      expect(list[0]!.id).toBe(entry.id);
+
+      const found = await storage.allowlistFind(entry.id);
+      expect(found?.value).toBe('alice@example.com');
+    });
+
+    it('add() lowercases the value on insert', async () => {
+      const entry = await storage.allowlistAdd({
+        kind: 'email',
+        value: 'Alice@Example.COM',
+      });
+      expect(entry.value).toBe('alice@example.com');
+    });
+
+    it('add() rejects duplicate (kind, value) after normalization', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'dup@example.com' });
+      await expect(
+        storage.allowlistAdd({ kind: 'email', value: 'DUP@example.com' }),
+      ).rejects.toThrow();
+    });
+
+    it('add() allows the same value across different kinds', async () => {
+      // (Edge case: github_username "alice" and email "alice" — these are
+      // technically the same string but different kinds; both are valid.)
+      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'github_username', value: 'alice' });
+      const list = await storage.allowlistList();
+      expect(list).toHaveLength(2);
+    });
+
+    it('find() returns null for unknown id', async () => {
+      expect(await storage.allowlistFind('00000000-0000-0000-0000-000000000000')).toBeNull();
+    });
+
+    it('update() mutates note, leaves kind/value/id untouched', async () => {
+      const entry = await storage.allowlistAdd({
+        kind: 'email',
+        value: 'bob@example.com',
+        note: 'old',
+      });
+      const updated = await storage.allowlistUpdate(entry.id, { note: 'new' });
+      expect(updated?.id).toBe(entry.id);
+      expect(updated?.kind).toBe('email');
+      expect(updated?.value).toBe('bob@example.com');
+      expect(updated?.note).toBe('new');
+    });
+
+    it('update() supports setting note to null', async () => {
+      const entry = await storage.allowlistAdd({
+        kind: 'email',
+        value: 'carol@example.com',
+        note: 'something',
+      });
+      const updated = await storage.allowlistUpdate(entry.id, { note: null });
+      expect(updated?.note).toBeNull();
+    });
+
+    it('update() returns null for unknown id', async () => {
+      const result = await storage.allowlistUpdate('00000000-0000-0000-0000-000000000000', { note: 'x' });
+      expect(result).toBeNull();
+    });
+
+    it('remove() returns true on hit and removes the entry', async () => {
+      const entry = await storage.allowlistAdd({ kind: 'email', value: 'dave@example.com' });
+      expect(await storage.allowlistRemove(entry.id)).toBe(true);
+      expect(await storage.allowlistFind(entry.id)).toBeNull();
+      expect(await storage.allowlistList()).toHaveLength(0);
+    });
+
+    it('remove() returns false for unknown id', async () => {
+      expect(await storage.allowlistRemove('00000000-0000-0000-0000-000000000000')).toBe(false);
+    });
+
+    it('remove() allows re-adding the same (kind, value) afterward', async () => {
+      const first = await storage.allowlistAdd({ kind: 'email', value: 'eve@example.com' });
+      await storage.allowlistRemove(first.id);
+      const second = await storage.allowlistAdd({ kind: 'email', value: 'eve@example.com' });
+      expect(second.id).not.toBe(first.id);
+    });
+
+    it('matchesIdentity() matches by email (case-insensitive input)', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      expect(await storage.allowlistMatchesIdentity({ email: 'alice@example.com' })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: 'ALICE@example.com' })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
+    });
+
+    it('matchesIdentity() matches by github_username (case-insensitive input)', async () => {
+      await storage.allowlistAdd({ kind: 'github_username', value: 'insomnolence' });
+      expect(await storage.allowlistMatchesIdentity({ githubUsername: 'insomnolence' })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ githubUsername: 'Insomnolence' })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ githubUsername: 'someone-else' })).toBe(false);
+    });
+
+    it('matchesIdentity() matches by github_id (exact string)', async () => {
+      await storage.allowlistAdd({ kind: 'github_id', value: '1125822' });
+      expect(await storage.allowlistMatchesIdentity({ githubId: '1125822' })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ githubId: '999' })).toBe(false);
+    });
+
+    it('matchesIdentity() ORs across the three kinds — any one match wins', async () => {
+      await storage.allowlistAdd({ kind: 'github_username', value: 'mick' });
+      expect(await storage.allowlistMatchesIdentity({
+        email: 'mick@example.com',
+        githubUsername: 'mick',
+        githubId: '999999',
+      })).toBe(true);
+    });
+
+    it('matchesIdentity() returns false when none of the supplied values match', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      expect(await storage.allowlistMatchesIdentity({
+        email: 'bob@example.com',
+        githubUsername: 'bob',
+      })).toBe(false);
+    });
+
+    it('matchesIdentity() returns false when no values are supplied', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      expect(await storage.allowlistMatchesIdentity({})).toBe(false);
+    });
+  });
 }
 
 // ── Static fixtures (always run) ───────────────────────────────────────
@@ -762,6 +907,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
       await tx.execute(sql`DELETE FROM auth_kv`);
       await tx.execute(sql`DELETE FROM auth_identity_events`);
       await tx.execute(sql`DELETE FROM auth_accounts`);
+      await tx.execute(sql`DELETE FROM auth_allowlist`);
     });
   };
 

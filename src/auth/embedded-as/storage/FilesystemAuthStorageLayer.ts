@@ -41,11 +41,17 @@
  * @module auth/embedded-as/storage/FilesystemAuthStorageLayer
  */
 
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
 import type {
+  AllowlistAddInput,
+  AllowlistMatchValues,
+  AllowlistUpdatePatch,
+  AuthAllowlistEntry,
+  AuthAllowlistKind,
   BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
@@ -78,6 +84,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly auditPath: string;
   private readonly kvDir: string;
   private readonly bootstrapPath: string;
+  private readonly allowlistPath: string;
   private readonly locks = new FileLockManager();
   private initialized = false;
 
@@ -92,6 +99,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     this.auditPath = path.join(this.rootDir, 'audit.jsonl');
     this.kvDir = path.join(this.rootDir, 'kv');
     this.bootstrapPath = path.join(this.rootDir, 'bootstrap.json');
+    this.allowlistPath = path.join(this.rootDir, 'allowlist.json');
   }
 
   // ---- Accounts (must-fix #18) ----
@@ -666,6 +674,129 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private modelDir(model: string): string {
     return path.join(this.kvDir, model);
   }
+
+  // ---- Sign-in allowlist ----
+
+  async allowlistList(): Promise<AuthAllowlistEntry[]> {
+    return this.readAllowlist();
+  }
+
+  async allowlistFind(id: string): Promise<AuthAllowlistEntry | null> {
+    const entries = await this.readAllowlist();
+    return entries.find(e => e.id === id) ?? null;
+  }
+
+  async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const value = input.value.toLowerCase();
+      const duplicate = entries.find(e => e.kind === input.kind && e.value === value);
+      if (duplicate) {
+        throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
+      }
+      const entry: AuthAllowlistEntry = {
+        id: randomUUID(),
+        kind: input.kind,
+        value,
+        note: input.note ?? null,
+        createdBy: input.createdBy ?? null,
+        createdAt: new Date(),
+      };
+      entries.push(entry);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      return { ...entry, createdAt: new Date(entry.createdAt) };
+    });
+  }
+
+  async allowlistUpdate(id: string, patch: AllowlistUpdatePatch): Promise<AuthAllowlistEntry | null> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const idx = entries.findIndex(e => e.id === id);
+      if (idx < 0) return null;
+      if (patch.note !== undefined) entries[idx]!.note = patch.note;
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      const updated = entries[idx]!;
+      return { ...updated, createdAt: new Date(updated.createdAt) };
+    });
+  }
+
+  async allowlistRemove(id: string): Promise<boolean> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const idx = entries.findIndex(e => e.id === id);
+      if (idx < 0) return false;
+      entries.splice(idx, 1);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      return true;
+    });
+  }
+
+  async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    const entries = await this.readAllowlist();
+    if (entries.length === 0) return false;
+    const email = values.email?.toLowerCase();
+    const githubUsername = values.githubUsername?.toLowerCase();
+    const githubId = values.githubId;
+    for (const e of entries) {
+      if (e.kind === 'email' && email && e.value === email) return true;
+      if (e.kind === 'github_username' && githubUsername && e.value === githubUsername) return true;
+      if (e.kind === 'github_id' && githubId && e.value === githubId) return true;
+    }
+    return false;
+  }
+
+  private async readAllowlist(): Promise<AuthAllowlistEntry[]> {
+    const raw = await this.readAllowlistRaw();
+    return raw.map(e => ({ ...e, createdAt: new Date(e.createdAt) }));
+  }
+
+  private async readAllowlistRaw(): Promise<AuthAllowlistEntry[]> {
+    try {
+      const raw = await fs.readFile(this.allowlistPath, 'utf8');
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        logger.warn('[AuthStorage:fs] allowlist.json is not an array; treating as empty', {
+          path: this.allowlistPath,
+        });
+        return [];
+      }
+      return parsed
+        .filter((e): e is AuthAllowlistEntry & { createdAt: string | Date } =>
+          typeof e === 'object' && e !== null
+          && typeof (e as { id?: unknown }).id === 'string'
+          && typeof (e as { kind?: unknown }).kind === 'string'
+          && ['email', 'github_username', 'github_id'].includes((e as { kind: string }).kind)
+          && typeof (e as { value?: unknown }).value === 'string')
+        .map(e => ({
+          id: e.id,
+          kind: e.kind as AuthAllowlistKind,
+          value: e.value,
+          note: typeof e.note === 'string' ? e.note : null,
+          createdBy: typeof e.createdBy === 'string' ? e.createdBy : null,
+          createdAt: typeof e.createdAt === 'string' ? new Date(e.createdAt) : (e.createdAt as Date),
+        }));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return [];
+      if (err instanceof SyntaxError) {
+        logger.warn('[AuthStorage:fs] allowlist.json failed to parse; treating as empty', {
+          path: this.allowlistPath,
+          error: err.message,
+        });
+        return [];
+      }
+      throw err;
+    }
+  }
+}
+
+function serializeAllowlist(entries: AuthAllowlistEntry[]): string {
+  // Pretty-print so operators editing the file by hand get readable output.
+  // Dates serialize to ISO-8601 via Date.prototype.toJSON.
+  return JSON.stringify(entries, null, 2);
 }
 
 function assertSafeModel(model: string): void {
