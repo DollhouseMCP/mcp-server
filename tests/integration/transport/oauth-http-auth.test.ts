@@ -215,7 +215,7 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(consent.status).toBe(200);
     jar.ingest(consent.headers);
     const consentHtml = await consent.text();
-    const csrfMatch = consentHtml.match(/name="csrf_token"\s+value="([^"]+)"/);
+    const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(consentHtml);
     expect(csrfMatch).not.toBeNull();
     const csrfToken = csrfMatch![1];
 

@@ -32,6 +32,7 @@ import {
 
 const REDIRECT_URI = 'http://127.0.0.1/callback';
 const CLIENT_ID = 'dollhouse-claude-connector';
+const VALID_PASSWORD = 'a-very-long-password';
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
   const invites = new InviteTokenStore(randomBytes(32), storage);
@@ -60,9 +61,9 @@ async function postConsentForm(
   });
   jar.ingest(consent.headers);
   const html = await consent.text();
-  const csrfMatch = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
   if (!csrfMatch) throw new Error('CSRF token not found in interaction render');
-  const csrfToken = csrfMatch[1]!;
+  const csrfToken = csrfMatch[1];
 
   return fetch(interactionUrl, {
     method: 'POST', redirect: 'manual',
@@ -112,7 +113,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     const consentPost = await postConsentForm(interactionUrl, jar, {
       action: 'set-password',
       invite: inviteToken,
-      password: 'a-very-long-password',
+      password: VALID_PASSWORD,
     });
     expect([302, 303]).toContain(consentPost.status);
     jar.ingest(consentPost.headers);
@@ -191,7 +192,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     const consentPost = await postConsentForm(interactionUrl, jar, {
       action: 'set-password',
       invite: inviteToken,
-      password: 'a-very-long-password',
+      password: VALID_PASSWORD,
     });
     expect([302, 303]).toContain(consentPost.status);
     jar.ingest(consentPost.headers);
@@ -247,7 +248,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
 
     const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
     const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
-    await method.consumeInvite(inviteToken, 'a-very-long-password');
+    await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     const stored = await storage.getAccount('local_alice');
     expect(stored?.roles).toBeUndefined();
@@ -257,7 +258,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     // First, redeem an invite to set up the account out-of-band.
     const inviteUrl = method.issueInvite('local_bob', 'bob@example.com', REDIRECT_URI);
     const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
-    await method.consumeInvite(inviteToken, 'a-very-long-password');
+    await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     // Now drive an OAuth flow as a LOGIN (not invite redemption).
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
@@ -273,7 +274,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     const consentPost = await postConsentForm(interactionUrl, jar, {
       action: 'login',
       username: 'bob',
-      password: 'a-very-long-password',
+      password: VALID_PASSWORD,
     });
     expect([302, 303]).toContain(consentPost.status);
     jar.ingest(consentPost.headers);
@@ -304,7 +305,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     // Set up the account.
     const inviteUrl = method.issueInvite('local_carol', 'carol@example.com', REDIRECT_URI);
     const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
-    await method.consumeInvite(inviteToken, 'a-very-long-password');
+    await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
 
@@ -345,7 +346,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     const lockedAttempt = await postConsentForm(interactionUrl, jar, {
       action: 'login',
       username: 'carol',
-      password: 'a-very-long-password',
+      password: VALID_PASSWORD,
     });
     // Method returns 'denied' → InteractionRouter sends 400.
     expect(lockedAttempt.status).toBe(400);

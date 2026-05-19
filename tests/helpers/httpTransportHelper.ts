@@ -133,9 +133,9 @@ export async function createHttpTestEnvironment(
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
       const userIdForSession = options.userIdSequence?.[sessionUserIdIdx++];
-      const sessionContext = userIdForSession !== undefined
-        ? createHttpSession({ userId: userIdForSession })
-        : createHttpSession();
+      const sessionContext = userIdForSession === undefined
+        ? createHttpSession()
+        : createHttpSession({ userId: userIdForSession });
       sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);

@@ -19,6 +19,11 @@ import type {
 } from '../../../../src/auth/embedded-as/IAuthMethod.js';
 import type { AuthMethodId } from '../../../../src/auth/embedded-as/AuthMethodFactory.js';
 
+const TRIVIAL_CONSENT_ID = 'trivial-consent';
+const MAGIC_LINK_ID = 'magic-link';
+const MAGIC_LINK_DISPLAY = 'Email magic link';
+const FORM_CONTENT_TYPE = 'application/x-www-form-urlencoded';
+
 interface FakeMethodOptions {
   id: AuthMethodId;
   displayName: string;
@@ -97,7 +102,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   });
 
   it('single-method deployment dispatches directly without a chooser', async () => {
-    const method = fakeMethod({ id: 'trivial-consent', displayName: 'Trivial' });
+    const method = fakeMethod({ id: TRIVIAL_CONSENT_ID, displayName: 'Trivial' });
     const h = await startHarness([method], storage, details);
     try {
       const res = await fetch(`${h.url}/interaction/${details.uid}`);
@@ -113,7 +118,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   it('multi-method GET renders the chooser when no method selected', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: 'GitHub' }),
-      fakeMethod({ id: 'magic-link', displayName: 'Email magic link' }),
+      fakeMethod({ id: MAGIC_LINK_ID, displayName: MAGIC_LINK_DISPLAY }),
     ];
     const h = await startHarness(methods, storage, details);
     try {
@@ -122,7 +127,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
       const body = await res.text();
       expect(body).toContain('Choose how to sign in');
       expect(body).toContain('GitHub');
-      expect(body).toContain('Email magic link');
+      expect(body).toContain(MAGIC_LINK_DISPLAY);
       expect(body).toContain(`/interaction/${details.uid}?method=github`);
       expect(body).toContain(`/interaction/${details.uid}?method=magic-link`);
     } finally {
@@ -133,7 +138,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   it('multi-method ?method=<id> persists the choice and dispatches', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: 'GitHub' }),
-      fakeMethod({ id: 'magic-link', displayName: 'Email magic link' }),
+      fakeMethod({ id: MAGIC_LINK_ID, displayName: MAGIC_LINK_DISPLAY }),
     ];
     const h = await startHarness(methods, storage, details);
     try {
@@ -155,7 +160,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   it('multi-method ?method=<unknown> falls through to the chooser', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: 'GitHub' }),
-      fakeMethod({ id: 'magic-link', displayName: 'Email magic link' }),
+      fakeMethod({ id: MAGIC_LINK_ID, displayName: MAGIC_LINK_DISPLAY }),
     ];
     const h = await startHarness(methods, storage, details);
     try {
@@ -171,13 +176,13 @@ describe('InteractionRouter — multi-method dispatch', () => {
   it('POST without prior method choice returns invalid_interaction', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: 'GitHub' }),
-      fakeMethod({ id: 'magic-link', displayName: 'Email magic link' }),
+      fakeMethod({ id: MAGIC_LINK_ID, displayName: MAGIC_LINK_DISPLAY }),
     ];
     const h = await startHarness(methods, storage, details);
     try {
       const res = await fetch(`${h.url}/interaction/${details.uid}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        headers: { 'content-type': FORM_CONTENT_TYPE },
         body: '',
       });
       expect(res.status).toBe(400);
@@ -191,7 +196,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   it('chooser HTML escapes method displayName', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: '<script>alert(1)</script>' }),
-      fakeMethod({ id: 'magic-link', displayName: 'Magic & Link' }),
+      fakeMethod({ id: MAGIC_LINK_ID, displayName: 'Magic & Link' }),
     ];
     const h = await startHarness(methods, storage, details);
     try {
@@ -208,7 +213,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
   describe('H8: throws in method calls become structured 500', () => {
     it('beginInteraction throw yields 500 server_error (no hung request)', async () => {
       const throwing: IAuthMethod = {
-        id: 'trivial-consent',
+        id: TRIVIAL_CONSENT_ID,
         displayName: 'Trivial',
         async beginInteraction() { throw new Error('method blew up'); },
         async completeInteraction() { return { kind: 'denied', reason: 'never' }; },
@@ -227,7 +232,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
 
     it('completeInteraction throw yields 500 server_error', async () => {
       const throwing: IAuthMethod = {
-        id: 'trivial-consent',
+        id: TRIVIAL_CONSENT_ID,
         displayName: 'Trivial',
         async beginInteraction(): Promise<InteractionStep> {
           return { kind: 'render-html', html: '<form method="post"></form>', csrfToken: '' };
@@ -240,12 +245,12 @@ describe('InteractionRouter — multi-method dispatch', () => {
         // GET to render-html (stamps CSRF).
         const getRes = await fetch(`${h.url}/interaction/${details.uid}`);
         const getBody = await getRes.text();
-        const csrfMatch = getBody.match(/name="csrf_token"\s+value="([^"]+)"/);
-        const csrfToken = csrfMatch![1]!;
+        const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(getBody);
+        const csrfToken = csrfMatch![1];
         // POST with valid CSRF — completeInteraction throws.
         const postRes = await fetch(`${h.url}/interaction/${details.uid}`, {
           method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: new URLSearchParams({ csrf_token: csrfToken }),
         });
         expect(postRes.status).toBe(500);
@@ -259,13 +264,13 @@ describe('InteractionRouter — multi-method dispatch', () => {
 
   describe('H13: CSRF required on every POST (no missing-record bypass)', () => {
     it('POST without prior render-html GET (no CSRF record) returns 403', async () => {
-      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Trivial' });
+      const method = fakeMethod({ id: TRIVIAL_CONSENT_ID, displayName: 'Trivial' });
       const h = await startHarness([method], storage, details);
       try {
         // POST without ever GETting the render-html step.
         const res = await fetch(`${h.url}/interaction/${details.uid}`, {
           method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: 'action=approve',
         });
         expect(res.status).toBe(403);
@@ -278,7 +283,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
 
     it('replay (back-button) after consumed CSRF returns 403, not silent bypass', async () => {
       const method = fakeMethod({
-        id: 'trivial-consent', displayName: 'Trivial',
+        id: TRIVIAL_CONSENT_ID, displayName: 'Trivial',
         identity: { sub: 'local_alice', emailVerified: false },
       });
       const h = await startHarness([method], storage, details);
@@ -286,21 +291,21 @@ describe('InteractionRouter — multi-method dispatch', () => {
         // GET → render-html stamps CSRF.
         const getRes = await fetch(`${h.url}/interaction/${details.uid}`);
         const getBody = await getRes.text();
-        const csrfMatch = getBody.match(/name="csrf_token"\s+value="([^"]+)"/);
-        const csrfToken = csrfMatch![1]!;
+        const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(getBody);
+        const csrfToken = csrfMatch![1];
         // First POST consumes the CSRF. May 200/302/303 on success or
         // 500 if interactionFinished mock doesn't drive a real redirect;
         // either way it MUST NOT be 403 (CSRF was accepted).
         const firstPost = await fetch(`${h.url}/interaction/${details.uid}`, {
           method: 'POST', redirect: 'manual',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
         });
         expect(firstPost.status).not.toBe(403);
         // Second POST replays the same token (back-button); record is gone.
         const replayPost = await fetch(`${h.url}/interaction/${details.uid}`, {
           method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
         });
         expect(replayPost.status).toBe(403);
@@ -312,13 +317,13 @@ describe('InteractionRouter — multi-method dispatch', () => {
     });
 
     it('POST with mismatched CSRF token returns 403', async () => {
-      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Trivial' });
+      const method = fakeMethod({ id: TRIVIAL_CONSENT_ID, displayName: 'Trivial' });
       const h = await startHarness([method], storage, details);
       try {
         await fetch(`${h.url}/interaction/${details.uid}`); // GET to stamp CSRF
         const res = await fetch(`${h.url}/interaction/${details.uid}`, {
           method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: new URLSearchParams({ csrf_token: 'totally-wrong-token' }),
         });
         expect(res.status).toBe(403);
@@ -334,7 +339,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
     // now.
     it('cycle-13: urlencoded body > 4kb is rejected with 413', async () => {
       const localStorage = new InMemoryAuthStorageLayer();
-      const method = fakeMethod({ id: 'trivial-consent', displayName: 'Test' });
+      const method = fakeMethod({ id: TRIVIAL_CONSENT_ID, displayName: 'Test' });
       const h = await startHarness([method], localStorage, {
         uid: 'body-limit-test-uid',
         prompt: { name: 'login' },
@@ -349,7 +354,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
         });
         const res = await fetch(`${h.url}/interaction/body-limit-test-uid`, {
           method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          headers: { 'content-type': FORM_CONTENT_TYPE },
           body: oversized.toString(),
         });
         expect(res.status).toBe(413);
@@ -405,7 +410,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
         // Both must have the SAME value (single per-render token).
         const csrfMatches = [...getBody.matchAll(/name="csrf_token"\s+value="([^"]+)"/g)];
         expect(csrfMatches).toHaveLength(2);
-        expect(csrfMatches[0]![1]).toBe(csrfMatches[1]![1]);
+        expect(csrfMatches[0][1]).toBe(csrfMatches[1][1]);
       } finally {
         await h.close();
       }

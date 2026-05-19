@@ -177,7 +177,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     const record = this.genericStore.get(genericKey(model, id));
     if (!record) return null;
     if (record.expiresAt && record.expiresAt <= Date.now()) {
@@ -230,7 +230,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
    * Map iteration tolerates concurrent delete (Node 22+ documented behavior),
    * which the inline GC pass relies on.
    */
-  async genericFindByUid(uid: string): Promise<unknown | null> {
+  async genericFindByUid(uid: string): Promise<unknown> {
     const now = Date.now();
     for (const [key, record] of this.genericStore.entries()) {
       if (record.expiresAt && record.expiresAt <= now) {

@@ -50,11 +50,11 @@ describe('Per-session DI architecture', () => {
     }
 
     for (const service of sessionRegisteredServices) {
-      const rootResolve = new RegExp(`\\bthis\\.resolve(?:<[^>]+>)?\\(\\s*['"]${service}['"]\\s*\\)`, 'g');
+      const rootResolve = new RegExp(String.raw`\bthis\.resolve(?:<[^>]+>)?\(\s*['"]${service}['"]\s*\)`, 'g');
       const matches = [...bundleBody.matchAll(rootResolve)];
       for (const match of matches) {
         violations.push(
-          `${service}: createHttpSessionHandlerBundle uses root this.resolve(...) at ${lineFor(source, methodOffset(source, 'createHttpSessionHandlerBundle') + match.index!)}`,
+          `${service}: createHttpSessionHandlerBundle uses root this.resolve(...) at ${lineFor(source, methodOffset(source, 'createHttpSessionHandlerBundle') + match.index)}`,
         );
       }
     }
@@ -69,14 +69,14 @@ describe('Per-session DI architecture', () => {
 
     for (const service of HTTP_HANDLER_SERVICES) {
       const rootBundleRegistration = new RegExp(
-        `child\\.register\\(\\s*['"]${service}['"]\\s*,\\s*\\(\\)\\s*=>\\s*(?:this\\.)?httpRootHandlerBundle[!?]?\\.`,
+        String.raw`child\.register\(\s*['"]${service}['"]\s*,\s*\(\)\s*=>\s*(?:this\.)?httpRootHandlerBundle[!?]?\.`,
       );
       if (rootBundleRegistration.test(sessionBody)) {
         violations.push(`${service}: registered from cached root httpRootHandlerBundle`);
       }
 
       const rootResolveRegistration = new RegExp(
-        `child\\.register\\(\\s*['"]${service}['"]\\s*,\\s*\\(\\)\\s*=>\\s*this\\.resolve(?:<[^>]+>)?\\(\\s*['"]${service}['"]\\s*\\)`,
+        String.raw`child\.register\(\s*['"]${service}['"]\s*,\s*\(\)\s*=>\s*this\.resolve(?:<[^>]+>)?\(\s*['"]${service}['"]\s*\)`,
       );
       if (rootResolveRegistration.test(sessionBody)) {
         violations.push(`${service}: registered by resolving root ${service}`);

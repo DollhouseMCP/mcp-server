@@ -113,8 +113,8 @@ describe('InviteTokenStore', () => {
     });
 
     afterEach(() => {
-      if (originalEnv !== undefined) process.env[ENV_KEY] = originalEnv;
-      else delete process.env[ENV_KEY];
+      if (originalEnv === undefined) delete process.env[ENV_KEY];
+      else process.env[ENV_KEY] = originalEnv;
       fs.rmSync(tmpDir, { recursive: true, force: true });
     });
 

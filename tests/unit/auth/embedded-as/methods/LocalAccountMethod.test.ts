@@ -5,6 +5,7 @@ import { LocalAccountMethod } from '../../../../../src/auth/embedded-as/methods/
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InviteTokenStore } from '../../../../../src/auth/embedded-as/inviteTokens.js';
 import { LocalLoginRateLimiter } from '../../../../../src/auth/embedded-as/rateLimit.js';
+import { CLIENT_PRIMARY, CLIENT_SECONDARY, CLIENT_TERTIARY } from '../../../../fixtures/test-ips.js';
 
 const CTX = {
   interactionId: 'i',
@@ -12,6 +13,13 @@ const CTX = {
   requestedScopes: [],
   requestUrl: '/interaction/i',
 };
+
+const ALICE_EMAIL = 'alice@example.com';
+const BOB_EMAIL = 'bob@example.com';
+const SET_PASSWORD_ACTION = 'set-password';
+const VALID_PASSWORD = 'a-very-long-password';
+const INTERACTION_URL = 'http://app/i/x';
+const INVITE_URL = 'http://app/auth/local/invite';
 
 describe('LocalAccountMethod', () => {
   let storage: InMemoryAuthStorageLayer;
@@ -35,76 +43,76 @@ describe('LocalAccountMethod', () => {
   });
 
   it('issues an invite URL and the user can redeem it (must-fix #17)', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/interaction/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, 'http://app/interaction/x'); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite');
     expect(inviteToken).toBeTruthy();
 
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken!, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken!, password: VALID_PASSWORD },
     });
     expect(result.kind).toBe('authenticated');
     if (result.kind !== 'authenticated') return;
     expect(result.identity.sub).toBe('local_alice');
 
     const stored = await storage.getAccount('local_alice');
-    expect(stored?.email).toBe('alice@example.com');
+    expect(stored?.email).toBe(ALICE_EMAIL);
     expect(stored?.credentials?.passwordHash).toBeTruthy();
     // Critically: rawProfile must NOT carry the credential (B4).
     expect((stored?.rawProfile as { passwordHash?: string } | undefined)?.passwordHash).toBeUndefined();
   });
 
   it('rejects passwords shorter than 12 characters', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'short' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: 'short' },
     });
     expect(result.kind).toBe('next-step');
   });
 
   it('rejects re-use of an invite token (single-use)', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
     const second = await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
     expect(second.kind).toBe('denied');
   });
 
   it('verifies a password and returns authenticated', async () => {
     // Set up the account first.
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
 
     // Now log in.
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password' }, ip: '10.0.0.1',
+      formBody: { action: 'login', username: 'alice', password: VALID_PASSWORD }, ip: CLIENT_PRIMARY,
     });
     expect(result.kind).toBe('authenticated');
   });
 
   it('rejects wrong password and notes the failure for rate limiting', async () => {
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
 
     for (let i = 0; i < 5; i += 1) {
       const result = await method.completeInteraction(CTX, {
-        formBody: { action: 'login', username: 'alice', password: 'wrong' }, ip: '10.0.0.1',
+        formBody: { action: 'login', username: 'alice', password: 'wrong' }, ip: CLIENT_PRIMARY,
       });
       expect(result.kind).toBe('denied');
     }
     // Sixth attempt should be rate-limited even with the correct password.
     const sixth = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'a-very-long-password' }, ip: '10.0.0.1',
+      formBody: { action: 'login', username: 'alice', password: VALID_PASSWORD }, ip: CLIENT_PRIMARY,
     });
     expect(sixth.kind).toBe('denied');
     if (sixth.kind === 'denied') {
@@ -114,7 +122,7 @@ describe('LocalAccountMethod', () => {
 
   it('rejects login attempts on unknown usernames (no enumeration via timing)', async () => {
     const result = await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'ghost', password: 'whatever' }, ip: '10.0.0.1',
+      formBody: { action: 'login', username: 'ghost', password: 'whatever' }, ip: CLIENT_PRIMARY,
     });
     expect(result.kind).toBe('denied');
   });
@@ -132,21 +140,21 @@ describe('LocalAccountMethod', () => {
     // the rest of the suite) and any lazy-init cost on the unknown branch
     // only makes the `unknownMs >= wrongPasswordMs/2` assertion easier
     // to satisfy.
-    const url = method.issueInvite('local_alice', 'alice@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+    const url = method.issueInvite('local_alice', ALICE_EMAIL, INTERACTION_URL); // NOSONAR — opaque test base URL
     const inviteToken = new URL(url).searchParams.get('invite')!;
     await method.completeInteraction(CTX, {
-      formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+      formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
     });
 
     const wrongPasswordStart = Date.now();
     await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'alice', password: 'incorrect' }, ip: '10.0.0.2',
+      formBody: { action: 'login', username: 'alice', password: 'incorrect' }, ip: CLIENT_SECONDARY,
     });
     const wrongPasswordMs = Date.now() - wrongPasswordStart;
 
     const unknownStart = Date.now();
     await method.completeInteraction(CTX, {
-      formBody: { action: 'login', username: 'nobody', password: 'whatever' }, ip: '10.0.0.3',
+      formBody: { action: 'login', username: 'nobody', password: 'whatever' }, ip: CLIENT_TERTIARY,
     });
     const unknownMs = Date.now() - unknownStart;
 
@@ -156,32 +164,32 @@ describe('LocalAccountMethod', () => {
 
   describe('consumeInvite (out-of-band CLI invite redemption)', () => {
     it('verifies + creates the account when called directly (used by /auth/local/invite POST)', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_bob', BOB_EMAIL, INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
-      const result = await method.consumeInvite(token, 'a-very-long-password');
+      const result = await method.consumeInvite(token, VALID_PASSWORD);
       expect(result.kind).toBe('ok');
       if (result.kind !== 'ok') return;
       expect(result.sub).toBe('local_bob');
-      expect(result.email).toBe('bob@example.com');
+      expect(result.email).toBe(BOB_EMAIL);
 
       // Subsequent login with the just-set password works.
       const login = await method.completeInteraction(CTX, {
-        formBody: { action: 'login', username: 'bob', password: 'a-very-long-password' },
+        formBody: { action: 'login', username: 'bob', password: VALID_PASSWORD },
       });
       expect(login.kind).toBe('authenticated');
     });
 
     it('rejects re-use of the same invite (single-use)', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_bob', BOB_EMAIL, INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
-      await method.consumeInvite(token, 'a-very-long-password');
-      const second = await method.consumeInvite(token, 'a-very-long-password');
+      await method.consumeInvite(token, VALID_PASSWORD);
+      const second = await method.consumeInvite(token, VALID_PASSWORD);
       expect(second.kind).toBe('error');
     });
 
     it('rejects passwords shorter than 12 characters with a clear reason', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_bob', BOB_EMAIL, INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
       const result = await method.consumeInvite(token, 'short');
       expect(result.kind).toBe('error');
@@ -190,12 +198,12 @@ describe('LocalAccountMethod', () => {
     });
 
     it('verifyInvite returns the email without consuming the token', async () => {
-      const url = method.issueInvite('local_bob', 'bob@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_bob', BOB_EMAIL, INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
       const verified = method.verifyInvite(token);
       expect(verified.ok).toBe(true);
       if (!verified.ok) return;
-      expect(verified.email).toBe('bob@example.com');
+      expect(verified.email).toBe(BOB_EMAIL);
       // Token should still be consumable after verify.
       expect((await invites.consume(token)).ok).toBe(true);
     });
@@ -209,12 +217,12 @@ describe('LocalAccountMethod', () => {
       // means the user requests a fresh invite (rare path, single-user
       // UX cost) instead of opening the DoS surface (security cost,
       // applies to anyone with a leaked URL).
-      const url = method.issueInvite('local_carol', 'carol@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_carol', 'carol@example.com', INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
       const spy = jest.spyOn(argon2, 'hash').mockRejectedValueOnce(new Error('argon2 OOM'));
       try {
-        const failed = await method.consumeInvite(token, 'a-very-long-password');
+        const failed = await method.consumeInvite(token, VALID_PASSWORD);
         expect(failed.kind).toBe('error');
         if (failed.kind === 'error') {
           // Error message should hint at the new behavior (request a
@@ -228,7 +236,7 @@ describe('LocalAccountMethod', () => {
       // The token IS consumed even though argon2 failed — this is the
       // tradeoff. A retry with the same token must fail with the
       // already-consumed signal.
-      const retried = await method.consumeInvite(token, 'a-very-long-password');
+      const retried = await method.consumeInvite(token, VALID_PASSWORD);
       expect(retried.kind).toBe('error');
     });
 
@@ -237,11 +245,11 @@ describe('LocalAccountMethod', () => {
       // successfully, then replay it many times and assert argon2.hash
       // is NEVER invoked on the replays. If a future change reorders
       // back to verify→hash→consume, this test fails loudly.
-      const url = method.issueInvite('local_dosvictim', 'victim@example.com', 'http://app/auth/local/invite'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_dosvictim', 'victim@example.com', INVITE_URL); // NOSONAR — opaque test base URL
       const token = new URL(url).searchParams.get('invite')!;
 
       // First (legitimate) consume — succeeds.
-      const ok = await method.consumeInvite(token, 'a-very-long-password');
+      const ok = await method.consumeInvite(token, VALID_PASSWORD);
       expect(ok.kind).toBe('ok');
 
       // Now spy on argon2.hash and replay the captured-but-consumed token.
@@ -263,10 +271,10 @@ describe('LocalAccountMethod', () => {
 
   describe('credential isolation (B4 — passwordHash off rawProfile)', () => {
     it('writes the argon2 hash to credentials.passwordHash, NOT rawProfile', async () => {
-      const url = method.issueInvite('local_dave', 'dave@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_dave', 'dave@example.com', INTERACTION_URL); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
-        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+        formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
       });
       const stored = await storage.getAccount('local_dave');
       expect(stored?.credentials?.passwordHash).toMatch(/^\$argon2id\$/);
@@ -278,10 +286,10 @@ describe('LocalAccountMethod', () => {
       // credentials masked. Asserts the credential is on a typed sibling
       // field that's straightforward to redact, rather than buried inside
       // an opaque rawProfile blob.
-      const url = method.issueInvite('local_eve', 'eve@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_eve', 'eve@example.com', INTERACTION_URL); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
-        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+        formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
       });
       const stored = await storage.getAccount('local_eve');
       const masked = { ...stored, credentials: undefined };
@@ -291,14 +299,14 @@ describe('LocalAccountMethod', () => {
     });
 
     it('login still verifies against credentials.passwordHash', async () => {
-      const url = method.issueInvite('local_finn', 'finn@example.com', 'http://app/i/x'); // NOSONAR — opaque test base URL
+      const url = method.issueInvite('local_finn', 'finn@example.com', INTERACTION_URL); // NOSONAR — opaque test base URL
       const inviteToken = new URL(url).searchParams.get('invite')!;
       await method.completeInteraction(CTX, {
-        formBody: { action: 'set-password', invite: inviteToken, password: 'a-very-long-password' },
+        formBody: { action: SET_PASSWORD_ACTION, invite: inviteToken, password: VALID_PASSWORD },
       });
       const result = await method.completeInteraction(CTX, {
-        formBody: { action: 'login', username: 'finn', password: 'a-very-long-password' },
-        ip: '10.0.0.1',
+        formBody: { action: 'login', username: 'finn', password: VALID_PASSWORD },
+        ip: CLIENT_PRIMARY,
       });
       expect(result.kind).toBe('authenticated');
     });

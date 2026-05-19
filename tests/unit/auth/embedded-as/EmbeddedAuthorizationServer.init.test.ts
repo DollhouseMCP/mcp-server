@@ -28,7 +28,7 @@ class FlakyStorage implements IAuthStorageLayer {
     this.failures = failOnFirstNGet;
   }
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     if (this.failures > 0) {
       this.failures -= 1;
       throw new Error(`flaky storage transient failure (remaining: ${this.failures + 1})`);
@@ -63,6 +63,21 @@ class FlakyStorage implements IAuthStorageLayer {
   genericRevokeByGrantId(grantId: string) { return this.inner.genericRevokeByGrantId?.(grantId) ?? Promise.resolve(); }
 }
 
+/**
+ * Helper: run an awaitable that may reject and return either the
+ * resolution or the captured error. The H15 test cares about WHICH
+ * attempt fails — first attempt's transient error vs. cached stale
+ * rejection — so we capture both shapes.
+ */
+async function attempt(fn: () => Promise<unknown>): Promise<{ ok: true } | { ok: false; error: Error }> {
+  try {
+    await fn();
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err as Error };
+  }
+}
+
 describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
   let tmpDir: string;
 
@@ -73,21 +88,6 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
   afterEach(async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
-
-  /**
-   * Helper: run an awaitable that may reject and return either the
-   * resolution or the captured error. The H15 test cares about WHICH
-   * attempt fails — first attempt's transient error vs. cached stale
-   * rejection — so we capture both shapes.
-   */
-  async function attempt(fn: () => Promise<unknown>): Promise<{ ok: true } | { ok: false; error: Error }> {
-    try {
-      await fn();
-      return { ok: true };
-    } catch (err) {
-      return { ok: false, error: err as Error };
-    }
-  }
 
   it('a transient init failure does NOT poison subsequent ensureInitialized calls', async () => {
     const inner = new InMemoryAuthStorageLayer();

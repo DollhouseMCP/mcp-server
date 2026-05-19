@@ -145,7 +145,7 @@ async function resolveMethodForRequest(
   methods: readonly IAuthMethod[],
   storage: IAuthStorageLayer,
 ): Promise<MethodResolution> {
-  if (methods.length === 1) return { kind: 'method', method: methods[0]! };
+  if (methods.length === 1) return { kind: 'method', method: methods[0] };
 
   const queryMethod = typeof req.query.method === 'string' ? req.query.method : null;
   if (queryMethod) {
@@ -349,43 +349,7 @@ export async function finishInteractionWithIdentity(
   defaultResource: string,
 ): Promise<void> {
   try {
-    const requestedScope = String(details.params.scope ?? '');
-    const clientId = String(details.params.client_id ?? '');
-    // Use the explicitly-passed resource(s) when present; otherwise fall
-    // back to the AS's default resource. Cycle 24 fix.
-    const requestedResource = details.params.resource ?? defaultResource;
-    const { oidcScopes, resourceScopes } = splitScopes(requestedScope);
-
-    let grantId = details.grantId;
-    let grant: OidcGrantInstance | undefined;
-    if (grantId) {
-      grant = await provider.Grant.find(grantId);
-    }
-    if (!grant) {
-      grant = new provider.Grant({ accountId, clientId });
-    }
-    // Cycle 24 fix: oidc-provider's prompt-resolution checks `missingOIDCScope`
-    // and `missingResourceScopes` independently. A scope that appears in BOTH
-    // `scopes` (the OIDC-level config) AND `getResourceServerInfo.scope` (the
-    // resource-server scope set) needs to be in BOTH grant dimensions or the
-    // prompt re-fires. Our `mcp` scope is in both. The earlier shape — using
-    // splitScopes to put OIDC standard scopes in one bucket and `mcp` in the
-    // other — left `mcp` out of the OIDC dimension and `openid` out of the
-    // resource dimension, looping the consent prompt forever. The honest
-    // resolution: add ALL requested scopes to BOTH dimensions. oidc-provider
-    // ignores scopes that aren't valid for a given dimension, so this is
-    // safe (and matches the behavior every other AS we've inspected does).
-    const allScopes = [...oidcScopes, ...resourceScopes];
-    if (allScopes.length > 0) {
-      grant.addOIDCScope(allScopes.join(' '));
-      const resources = Array.isArray(requestedResource) ? requestedResource : [requestedResource];
-      for (const r of resources) {
-        if (typeof r === 'string' && r.length > 0) {
-          grant.addResourceScope(r, allScopes.join(' '));
-        }
-      }
-    }
-    grantId = await grant.save();
+    const grantId = await resolveAndSaveGrant(provider, details, accountId, defaultResource);
 
     // Stamp lastAuthAt before interactionFinished so the redirect-to-token
     // round-trip that follows can read a fresh value via extraTokenClaims.
@@ -409,6 +373,69 @@ export async function finishInteractionWithIdentity(
     });
     if (!res.headersSent) {
       sendError(res, 500, 'server_error', 'Failed to finish interaction');
+    }
+  }
+}
+
+/**
+ * Resolve (or create) the OIDC Grant for this interaction, bind all
+ * requested scopes to both OIDC + resource dimensions (cycle 24 fix —
+ * scopes that appear in both dimensions need to be in both grant lists
+ * or the consent prompt re-fires), and save. Returns the saved grant id.
+ */
+async function resolveAndSaveGrant(
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+  accountId: string,
+  defaultResource: string,
+): Promise<string> {
+  // Explicit string-narrowing: details.params values are typed as unknown
+  // in oidc-provider. String(obj) would yield "[object Object]" if a
+  // caller put non-string content there.
+  const requestedScope = typeof details.params.scope === 'string' ? details.params.scope : '';
+  const clientId = typeof details.params.client_id === 'string' ? details.params.client_id : '';
+  // Use the explicitly-passed resource(s) when present; otherwise fall
+  // back to the AS's default resource. Cycle 24 fix.
+  const requestedResource = details.params.resource ?? defaultResource;
+  const { oidcScopes, resourceScopes } = splitScopes(requestedScope);
+
+  const grant = await findOrCreateGrant(provider, details.grantId, accountId, clientId);
+  bindAllScopesToGrant(grant, [...oidcScopes, ...resourceScopes], requestedResource);
+  return grant.save();
+}
+
+async function findOrCreateGrant(
+  provider: OidcProviderForInteractions,
+  existingGrantId: string | undefined,
+  accountId: string,
+  clientId: string,
+): Promise<OidcGrantInstance> {
+  if (existingGrantId) {
+    const found = await provider.Grant.find(existingGrantId);
+    if (found) return found;
+  }
+  return new provider.Grant({ accountId, clientId });
+}
+
+function bindAllScopesToGrant(
+  grant: OidcGrantInstance,
+  allScopes: string[],
+  requestedResource: unknown,
+): void {
+  if (allScopes.length === 0) return;
+  // Cycle 24 fix: oidc-provider's prompt-resolution checks `missingOIDCScope`
+  // and `missingResourceScopes` independently. A scope that appears in BOTH
+  // `scopes` (the OIDC-level config) AND `getResourceServerInfo.scope` (the
+  // resource-server scope set) needs to be in BOTH grant dimensions or the
+  // prompt re-fires. Our `mcp` scope is in both. Adding ALL requested scopes
+  // to BOTH dimensions is safe: oidc-provider ignores scopes that aren't
+  // valid for a given dimension.
+  const joined = allScopes.join(' ');
+  grant.addOIDCScope(joined);
+  const resources = Array.isArray(requestedResource) ? requestedResource : [requestedResource];
+  for (const r of resources) {
+    if (typeof r === 'string' && r.length > 0) {
+      grant.addResourceScope(r, joined);
     }
   }
 }
@@ -441,7 +468,7 @@ function makeContext(
 ): InteractionContext {
   return {
     interactionId: details.uid,
-    clientId: String(details.params.client_id ?? ''),
+    clientId: typeof details.params.client_id === 'string' ? details.params.client_id : '',
     requestedScopes: typeof details.params.scope === 'string'
       ? details.params.scope.split(/\s+/).filter(Boolean)
       : [],
@@ -464,7 +491,7 @@ function ensureCsrfInForm(html: string, csrfToken: string): string {
   // flag so every form gets a token. They share the same per-render
   // CSRF token, which is correct — the token is bound to the
   // interaction, not to a specific form.
-  return html.replace(
+  return html.replaceAll(
     /<form\b([^>]*)>/gi,
     (_match, attrs) =>
       `<form${attrs}>\n      <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">`,
@@ -472,7 +499,7 @@ function ensureCsrfInForm(html: string, csrfToken: string): string {
 }
 
 function escapeHtmlAttr(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
 }
 
 function bodyValue(req: Request, field: string): string | undefined {
@@ -519,7 +546,7 @@ function renderLoginChooser(methods: readonly IAuthMethod[], interactionId: stri
   const items = methods.map((m) => {
     const safeId = escapeHtmlAttr(m.id);
     const safeLabel = m.displayName
-      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     return `      <li><a href="/interaction/${safeUid}?method=${safeId}">${safeLabel}</a></li>`;
   }).join('\n');
 

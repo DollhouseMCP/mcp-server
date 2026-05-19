@@ -286,7 +286,7 @@ export interface IAuthStorageLayer {
   // RefreshToken, AccessToken, RegistrationAccessToken, ReplayDetection,
   // PushedAuthorizationRequest, BackchannelAuthenticationRequest.
 
-  genericGet(model: string, id: string): Promise<unknown | null>;
+  genericGet(model: string, id: string): Promise<unknown>;
   genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void>;
   genericDestroy(model: string, id: string): Promise<void>;
 
@@ -361,8 +361,8 @@ export interface IAuthStorageLayer {
   sweepExpiredKv(): Promise<number>;
 
   /** Optional secondary indexes oidc-provider expects when those features are enabled. */
-  genericFindByUserCode?(userCode: string): Promise<unknown | null>;
-  genericFindByUid?(uid: string): Promise<unknown | null>;
+  genericFindByUserCode?(userCode: string): Promise<unknown>;
+  genericFindByUid?(uid: string): Promise<unknown>;
   genericRevokeByGrantId?(grantId: string): Promise<void>;
 
   // --- Sign-in allowlist (gates GitHub OAuth, magic-link, local-password) ---

@@ -16,6 +16,8 @@ import { createHmac } from 'node:crypto';
 import type { Request } from 'express';
 import { verifyInteractionCookieMatches } from '../../../../src/auth/embedded-as/interactionCookieBinding.js';
 
+const MISSING_COOKIE_REASON = 'missing-cookie';
+
 const COOKIE_KEY = 'dGVzdC1jb29raWUtc2lnbmluZy1zZWNyZXQ='; // any 32-byte base64
 const COOKIE_KEYS = [COOKIE_KEY];
 
@@ -24,8 +26,8 @@ function keygripSign(data: string, key: string): string {
   return createHmac('sha1', key)
     .update(data)
     .digest('base64')
-    .replace(/\//g, '_')
-    .replace(/\+/g, '-')
+    .replaceAll('/', '_')
+    .replaceAll('+', '-')
     .replace(/=+$/, ''); // NOSONAR — anchored single-quantifier on bounded base64 digest; no backtracking
 }
 
@@ -49,13 +51,13 @@ describe('verifyInteractionCookieMatches — H12 signature verification', () => 
   it('rejects with missing-cookie when no Cookie header present', () => {
     const req = makeReq(undefined);
     const result = verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS);
-    expect(result).toEqual({ ok: false, reason: 'missing-cookie' });
+    expect(result).toEqual({ ok: false, reason: MISSING_COOKIE_REASON });
   });
 
   it('rejects with missing-cookie when _interaction is absent', () => {
     const req = makeReq('other_cookie=foo');
     expect(verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS)).toEqual({
-      ok: false, reason: 'missing-cookie',
+      ok: false, reason: MISSING_COOKIE_REASON,
     });
   });
 
@@ -64,7 +66,7 @@ describe('verifyInteractionCookieMatches — H12 signature verification', () => 
     // the `.sig` companion. Prior shape would have accepted this.
     const req = makeReq(`_interaction=${expectedUid}`);
     expect(verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS)).toEqual({
-      ok: false, reason: 'missing-cookie',
+      ok: false, reason: MISSING_COOKIE_REASON,
     });
   });
 
@@ -113,7 +115,7 @@ describe('verifyInteractionCookieMatches — H12 signature verification', () => 
       verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS),
     ).not.toThrow();
     expect(verifyInteractionCookieMatches(req, expectedUid, COOKIE_KEYS)).toEqual({
-      ok: false, reason: 'missing-cookie',
+      ok: false, reason: MISSING_COOKIE_REASON,
     });
   });
 
@@ -129,7 +131,7 @@ describe('verifyInteractionCookieMatches — H12 signature verification', () => 
       // Either treated as missing or as invalid-signature, depending on
       // which decode short-circuits first. Both are acceptable —
       // critical thing is no URIError leak.
-      expect(['missing-cookie', 'invalid-signature']).toContain(result.reason);
+      expect([MISSING_COOKIE_REASON, 'invalid-signature']).toContain(result.reason);
     }
   });
 });

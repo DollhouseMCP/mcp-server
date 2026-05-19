@@ -70,13 +70,18 @@ export const DEFAULT_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
  * verbatim — operators wanting deeper merges should write the full
  * sub-section.
  */
-function deepMergeSection<T extends Record<string, unknown>>(
+function deepMergeSection<T extends object>(
   defaults: T,
   stored: Record<string, unknown>,
 ): T {
-  const out: Record<string, unknown> = { ...defaults };
+  // Internal Record<string, unknown> view so we can spread + index the
+  // generic T without forcing every caller to repeat the `as unknown as
+  // Record<string, unknown>` widening + `as unknown as T` re-narrowing
+  // dance. The runtime shape is unchanged.
+  const defaultsAsRecord = defaults as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...defaultsAsRecord };
   for (const [key, value] of Object.entries(stored)) {
-    const defaultValue = (defaults as Record<string, unknown>)[key];
+    const defaultValue = defaultsAsRecord[key];
     if (
       value !== null
       && typeof value === 'object'
@@ -361,6 +366,23 @@ export interface ConfigActionResult {
   success: boolean;
   message: string;
   data?: any;
+}
+
+// Type-coercion helpers for legacy on-disk configs where booleans and nulls
+// may have been written as strings. Module-scoped so the per-section fixers
+// can reuse them without each method declaring its own copy.
+function fixNull(value: any): any {
+  if (value === 'null' || value === 'NULL') return null;
+  return value;
+}
+
+function fixBoolean(value: any): any {
+  if (typeof value === 'string') {
+    const lower = value.toLowerCase();
+    if (lower === 'true') return true;
+    if (lower === 'false') return false;
+  }
+  return value;
 }
 
 export class ConfigManager {
@@ -735,43 +757,31 @@ export class ConfigManager {
     const defaults = this.getDefaultConfig();
     const userIdentity = user.userIdentityConfig as Partial<UserConfig>;
     const merged: DollhouseConfig = {
-      version: ((operator.defaultsConfig as Record<string, unknown>).version as string)
+      version: (operator.defaultsConfig.version as string)
         ?? defaults.version,
       user: {
         username: userIdentity.username ?? defaults.user.username,
         email: userIdentity.email ?? defaults.user.email,
         display_name: userIdentity.display_name ?? defaults.user.display_name,
       },
-      github: deepMergeSection(
-        defaults.github as unknown as Record<string, unknown>,
-        user.githubConfig,
-      ) as unknown as GitHubConfig,
-      sync: deepMergeSection(
-        defaults.sync as unknown as Record<string, unknown>,
-        user.syncConfig,
-      ) as unknown as SyncConfig,
-      collection: { ...defaults.collection, ...user.collectionConfig } as unknown as CollectionConfig,
-      autoLoad: { ...defaults.autoLoad, ...user.autoloadConfig } as unknown as AutoLoadConfig,
+      github: deepMergeSection(defaults.github, user.githubConfig),
+      sync: deepMergeSection(defaults.sync, user.syncConfig),
+      collection: { ...defaults.collection, ...user.collectionConfig } as CollectionConfig,
+      autoLoad: { ...defaults.autoLoad, ...user.autoloadConfig } as AutoLoadConfig,
       elements: {
         auto_activate: { ...defaults.elements.auto_activate, ...user.autoActivateConfig },
-        default_element_dir: ((operator.defaultsConfig as Record<string, unknown>).default_element_dir as string)
+        default_element_dir: (operator.defaultsConfig.default_element_dir as string)
           ?? defaults.elements.default_element_dir,
         enhanced_index: deepMergeSection(
-          (defaults.elements.enhanced_index ?? {}) as unknown as Record<string, unknown>,
+          defaults.elements.enhanced_index ?? ({} as EnhancedIndexConfig),
           operator.enhancedIndexConfig,
-        ) as unknown as EnhancedIndexConfig,
+        ),
       },
-      display: deepMergeSection(
-        defaults.display as unknown as Record<string, unknown>,
-        user.displayConfig,
-      ) as unknown as DisplayConfig,
-      wizard: { ...defaults.wizard, ...user.wizardConfig } as unknown as WizardConfig,
-      retentionPolicy: deepMergeSection(
-        defaults.retentionPolicy as unknown as Record<string, unknown>,
-        user.retentionConfig,
-      ) as unknown as RetentionPolicyConfig,
-      license: { ...defaults.license, ...operator.licenseConfig } as unknown as LicenseConfig,
-      console: { ...defaults.console, ...operator.consoleConfig } as unknown as ConsoleConfig,
+      display: deepMergeSection(defaults.display, user.displayConfig),
+      wizard: { ...defaults.wizard, ...user.wizardConfig } as WizardConfig,
+      retentionPolicy: deepMergeSection(defaults.retentionPolicy, user.retentionConfig),
+      license: { ...defaults.license, ...operator.licenseConfig } as LicenseConfig,
+      console: { ...defaults.console, ...operator.consoleConfig } as ConsoleConfig,
       source_priority: Object.keys(user.sourcePriorityConfig).length > 0
         ? user.sourcePriorityConfig as unknown as SourcePriorityConfigData
         : undefined,
@@ -1069,104 +1079,91 @@ export class ConfigManager {
    */
   private fixConfigTypes(): void {
     if (!this.config) return;
-    
-    // Helper to convert string "null" to actual null
-    const fixNull = (value: any): any => {
-      if (value === 'null' || value === 'NULL') return null;
-      return value;
-    };
-    
-    // Helper to convert string booleans to actual booleans
-    const fixBoolean = (value: any): any => {
-      if (typeof value === 'string') {
-        const lower = value.toLowerCase();
-        if (lower === 'true') return true;
-        if (lower === 'false') return false;
-      }
-      return value;
-    };
-    
-    // Fix user fields - handle string "null" values
-    if (this.config.user) {
-      this.config.user.username = fixNull(this.config.user.username);
-      this.config.user.email = fixNull(this.config.user.email);
-      this.config.user.display_name = fixNull(this.config.user.display_name);
-    }
-    
-    // Fix sync settings
-    if (this.config.sync) {
-      this.config.sync.enabled = fixBoolean(this.config.sync.enabled);
-      
-      if (this.config.sync.individual) {
-        this.config.sync.individual.require_confirmation = fixBoolean(this.config.sync.individual.require_confirmation);
-        this.config.sync.individual.show_diff_before_sync = fixBoolean(this.config.sync.individual.show_diff_before_sync);
-        this.config.sync.individual.track_versions = fixBoolean(this.config.sync.individual.track_versions);
-      }
-      
-      if (this.config.sync.bulk) {
-        this.config.sync.bulk.upload_enabled = fixBoolean(this.config.sync.bulk.upload_enabled);
-        this.config.sync.bulk.download_enabled = fixBoolean(this.config.sync.bulk.download_enabled);
-        this.config.sync.bulk.require_preview = fixBoolean(this.config.sync.bulk.require_preview);
-        this.config.sync.bulk.respect_local_only = fixBoolean(this.config.sync.bulk.respect_local_only);
-      }
-      
-      if (this.config.sync.privacy) {
-        this.config.sync.privacy.scan_for_secrets = fixBoolean(this.config.sync.privacy.scan_for_secrets);
-        this.config.sync.privacy.scan_for_pii = fixBoolean(this.config.sync.privacy.scan_for_pii);
-        this.config.sync.privacy.warn_on_sensitive = fixBoolean(this.config.sync.privacy.warn_on_sensitive);
-      }
-    }
-    
-    // Fix collection settings
-    if (this.config.collection) {
-      this.config.collection.auto_submit = fixBoolean(this.config.collection.auto_submit);
-      this.config.collection.require_review = fixBoolean(this.config.collection.require_review);
-      this.config.collection.add_attribution = fixBoolean(this.config.collection.add_attribution);
-    }
-    
-    // Fix display settings
-    if (this.config.display) {
-      if (this.config.display.persona_indicators) {
-        this.config.display.persona_indicators.enabled = fixBoolean(this.config.display.persona_indicators.enabled);
-        this.config.display.persona_indicators.include_emoji = fixBoolean(this.config.display.persona_indicators.include_emoji);
-      }
-      this.config.display.verbose_logging = fixBoolean(this.config.display.verbose_logging);
-      this.config.display.show_progress = fixBoolean(this.config.display.show_progress);
-    }
-    
-    // Fix github settings
-    if (this.config.github) {
-      if (this.config.github.portfolio) {
-        this.config.github.portfolio.repository_url = fixNull(this.config.github.portfolio.repository_url);
-        this.config.github.portfolio.auto_create = fixBoolean(this.config.github.portfolio.auto_create);
-      }
-      if (this.config.github.auth) {
-        this.config.github.auth.use_oauth = fixBoolean(this.config.github.auth.use_oauth);
-        // Fix client_id if it's a string "null"
-        if (this.config.github.auth.client_id) {
-          this.config.github.auth.client_id = fixNull(this.config.github.auth.client_id) || undefined;
-        }
-      }
-    }
-    
-    // Fix wizard settings
-    if (this.config.wizard) {
-      this.config.wizard.completed = fixBoolean(this.config.wizard.completed);
-      this.config.wizard.dismissed = fixBoolean(this.config.wizard.dismissed);
-    }
+    this.fixUserTypes(this.config.user);
+    this.fixSyncTypes(this.config.sync);
+    this.fixCollectionTypes(this.config.collection);
+    this.fixDisplayTypes(this.config.display);
+    this.fixGithubTypes(this.config.github);
+    this.fixWizardTypes(this.config.wizard);
+    this.fixRetentionPolicyTypes(this.config.retentionPolicy);
+  }
 
-    // Fix retention policy settings (Issue #51)
-    if (this.config.retentionPolicy) {
-      this.config.retentionPolicy.enabled = fixBoolean(this.config.retentionPolicy.enabled);
-      if (this.config.retentionPolicy.safety) {
-        this.config.retentionPolicy.safety.require_confirmation = fixBoolean(this.config.retentionPolicy.safety.require_confirmation);
-        this.config.retentionPolicy.safety.dry_run_first = fixBoolean(this.config.retentionPolicy.safety.dry_run_first);
-        this.config.retentionPolicy.safety.warn_on_expiring = fixBoolean(this.config.retentionPolicy.safety.warn_on_expiring);
+  private fixUserTypes(user: DollhouseConfig['user'] | undefined): void {
+    if (!user) return;
+    user.username = fixNull(user.username);
+    user.email = fixNull(user.email);
+    user.display_name = fixNull(user.display_name);
+  }
+
+  private fixSyncTypes(sync: DollhouseConfig['sync'] | undefined): void {
+    if (!sync) return;
+    sync.enabled = fixBoolean(sync.enabled);
+    if (sync.individual) {
+      sync.individual.require_confirmation = fixBoolean(sync.individual.require_confirmation);
+      sync.individual.show_diff_before_sync = fixBoolean(sync.individual.show_diff_before_sync);
+      sync.individual.track_versions = fixBoolean(sync.individual.track_versions);
+    }
+    if (sync.bulk) {
+      sync.bulk.upload_enabled = fixBoolean(sync.bulk.upload_enabled);
+      sync.bulk.download_enabled = fixBoolean(sync.bulk.download_enabled);
+      sync.bulk.require_preview = fixBoolean(sync.bulk.require_preview);
+      sync.bulk.respect_local_only = fixBoolean(sync.bulk.respect_local_only);
+    }
+    if (sync.privacy) {
+      sync.privacy.scan_for_secrets = fixBoolean(sync.privacy.scan_for_secrets);
+      sync.privacy.scan_for_pii = fixBoolean(sync.privacy.scan_for_pii);
+      sync.privacy.warn_on_sensitive = fixBoolean(sync.privacy.warn_on_sensitive);
+    }
+  }
+
+  private fixCollectionTypes(collection: DollhouseConfig['collection'] | undefined): void {
+    if (!collection) return;
+    collection.auto_submit = fixBoolean(collection.auto_submit);
+    collection.require_review = fixBoolean(collection.require_review);
+    collection.add_attribution = fixBoolean(collection.add_attribution);
+  }
+
+  private fixDisplayTypes(display: DollhouseConfig['display'] | undefined): void {
+    if (!display) return;
+    if (display.persona_indicators) {
+      display.persona_indicators.enabled = fixBoolean(display.persona_indicators.enabled);
+      display.persona_indicators.include_emoji = fixBoolean(display.persona_indicators.include_emoji);
+    }
+    display.verbose_logging = fixBoolean(display.verbose_logging);
+    display.show_progress = fixBoolean(display.show_progress);
+  }
+
+  private fixGithubTypes(github: DollhouseConfig['github'] | undefined): void {
+    if (!github) return;
+    if (github.portfolio) {
+      github.portfolio.repository_url = fixNull(github.portfolio.repository_url);
+      github.portfolio.auto_create = fixBoolean(github.portfolio.auto_create);
+    }
+    if (github.auth) {
+      github.auth.use_oauth = fixBoolean(github.auth.use_oauth);
+      if (github.auth.client_id) {
+        github.auth.client_id = fixNull(github.auth.client_id) || undefined;
       }
-      if (this.config.retentionPolicy.audit) {
-        this.config.retentionPolicy.audit.log_deletions = fixBoolean(this.config.retentionPolicy.audit.log_deletions);
-        this.config.retentionPolicy.audit.backup_before_delete = fixBoolean(this.config.retentionPolicy.audit.backup_before_delete);
-      }
+    }
+  }
+
+  private fixWizardTypes(wizard: DollhouseConfig['wizard'] | undefined): void {
+    if (!wizard) return;
+    wizard.completed = fixBoolean(wizard.completed);
+    wizard.dismissed = fixBoolean(wizard.dismissed);
+  }
+
+  private fixRetentionPolicyTypes(retention: DollhouseConfig['retentionPolicy'] | undefined): void {
+    if (!retention) return;
+    retention.enabled = fixBoolean(retention.enabled);
+    if (retention.safety) {
+      retention.safety.require_confirmation = fixBoolean(retention.safety.require_confirmation);
+      retention.safety.dry_run_first = fixBoolean(retention.safety.dry_run_first);
+      retention.safety.warn_on_expiring = fixBoolean(retention.safety.warn_on_expiring);
+    }
+    if (retention.audit) {
+      retention.audit.log_deletions = fixBoolean(retention.audit.log_deletions);
+      retention.audit.backup_before_delete = fixBoolean(retention.audit.backup_before_delete);
     }
   }
 
@@ -1285,35 +1282,28 @@ export class ConfigManager {
    * Migrate settings from environment variables
    */
   private async migrateFromEnvironment(): Promise<void> {
+    // NOTE: These are optional custom env vars not in centralized config.
+    // They're used for backwards compatibility migration only.
+    const ensureConfig = (): DollhouseConfig => (this.config ??= this.getDefaultConfig());
     let migrated = false;
 
-    // NOTE: These are optional custom env vars not in centralized config
-    // They're used for backwards compatibility migration only
-
-    // Migrate user settings
     if (process.env.DOLLHOUSE_USER && !this.config?.user.username) {
-      if (!this.config) this.config = this.getDefaultConfig();
-      this.config.user.username = process.env.DOLLHOUSE_USER;
+      ensureConfig().user.username = process.env.DOLLHOUSE_USER;
       migrated = true;
     }
 
     if (process.env.DOLLHOUSE_EMAIL && !this.config?.user.email) {
-      if (!this.config) this.config = this.getDefaultConfig();
-      this.config.user.email = process.env.DOLLHOUSE_EMAIL;
+      ensureConfig().user.email = process.env.DOLLHOUSE_EMAIL;
       migrated = true;
     }
 
-    // Migrate portfolio URL
     if (process.env.DOLLHOUSE_PORTFOLIO_URL && !this.config?.github.portfolio.repository_url) {
-      if (!this.config) this.config = this.getDefaultConfig();
-      this.config.github.portfolio.repository_url = process.env.DOLLHOUSE_PORTFOLIO_URL;
+      ensureConfig().github.portfolio.repository_url = process.env.DOLLHOUSE_PORTFOLIO_URL;
       migrated = true;
     }
 
-    // Migrate collection auto-submit - use centralized env config
     if (env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION !== false) {
-      if (!this.config) this.config = this.getDefaultConfig();
-      this.config.collection.auto_submit = env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
+      ensureConfig().collection.auto_submit = env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
       migrated = true;
     }
 
@@ -1334,9 +1324,7 @@ export class ConfigManager {
 
     if (section) {
       // Reset specific section
-      if (!this.config) {
-        this.config = defaults;
-      } else {
+      if (this.config) {
         // SECURITY: Validate section path to prevent prototype pollution
         validatePropertyPath(section, 'section');
 
@@ -1352,9 +1340,11 @@ export class ConfigManager {
         const lastKey = sectionKeys[sectionKeys.length - 1];
         // SECURITY: Use secure property setter to avoid prototype chain pollution
         safeSetProperty(current, lastKey, defaultSection[lastKey]);
+      } else {
+        this.config = defaults;
       }
 
-      await this.persistMerged(userId, this.config!);
+      await this.persistMerged(userId, this.config);
 
       return {
         success: true,

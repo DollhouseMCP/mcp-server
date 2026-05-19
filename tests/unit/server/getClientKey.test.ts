@@ -20,6 +20,14 @@
 import { describe, it, expect } from '@jest/globals';
 import type { Request } from 'express';
 import { getClientKey } from '../../../src/server/StreamableHttpServer.js';
+import {
+  CLIENT_PRIMARY,
+  PUBLIC_CLIENT_A,
+  PUBLIC_CLIENT_B,
+  TCP_PEER,
+  XFF_SPOOF,
+  XFF_SPOOF_CHAIN,
+} from '../../fixtures/test-ips.js';
 
 function makeReq(opts: {
   ip?: string;
@@ -37,25 +45,25 @@ function makeReq(opts: {
 
 describe('getClientKey', () => {
   it('returns req.ip when set (Express has already resolved trust-proxy)', () => {
-    expect(getClientKey(makeReq({ ip: '203.0.113.5' }))).toBe('203.0.113.5');
+    expect(getClientKey(makeReq({ ip: PUBLIC_CLIENT_A }))).toBe(PUBLIC_CLIENT_A);
   });
 
   it('IGNORES X-Forwarded-For header when req.ip is set (no double-resolution)', () => {
-    // The bug being fixed: previously this returned '1.2.3.4' (the
-    // attacker-supplied value) even when Express had resolved
-    // req.ip='10.0.0.1' from a trusted proxy. The header is the
-    // attacker-chosen part; req.ip is Express's authoritative answer.
+    // The bug being fixed: previously this returned the attacker-supplied
+    // header value even when Express had resolved req.ip from a trusted
+    // proxy. The header is the attacker-chosen part; req.ip is Express's
+    // authoritative answer.
     expect(getClientKey(makeReq({
-      ip: '10.0.0.1',
-      forwardedFor: '1.2.3.4',
-    }))).toBe('10.0.0.1');
+      ip: CLIENT_PRIMARY,
+      forwardedFor: XFF_SPOOF,
+    }))).toBe(CLIENT_PRIMARY);
   });
 
   it('IGNORES X-Forwarded-For header even with a long chain (cannot be spoofed past trust-proxy)', () => {
     expect(getClientKey(makeReq({
-      ip: '10.0.0.1',
-      forwardedFor: '1.2.3.4, 5.6.7.8, 9.10.11.12',
-    }))).toBe('10.0.0.1');
+      ip: CLIENT_PRIMARY,
+      forwardedFor: XFF_SPOOF_CHAIN,
+    }))).toBe(CLIENT_PRIMARY);
   });
 
   it('falls back to socket.remoteAddress when req.ip is undefined', () => {
@@ -74,12 +82,11 @@ describe('getClientKey', () => {
     // X-Forwarded-For, Express ignores it (because trust proxy is
     // 'loopback' and the connection is not from loopback) and
     // req.ip stays as the real peer. getClientKey must follow.
-    const tcpPeer = '198.51.100.99';
     const spoofed = '127.0.0.1'; // attacker tries to claim loopback-rate-limit identity
     expect(getClientKey(makeReq({
-      ip: tcpPeer,
+      ip: TCP_PEER,
       forwardedFor: spoofed,
-    }))).toBe(tcpPeer);
+    }))).toBe(TCP_PEER);
   });
 
   // Cycle-11 fix (H11-2): on dual-stack Node, IPv4 connections show
@@ -88,19 +95,19 @@ describe('getClientKey', () => {
   // rate-limit budget. Same fix shape as cycle-10 H10-2 in MagicLink
   // — both now use the shared `normalizeIp` helper from rateLimit.ts.
   it('H11-2: normalizes IPv4-mapped IPv6 (::ffff:1.2.3.4 → 1.2.3.4)', () => {
-    expect(getClientKey(makeReq({ ip: '::ffff:203.0.113.5' }))).toBe('203.0.113.5');
+    expect(getClientKey(makeReq({ ip: `::ffff:${PUBLIC_CLIENT_A}` }))).toBe(PUBLIC_CLIENT_A);
   });
 
   it('H11-2: pure IPv4 passes through unchanged', () => {
-    expect(getClientKey(makeReq({ ip: '203.0.113.5' }))).toBe('203.0.113.5');
+    expect(getClientKey(makeReq({ ip: PUBLIC_CLIENT_A }))).toBe(PUBLIC_CLIENT_A);
   });
 
   it('H11-2: regression — same v4 attacker cannot get two buckets via dual-stack', () => {
-    // Pin the bypass class: 1.2.3.4 and ::ffff:1.2.3.4 must hash to
-    // the same rate-limit key. Before the fix, an attacker on a
-    // dual-stack bind alternating address families got 2× budget.
-    const v4 = getClientKey(makeReq({ ip: '203.0.113.42' }));
-    const v6Mapped = getClientKey(makeReq({ ip: '::ffff:203.0.113.42' }));
+    // Pin the bypass class: an IPv4 and its ::ffff:-mapped form must
+    // hash to the same rate-limit key. Before the fix, an attacker on
+    // a dual-stack bind alternating address families got 2× budget.
+    const v4 = getClientKey(makeReq({ ip: PUBLIC_CLIENT_B }));
+    const v6Mapped = getClientKey(makeReq({ ip: `::ffff:${PUBLIC_CLIENT_B}` }));
     expect(v4).toBe(v6Mapped);
   });
 

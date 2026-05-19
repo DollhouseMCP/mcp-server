@@ -141,7 +141,7 @@ export async function checkAllowlistGate(
  */
 export function renderAllowlistDeniedPage(contactNote?: string): string {
   const note = contactNote
-    ? `<p>${contactNote.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>`
+    ? `<p>${contactNote.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</p>`
     : '';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Access denied</title>
@@ -156,22 +156,25 @@ ${note}
 
 async function recordDenied(storage: IAuthStorageLayer, identity: AllowlistGateIdentity): Promise<void> {
   try {
-    await storage.recordIdentityEvent({
+    // Identity values are PII-bearing. Log them at debug-friendly detail level
+    // (operator can see who tried) but not the full raw profile. Email is most
+    // useful for operator-side diagnosis ("Mick tried to sign in but isn't on
+    // the list"). Build the optional fields incrementally to avoid noisy
+    // negated-conditional spreads.
+    const details: Record<string, unknown> = { method: identity.method };
+    if (identity.email !== undefined) details.email = identity.email;
+    if (identity.githubUsername !== undefined) details.githubUsername = identity.githubUsername;
+
+    const event: Parameters<IAuthStorageLayer['recordIdentityEvent']>[0] = {
       type: 'auth.allowlist_denied',
       sub: identity.sub,
-      ...(identity.provider !== undefined ? { provider: identity.provider } : {}),
-      ...(identity.externalSub !== undefined ? { externalSub: identity.externalSub } : {}),
-      details: {
-        method: identity.method,
-        // Identity values are PII-bearing. Log them at debug-friendly
-        // detail level (operator can see who tried) but not the full
-        // raw profile. Email is most useful for operator-side diagnosis
-        // ("Mick tried to sign in but isn't on the list").
-        ...(identity.email !== undefined ? { email: identity.email } : {}),
-        ...(identity.githubUsername !== undefined ? { githubUsername: identity.githubUsername } : {}),
-      },
+      details,
       timestamp: Date.now(),
-    });
+    };
+    if (identity.provider !== undefined) event.provider = identity.provider;
+    if (identity.externalSub !== undefined) event.externalSub = identity.externalSub;
+
+    await storage.recordIdentityEvent(event);
   } catch (err) {
     // Audit emission failures must not block the deny path — log and
     // continue. The user still gets denied; the audit gap is the

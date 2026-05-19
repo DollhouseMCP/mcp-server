@@ -30,6 +30,7 @@ import {
 
 const REDIRECT_URI = 'http://127.0.0.1/callback';
 const CLIENT_ID = 'dollhouse-claude-connector';
+const LOCAL_PASSWORD_ID = 'local-password';
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
   const invites = new InviteTokenStore(randomBytes(32), storage);
@@ -57,9 +58,9 @@ async function postConsentForm(
   });
   jar.ingest(consent.headers);
   const html = await consent.text();
-  const csrfMatch = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
   if (!csrfMatch) throw new Error('CSRF token not found in interaction render');
-  const csrfToken = csrfMatch[1]!;
+  const csrfToken = csrfMatch[1];
   return fetch(interactionUrl, {
     method: 'POST', redirect: 'manual',
     headers: {
@@ -142,7 +143,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
   });
 
   it('admin token → 200 with claims body containing roles:["admin"]', async () => {
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
     const adminToken = await loginAsLocalUser(harness, method, 'local_admin', 'admin@example.com');
 
     const res = await fetch(`${harness.baseUrl}/auth/admin/me`, {
@@ -161,7 +162,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
     // The bootstrap admin sees their own sub echoed back (MED-6:
     // restricted to the bootstrap admin only).
     expect(body.bootstrap.adminSub).toBe('local_admin');
-    expect(body.bootstrap.adminMethod).toBe('local-password');
+    expect(body.bootstrap.adminMethod).toBe(LOCAL_PASSWORD_ID);
   }, 30_000);
 
   it('MED-6: bootstrap.adminSub is omitted for non-bootstrap admins', async () => {
@@ -170,7 +171,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
     // (simulating a future role-assignment feature). When that other
     // admin hits /auth/admin/me, the response must NOT echo the
     // bootstrap admin's sub — only the bootstrap admin sees that field.
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
     // Issue tokens for both users.
     await loginAsLocalUser(harness, method, 'local_admin', 'admin@example.com');
     const secondToken = await loginAsLocalUser(harness, method, 'local_other_admin', 'other@example.com');
@@ -192,7 +193,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
     expect(body.roles).toContain('admin');
     // Bootstrap method still surfaced (operator can verify the AS is
     // running in the expected mode), but the admin's identity is not.
-    expect(body.bootstrap.adminMethod).toBe('local-password');
+    expect(body.bootstrap.adminMethod).toBe(LOCAL_PASSWORD_ID);
     expect(body.bootstrap.adminSub).toBeUndefined();
     // Reference the seeded token so the linter doesn't flag it as unused.
     expect(secondToken).toBeTruthy();
@@ -200,7 +201,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
 
   it('non-admin token → 403 with required_role hint', async () => {
     // Pre-claim a different sub as admin, then log in as a regular user.
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
     const aliceToken = await loginAsLocalUser(harness, method, 'local_alice', 'alice@example.com');
 
     const res = await fetch(`${harness.baseUrl}/auth/admin/me`, {
@@ -214,7 +215,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
 
   it('no token → 401 with WWW-Authenticate header', async () => {
     // Bootstrap so the gate is open; we want a clean 401, not a 503.
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
 
     const res = await fetch(`${harness.baseUrl}/auth/admin/me`);
     expect(res.status).toBe(401);
@@ -222,7 +223,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
   }, 30_000);
 
   it('invalid token → 401', async () => {
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
 
     const res = await fetch(`${harness.baseUrl}/auth/admin/me`, {
       headers: { Authorization: 'Bearer not.a.real.jwt' },
@@ -248,7 +249,7 @@ describe('GET /auth/admin/me — H7 admin role enforcement', () => {
     // email:undefined, displayName:undefined — operators couldn't
     // distinguish "I'm the admin but missing a profile" from "my
     // admin row was wiped." 410 makes the failure mode unambiguous.
-    await storage.markBootstrapComplete('local_admin', 'local-password');
+    await storage.markBootstrapComplete('local_admin', LOCAL_PASSWORD_ID);
     const adminToken = await loginAsLocalUser(harness, method, 'local_admin', 'admin@example.com');
 
     // Delete the account row directly (simulating operator action).

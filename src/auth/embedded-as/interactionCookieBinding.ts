@@ -38,7 +38,7 @@ const INTERACTION_SIG_COOKIE_NAME = '_interaction.sig';
  * sync with the threat model documented at the top of this file.
  */
 export function renderInteractionBindingError(flowLabel: string): string {
-  const safe = flowLabel.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safe = flowLabel.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Continue in your original browser</title>
 <style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}</style>
@@ -127,8 +127,8 @@ function keygripSign(data: string, key: string): string {
   return createHmac('sha1', key)
     .update(data)
     .digest('base64')
-    .replace(/\//g, '_')
-    .replace(/\+/g, '-')
+    .replaceAll('/', '_')
+    .replaceAll('+', '-')
     .replace(/=+$/, ''); // NOSONAR — anchored single-quantifier on a bounded base64 digest; no backtracking possible
 }
 

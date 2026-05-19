@@ -45,7 +45,7 @@ import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
 import { normalizeIp } from '../rateLimit.js';
 
-const PROVIDER_NAME = 'magic-link';
+const PROVIDER_NAME = 'magic-link' as const;
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const REQUEST_RATE_LIMIT_PER_EMAIL = 3;
 const REQUEST_RATE_LIMIT_PER_IP = 5;
@@ -120,7 +120,7 @@ interface RequestRateBucket {
 }
 
 export class MagicLinkMethod implements IAuthMethod {
-  readonly id = 'magic-link' as const;
+  readonly id = PROVIDER_NAME;
   readonly displayName = 'Email magic link';
 
   private readonly perEmailRequests = new Map<string, RequestRateBucket>();
@@ -304,7 +304,7 @@ export class MagicLinkMethod implements IAuthMethod {
   verifyMagicLink(token: string): { ok: true; interactionId?: string } | { ok: false; reason: string } {
     const verified = this.options.invites.verify(token);
     if (!verified.ok) return { ok: false, reason: GENERIC_LINK_INVALID };
-    if (verified.payload.purpose !== 'magic-link') {
+    if (verified.payload.purpose !== PROVIDER_NAME) {
       return { ok: false, reason: GENERIC_LINK_INVALID };
     }
     return { ok: true, interactionId: verified.payload.interactionId };
@@ -330,7 +330,7 @@ export class MagicLinkMethod implements IAuthMethod {
       }
       return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }
-    if (consume.payload.purpose !== 'magic-link') {
+    if (consume.payload.purpose !== PROVIDER_NAME) {
       return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }
 
@@ -346,7 +346,7 @@ export class MagicLinkMethod implements IAuthMethod {
     const gate = await checkAllowlistGate(
       {
         sub,
-        method: 'magic-link',
+        method: PROVIDER_NAME,
         email,
         provider: PROVIDER_NAME,
         externalSub: hashEmail(email),
@@ -362,7 +362,7 @@ export class MagicLinkMethod implements IAuthMethod {
     // grant admin role on the account. Round 5 / H5 — see
     // bootstrapAdmin.ts for why setAccountRoles is split off from the
     // upsertAccount payload.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, 'magic-link');
+    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, PROVIDER_NAME);
 
     const existing = await this.options.storage.getAccount(sub);
     await this.options.storage.upsertAccount({
@@ -443,7 +443,7 @@ export class MagicLinkMethod implements IAuthMethod {
       const token = this.options.invites.issue({
         sub,
         email,
-        purpose: 'magic-link',
+        purpose: PROVIDER_NAME,
         interactionId,
       });
       const url = new URL(this.options.verifyUrl);
@@ -594,7 +594,7 @@ function renderCheckEmailPage(): string {
 }
 
 function renderConfirmationPage(token: string): string {
-  const safeToken = token.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const safeToken = token.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Confirm sign-in</title>
 <style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}button{background:#185c37;color:white;border:0;border-radius:6px;padding:12px 16px;font-weight:700;cursor:pointer;margin-top:16px}</style>
@@ -604,7 +604,7 @@ function renderConfirmationPage(token: string): string {
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 function renderMagicLinkError(reason: string): string {

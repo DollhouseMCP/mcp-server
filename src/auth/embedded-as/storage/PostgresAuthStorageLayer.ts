@@ -288,7 +288,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select({ payload: authKv.payload, expiresAt: authKv.expiresAt })
         .from(authKv)
@@ -296,7 +296,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .limit(1),
     );
     if (rows.length === 0) return null;
-    const row = rows[0]!;
+    const row = rows[0];
     if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
       // Lazy expiry; best-effort cleanup.
       void this.genericDestroy(model, id);
@@ -311,11 +311,11 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       await tx.insert(authKv).values({
         model,
         id,
-        payload: payload as AuthKvRow['payload'],
+        payload,
         expiresAt,
       }).onConflictDoUpdate({
         target: [authKv.model, authKv.id],
-        set: { payload: payload as AuthKvRow['payload'], expiresAt },
+        set: { payload, expiresAt },
       });
     });
   }
@@ -348,13 +348,13 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .values({
           model,
           id,
-          payload: payload as AuthKvRow['payload'],
+          payload,
           expiresAt,
         })
         .onConflictDoUpdate({
           target: [authKv.model, authKv.id],
           set: {
-            payload: payload as AuthKvRow['payload'],
+            payload,
             expiresAt,
           },
           // Only overwrite when the existing row has expired. Live
@@ -424,12 +424,12 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       await tx.delete(authKv).where(or(
         and(eq(authKv.model, 'Grant'), eq(authKv.id, grantId)),
         sql`${authKv.payload}->>'grantId' = ${grantId}`,
-      )!);
+      ));
     });
   }
 
   /** Uses idx_auth_kv_session_uid partial expression index. */
-  async genericFindByUid(uid: string): Promise<unknown | null> {
+  async genericFindByUid(uid: string): Promise<unknown> {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select({ payload: authKv.payload }).from(authKv).where(
         and(
@@ -439,7 +439,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         ),
       ).limit(1),
     );
-    return rows.length > 0 ? rows[0]!.payload : null;
+    return rows.length > 0 ? rows[0].payload : null;
   }
 
   // ---- Sign-in allowlist ----
@@ -455,7 +455,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select().from(authAllowlist).where(eq(authAllowlist.id, id)).limit(1),
     );
-    return rows.length > 0 ? rowToAllowlistEntry(rows[0]!) : null;
+    return rows.length > 0 ? rowToAllowlistEntry(rows[0]) : null;
   }
 
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
@@ -469,7 +469,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
           createdBy: input.createdBy ?? null,
         }).returning(),
       );
-      return rowToAllowlistEntry(rows[0]!);
+      return rowToAllowlistEntry(rows[0]);
     } catch (err) {
       // The (kind, value) unique index fires on duplicate. Normalize the
       // Postgres-specific error (code 23505 = unique_violation) to the
@@ -498,7 +498,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .where(eq(authAllowlist.id, id))
         .returning(),
     );
-    return rows.length > 0 ? rowToAllowlistEntry(rows[0]!) : null;
+    return rows.length > 0 ? rowToAllowlistEntry(rows[0]) : null;
   }
 
   async allowlistRemove(id: string): Promise<boolean> {
@@ -576,7 +576,7 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
   // in-memory and filesystem backends (which preserve undefined when
   // the field was never set).
   if (Array.isArray(row.roles) && row.roles.length > 0) {
-    account.roles = row.roles as string[];
+    account.roles = row.roles;
   }
   return account;
 }

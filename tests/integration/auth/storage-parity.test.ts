@@ -23,6 +23,8 @@ import { withSystemContext } from '../../../src/database/admin.js';
 import type { IAuthStorageLayer, StoredAccount } from '../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
 import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
 
+const ALICE_EMAIL = 'alice@example.com';
+
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
     sub: 'github_42',
@@ -277,7 +279,7 @@ function runContractSuite(
       await storage.recordIdentityEvent({ type: 'auth.b', timestamp: 2 });
       const aOnly = await storage.listIdentityEvents({ type: 'auth.a' });
       expect(aOnly).toHaveLength(1);
-      expect(aOnly[0]!.type).toBe('auth.a');
+      expect(aOnly[0].type).toBe('auth.a');
     });
 
     it('listIdentityEvents filters by sub', async () => {
@@ -285,7 +287,7 @@ function runContractSuite(
       await storage.recordIdentityEvent({ type: 'auth.x', sub: 'bob', timestamp: 2 });
       const aliceOnly = await storage.listIdentityEvents({ sub: 'alice' });
       expect(aliceOnly).toHaveLength(1);
-      expect(aliceOnly[0]!.sub).toBe('alice');
+      expect(aliceOnly[0].sub).toBe('alice');
     });
 
     it('listIdentityEvents filters by since (inclusive)', async () => {
@@ -704,23 +706,23 @@ function runContractSuite(
     it('add() persists and round-trips via list() and find()', async () => {
       const entry = await storage.allowlistAdd({
         kind: 'email',
-        value: 'alice@example.com',
+        value: ALICE_EMAIL,
         note: 'founder',
         createdBy: 'github_1',
       });
       expect(entry.id).toBeTruthy();
       expect(entry.kind).toBe('email');
-      expect(entry.value).toBe('alice@example.com');
+      expect(entry.value).toBe(ALICE_EMAIL);
       expect(entry.note).toBe('founder');
       expect(entry.createdBy).toBe('github_1');
       expect(entry.createdAt).toBeInstanceOf(Date);
 
       const list = await storage.allowlistList();
       expect(list).toHaveLength(1);
-      expect(list[0]!.id).toBe(entry.id);
+      expect(list[0].id).toBe(entry.id);
 
       const found = await storage.allowlistFind(entry.id);
-      expect(found?.value).toBe('alice@example.com');
+      expect(found?.value).toBe(ALICE_EMAIL);
     });
 
     it('add() lowercases the value on insert', async () => {
@@ -728,7 +730,7 @@ function runContractSuite(
         kind: 'email',
         value: 'Alice@Example.COM',
       });
-      expect(entry.value).toBe('alice@example.com');
+      expect(entry.value).toBe(ALICE_EMAIL);
     });
 
     it('add() rejects duplicate (kind, value) after normalization', async () => {
@@ -741,7 +743,7 @@ function runContractSuite(
     it('add() allows the same value across different kinds', async () => {
       // (Edge case: github_username "alice" and email "alice" — these are
       // technically the same string but different kinds; both are valid.)
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       await storage.allowlistAdd({ kind: 'github_username', value: 'alice' });
       const list = await storage.allowlistList();
       expect(list).toHaveLength(2);
@@ -798,8 +800,8 @@ function runContractSuite(
     });
 
     it('matchesIdentity() matches by email (case-insensitive input)', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
-      expect(await storage.allowlistMatchesIdentity({ email: 'alice@example.com' })).toBe(true);
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
+      expect(await storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).toBe(true);
       expect(await storage.allowlistMatchesIdentity({ email: 'ALICE@example.com' })).toBe(true);
       expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
     });
@@ -827,7 +829,7 @@ function runContractSuite(
     });
 
     it('matchesIdentity() returns false when none of the supplied values match', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       expect(await storage.allowlistMatchesIdentity({
         email: 'bob@example.com',
         githubUsername: 'bob',
@@ -835,7 +837,7 @@ function runContractSuite(
     });
 
     it('matchesIdentity() returns false when no values are supplied', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       expect(await storage.allowlistMatchesIdentity({})).toBe(false);
     });
   });
@@ -964,8 +966,8 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
     const b = new FilesystemAuthStorageLayer({ rootDir: dir });
     const events = await b.listIdentityEvents();
     expect(events).toHaveLength(1);
-    expect(events[0]!.type).toBe('auth.test.persist');
-    expect(events[0]!.sub).toBe('alice');
+    expect(events[0].type).toBe('auth.test.persist');
+    expect(events[0].sub).toBe('alice');
   });
 
   it('K/V entries survive across instances (non-expiring)', async () => {

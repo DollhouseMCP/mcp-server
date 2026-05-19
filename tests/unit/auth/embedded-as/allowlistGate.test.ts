@@ -17,6 +17,8 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import { checkAllowlistGate, renderAllowlistDeniedPage } from '../../../../src/auth/embedded-as/allowlistGate.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
+const ALICE_EMAIL = 'alice@example.com';
+
 describe('checkAllowlistGate — decision matrix', () => {
   let storage: InMemoryAuthStorageLayer;
 
@@ -62,9 +64,9 @@ describe('checkAllowlistGate — decision matrix', () => {
 
   describe('allowlist match wins', () => {
     it('passes when email is on the list (REQUIRED=true)', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       const result = await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com', githubId: '99' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
         { storage, required: true },
       );
       expect(result.allowed).toBe(true);
@@ -90,7 +92,7 @@ describe('checkAllowlistGate — decision matrix', () => {
     });
 
     it('email match is case-insensitive on the caller side', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       const result = await checkAllowlistGate(
         { sub: 'github_99', method: 'github', email: 'ALICE@example.com' },
         { storage, required: true },
@@ -104,7 +106,7 @@ describe('checkAllowlistGate — decision matrix', () => {
   describe('REQUIRED=true rejects unmatched identities', () => {
     it('denies when empty list and not bootstrap admin', async () => {
       const result = await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com', githubId: '99' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
@@ -116,7 +118,7 @@ describe('checkAllowlistGate — decision matrix', () => {
     it('denies when list populated but identity not on it', async () => {
       await storage.allowlistAdd({ kind: 'email', value: 'someone-else@example.com' });
       const result = await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com', githubId: '99' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
@@ -141,7 +143,7 @@ describe('checkAllowlistGate — decision matrix', () => {
     it('denies when list has entries and identity is not on it', async () => {
       await storage.allowlistAdd({ kind: 'email', value: 'someone-else@example.com' });
       const result = await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com', githubId: '99' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
         { storage, required: false },
       );
       expect(result.allowed).toBe(false);
@@ -159,7 +161,7 @@ describe('checkAllowlistGate — decision matrix', () => {
         {
           sub: 'github_99',
           method: 'github',
-          email: 'alice@example.com',
+          email: ALICE_EMAIL,
           githubUsername: 'alice',
           githubId: '99',
           provider: 'github',
@@ -176,14 +178,14 @@ describe('checkAllowlistGate — decision matrix', () => {
       expect(events[0]?.externalSub).toBe('99');
       const details = events[0]?.details as Record<string, unknown>;
       expect(details?.method).toBe('github');
-      expect(details?.email).toBe('alice@example.com');
+      expect(details?.email).toBe(ALICE_EMAIL);
       expect(details?.githubUsername).toBe('alice');
     });
 
     it('does NOT write an audit event when the identity passes', async () => {
-      await storage.allowlistAdd({ kind: 'email', value: 'alice@example.com' });
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
       await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL },
         { storage, required: true },
       );
 
@@ -197,7 +199,7 @@ describe('checkAllowlistGate — decision matrix', () => {
   describe('all 3 sign-in methods exercise the gate uniformly', () => {
     it('github method denial', async () => {
       const result = await checkAllowlistGate(
-        { sub: 'github_99', method: 'github', email: 'alice@example.com' },
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL },
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
@@ -205,7 +207,7 @@ describe('checkAllowlistGate — decision matrix', () => {
 
     it('magic-link method denial', async () => {
       const result = await checkAllowlistGate(
-        { sub: 'magic-link_abc', method: 'magic-link', email: 'alice@example.com' },
+        { sub: 'magic-link_abc', method: 'magic-link', email: ALICE_EMAIL },
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
@@ -213,7 +215,7 @@ describe('checkAllowlistGate — decision matrix', () => {
 
     it('local-password method denial', async () => {
       const result = await checkAllowlistGate(
-        { sub: 'local_alice', method: 'local-password', email: 'alice@example.com' },
+        { sub: 'local_alice', method: 'local-password', email: ALICE_EMAIL },
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
