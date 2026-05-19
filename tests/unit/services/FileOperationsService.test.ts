@@ -125,6 +125,47 @@ describe('FileOperationsService', () => {
       expect(mockAtomicWriteFile).toHaveBeenCalledWith(filePath, content, { encoding: 'utf-8' });
     });
 
+    it('should use active session PathValidator validated path for writes', async () => {
+      const filePath = '/users/alice/file.txt';
+      const validatedPath = '/real/users/alice/file.txt';
+      const content = 'new content';
+      const enforceWritablePath = jest.fn<(filePath: string) => Promise<string>>()
+        .mockResolvedValue(validatedPath);
+      service.setSessionContainerRegistryProvider(() => ({
+        getActiveContainer: () => ({
+          resolve: () => ({ enforceWritablePath }),
+        }),
+      } as any));
+      mockAtomicWriteFile.mockResolvedValue(undefined);
+
+      await service.writeFile(filePath, content);
+
+      expect(enforceWritablePath).toHaveBeenCalledWith(filePath);
+      expect(mockAtomicWriteFile).toHaveBeenCalledWith(validatedPath, content, { encoding: 'utf-8' });
+    });
+
+    it('should log and rethrow active session write sandbox violations', async () => {
+      const filePath = '/users/bob/file.txt';
+      const error = new Error('Write access denied');
+      service.setSessionContainerRegistryProvider(() => ({
+        getActiveContainer: () => ({
+          resolve: () => ({
+            enforceWritablePath: jest.fn<() => Promise<string>>().mockRejectedValue(error),
+          }),
+        }),
+      } as any));
+
+      await expect(service.writeFile(filePath, 'content')).rejects.toThrow('Write access denied');
+      expect(mockLogSecurityEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'WRITE_SANDBOX_VIOLATION',
+          severity: 'HIGH',
+          additionalData: { operation: 'writeFile' },
+        })
+      );
+      expect(mockAtomicWriteFile).not.toHaveBeenCalled();
+    });
+
     it('should throw error if content exceeds max size', async () => {
       const filePath = '/test/large_file.txt';
       const largeContent = 'a'.repeat(10 * 1024 * 1024 + 1);

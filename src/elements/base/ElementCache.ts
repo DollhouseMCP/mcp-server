@@ -22,6 +22,7 @@ import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 export interface ElementCacheHost {
   resolveAbsolutePath(filePath: string): string;
   readonly elementDir: string;
+  getCacheNamespace(): string;
 }
 
 export class ElementCache<T extends IElement> {
@@ -73,6 +74,14 @@ export class ElementCache<T extends IElement> {
     }
   }
 
+  private key(rawKey: string): string {
+    return `${this.host.getCacheNamespace()}:${rawKey}`;
+  }
+
+  private keyPrefix(): string {
+    return `${this.host.getCacheNamespace()}:`;
+  }
+
   /**
    * Adds an element to both caches (bidirectional mapping).
    * Also stamps `filename` and `filePath` onto the element object.
@@ -80,16 +89,18 @@ export class ElementCache<T extends IElement> {
   cacheElement(element: T, filePath: string): void {
     const absolutePath = this.host.resolveAbsolutePath(filePath);
 
-    const existingId = this.filePathToId.get(absolutePath);
-    if (existingId && existingId !== element.id) {
+    const pathKey = this.key(absolutePath);
+    const elementKey = this.key(element.id);
+    const existingId = this.filePathToId.get(pathKey);
+    if (existingId && existingId !== elementKey) {
       this.elements.delete(existingId);
       this.elementGenerations.delete(existingId);
     }
 
-    this.elements.set(element.id, element);
-    this.filePathToId.set(absolutePath, element.id);
+    this.elements.set(elementKey, element);
+    this.filePathToId.set(pathKey, elementKey);
     const generation = ++this.cacheGenerationCounter;
-    this.elementGenerations.set(element.id, generation);
+    this.elementGenerations.set(elementKey, generation);
 
     const relativePath = path.isAbsolute(filePath)
       ? path.relative(this.host.elementDir, filePath)
@@ -122,11 +133,12 @@ export class ElementCache<T extends IElement> {
    */
   uncacheByPath(filePath: string): void {
     const absolutePath = this.host.resolveAbsolutePath(filePath);
-    const elementId = this.filePathToId.get(absolutePath);
+    const pathKey = this.key(absolutePath);
+    const elementId = this.filePathToId.get(pathKey);
 
     if (elementId !== undefined) {
       this.elements.delete(elementId);
-      this.filePathToId.delete(absolutePath);
+      this.filePathToId.delete(pathKey);
       this.elementGenerations.delete(elementId);
       logger.debug(`Uncached element ${elementId} from ${absolutePath}`);
     }
@@ -137,16 +149,28 @@ export class ElementCache<T extends IElement> {
    */
   getCachedByAbsolutePath(absolutePath: string): T | undefined {
     const resolvedPath = this.host.resolveAbsolutePath(absolutePath);
-    const elementId = this.filePathToId.get(resolvedPath);
+    const elementId = this.filePathToId.get(this.key(resolvedPath));
     if (!elementId) return undefined;
     return this.elements.get(elementId);
+  }
+
+  getCachedByPath(filePath: string): T | undefined {
+    return this.getCachedByAbsolutePath(filePath);
+  }
+
+  getScopedValues(): T[] {
+    const prefix = this.keyPrefix();
+    return this.elements
+      .entries()
+      .filter(([key]) => key.startsWith(prefix))
+      .map(([, element]) => element);
   }
 
   /**
    * Return the generation number for an element ID (used in event payloads).
    */
   getGeneration(elementId: string): number | undefined {
-    return this.elementGenerations.get(elementId);
+    return this.elementGenerations.get(this.key(elementId));
   }
 
   /**

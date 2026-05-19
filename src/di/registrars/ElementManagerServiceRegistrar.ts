@@ -42,21 +42,52 @@ import {
   DollhouseToAnthropicConverter,
 } from '../../converters/index.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
+import {
+  AGENT_STATE_MAX_YAML_SIZE,
+  FileAgentStateStore,
+} from '../../storage/FileAgentStateStore.js';
+import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
 import type { ElementCRUDHandler } from '../../handlers/ElementCRUDHandler.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { SessionContainerRegistry } from '../SessionContainerRegistry.js';
+import type { DangerZoneBlocker } from '../../elements/agents/types.js';
 
 export class ElementManagerServiceRegistrar {
   public register(container: DiContainerFacade): void {
     container.register('ElementEventDispatcher', () => new ElementEventDispatcher(
-      container.resolve('ContextTracker')
+      container.resolve('ContextTracker'),
+      {
+        activeDispatcherProvider: () =>
+          container.resolve<SessionContainerRegistry>('SessionContainerRegistry')
+            .getActiveContainer()
+            ?.resolve<ElementEventDispatcher>('ElementEventDispatcher'),
+      },
     ));
 
     // PORTFOLIO & MANAGERS
     container.register('PortfolioManager', () => {
-      const config = container.hasRegistration('PathService')
-        ? { baseDir: container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('portfolio-root') }
+      // Phase 4.5 follow-up: inject PathService + ContextTracker so
+      // getElementDir(type) routes through the per-user resolver when a
+      // session context is active. Flat-layout resolvers return the
+      // shared base path (byte-identical to legacy behavior). Without
+      // these injections — e.g. in standalone CLI / test harnesses that
+      // skip PathService registration — PortfolioManager falls back to
+      // the legacy flat path.
+      const hasPathService = container.hasRegistration('PathService');
+      const pathService = hasPathService
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService')
         : undefined;
-      return new PortfolioManager(container.resolve('FileOperationsService'), config);
+      const config = hasPathService
+        ? { baseDir: pathService!.resolveDataDir('portfolio-root') }
+        : undefined;
+      const contextTracker = container.hasRegistration('ContextTracker')
+        ? container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        : null;
+      return new PortfolioManager(
+        container.resolve('FileOperationsService'),
+        config,
+        { pathService, contextTracker },
+      );
     });
 
     container.register('PersonaImporter', () => {
@@ -71,6 +102,27 @@ export class ElementManagerServiceRegistrar {
         container.resolve('FileOperationsService')
       );
     });
+
+    const resolveActiveOrRoot = <T>(serviceName: string): T => {
+      const registry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+      const activeContainer = registry.getActiveContainer();
+      return (activeContainer ?? container).resolve<T>(serviceName);
+    };
+    const dangerZoneEnforcerProxy: DangerZoneBlocker = {
+      block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
+    };
+    const agentStateStoreProxy: IAgentStateStore = {
+      load: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').load(key),
+      save: (key, state, expectedVersion) =>
+        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion),
+      delete: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key),
+    };
+    const verificationStoreProxy = {
+      set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
+        resolveActiveOrRoot<{ set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }>('ChallengeStore')
+          .set(id, challenge),
+    };
+    const backupServiceProvider = () => resolveActiveOrRoot<BackupService>('BackupService');
 
     container.register('PersonaManager', () => new PersonaManager({
       portfolioManager: container.resolve('PortfolioManager'),
@@ -88,6 +140,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
@@ -107,7 +160,13 @@ export class ElementManagerServiceRegistrar {
     container.register('MigrationManager', () => new MigrationManager(
       container.resolve('PortfolioManager'),
       container.resolve('FileLockManager'),
-      container.resolve('FileOperationsService')
+      container.resolve('FileOperationsService'),
+      // Phase 4.5 follow-up: route the v1→v2 legacy-persona migration
+      // through the storage-layer factory so DB-mode upgraders land their
+      // migrated personas in Postgres rather than the filesystem.
+      container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     ));
 
     // BACKUP SERVICE (Issue #659: Universal backup for all element types)
@@ -144,6 +203,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
@@ -162,6 +222,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
@@ -169,6 +230,18 @@ export class ElementManagerServiceRegistrar {
     }));
 
     container.register('TemplateRenderer', () => new TemplateRenderer(container.resolve('TemplateManager')));
+
+    container.register('AgentStateStore', () => {
+      const portfolioManager = container.resolve<PortfolioManager>('PortfolioManager');
+      return new FileAgentStateStore({
+        stateDir: path.join(portfolioManager.getElementDir(ElementType.AGENT), '.state'),
+        fileLockManager: container.resolve('FileLockManager'),
+        fileOperations: container.resolve('FileOperationsService'),
+        serializationService: container.resolve('SerializationService'),
+        stateCache: new Map(),
+        maxYamlSize: AGENT_STATE_MAX_YAML_SIZE,
+      });
+    });
 
     container.register('AgentManager', () => new AgentManager({
       portfolioManager: container.resolve('PortfolioManager'),
@@ -181,13 +254,15 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
       // Issue #1948: Instance-injected dependencies (replaces static resolvers)
       elementManagerResolver: (name: string) => container.resolve(name) as import('../../elements/agents/AgentManager.js').ResolvedElementManager,
-      dangerZoneEnforcer: container.resolve('DangerZoneEnforcer'),
-      verificationStore: container.resolve('ChallengeStore'),
+      dangerZoneEnforcer: dangerZoneEnforcerProxy,
+      verificationStore: verificationStoreProxy,
+      stateStore: agentStateStoreProxy,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,
@@ -203,6 +278,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),
@@ -221,6 +297,7 @@ export class ElementManagerServiceRegistrar {
       fileWatchService: container.resolve('FileWatchService'),
       memoryBudget: container.resolve('CacheMemoryBudget'),
       backupService: container.resolve('BackupService'),
+      backupServiceProvider,
       eventDispatcher: container.resolve('ElementEventDispatcher'),
       contextTracker: container.resolve('ContextTracker'),
       activationRegistry: container.resolve('SessionActivationRegistry'),

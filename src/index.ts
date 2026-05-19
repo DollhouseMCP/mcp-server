@@ -23,6 +23,7 @@ import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
 import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
 import { PACKAGE_VERSION } from "./generated/version.js";
+import { joinUrl } from './auth/oauth/url.js';
 import type { IndicatorConfig } from "./config/indicator-config.js";
 import type { IToolHandler } from "./server/index.js";
 import type { ToolRegistry } from "./handlers/ToolRegistry.js";
@@ -37,8 +38,6 @@ import type { ConfigHandler } from "./handlers/ConfigHandler.js";
 import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
 import { ConfigManager } from "./config/ConfigManager.js";
-import { FileOperationsService } from "./services/FileOperationsService.js";
-import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
 
@@ -65,7 +64,7 @@ export function setHttpModeActive(active: boolean): void {
 }
 
 // Only log execution environment in debug mode
-if (process.env.DOLLHOUSE_DEBUG) {
+if (env.DOLLHOUSE_DEBUG) {
   console.error('[DollhouseMCP] Debug mode enabled');
 }
 
@@ -103,27 +102,24 @@ export class DollhouseMCPServer implements IToolHandler {
       tools: {},
     };
 
-    // Check if resources should be advertised
-    // This is a future-proof implementation - resources are opt-in
+    // Check if resources should be advertised. Resources are opt-in.
+    //
+    // Phase 4.5: this runs before the DI container exists, so we can't
+    // resolve a real ConfigManager (which now requires async-constructed
+    // stores). Instead we peek the YAML file directly. In DB-backend mode
+    // the file doesn't exist and we get the safe default (false) — operators
+    // wanting advertise=true in DB mode would set it post-startup via the
+    // dollhouse_config tool, then restart for the capability to take effect.
     try {
-      // Initialize ConfigManager to check resource settings
-      // Note: Config may not be fully initialized yet, so we check synchronously
-      // If config is not initialized, defaults (advertise_resources: false) apply
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const configManager = new ConfigManager(fileOperations, os);
-      const resourcesConfig = configManager.getSetting<any>('elements.enhanced_index.resources');
-
-      if (resourcesConfig?.advertise_resources === true) {
+      if (ConfigManager.peekResourcesAdvertiseFlag()) {
         capabilities.resources = {};
         logger.info('[DollhouseMCP] MCP Resources capability advertised (enabled via config)');
       } else {
         logger.info('[DollhouseMCP] MCP Resources capability NOT advertised (disabled by default)');
       }
     } catch (error) {
-      // Config not initialized yet - use safe default (no resources)
       const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.debug(`[DollhouseMCP] Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
+      logger.debug(`[DollhouseMCP] Resources capability disabled by default: ${errorMessage}`);
     }
 
     this.server = new Server(
@@ -763,7 +759,7 @@ let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
 try {
   scriptPath = realpathSync(scriptPath);
 } catch {
-  if (process.env.DOLLHOUSE_DEBUG) {
+  if (env.DOLLHOUSE_DEBUG) {
     console.error(`[DEBUG] Symlink resolution failed for ${rawScriptPath} — using original path`);
   }
 }
@@ -780,8 +776,7 @@ const binName = path.basename(rawScriptPath);
 const isCliExecution = binName === 'dollhousemcp' || binName === 'mcp-server';
 const isTest = process.env.JEST_WORKER_ID; // This is set when Jest runs tests
 const isTestMode = process.env.TEST_MODE === 'true'; // Check for TEST_MODE environment variable
-const dollhouseDebugFlag = process.env.DOLLHOUSE_DEBUG?.toLowerCase();
-const isDebugStartupLogging = dollhouseDebugFlag === 'true' || dollhouseDebugFlag === '1';
+const isDebugStartupLogging = env.DOLLHOUSE_DEBUG;
 
 // Progressive startup with retries for npx/CLI execution
 const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
@@ -805,7 +800,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed",
-      process.env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
+      env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
     process.exit(1);
   }
 }
@@ -909,6 +904,23 @@ async function startHttpConsole(
   let mcpAqlHandler: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler | undefined;
   try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (e) { logger.debug('[HTTP Console] MCPAQLHandler not registered', { error: (e as Error).message }); }
 
+  // Wire unified auth into the console when DOLLHOUSE_AUTH_ENABLED is on
+  // (Phase 9 M4/Q7). Without this, MCP transport routes are protected
+  // by the unified middleware but /api console routes fall back to the
+  // separate console-token surface. Pulling AuthMiddleware from the DI
+  // container keeps both surfaces on the same identity. Optional —
+  // when auth isn't registered (auth disabled), startWebServer keeps
+  // its existing console-token-only behavior.
+  const unifiedAuthMiddleware = container.hasRegistration('AuthMiddleware')
+    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container.hasRegistration('ContextTracker')
+    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    : undefined;
+
   // Start the web server
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
@@ -920,12 +932,20 @@ async function startHttpConsole(
     metricsSink,
     additionalRouters: [ingestResult.router],
     tokenStore,
+    unifiedAuthMiddleware,
+    contextTracker,
   });
 
   // Wire WebSSELogSink so live log entries reach the browser
   if (webResult.logBroadcast && logManager) {
     const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
     logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
   }
 
   return ingestResult;
@@ -952,6 +972,10 @@ async function startStreamableHttpServer(
   const authMiddleware = container.hasRegistration('AuthMiddleware')
     ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
     : undefined;
+  const authProvider = container.hasRegistration('AuthProvider')
+    ? container.resolve<unknown>('AuthProvider')
+    : undefined;
+  const oauthProvider = isEmbeddedOAuthProvider(authProvider) ? authProvider : undefined;
 
   // Fallback userId for unauthenticated sessions (DB mode bootstrap user)
   const fallbackUserId = container.hasRegistration('BootstrappedUserId')
@@ -987,6 +1011,10 @@ async function startStreamableHttpServer(
       displayName: authClaims?.displayName,
       email: authClaims?.email,
       tenantId: authClaims?.tenantId,
+      // JWT `roles` claim threads through here so ConfigManager can admin-gate
+      // per-host operator-config writes downstream. Round 5 pre-claim flow
+      // stamps `roles: ['admin']` on the JWT for the bootstrapped admin sub.
+      roles: authClaims?.roles,
     });
     const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);
@@ -1013,6 +1041,10 @@ async function startStreamableHttpServer(
   }, {
     ...options,
     authMiddleware,
+    oauthProvider,
+    tlsConfig: container.hasRegistration('TlsConfig')
+      ? container.resolve<import('./server/TlsConfig.js').TlsConfig>('TlsConfig')
+      : undefined,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
@@ -1021,6 +1053,16 @@ async function startStreamableHttpServer(
       ingestRoutes?.deregisterHttpSession(sessionId);
     },
   });
+}
+
+function isEmbeddedOAuthProvider(value: unknown): value is {
+  setPublicBaseUrl?: (publicBaseUrl: string) => void;
+  createRouter: () => import('express').Router;
+  isReadyForTraffic?: () => Promise<boolean>;
+} {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { createRouter?: unknown }).createRouter === 'function';
 }
 
 /**
@@ -1118,7 +1160,7 @@ async function startWebStandaloneMode(): Promise<void> {
     console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const { mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
+  const { container, mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
 
   const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
   const ingestResult = createIngestRoutes({
@@ -1138,6 +1180,20 @@ async function startWebStandaloneMode(): Promise<void> {
 
   const resolvedPort = cliPort || await resolvePortFromConfig();
   const sessionIdentity = resolveSessionIdentity();
+  // Phase 9 M4/Q7: same wiring as startHttpConsole — pull AuthMiddleware
+  // from the container so /api routes share the unified-auth surface
+  // when DOLLHOUSE_AUTH_ENABLED is on. Without this, standalone web mode
+  // would protect MCP routes (if any) but leave /api on the console
+  // token only.
+  const unifiedAuthMiddleware = container?.hasRegistration('AuthMiddleware')
+    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container?.hasRegistration('ContextTracker')
+    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    : undefined;
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
     portfolioDir,
@@ -1150,11 +1206,19 @@ async function startWebStandaloneMode(): Promise<void> {
     tokenStore,
     sessionId: sessionIdentity.sessionId,
     runtimeSessionId: sessionIdentity.runtimeSessionId,
+    unifiedAuthMiddleware,
+    contextTracker,
   });
 
   if (webResult.logBroadcast && logManager) {
     const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
     logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
   }
 
   listenForQuitCommands();
@@ -1179,6 +1243,13 @@ async function startHttpMode(): Promise<void> {
 
   const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
   console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+  const connectorUrl = env.DOLLHOUSE_PUBLIC_BASE_URL
+    ? joinUrl(env.DOLLHOUSE_PUBLIC_BASE_URL, runtime.mcpPath)
+    : runtime.url;
+  console.error(`[DollhouseMCP] Claude connector URL: ${connectorUrl}`);
+  if (!env.DOLLHOUSE_PUBLIC_BASE_URL) {
+    console.error('[DollhouseMCP] For claude.ai, expose this server through HTTPS and set DOLLHOUSE_PUBLIC_BASE_URL. Cloudflare Tunnel works for the first public setup path.');
+  }
 }
 
 /**
@@ -1189,7 +1260,7 @@ async function main(): Promise<void> {
   const isWebMode = process.argv.includes('--web');
 
   if (isWebMode) {
-    if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
+    if (!env.DOLLHOUSE_DEBUG && !env.ENABLE_DEBUG) {
       logger.setMinLevel('error');
     }
     return startWebStandaloneMode();

@@ -18,6 +18,11 @@ class MCPLogger implements ILogger {
   private isMCPConnected = false;
   // In --web mode, default to error-only so bootstrap logs don't flood the terminal.
   // All levels still go to MemoryLogSink (visible in the Logs tab).
+  //
+  // Cycle 19 / H3 note: raw process.env read here is intentional — env.ts
+  // imports this module, so the Zod schema can't be parsed before this
+  // class field initializer runs. All other consumers of DOLLHOUSE_DEBUG /
+  // ENABLE_DEBUG go through env.X (config/env.ts).
   private minLevel: 'debug' | 'info' | 'warn' | 'error' =
     (process.argv.includes('--web') && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG)
       ? 'error' : 'debug';

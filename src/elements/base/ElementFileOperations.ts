@@ -6,15 +6,15 @@
  * - Writing files with atomic operations
  * - Directory scanning and filtering
  *
- * SECURITY: All operations use FileLockManager for atomic reads/writes
+ * SECURITY: All operations use FileOperationsService for atomic reads/writes
  * PATH VALIDATION: All paths are validated before file operations
  * LOGGING: Operations are logged for debugging and audit trail
  */
 
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import type { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import matter from 'gray-matter';
@@ -44,17 +44,17 @@ export interface FileOperationOptions {
  * Utility class for common file operations
  * Used by BaseElementManager and can be used by other managers
  *
- * DEPENDENCY INJECTION: Requires FileLockManager instance for atomic operations
+ * DEPENDENCY INJECTION: Requires FileOperationsService for atomic operations
  */
 export class ElementFileOperations {
-  private fileLockManager: FileLockManager;
+  private readonly fileOperations: IFileOperationsService;
 
   /**
-   * Constructor - accepts FileLockManager for atomic operations
-   * @param fileLockManager - FileLockManager instance for atomic file operations
+   * Constructor - accepts FileOperationsService for centralized file operations
+   * @param fileOperations - FileOperationsService instance for file operations
    */
-  constructor(fileLockManager: FileLockManager) {
-    this.fileLockManager = fileLockManager;
+  constructor(fileOperations: IFileOperationsService) {
+    this.fileOperations = fileOperations;
   }
 
   /**
@@ -99,8 +99,11 @@ export class ElementFileOperations {
       throw new Error(`File too large: ${stats.size} bytes (max: ${maxSize})`);
     }
 
-    // CRITICAL FIX: Use atomic file read via injected instance
-    const raw = await this.fileLockManager.atomicReadFile(fullPath, { encoding: 'utf-8' });
+    const raw = await this.fileOperations.readFile(fullPath, {
+      encoding: 'utf-8',
+      maxSize,
+      source: 'ElementFileOperations.readFileWithFrontmatter',
+    });
 
     // Parse frontmatter
     const parsed = matter(raw);
@@ -153,7 +156,7 @@ export class ElementFileOperations {
 
     // Ensure directory exists
     if (ensureDir) {
-      await fs.mkdir(path.dirname(fullPath), { recursive: true });
+      await this.fileOperations.createDirectory(path.dirname(fullPath));
     }
 
     // Clean metadata to remove undefined values
@@ -167,8 +170,10 @@ export class ElementFileOperations {
     // Create frontmatter content
     const fileContent = matter.stringify(content, cleanMetadata);
 
-    // CRITICAL FIX: Use atomic file write via injected instance
-    await this.fileLockManager.atomicWriteFile(fullPath, fileContent, { encoding: 'utf-8' });
+    await this.fileOperations.writeFile(fullPath, fileContent, {
+      encoding: 'utf-8',
+      source: 'ElementFileOperations.writeFileWithFrontmatter',
+    });
   }
 
   /**

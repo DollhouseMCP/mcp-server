@@ -12,6 +12,10 @@ import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals
 
 // Create mock before importing
 const mockRandomBytes = jest.fn<(size: number) => Buffer>();
+const mockCreateHash = jest.fn(() => ({
+  update: jest.fn().mockReturnThis(),
+  digest: jest.fn().mockReturnValue('token-hash-for-test'),
+}));
 const mockGetGitHubTokenAsync = jest.fn<() => Promise<string | null>>();
 const mockLogger = {
   debug: jest.fn(),
@@ -21,6 +25,7 @@ const mockLogger = {
 };
 
 jest.unstable_mockModule('node:crypto', () => ({
+  createHash: mockCreateHash,
   randomBytes: mockRandomBytes
 }));
 

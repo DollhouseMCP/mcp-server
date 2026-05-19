@@ -324,18 +324,22 @@ function storeAndDisplayChallenge(
     });
   }
 
-  // Show to human via OS-native dialog (fire-and-forget, non-blocking for evaluation)
-  try {
-    showVerificationDialog(
-      challenge.displayCode,
-      challenge.reason,
-      { title: 'DollhouseMCP - Verification Required', icon: 'warning' }
-    );
-  } catch (error) {
-    logger.warn('Failed to show verification dialog', {
-      error: error instanceof Error ? error.message : String(error),
-      challengeId: challenge.challengeId,
-    });
+  // Show to human via OS-native dialog (fire-and-forget, non-blocking for evaluation).
+  // HTTP integration tests run unattended and must not pop an OS dialog that waits
+  // for human input — env-var-gated escape hatch leaves stdio/production untouched.
+  if (process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG !== 'true') {
+    try {
+      showVerificationDialog(
+        challenge.displayCode,
+        challenge.reason,
+        { title: 'DollhouseMCP - Verification Required', icon: 'warning' }
+      );
+    } catch (error) {
+      logger.warn('Failed to show verification dialog', {
+        error: error instanceof Error ? error.message : String(error),
+        challengeId: challenge.challengeId,
+      });
+    }
   }
 }
 
@@ -436,7 +440,8 @@ export function evaluateAutonomy(context: AutonomyContext): AutonomyDirective {
           goalDescription: context.goalDescription,
           goalId: context.goalId,
           safetyFactors: factors,
-        }
+        },
+        context.sessionId,
       );
 
       SecurityMonitor.logSecurityEvent({

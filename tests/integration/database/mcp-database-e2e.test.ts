@@ -29,6 +29,7 @@ const STARTUP_TIMEOUT = 60_000;
 const TEST_TIMEOUT = 30_000;
 const DB_URL = 'postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test';
 const DB_ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test';
+const TEST_MASTER_ENCRYPTION_KEY = Buffer.alloc(32, 12).toString('base64');
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -122,6 +123,7 @@ describe('MCP Database E2E Tests', () => {
         DOLLHOUSE_DATABASE_ADMIN_URL: DB_ADMIN_URL,
         DOLLHOUSE_DATABASE_POOL_SIZE: '3',
         DOLLHOUSE_DATABASE_SSL: 'disable',
+        DOLLHOUSE_MASTER_ENCRYPTION_KEY: TEST_MASTER_ENCRYPTION_KEY,
         GITHUB_TOKEN: '',
         GITHUB_TEST_TOKEN: '',
       },

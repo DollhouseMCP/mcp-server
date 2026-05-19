@@ -86,13 +86,12 @@ export interface SearchResult {
 }
 
 export class PortfolioIndexManager {
-  private index: PortfolioIndex | null = null;
-  private lastBuilt: Date | null = null;
+  private readonly indexByNamespace = new Map<string, PortfolioIndex>();
+  private readonly lastBuiltByNamespace = new Map<string, Date>();
   private readonly TTL_MS: number;
   private readonly portfolioManager: PortfolioManager;
   private readonly fileOperations: IFileOperationsService;
-  private isBuilding = false;
-  private buildPromise: Promise<void> | null = null;
+  private readonly buildingByNamespace = new Map<string, Promise<void>>();
 
   // Retry configuration for file operations
   private readonly MAX_RETRIES = 3;
@@ -163,7 +162,7 @@ export class PortfolioIndexManager {
       await this.buildIndex();
     }
     
-    return this.index!;
+    return this.indexByNamespace.get(this.currentNamespace())!;
   }
 
   /**
@@ -343,7 +342,7 @@ export class PortfolioIndexManager {
     const stats = {
       totalElements: index.byName.size,
       elementsByType: {} as Record<ElementType, number>,
-      lastBuilt: this.lastBuilt,
+      lastBuilt: this.lastBuiltByNamespace.get(this.currentNamespace()) ?? null,
       isStale: this.needsRebuild()
     };
     
@@ -358,8 +357,9 @@ export class PortfolioIndexManager {
    * Force rebuild the index
    */
   public async rebuildIndex(): Promise<void> {
-    this.index = null;
-    this.lastBuilt = null;
+    const namespace = this.currentNamespace();
+    this.indexByNamespace.delete(namespace);
+    this.lastBuiltByNamespace.delete(namespace);
     await this.buildIndex();
   }
 
@@ -367,42 +367,51 @@ export class PortfolioIndexManager {
    * Check if the index needs rebuilding
    */
   private needsRebuild(): boolean {
-    if (!this.index || !this.lastBuilt) {
+    const namespace = this.currentNamespace();
+    const index = this.indexByNamespace.get(namespace);
+    const lastBuilt = this.lastBuiltByNamespace.get(namespace);
+    if (!index || !lastBuilt) {
       return true;
     }
     
-    const age = Date.now() - this.lastBuilt.getTime();
+    const age = Date.now() - lastBuilt.getTime();
     return age > this.TTL_MS;
+  }
+
+  private currentNamespace(): string {
+    return this.portfolioManager.getElementDir(ElementType.PERSONA);
+  }
+
+  public getCacheNamespace(): string {
+    return this.currentNamespace();
   }
 
   /**
    * Build the index by scanning all portfolio directories
    */
   private async buildIndex(): Promise<void> {
+    const namespace = this.currentNamespace();
     // Prevent concurrent builds
-    if (this.isBuilding) {
-      if (this.buildPromise) {
-        await this.buildPromise;
-      }
+    const existingBuild = this.buildingByNamespace.get(namespace);
+    if (existingBuild) {
+      await existingBuild;
       return;
     }
     
-    this.isBuilding = true;
-    
-    this.buildPromise = this.performBuild();
+    const buildPromise = this.performBuild(namespace);
+    this.buildingByNamespace.set(namespace, buildPromise);
     
     try {
-      await this.buildPromise;
+      await buildPromise;
     } finally {
-      this.isBuilding = false;
-      this.buildPromise = null;
+      this.buildingByNamespace.delete(namespace);
     }
   }
 
   /**
    * Perform the actual index building
    */
-  private async performBuild(): Promise<void> {
+  private async performBuild(namespace: string): Promise<void> {
     const startTime = Date.now();
     logger.debug('Building portfolio index...');
     
@@ -618,8 +627,8 @@ export class PortfolioIndexManager {
       }
       
       // Update instance state
-      this.index = newIndex;
-      this.lastBuilt = new Date();
+      this.indexByNamespace.set(namespace, newIndex);
+      this.lastBuiltByNamespace.set(namespace, new Date());
       
       const duration = Date.now() - startTime;
       logger.info('Portfolio index built successfully', {
@@ -897,10 +906,9 @@ export class PortfolioIndexManager {
    * Dispose internal state to release resources (used during shutdown/tests).
    */
   public dispose(): void {
-    this.index = null;
-    this.lastBuilt = null;
-    this.isBuilding = false;
-    this.buildPromise = null;
+    this.indexByNamespace.clear();
+    this.lastBuiltByNamespace.clear();
+    this.buildingByNamespace.clear();
   }
 
 

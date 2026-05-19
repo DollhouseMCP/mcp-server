@@ -62,6 +62,8 @@ import { ElementResolver } from './ElementResolver.js';
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
 
+export type BackupServiceProvider = () => BackupService | undefined;
+
 export interface BaseElementManagerOptions {
   elementDirOverride?: string;
   eventDispatcher: ElementEventDispatcher;
@@ -72,6 +74,7 @@ export interface BaseElementManagerOptions {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  backupServiceProvider?: BackupServiceProvider;
   /** Issue #1946: ContextTracker for session-scoped activation state resolution */
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
@@ -111,6 +114,7 @@ export interface ElementManagerDeps {
   fileWatchService?: FileWatchService;
   memoryBudget?: CacheMemoryBudget;
   backupService?: BackupService;
+  backupServiceProvider?: BackupServiceProvider;
   /** Issue #1946: ContextTracker for session-scoped activation state resolution */
   contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
   /** Issue #1946: Registry for per-session activation state */
@@ -158,7 +162,28 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   protected fileLockManager: FileLockManager;
   protected fileOperations: FileOperationsService;
   protected fileWatchService?: FileWatchService;
-  protected elementDir: string;
+  /**
+   * Phase 4.5 follow-up: `elementDir` used to be a string field
+   * captured once at construction from `portfolioManager.getElementDir(type)`.
+   * That made HTTP per-user filesystem isolation impossible because the
+   * captured value was the SHARED flat path (no session was active at
+   * root-container construction time). It's now a dynamic getter that
+   * re-queries PortfolioManager on every access — when a session is
+   * active PortfolioManager delegates to `PathService.getUserElementDir(type)`
+   * which routes through the per-user resolver in per-user layout.
+   *
+   * Construction captures the initial value into `staticElementDir`
+   * as a defensive fallback for the rare paths that construct a
+   * manager without a real PortfolioManager (some unit tests).
+   */
+  private readonly staticElementDir: string;
+  protected get elementDir(): string {
+    if (this.portfolioManager
+        && typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {
+      return (this.portfolioManager as { getElementDir(t: ElementType): string }).getElementDir(this.elementType);
+    }
+    return this.staticElementDir;
+  }
 
   /** Specialized validator for this element type. */
   protected validator: ElementValidator;
@@ -173,6 +198,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
 
   protected readonly elementType: ElementType;
   protected readonly backupService?: BackupService;
+  private readonly backupServiceProvider?: BackupServiceProvider;
 
   /** Issue #1946: ContextTracker for session-scoped activation state */
   protected readonly contextTracker?: import('../../security/encryption/ContextTracker.js').ContextTracker;
@@ -247,6 +273,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.fileOperations = fileOperationsService;
     this.fileWatchService = options.fileWatchService;
     this.backupService = options.backupService;
+    this.backupServiceProvider = options.backupServiceProvider;
     this.contextTracker = options.contextTracker;
     this.activationRegistry = options.activationRegistry;
     this.getCurrentUserId = options.getCurrentUserId;
@@ -256,9 +283,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     this.validator = validationRegistry.getValidator(elementType);
 
     if (options.elementDirOverride) {
-      this.elementDir = options.elementDirOverride;
-    } else if (typeof (this.portfolioManager as any).getElementDir === 'function') {
-      this.elementDir = (this.portfolioManager as any).getElementDir(elementType);
+      this.staticElementDir = options.elementDirOverride;
+    } else if (typeof (this.portfolioManager as { getElementDir?: unknown }).getElementDir === 'function') {
+      this.staticElementDir = (this.portfolioManager as { getElementDir(t: ElementType): string }).getElementDir(elementType);
     } else {
       throw new Error(
         `Unable to resolve element directory for ${elementType}. ` +
@@ -281,6 +308,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     const cacheHost = {
       resolveAbsolutePath: (fp: string) => this.resolveAbsolutePath(fp),
       get elementDir() { return self.elementDir; },
+      getCacheNamespace: () => this.getCacheNamespace(),
     };
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this; // NOSONAR — needed for object literal getters where `this` rebinds
@@ -555,8 +583,29 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._cache.getCachedByAbsolutePath(absolutePath);
   }
 
+  protected getCachedElementsForCurrentNamespace(): T[] {
+    return this._cache.getScopedValues();
+  }
+
   protected getCacheStats(): { elementCount: number; pathMappings: number } {
     return this._cache.getCacheStats();
+  }
+
+  protected getCacheNamespace(): string {
+    if (this.contextTracker) {
+      const session = this.contextTracker.getSessionContext();
+      if (session?.userId) {
+        return session.userId;
+      }
+    }
+    if (this.getCurrentUserId) {
+      try {
+        return this.getCurrentUserId();
+      } catch {
+        // Fall through to the process-local namespace for startup and tests outside a session.
+      }
+    }
+    return 'system';
   }
 
   clearCache(): void {
@@ -607,8 +656,9 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses can override to no-op (e.g. MemoryManager has its own backup system).
    */
   protected async createBackupBeforeSave(absolutePath: string): Promise<void> {
-    if (!this.backupService) return;
-    await this.backupService.backupBeforeSave(absolutePath, this.elementType);
+    const backupService = this.resolveBackupService();
+    if (!backupService) return;
+    await backupService.backupBeforeSave(absolutePath, this.elementType);
   }
 
   /**
@@ -617,9 +667,19 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Subclasses can override to no-op (e.g. MemoryManager has its own backup system).
    */
   protected async createBackupBeforeDelete(absolutePath: string): Promise<boolean> {
-    if (!this.backupService) return false;
-    const result = await this.backupService.backupBeforeDelete(absolutePath, this.elementType);
+    const backupService = this.resolveBackupService();
+    if (!backupService) return false;
+    const result = await backupService.backupBeforeDelete(absolutePath, this.elementType);
     return !!result.movedOriginal;
+  }
+
+  /**
+   * Resolve the BackupService for the active execution context.
+   * HTTP sessions provide a per-user BackupService through SessionContainer;
+   * stdio/background/test contexts fall back to the constructor-injected root.
+   */
+  protected resolveBackupService(): BackupService | undefined {
+    return this.backupServiceProvider?.() ?? this.backupService;
   }
 
   // ============================================

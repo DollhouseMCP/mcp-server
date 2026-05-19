@@ -10,8 +10,30 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { LRUCache, CacheFactory } from './LRUCache.js';
 import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
+
+export interface CollectionIndexCacheConfig {
+  githubClient: GitHubClient;
+  baseDir: string;
+  performanceMonitor: PerformanceMonitor;
+  fileOperations: IFileOperationsService;
+  /**
+   * Optional shared-cache store. When present, the disk-cache load/save/clear
+   * paths route through it instead of `<baseDir>/.dollhousemcp/cache/...`.
+   * Falls back to the legacy direct-file path when null (covers unit tests
+   * that skip the DI bootstrap).
+   *
+   * Parallel to `CollectionIndexManager.config.cache` — Phase H's original
+   * scope wired CollectionIndexManager but missed this sibling cache, which
+   * `CollectionSearch.searchFromIndex` exercises via the
+   * `search_collection_enhanced` MCP operation.
+   */
+  cache?: ISharedCacheStore;
+}
 
 export class CollectionIndexCache {
+  private static readonly CACHE_KEY = 'collection-index-cache';
+
   private cache: CachedIndex | null = null;
   private readonly TTL = 15 * 60 * 1000; // 15 minutes in milliseconds
   private readonly INDEX_URL = 'https://dollhousemcp.github.io/collection/collection-index.json';
@@ -24,18 +46,50 @@ export class CollectionIndexCache {
 
   // File operations service for secure file I/O
   private readonly fileOperations: IFileOperationsService;
+  // Phase 4.5: shared-cache store. When set, takes precedence over the
+  // legacy filesystem cacheFile path. Null when running outside the DI
+  // bootstrap (some unit tests).
+  private readonly sharedCache: ISharedCacheStore | null;
 
+  /**
+   * Two construction signatures supported for backwards compatibility:
+   *
+   * 1. **Legacy positional** (`githubClient, baseDir, performanceMonitor,
+   *    fileOperations`) — used by existing call sites and tests.
+   * 2. **Config-object** (`CollectionIndexCacheConfig`) — used by DI
+   *    registration so the optional `cache: ISharedCacheStore` can be
+   *    threaded in without breaking the positional callers.
+   *
+   * Detect via duck-typing on the first arg.
+   */
+  constructor(config: CollectionIndexCacheConfig);
   constructor(
     githubClient: GitHubClient,
     baseDir: string,
     performanceMonitor: PerformanceMonitor,
-    fileOperations: IFileOperationsService
+    fileOperations: IFileOperationsService,
+  );
+  constructor(
+    arg0: CollectionIndexCacheConfig | GitHubClient,
+    baseDir?: string,
+    performanceMonitor?: PerformanceMonitor,
+    fileOperations?: IFileOperationsService,
   ) {
-    this.githubClient = githubClient;
-    this.cacheDir = path.join(baseDir, '.dollhousemcp', 'cache');
-    this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
-    this.performanceMonitor = performanceMonitor;
-    this.fileOperations = fileOperations;
+    if (arg0 && typeof arg0 === 'object' && 'githubClient' in arg0) {
+      this.githubClient = arg0.githubClient;
+      this.cacheDir = path.join(arg0.baseDir, '.dollhousemcp', 'cache');
+      this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
+      this.performanceMonitor = arg0.performanceMonitor;
+      this.fileOperations = arg0.fileOperations;
+      this.sharedCache = arg0.cache ?? null;
+    } else {
+      this.githubClient = arg0 as GitHubClient;
+      this.cacheDir = path.join(baseDir!, '.dollhousemcp', 'cache');
+      this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
+      this.performanceMonitor = performanceMonitor!;
+      this.fileOperations = fileOperations!;
+      this.sharedCache = null;
+    }
 
     // Initialize memory cache for frequently accessed data
     this.memoryCache = CacheFactory.createAPICache({
@@ -45,6 +99,12 @@ export class CollectionIndexCache {
       onEviction: (key, _value) => {
         logger.debug('Collection memory cache eviction', { key });
       }
+    });
+
+    logger.debug('CollectionIndexCache initialized', {
+      ttlMs: this.TTL,
+      cacheBackend: this.sharedCache ? 'shared-cache-store' : 'filesystem-direct',
+      cacheTarget: this.sharedCache ? `(store: ${CollectionIndexCache.CACHE_KEY})` : this.cacheFile,
     });
   }
   
@@ -214,9 +274,41 @@ export class CollectionIndexCache {
   }
   
   /**
-   * Save cache to persistent storage
+   * Save cache to persistent storage. When a shared-cache store is wired,
+   * routes through it (Postgres or filesystem-backed per the storage
+   * backend). Otherwise falls back to the legacy direct-file path under
+   * `<baseDir>/.dollhousemcp/cache/`.
+   *
+   * Earlier shape swallowed write errors silently — that hid the read-only-root
+   * container failure on the PoC. Now logs at warn for store failures so
+   * operators see when persistence isn't actually happening; still doesn't
+   * throw, since cache persistence is best-effort.
    */
   private async saveToDisk(cache: CachedIndex): Promise<void> {
+    if (this.sharedCache) {
+      try {
+        const expiresAt = cache.fetchedAt.getTime() + this.TTL;
+        // SharedCacheWriteEntry: fetchedAt is stamped by the implementation,
+        // so we don't pass it on the write side; expiresAt drives TTL.
+        await this.sharedCache.set({
+          cacheKey: CollectionIndexCache.CACHE_KEY,
+          payload: cache.data as unknown as Record<string, unknown>,
+          etag: cache.etag,
+          lastModified: cache.lastModified,
+          expiresAt,
+        });
+        logger.debug('Collection index cache saved via shared-cache store');
+      } catch (error) {
+        // Surface store failures at warn so operators see when persistence
+        // isn't happening — the legacy code swallowed silently, which hid
+        // the read-only-root container failure on the PoC.
+        logger.warn('[CollectionIndexCache] failed to save via shared-cache store', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      return;
+    }
+
     try {
       await this.ensureCacheDir();
 
@@ -232,15 +324,37 @@ export class CollectionIndexCache {
 
       logger.debug('Collection index cache saved to disk');
     } catch (error) {
-      logger.debug('Failed to save collection index cache:', error);
+      logger.warn('[CollectionIndexCache] failed to save to disk', {
+        error: error instanceof Error ? error.message : String(error),
+        path: this.cacheFile,
+      });
       // Don't throw - cache persistence failures shouldn't break functionality
     }
   }
-  
+
   /**
-   * Load cache from persistent storage
+   * Load cache from persistent storage. Mirrors `saveToDisk`'s branching:
+   * shared-cache store when wired, else the legacy file path.
    */
   private async loadFromDisk(): Promise<CachedIndex | null> {
+    if (this.sharedCache) {
+      try {
+        const entry = await this.sharedCache.get(CollectionIndexCache.CACHE_KEY);
+        if (!entry) return null;
+        return {
+          data: entry.payload as unknown as CollectionIndex,
+          fetchedAt: new Date(entry.fetchedAt),
+          etag: entry.etag,
+          lastModified: entry.lastModified,
+        };
+      } catch (error) {
+        logger.debug('[CollectionIndexCache] shared-cache load failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return null;
+      }
+    }
+
     try {
       // Basic security check for path traversal
       if (this.cacheFile.includes('..') || this.cacheFile.includes('\0')) {
@@ -294,14 +408,25 @@ export class CollectionIndexCache {
     // Cancel any ongoing fetch
     this.fetchPromise = null;
 
-    try {
-      await this.fileOperations.deleteFile(this.cacheFile, undefined, {
-        source: 'CollectionIndexCache.clearCache'
-      });
-      logger.debug('Collection index cache cleared from disk');
-    } catch (error) {
-      if ((error as any).code !== 'ENOENT') {
-        logger.debug('Failed to clear collection index cache:', error);
+    if (this.sharedCache) {
+      try {
+        await this.sharedCache.delete(CollectionIndexCache.CACHE_KEY);
+        logger.debug('Collection index cache cleared from shared-cache store');
+      } catch (error) {
+        logger.debug('[CollectionIndexCache] shared-cache delete failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    } else {
+      try {
+        await this.fileOperations.deleteFile(this.cacheFile, undefined, {
+          source: 'CollectionIndexCache.clearCache'
+        });
+        logger.debug('Collection index cache cleared from disk');
+      } catch (error) {
+        if ((error as any).code !== 'ENOENT') {
+          logger.debug('Failed to clear collection index cache:', error);
+        }
       }
     }
 

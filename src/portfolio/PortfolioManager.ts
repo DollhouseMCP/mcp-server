@@ -12,6 +12,8 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { DefaultElementProvider } from './DefaultElementProvider.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
+import type { PathService } from '../paths/PathService.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
 
 // Constants
 const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
@@ -38,27 +40,64 @@ export function getElementFileExtension(type: string): string {
 export { ElementType };
 export type { PortfolioConfig };
 
+export interface PortfolioManagerOptions {
+  /**
+   * PathService instance for per-user-aware path resolution. When
+   * present AND a session context is active, `getElementDir(type)`
+   * delegates to `PathService.getUserElementDir(type)`, which routes
+   * through `IUserPathResolver` — flat layout returns the shared
+   * baseDir (byte-identical to legacy behavior), per-user layout
+   * returns `<root>/users/<sub>/portfolio/<type>/`. When this option
+   * is omitted, PortfolioManager keeps its legacy flat behavior
+   * (used by standalone test harnesses and the CLI scripts).
+   *
+   * @since Phase 4.5 follow-up — closes the HTTP multi-user
+   *        filesystem-isolation gap.
+   */
+  pathService?: PathService;
+  /**
+   * ContextTracker used to detect whether a session is active. When
+   * no session is in scope (startup, sweepers, MigrationManager
+   * pre-bootstrap), `getElementDir` falls back to the flat baseDir
+   * rather than triggering the UserIdResolver's "no session" throw.
+   */
+  contextTracker?: ContextTracker | null;
+}
+
 export class PortfolioManager {
   private initializationPromise: Promise<void> | null = null;
   private baseDir: string;
   private fileOperations: FileOperationsService;
+  private readonly pathService?: PathService;
+  private readonly contextTracker: ContextTracker | null;
 
   /**
    * Create a new PortfolioManager instance
    *
-   * @param config - Optional portfolio configuration
-   * @param fileOperations - Optional FileOperationsService for dependency injection.
+   * @param fileOperations - FileOperationsService for dependency injection.
    *                         BREAKING CHANGE (v1.5.0): Added as second parameter for DI.
    *                         Direct instantiation without DI container should pass undefined
    *                         or provide a FileOperationsService instance.
+   * @param config - Optional portfolio configuration (legacy baseDir override)
+   * @param options - Phase 4.5 follow-up: optional PathService + ContextTracker
+   *                  for per-user-aware element-dir resolution. When provided,
+   *                  getElementDir consults PathService when a session is
+   *                  active. Omit for standalone test harnesses / CLI scripts
+   *                  where flat behavior is desired.
    */
-  constructor(fileOperations: FileOperationsService, config?: PortfolioConfig) {
+  constructor(
+    fileOperations: FileOperationsService,
+    config?: PortfolioConfig,
+    options?: PortfolioManagerOptions,
+  ) {
     this.fileOperations = fileOperations;
+    this.pathService = options?.pathService;
+    this.contextTracker = options?.contextTracker ?? null;
     // Get potential directory from environment or config
     const envDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
     const configDir = config?.baseDir;
     const defaultDir = path.join(homedir(), '.dollhouse', 'portfolio');
-    
+
     // Validate environment variable if provided
     if (envDir) {
       if (!path.isAbsolute(envDir)) {
@@ -69,29 +108,72 @@ export class PortfolioManager {
         throw new Error('DOLLHOUSE_PORTFOLIO_DIR contains suspicious path segments');
       }
     }
-    
+
     // Validate config directory if provided
     if (configDir && !path.isAbsolute(configDir)) {
       throw new Error('Portfolio config baseDir must be an absolute path');
     }
-    
+
     // Use environment variable if set, otherwise config, otherwise default
     this.baseDir = envDir || configDir || defaultDir;
-    
+
     logger.info(`[PortfolioManager] Portfolio base directory: ${this.baseDir}`);
   }
-  
+
   /**
-   * Get the base portfolio directory
+   * Get the base portfolio directory.
+   *
+   * Always returns the FLAT root, regardless of layout. This is the
+   * layout root (e.g. `~/DollhouseMCP/` or `$DOLLHOUSE_PORTFOLIO_DIR`)
+   * — under per-user layout the actual element directories live at
+   * `<baseDir>/users/<sub>/portfolio/<type>/` and are reached via
+   * `getElementDir(type)`. Callers that need the root for layout
+   * checks, logging, or `initialize()` semantics keep using this;
+   * callers that write element content use `getElementDir(type)`.
    */
   public getBaseDir(): string {
     return this.baseDir;
   }
-  
+
   /**
-   * Get the directory for a specific element type
+   * Get the directory for a specific element type.
+   *
+   * Phase 4.5 follow-up: when a PathService is wired AND a session
+   * context is active, delegates to `PathService.getUserElementDir(type)`.
+   * The resolver behind the facade decides what that means for the
+   * current layout:
+   *   - Flat layout (`FlatPathResolver`)     → returns `<baseDir>/<type>/`
+   *     (byte-identical to pre-fix behavior; userId ignored)
+   *   - Per-user layout (`PerUserPathResolver`) → returns
+   *     `<baseDir>/users/<sub>/portfolio/<type>/`, which is the
+   *     correct per-user filesystem isolation point.
+   *
+   * Falls back to the flat `path.join(this.baseDir, type)` when:
+   *   - No PathService was wired (legacy callers, standalone tests)
+   *   - No session context is active (startup, sweepers,
+   *     MigrationManager pre-bootstrap, background tasks)
+   *
+   * The fallback preserves the flat behavior that legacy single-user
+   * deployments rely on and guarantees that init-time / background
+   * code paths don't throw via `UserIdResolver`'s "no session" rule.
    */
   public getElementDir(type: ElementType): string {
+    if (this.pathService && this.contextTracker?.getSessionContext()?.userId) {
+      const resolverPath = this.pathService.getUserElementDir(type);
+      // Sanity check: the resolver's per-user path must descend from
+      // PortfolioManager's `baseDir` (the operator-controlled portfolio
+      // root, honoring DOLLHOUSE_PORTFOLIO_DIR). The two can diverge
+      // when an operator or test overrides `DOLLHOUSE_PORTFOLIO_DIR`
+      // without also overriding `DOLLHOUSE_HOME_DIR` — layout detection
+      // sees the host machine's legacy `~/.dollhouse/` and anchors the
+      // resolver there instead of on baseDir. In that case the explicit
+      // baseDir override wins: returning the resolver's unrelated
+      // anchor would write to the wrong filesystem subtree.
+      if (resolverPath.startsWith(this.baseDir + path.sep)
+          || resolverPath === path.join(this.baseDir, type)) {
+        return resolverPath;
+      }
+    }
     return path.join(this.baseDir, type);
   }
 

@@ -11,6 +11,8 @@ import { homedir } from 'os';
 import { SecurityMonitor } from './securityMonitor.js';
 import { UnicodeValidator } from './validators/unicodeValidator.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { ITokenStore } from './tokenStores/ITokenStore.js';
+import { FileTokenStore } from './tokenStores/FileTokenStore.js';
 
 export interface TokenScopes {
   required: string[];
@@ -54,24 +56,49 @@ export class TokenManager {
 
   // Secure storage configuration
   private static readonly DEFAULT_TOKEN_DIR = path.join(homedir(), '.dollhouse', '.auth');
-  private static readonly TOKEN_FILE = 'github_token.enc';
-  private static readonly ALGORITHM = 'aes-256-gcm';
-  private static readonly KEY_LENGTH = 32;
-  private static readonly IV_LENGTH = 16;
-  private static readonly TAG_LENGTH = 16;
-  private static readonly SALT_LENGTH = 32;
-  private static readonly ITERATIONS = 100000;
 
   // Rate limiter for token validation operations - prevents brute force attacks
   private tokenValidationLimiter: RateLimiter | null = null;
 
-  // File operations service for secure file access (injected via constructor)
-  private fileOperations: IFileOperationsService;
-  private readonly tokenDir: string;
+  private readonly tokenStoreResolver: () => ITokenStore;
+  private readonly userIdResolver: () => string;
 
-  constructor(fileOperations: IFileOperationsService, authDir?: string) {
-    this.fileOperations = fileOperations;
-    this.tokenDir = authDir ?? TokenManager.DEFAULT_TOKEN_DIR;
+  constructor(tokenStore: ITokenStore, userIdResolver: () => string);
+  constructor(tokenStoreResolver: () => ITokenStore, userIdResolver: () => string);
+  constructor(fileOperations: IFileOperationsService, authDir?: string);
+  constructor(
+    tokenStoreOrFileOperationsOrResolver: ITokenStore | IFileOperationsService | (() => ITokenStore),
+    userIdResolverOrAuthDir?: (() => string) | string,
+  ) {
+    if (typeof tokenStoreOrFileOperationsOrResolver === 'function') {
+      this.tokenStoreResolver = tokenStoreOrFileOperationsOrResolver;
+      this.userIdResolver = typeof userIdResolverOrAuthDir === 'function'
+        ? userIdResolverOrAuthDir
+        : () => {
+          throw new Error('TokenManager requires a userId resolver when constructed with ITokenStore resolver');
+        };
+      return;
+    }
+
+    if (isTokenStore(tokenStoreOrFileOperationsOrResolver)) {
+      this.tokenStoreResolver = () => tokenStoreOrFileOperationsOrResolver;
+      this.userIdResolver = typeof userIdResolverOrAuthDir === 'function'
+        ? userIdResolverOrAuthDir
+        : () => {
+          throw new Error('TokenManager requires a userId resolver when constructed with ITokenStore');
+        };
+      return;
+    }
+
+    const authDir = typeof userIdResolverOrAuthDir === 'string'
+      ? userIdResolverOrAuthDir
+      : TokenManager.DEFAULT_TOKEN_DIR;
+    const tokenStore = new FileTokenStore(
+      tokenStoreOrFileOperationsOrResolver,
+      { getUserAuthDir: () => authDir },
+    );
+    this.tokenStoreResolver = () => tokenStore;
+    this.userIdResolver = () => 'default-user';
   }
 
   /**
@@ -434,71 +461,6 @@ export class TokenManager {
   }
 
   /**
-   * Derive encryption key from a passphrase
-   */
-  private deriveKey(passphrase: string, salt: Buffer): Buffer {
-    return crypto.pbkdf2Sync(passphrase, salt, TokenManager.ITERATIONS, TokenManager.KEY_LENGTH, 'sha256');
-  }
-
-  /**
-   * Get passphrase for token encryption.
-   *
-   * Priority: DOLLHOUSE_TOKEN_SECRET env var → machine-derived passphrase (fallback).
-   * The machine-derived passphrase uses homedir + USER which is predictable (#1735).
-   * Set DOLLHOUSE_TOKEN_SECRET for stronger protection.
-   */
-  private getPassphrase(): string {
-    if (process.env.DOLLHOUSE_TOKEN_SECRET) {
-      return process.env.DOLLHOUSE_TOKEN_SECRET;
-    }
-    return this.getMachinePassphrase();
-  }
-
-  /**
-   * Machine-derived passphrase — fallback when DOLLHOUSE_TOKEN_SECRET is not
-   * set, and migration path for tokens encrypted before that env var existed.
-   * Not deprecated; still the default for installations that haven't opted in
-   * to an explicit secret.
-   */
-  private getMachinePassphrase(): string {
-    // codeql[js/insufficient-password-hashing] — These are NOT password hashes.
-    // SHA-256 is used to derive a stable machine fingerprint from system identifiers
-    // (home directory path, OS username). The actual token encryption uses pbkdf2Sync
-    // with ITERATIONS rounds (see deriveKey method above).
-    const hostname = crypto.createHash('sha256').update(homedir()).digest('hex').substring(0, 16);
-    const username = crypto.createHash('sha256').update(process.env.USER || 'default').digest('hex').substring(0, 16);
-    const appId = 'DollhouseMCP-TokenStore-v1';
-
-    return `${appId}-${hostname}-${username}`;
-  }
-
-  /**
-   * Attempt decryption with the primary passphrase, then fall back to the
-   * machine-derived passphrase for backward compatibility (#1735).
-   */
-  private decryptWithFallback(salt: Buffer, iv: Buffer, tag: Buffer, encrypted: Buffer): string {
-    const primaryPassphrase = this.getPassphrase();
-    try {
-      return this.decryptToken(primaryPassphrase, salt, iv, tag, encrypted);
-    } catch {
-      // If primary passphrase differs from machine passphrase, try fallback
-      const machinePassphrase = this.getMachinePassphrase();
-      if (machinePassphrase !== primaryPassphrase) {
-        logger.info('Primary passphrase failed, trying machine passphrase migration path');
-        return this.decryptToken(machinePassphrase, salt, iv, tag, encrypted);
-      }
-      throw new SecurityError('Token decryption failed');
-    }
-  }
-
-  private decryptToken(passphrase: string, salt: Buffer, iv: Buffer, tag: Buffer, encrypted: Buffer): string {
-    const key = this.deriveKey(passphrase, salt);
-    const decipher = crypto.createDecipheriv(TokenManager.ALGORITHM, key, iv);
-    decipher.setAuthTag(tag);
-    return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
-  }
-
-  /**
    * Store GitHub token securely to file
    */
   async storeGitHubToken(token: string): Promise<void> {
@@ -514,39 +476,7 @@ export class TokenManager {
         throw new SecurityError('Token contains invalid characters');
       }
 
-      // Ensure directory exists
-      await this.fileOperations.createDirectory(this.tokenDir);
-      await this.fileOperations.chmod(this.tokenDir, 0o700, {
-        source: 'TokenManager.storeGitHubToken'
-      });
-
-      // Generate encryption components
-      const salt = crypto.randomBytes(TokenManager.SALT_LENGTH);
-      const iv = crypto.randomBytes(TokenManager.IV_LENGTH);
-      const passphrase = this.getPassphrase();
-      const key = this.deriveKey(passphrase, salt);
-
-      // Encrypt token
-      const cipher = crypto.createCipheriv(TokenManager.ALGORITHM, key, iv);
-      const encrypted = Buffer.concat([
-        cipher.update(validation.normalizedContent, 'utf8'),
-        cipher.final()
-      ]);
-      const tag = cipher.getAuthTag();
-
-      // Create storage format: salt + iv + tag + encrypted
-      const stored = Buffer.concat([salt, iv, tag, encrypted]);
-
-      // Write to file with restricted permissions
-      const tokenPath = path.join(this.tokenDir, TokenManager.TOKEN_FILE);
-      // Write the binary content to the file (need to convert Buffer to string for FileOperationsService)
-      // Since we're writing binary data, we'll write as base64 for safe storage
-      await this.fileOperations.writeFile(tokenPath, stored.toString('base64'), {
-        source: 'TokenManager.storeGitHubToken'
-      });
-      await this.fileOperations.chmod(tokenPath, 0o600, {
-        source: 'TokenManager.storeGitHubToken'
-      });
+      await this.resolveTokenStore().storeToken(this.resolveUserId(), validation.normalizedContent);
 
       // Log security event
       SecurityMonitor.logSecurityEvent({
@@ -578,30 +508,8 @@ export class TokenManager {
    */
   async retrieveGitHubToken(): Promise<string | null> {
     try {
-      const tokenPath = path.join(this.tokenDir, TokenManager.TOKEN_FILE);
-
-      // Check if file exists
-      const exists = await this.fileOperations.exists(tokenPath);
-      if (!exists) {
-        // No stored token
-        return null;
-      }
-
-      // Read encrypted data (stored as base64)
-      const base64Content = await this.fileOperations.readFile(tokenPath, {
-        source: 'TokenManager.retrieveGitHubToken'
-      });
-      const stored = Buffer.from(base64Content, 'base64');
-
-      // Extract components
-      const salt = stored.subarray(0, TokenManager.SALT_LENGTH);
-      const iv = stored.subarray(TokenManager.SALT_LENGTH, TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH);
-      const tag = stored.subarray(TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH, TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH + TokenManager.TAG_LENGTH);
-      const encrypted = stored.subarray(TokenManager.SALT_LENGTH + TokenManager.IV_LENGTH + TokenManager.TAG_LENGTH);
-
-      // Decrypt with primary passphrase; fall back to machine passphrase for
-      // backward compatibility with tokens stored before DOLLHOUSE_TOKEN_SECRET (#1735)
-      const decrypted = this.decryptWithFallback(salt, iv, tag, encrypted);
+      const decrypted = await this.resolveTokenStore().retrieveToken(this.resolveUserId());
+      if (!decrypted) return null;
 
       // Validate decrypted token
       if (!this.validateTokenFormat(decrypted)) {
@@ -644,27 +552,16 @@ export class TokenManager {
    */
   async removeStoredToken(): Promise<void> {
     try {
-      const tokenPath = path.join(this.tokenDir, TokenManager.TOKEN_FILE);
+      await this.resolveTokenStore().deleteToken(this.resolveUserId());
 
-      // Check if file exists before attempting deletion
-      const exists = await this.fileOperations.exists(tokenPath);
-      if (exists) {
-        await this.fileOperations.deleteFile(tokenPath, undefined, {
-          source: 'TokenManager.removeStoredToken'
-        });
+      SecurityMonitor.logSecurityEvent({
+        type: 'TOKEN_CACHE_CLEARED',
+        severity: 'LOW',
+        source: 'TokenManager.removeStoredToken',
+        details: 'GitHub token removed from secure storage'
+      });
 
-        SecurityMonitor.logSecurityEvent({
-          type: 'TOKEN_CACHE_CLEARED',
-          severity: 'LOW',
-          source: 'TokenManager.removeStoredToken',
-          details: 'GitHub token removed from secure storage'
-        });
-
-        logger.info('Stored GitHub token removed');
-      } else {
-        // File doesn't exist
-        logger.debug('No stored token to remove');
-      }
+      logger.info('Stored GitHub token removed');
     } catch (error) {
       SecurityMonitor.logSecurityEvent({
         type: 'TOKEN_CACHE_CLEARED',
@@ -691,4 +588,31 @@ export class TokenManager {
     // Fall back to secure storage
     return this.retrieveGitHubToken();
   }
+
+  private resolveUserId(): string {
+    return this.userIdResolver();
+  }
+
+  private resolveTokenStore(): ITokenStore {
+    return this.tokenStoreResolver();
+  }
+
+  /**
+   * Kept on the facade for legacy tests and compatibility with older
+   * TokenManager internals. FileTokenStore owns actual passphrase use.
+   */
+  private getMachinePassphrase(): string {
+    const hostname = crypto.createHash('sha256').update(homedir()).digest('hex').substring(0, 16);
+    const username = crypto.createHash('sha256').update(process.env.USER || 'default').digest('hex').substring(0, 16);
+    const appId = 'DollhouseMCP-TokenStore-v1';
+
+    return `${appId}-${hostname}-${username}`;
+  }
+}
+
+function isTokenStore(value: ITokenStore | IFileOperationsService): value is ITokenStore {
+  const candidate = value as Partial<ITokenStore>;
+  return typeof candidate.storeToken === 'function'
+    && typeof candidate.retrieveToken === 'function'
+    && typeof candidate.deleteToken === 'function';
 }

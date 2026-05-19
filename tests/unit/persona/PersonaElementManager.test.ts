@@ -273,7 +273,9 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(1);
 
       // Verify we can retrieve from cache
-      const cached = (personaManager as any).elements.get(persona.id);
+      const cached = (personaManager as any).getCachedByAbsolutePath(
+        path.join(mockPersonasDir, 'cached-persona.md')
+      );
       expect(cached).toBeDefined();
       expect(cached.metadata.name).toBe('Cached Persona');
     });
@@ -325,7 +327,9 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(25);
 
       // Access first persona to update LRU order
-      const firstPersona = (personaManager as any).elements.get(personas[0].id);
+      const firstPersona = (personaManager as any).getCachedByAbsolutePath(
+        path.join(mockPersonasDir, 'persona-0.md')
+      );
       expect(firstPersona).toBeDefined();
     });
   });

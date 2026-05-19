@@ -15,27 +15,36 @@ import { logger } from '../utils/logger.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { agentStates } from '../database/schema/agents.js';
-import type { UserIdResolver } from '../database/UserContext.js';
+import type { SessionIdResolver, UserIdResolver } from '../database/UserContext.js';
+import type { AgentState } from '../elements/agents/types.js';
+import type { AgentStateKey, IAgentStateStore } from './IAgentStateStore.js';
 
 // ── Types ───────────────────────────────────────────────────────────
 
-export interface AgentStateData {
+interface AgentStateData {
   goals: unknown[];
   decisions: unknown[];
   context: Record<string, unknown>;
   stateVersion: number;
   sessionCount?: number;
+  lastActive?: Date | null;
 }
 
 // ── Implementation ──────────────────────────────────────────────────
 
-export class DatabaseAgentStateStore {
+export class DatabaseAgentStateStore implements IAgentStateStore {
   private readonly db: DatabaseInstance;
   private readonly getCurrentUserId: UserIdResolver;
+  private readonly getCurrentSessionId: SessionIdResolver;
 
-  constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver) {
+  constructor(
+    db: DatabaseInstance,
+    getCurrentUserId: UserIdResolver,
+    getCurrentSessionId: SessionIdResolver = () => 'default',
+  ) {
     this.db = db;
     this.getCurrentUserId = getCurrentUserId;
+    this.getCurrentSessionId = getCurrentSessionId;
   }
 
   /** Resolved per call — reads from the active session's user context. */
@@ -43,11 +52,49 @@ export class DatabaseAgentStateStore {
     return this.getCurrentUserId();
   }
 
+  /** Resolved per call — scopes runtime state to the active MCP session. */
+  private get sessionId(): string {
+    return this.getCurrentSessionId();
+  }
+
   /**
    * Load agent state from the database.
    * Returns null if no state exists for this agent.
    */
+  async load(key: AgentStateKey): Promise<AgentState | null> {
+    const state = await this.loadData(key.agentElementId);
+    return state ? this.toAgentState(state) : null;
+  }
+
+  async save(
+    key: AgentStateKey,
+    state: AgentState,
+    expectedVersion: number,
+  ): Promise<number> {
+    return this.saveData(key.agentElementId, this.fromAgentState(state), expectedVersion);
+  }
+
+  async delete(key: AgentStateKey): Promise<void> {
+    await this.deleteData(key.agentElementId);
+  }
+
   async loadState(agentElementId: string): Promise<AgentStateData | null> {
+    return this.loadData(agentElementId);
+  }
+
+  async saveState(
+    agentElementId: string,
+    state: AgentStateData,
+    expectedVersion: number,
+  ): Promise<number> {
+    return this.saveData(agentElementId, state, expectedVersion);
+  }
+
+  async deleteState(agentElementId: string): Promise<void> {
+    return this.deleteData(agentElementId);
+  }
+
+  private async loadData(agentElementId: string): Promise<AgentStateData | null> {
     return withUserRead(this.db, this.userId, async (tx) => {
       // Defense-in-depth: userId filter alongside RLS enforcement.
       const rows = await tx
@@ -55,6 +102,7 @@ export class DatabaseAgentStateStore {
           goals: agentStates.goals,
           decisions: agentStates.decisions,
           context: agentStates.context,
+          lastActive: agentStates.lastActive,
           stateVersion: agentStates.stateVersion,
           sessionCount: agentStates.sessionCount,
         })
@@ -62,6 +110,7 @@ export class DatabaseAgentStateStore {
         .where(and(
           eq(agentStates.userId, this.userId),
           eq(agentStates.agentId, agentElementId),
+          eq(agentStates.sessionId, this.sessionId),
         ))
         .limit(1);
 
@@ -74,6 +123,7 @@ export class DatabaseAgentStateStore {
         context: row.context && typeof row.context === 'object' && !Array.isArray(row.context)
           ? row.context as Record<string, unknown>
           : {},
+        lastActive: row.lastActive,
         stateVersion: row.stateVersion,
         sessionCount: row.sessionCount,
       };
@@ -88,7 +138,7 @@ export class DatabaseAgentStateStore {
    * @returns The new state version after successful save
    * @throws If a version conflict is detected (concurrent modification)
    */
-  async saveState(
+  private async saveData(
     agentElementId: string,
     state: AgentStateData,
     expectedVersion: number,
@@ -104,6 +154,7 @@ export class DatabaseAgentStateStore {
         .where(and(
           eq(agentStates.userId, this.userId),
           eq(agentStates.agentId, agentElementId),
+          eq(agentStates.sessionId, this.sessionId),
         ))
         .for('update')
         .limit(1);
@@ -120,12 +171,13 @@ export class DatabaseAgentStateStore {
         await tx.insert(agentStates).values({
           agentId: agentElementId,
           userId: this.userId,
+          sessionId: this.sessionId,
           goals: state.goals,
           decisions: state.decisions,
           context: state.context,
           stateVersion: newVersion,
           sessionCount: (state.sessionCount ?? 0) + 1,
-          lastActive: new Date(),
+          lastActive: state.lastActive ?? new Date(),
         });
 
         return newVersion;
@@ -149,11 +201,12 @@ export class DatabaseAgentStateStore {
           context: state.context,
           stateVersion: newVersion,
           sessionCount: (state.sessionCount ?? 0) + 1,
-          lastActive: new Date(),
+          lastActive: state.lastActive ?? new Date(),
         })
         .where(and(
           eq(agentStates.userId, this.userId),
           eq(agentStates.agentId, agentElementId),
+          eq(agentStates.sessionId, this.sessionId),
           eq(agentStates.stateVersion, expectedVersion),
         ))
         .returning({ id: agentStates.id });
@@ -172,15 +225,54 @@ export class DatabaseAgentStateStore {
   /**
    * Delete agent state. Called when the agent element is deleted.
    */
-  async deleteState(agentElementId: string): Promise<void> {
+  private async deleteData(agentElementId: string): Promise<void> {
     await withUserContext(this.db, this.userId, async (tx) => {
       // Defense-in-depth: userId filter alongside RLS.
       await tx.delete(agentStates).where(and(
         eq(agentStates.userId, this.userId),
         eq(agentStates.agentId, agentElementId),
+        eq(agentStates.sessionId, this.sessionId),
       ));
     });
 
     logger.debug(`[DatabaseAgentStateStore] Deleted state for agent ${agentElementId}`);
+  }
+
+  private toAgentState(state: AgentStateData): AgentState {
+    const agentState = {
+      goals: Array.isArray(state.goals) ? state.goals : [],
+      decisions: Array.isArray(state.decisions) ? state.decisions : [],
+      context: state.context && typeof state.context === 'object' && !Array.isArray(state.context)
+        ? state.context
+        : {},
+      lastActive: state.lastActive ? new Date(state.lastActive) : new Date(),
+      sessionCount: state.sessionCount ?? 0,
+      stateVersion: state.stateVersion,
+    } as AgentState;
+
+    this.normalizeDates(agentState);
+    return agentState;
+  }
+
+  private fromAgentState(state: AgentState): AgentStateData {
+    return {
+      goals: state.goals ?? [],
+      decisions: state.decisions ?? [],
+      context: state.context ?? {},
+      lastActive: state.lastActive instanceof Date ? state.lastActive : new Date(state.lastActive ?? Date.now()),
+      sessionCount: state.sessionCount ?? 0,
+      stateVersion: state.stateVersion ?? 0,
+    };
+  }
+
+  private normalizeDates(state: AgentState): void {
+    state.goals.forEach((goal) => {
+      if (goal.createdAt) goal.createdAt = new Date(goal.createdAt);
+      if (goal.updatedAt) goal.updatedAt = new Date(goal.updatedAt);
+      if (goal.completedAt) goal.completedAt = new Date(goal.completedAt);
+    });
+    state.decisions.forEach((decision) => {
+      if (decision.timestamp) decision.timestamp = new Date(decision.timestamp);
+    });
   }
 }

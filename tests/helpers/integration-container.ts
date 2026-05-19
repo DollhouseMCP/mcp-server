@@ -4,6 +4,26 @@ import path from 'path';
 
 import { DollhouseContainer } from '../../src/di/Container.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
+import { InMemoryOperatorConfigStore } from '../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import { InMemoryUserConfigStore } from '../../src/storage/userConfig/InMemoryUserConfigStore.js';
+import { InMemorySharedCacheStore } from '../../src/storage/sharedCache/InMemorySharedCacheStore.js';
+
+// Phase 4.5 / Phase G: ConfigManager now resolves OperatorConfigStore +
+// UserConfigStore from the container. `preparePortfolio()` is what wires
+// StorageServiceRegistrar in production; these helpers don't run that
+// path, so register InMemory stores up front so any test that resolves
+// ConfigManager (directly or transitively) gets a working façade.
+function registerStorageStubs(container: DollhouseContainer): void {
+  if (!container.hasRegistration('OperatorConfigStore')) {
+    container.register('OperatorConfigStore', () => new InMemoryOperatorConfigStore());
+  }
+  if (!container.hasRegistration('UserConfigStore')) {
+    container.register('UserConfigStore', () => new InMemoryUserConfigStore());
+  }
+  if (!container.hasRegistration('SharedCacheStore')) {
+    container.register('SharedCacheStore', () => new InMemorySharedCacheStore());
+  }
+}
 
 export interface IntegrationContainerOptions {
   /**
@@ -99,6 +119,7 @@ export async function createIsolatedContainer(
   process.env.DOLLHOUSE_HOME_DIR = tempRoot;
 
   const container = new DollhouseContainer();
+  registerStorageStubs(container);
 
   return {
     container,
@@ -155,6 +176,7 @@ export async function createIntegrationContainer(
   }
 
   const container = new DollhouseContainer();
+  registerStorageStubs(container);
   const portfolioManager = container.resolve<PortfolioManager>('PortfolioManager');
 
   if (shouldInit) {

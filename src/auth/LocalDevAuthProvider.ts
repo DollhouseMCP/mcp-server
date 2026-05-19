@@ -20,7 +20,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { SignJWT, jwtVerify, importJWK, exportJWK, generateKeyPair } from 'jose';
+import { SignJWT, jwtVerify, importJWK, exportJWK, generateKeyPair, errors as joseErrors } from 'jose';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IAuthProvider, AuthResult, AuthClaims, IssueOptions } from './IAuthProvider.js';
@@ -33,6 +33,21 @@ const ALGORITHM = 'ES256';
 export interface LocalDevAuthProviderOptions {
   /** Path to the key pair file. Auto-generated if missing. */
   keyFilePath: string;
+}
+
+/**
+ * Extract scopes from either the spec-standard `scope` claim
+ * (space-separated string per RFC 8693 §4.2) or the legacy `scopes`
+ * array claim emitted by older issuance code.
+ */
+function extractScopes(payload: Record<string, unknown>): string[] | undefined {
+  if (typeof payload.scope === 'string') {
+    return payload.scope.split(/\s+/).filter(Boolean);
+  }
+  if (Array.isArray(payload.scopes)) {
+    return payload.scopes.filter((s): s is string => typeof s === 'string');
+  }
+  return undefined;
 }
 
 export class LocalDevAuthProvider implements IAuthProvider {
@@ -51,14 +66,32 @@ export class LocalDevAuthProvider implements IAuthProvider {
     await this.ensureInitialized();
 
     try {
-      const { payload } = await jwtVerify(token, this.publicKey!, {
+      const { payload, protectedHeader } = await jwtVerify(token, this.publicKey!, {
         issuer: ISSUER,
         audience: AUDIENCE,
         algorithms: [ALGORITHM],
       });
 
+      // RFC 9068: access tokens carry `typ: at+jwt` so an id_token
+      // (or any other JWT signed by the same key) can't be replayed
+      // as an access token. Mirror the embedded AS's enforcement.
+      if (protectedHeader.typ && protectedHeader.typ !== 'at+jwt') {
+        return { ok: false, reason: 'invalid token type' };
+      }
+
       if (!payload.sub) {
         return { ok: false, reason: 'token missing sub claim' };
+      }
+
+      // Cycle-16 fix: validate the spec-standard `scope` (RFC 8693 §4.2,
+      // space-separated string) AND legacy `scopes` (array) for tokens
+      // issued by older versions of this provider. Both forms decode to
+      // the same string array internally. New issuance uses `scope`
+      // exclusively so a token issued under DOLLHOUSE_AUTH_PROVIDER=local
+      // can be verified by the embedded AS (which requires `scope`).
+      const scopes = extractScopes(payload);
+      if (!scopes?.includes('mcp')) {
+        return { ok: false, reason: 'token missing mcp scope' };
       }
 
       const claims: AuthClaims = {
@@ -66,18 +99,39 @@ export class LocalDevAuthProvider implements IAuthProvider {
         displayName: typeof payload.display_name === 'string' ? payload.display_name : undefined,
         email: typeof payload.email === 'string' ? payload.email : undefined,
         tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
-        scopes: Array.isArray(payload.scopes) ? payload.scopes as string[] : undefined,
+        scopes,
+        roles: Array.isArray(payload.roles)
+          ? payload.roles.filter((r): r is string => typeof r === 'string')
+          : undefined,
         exp: payload.exp,
       };
 
       return { ok: true, claims };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('exp')) {
+    } catch (error) {
+      // Cycle-10 fix (H10-3): use jose's typed errors instead of
+      // substring-matching .message. Substrings like 'exp' / 'signature'
+      // collide with unrelated error text ('issuer' contains 'iss',
+      // 'expected' contains 'exp', 'unexpected signal' contains
+      // 'signature') and produce misleading reasons in operator logs.
+      // Cycle 8 made the same fix in EmbeddedAuthorizationServer.validate;
+      // this is the sibling site that was missed at the time.
+      if (error instanceof joseErrors.JWTExpired) {
         return { ok: false, reason: 'token expired' };
       }
-      if (message.includes('signature')) {
+      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
         return { ok: false, reason: 'invalid signature' };
+      }
+      // Cycle-13 fix: parity with OidcAuthProvider — distinct reason
+      // for alg-rejection so operator triage doesn't fold it into the
+      // generic "token validation failed" bucket.
+      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+        return { ok: false, reason: 'algorithm not allowed' };
+      }
+      if (error instanceof joseErrors.JWTClaimValidationFailed) {
+        const claim = error.claim;
+        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
+        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
+        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
       }
       return { ok: false, reason: 'token validation failed' };
     }
@@ -90,9 +144,9 @@ export class LocalDevAuthProvider implements IAuthProvider {
     const builder = new SignJWT({
       ...(options?.displayName ? { display_name: options.displayName } : {}),
       ...(options?.email ? { email: options.email } : {}),
-      ...(options?.scopes?.length ? { scopes: options.scopes } : {}),
+      ...(options?.scopes?.length ? { scope: options.scopes.join(' ') } : {}),
     })
-      .setProtectedHeader({ alg: ALGORITHM })
+      .setProtectedHeader({ alg: ALGORITHM, typ: 'at+jwt' })
       .setIssuer(ISSUER)
       .setAudience(AUDIENCE)
       .setSubject(sub)

@@ -1867,12 +1867,23 @@ export class MCPAQLHandler {
         const content = params.content as string;
         const tags = params.tags as string[] | undefined;
         const metadata = params.metadata as Record<string, unknown> | undefined;
-        const entryResult = memory.addEntry(content, tags, metadata);
+        // Lost-update fix: if a debounced save is already pending for this
+        // memory, the in-memory instance it holds has earlier addEntry
+        // mutations that haven't been flushed yet. Mutating the freshly-
+        // loaded `memory` from manager.find() above would miss those entries
+        // — when the debounce fires, the pending instance gets replaced and
+        // only the LAST addEntry's state reaches storage. Always apply to
+        // the pending instance when present so the debounce coalesces by
+        // accumulating mutations, not by overwriting.
+        const pendingKey = this.sessionKey(memoryName.toLowerCase());
+        const pending = this.pendingSaves.get(pendingKey);
+        const targetMemory = pending?.memory ?? memory;
+        const entryResult = targetMemory.addEntry(content, tags, metadata);
         // Issue #657: Track save frequency and alert on anomalous patterns.
         this.trackSaveFrequency(memoryName);
         // Issue #656: Debounce saves to prevent FD exhaustion from rapid addEntry calls.
         // The entry is already in memory — disk write is deferred and coalesced.
-        this.debouncedMemorySave(memoryName, memory, manager);
+        this.debouncedMemorySave(memoryName, targetMemory, manager);
         return entryResult;
       }
 

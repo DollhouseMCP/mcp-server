@@ -55,9 +55,17 @@ export class CollectionServiceRegistrar {
     ));
 
     // CollectionIndexManager's index URL is overridable via DOLLHOUSE_COLLECTION_URL.
+    // Phase 4.5: when SharedCacheStore is registered (StorageServiceRegistrar runs
+    // before us in preparePortfolio), inject it so the cache routes through the
+    // store backend (filesystem or postgres). Falls back to the legacy direct-file
+    // path when the store isn't registered (e.g. in unit-test containers that
+    // skip the full bootstrap).
     container.register('CollectionIndexManager', () => new CollectionIndexManager({
       fileOperations: container.resolve('FileOperationsService'),
       indexUrl: env.DOLLHOUSE_COLLECTION_URL,
+      cache: container.hasRegistration('SharedCacheStore')
+        ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
+        : undefined,
     }));
 
     container.register('CollectionBrowser', () => new CollectionBrowser(
@@ -91,6 +99,14 @@ export class CollectionServiceRegistrar {
       sharedPoolInstaller: container.hasRegistration('SharedPoolInstaller')
         ? container.resolve('SharedPoolInstaller')
         : undefined,
+      // Phase 4.5 follow-up: route install_collection_content writes through
+      // the storage-layer factory so DB-mode deployments actually persist to
+      // Postgres instead of writing only to (often tmpfs) portfolio files.
+      // DatabaseServiceRegistrar overrides this registration when DB mode is
+      // selected — see DatabaseServiceRegistrar.ts.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
 
     container.register('PortfolioRepoManager', () => new PortfolioRepoManager(
@@ -99,7 +115,9 @@ export class CollectionServiceRegistrar {
     ));
 
     container.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
-      container.resolve('PortfolioRepoManager')
+      container.resolve('PortfolioRepoManager'),
+      () => container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+        .getSessionContext()?.userId ?? 'system',
     ));
   }
 }

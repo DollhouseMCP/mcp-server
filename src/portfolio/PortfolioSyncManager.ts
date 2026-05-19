@@ -96,6 +96,15 @@ export interface PortfolioSyncManagerDependencies {
   indexer: GitHubPortfolioIndexer;
   fileOperations: IFileOperationsService;
   tokenManager: TokenManager;
+  /**
+   * Phase 4.5 follow-up: optional storage-layer factory. When present AND
+   * the factory produces a writable (database-backed) layer for the element
+   * type, `downloadElement` writes through it instead of the legacy
+   * filesystem-only path. Closes the bug where DB-mode sync downloads
+   * landed on tmpfs and vanished on restart. Same correctness pattern as
+   * the ElementInstaller and PortfolioPullHandler fixes.
+   */
+  storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 }
 
 export class PortfolioSyncManager {
@@ -105,6 +114,7 @@ export class PortfolioSyncManager {
   private indexer: GitHubPortfolioIndexer;
   private fileOperations: IFileOperationsService;
   private tokenManager: TokenManager;
+  private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 
   constructor(dependencies: PortfolioSyncManagerDependencies) {
     this.configManager = dependencies.configManager;
@@ -113,6 +123,7 @@ export class PortfolioSyncManager {
     this.indexer = dependencies.indexer;
     this.fileOperations = dependencies.fileOperations;
     this.tokenManager = dependencies.tokenManager;
+    this.storageLayerFactory = dependencies.storageLayerFactory;
   }
   
   /**
@@ -433,14 +444,35 @@ export class PortfolioSyncManager {
         }
       }
       
-      // Save the element
-      await this.fileOperations.createDirectory(path.dirname(localPath));
-      await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
-      
+      // Phase 4.5 follow-up: when a storage-layer factory is wired AND it
+      // produces a writable layer for this element type, persist through it
+      // instead of writing to filesystem. Without this, DB-mode sync
+      // downloads land on the per-user portfolio dir (typically tmpfs in
+      // containers) and vanish on every restart. Filesystem-mode falls
+      // through to the legacy writeFile path.
+      const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+      const elementDir = path.dirname(localPath);
+      const persistedViaStorageLayer = await persistElementViaFactory(
+        this.storageLayerFactory,
+        elementType,
+        elementName,
+        remoteContent,
+        { elementDir, fileExtension: path.extname(localPath) || '.md', scanCooldownMs: 0 },
+        { exclusive: false },
+      );
+
+      if (!persistedViaStorageLayer) {
+        // Save the element to filesystem (legacy path, used when no factory
+        // or when the factory produces a non-writable filesystem layer).
+        await this.fileOperations.createDirectory(elementDir);
+        await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
+      }
+
       logger.info('Element downloaded from GitHub', {
         element: elementName,
         type: elementType,
-        version: entry.version
+        version: entry.version,
+        target: persistedViaStorageLayer ? 'storage-layer' : 'filesystem',
       });
       
       return {

@@ -108,15 +108,26 @@ export class IndexingServiceRegistrar {
       container.resolve('VerbTriggerManager'),
       container.resolve('RelationshipManager'),
       container.resolve('EnhancedIndexHelpers'),
-      container.resolve('FileOperationsService')
+      container.resolve('FileOperationsService'),
+      container.hasRegistration('PathService')
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService')
+        : undefined,
     ));
 
-    container.register('CollectionIndexCache', () => new CollectionIndexCache(
-      container.resolve('GitHubClient'),
-      process.cwd(),
-      container.resolve('PerformanceMonitor'),
-      container.resolve('FileOperationsService')
-    ));
+    // Phase 4.5: when SharedCacheStore is registered (StorageServiceRegistrar
+    // runs before us in preparePortfolio), inject it so the cache routes
+    // through the store backend (filesystem or postgres). Falls back to the
+    // legacy direct-file path under cwd/.dollhousemcp/cache/ when the store
+    // isn't registered (e.g. unit-test containers that skip the full bootstrap).
+    container.register('CollectionIndexCache', () => new CollectionIndexCache({
+      githubClient: container.resolve('GitHubClient'),
+      baseDir: process.cwd(),
+      performanceMonitor: container.resolve('PerformanceMonitor'),
+      fileOperations: container.resolve('FileOperationsService'),
+      cache: container.hasRegistration('SharedCacheStore')
+        ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
+        : undefined,
+    }));
 
     container.register('UnifiedIndexManager', () => new UnifiedIndexManager({
       portfolioIndexManager: container.resolve('PortfolioIndexManager'),
@@ -142,6 +153,11 @@ export class IndexingServiceRegistrar {
       downloader: container.resolve('PortfolioDownloader'),
       fileOperations: container.resolve('FileOperationsService'),
       tokenManager: container.resolve('TokenManager'),
+      // Phase 4.5 follow-up: route pulls through the storage-layer factory
+      // so DB-mode deployments persist to Postgres instead of tmpfs.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
 
     container.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(container.resolve<APICache>('APICache'), {
@@ -160,7 +176,12 @@ export class IndexingServiceRegistrar {
       portfolioRepoManager: container.resolve('PortfolioRepoManager'),
       indexer: container.resolve('GitHubPortfolioIndexer'),
       fileOperations: container.resolve('FileOperationsService'),
-      tokenManager: container.resolve('TokenManager')
+      tokenManager: container.resolve('TokenManager'),
+      // Phase 4.5 follow-up: route sync downloads through the storage-layer
+      // factory so DB-mode deployments persist to Postgres.
+      storageLayerFactory: container.hasRegistration('StorageLayerFactory')
+        ? container.resolve('StorageLayerFactory')
+        : undefined,
     }));
   }
 }

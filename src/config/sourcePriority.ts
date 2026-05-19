@@ -312,7 +312,10 @@ export async function saveSourcePriorityConfig(config: SourcePriorityConfig): Pr
 
   const fileLockManager = new FileLockManager();
   const fileOperations = new FileOperationsService(fileLockManager);
-  const configManager = new ConfigManager(fileOperations, os);
+  // Phase 4.5: legacy non-DI consumer uses createStandalone — picks env-driven
+  // backend (filesystem/postgres) without requiring a DI container.
+  const configManager = await ConfigManager.createStandalone(fileOperations, os);
+  await configManager.initialize();
 
   // Save to config file using ConfigManager
   await configManager.updateSetting('source_priority', config);

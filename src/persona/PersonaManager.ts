@@ -83,6 +83,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
@@ -295,7 +296,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   getPersonas(): Map<string, Persona> {
     const map = new Map<string, Persona>();
-    for (const persona of this.elements.values()) {
+    for (const persona of this.getCachedElementsForCurrentNamespace()) {
       map.set(persona.filename, persona);
     }
     return map;
@@ -375,7 +376,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return undefined;
     }
 
-    return this.elements.values().find(p => this.matchesIdentifier(p, identifier));
+    return this.getCachedElementsForCurrentNamespace().find(p => this.matchesIdentifier(p, identifier));
   }
 
   /** In-flight disk lookups to prevent duplicate reads for the same identifier */

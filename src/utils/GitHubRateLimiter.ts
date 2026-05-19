@@ -15,7 +15,7 @@ import { TokenManager } from '../security/tokenManager.js';
 import { logger } from './logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 
 export interface GitHubRateLimitInfo {
   limit: number;
@@ -58,6 +58,7 @@ export interface IRateLimiter {
 
 export class GitHubRateLimiter implements IRateLimiter {
   private rateLimiter!: RateLimiter;
+  private readonly rateLimitersByToken = new Map<string, RateLimiter>();
   private requestQueue: GitHubApiRequest[] = [];
   private processing = false;
   private lastRateLimitInfo?: GitHubRateLimitInfo;
@@ -74,7 +75,7 @@ export class GitHubRateLimiter implements IRateLimiter {
     this.tokenManager = tokenManager;
 
     // Initialize with conservative defaults synchronously
-    this.rateLimiter = new RateLimiter({
+    this.rateLimiter = this.getOrCreateRateLimiter('anonymous', {
       maxRequests: Math.floor(GITHUB_API_RATE_LIMITS.UNAUTHENTICATED_LIMIT * GITHUB_API_RATE_LIMITS.BUFFER_PERCENTAGE),
       windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
       minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
@@ -122,25 +123,24 @@ export class GitHubRateLimiter implements IRateLimiter {
     try {
       const token = await this.tokenManager.getGitHubTokenAsync();
       const newIsAuthenticated = !!token;
+      const tokenKey = token
+        ? createHash('sha256').update(token).digest('hex').slice(0, 16)
+        : 'anonymous';
+      const limit = newIsAuthenticated
+        ? GITHUB_API_RATE_LIMITS.AUTHENTICATED_LIMIT
+        : GITHUB_API_RATE_LIMITS.UNAUTHENTICATED_LIMIT;
+      const bufferedLimit = Math.floor(limit * GITHUB_API_RATE_LIMITS.BUFFER_PERCENTAGE);
+      const config: RateLimiterConfig = {
+        maxRequests: bufferedLimit,
+        windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
+        minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
+      };
+
+      this.rateLimiter = this.getOrCreateRateLimiter(tokenKey, config);
       
       // Only recreate rate limiter if auth status changed
       if (newIsAuthenticated !== this.isAuthenticated) {
         this.isAuthenticated = newIsAuthenticated;
-        
-        const limit = this.isAuthenticated 
-          ? GITHUB_API_RATE_LIMITS.AUTHENTICATED_LIMIT 
-          : GITHUB_API_RATE_LIMITS.UNAUTHENTICATED_LIMIT;
-          
-        // Apply buffer to stay below actual limits
-        const bufferedLimit = Math.floor(limit * GITHUB_API_RATE_LIMITS.BUFFER_PERCENTAGE);
-        
-        const config: RateLimiterConfig = {
-          maxRequests: bufferedLimit,
-          windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
-          minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
-        };
-        
-        this.rateLimiter = new RateLimiter(config);
         
         logger.info('GitHub rate limiter updated', {
           authenticated: this.isAuthenticated,
@@ -153,7 +153,7 @@ export class GitHubRateLimiter implements IRateLimiter {
       logger.warn('Failed to check authentication status for rate limiting', { error });
       // Fall back to unauthenticated limits
       this.isAuthenticated = false;
-      this.rateLimiter = new RateLimiter({
+      this.rateLimiter = this.getOrCreateRateLimiter('anonymous', {
         maxRequests: Math.floor(GITHUB_API_RATE_LIMITS.UNAUTHENTICATED_LIMIT * GITHUB_API_RATE_LIMITS.BUFFER_PERCENTAGE),
         windowMs: GITHUB_API_RATE_LIMITS.WINDOW_MS,
         minDelayMs: GITHUB_API_RATE_LIMITS.MIN_DELAY_MS
@@ -161,6 +161,15 @@ export class GitHubRateLimiter implements IRateLimiter {
       // Re-throw to allow retry mechanism in ensureInitialized()
       throw error;
     }
+  }
+
+  private getOrCreateRateLimiter(tokenKey: string, config: RateLimiterConfig): RateLimiter {
+    let limiter = this.rateLimitersByToken.get(tokenKey);
+    if (!limiter) {
+      limiter = new RateLimiter(config);
+      this.rateLimitersByToken.set(tokenKey, limiter);
+    }
+    return limiter;
   }
 
   private statusCheckInterval?: NodeJS.Timeout;

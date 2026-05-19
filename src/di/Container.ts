@@ -1,4 +1,5 @@
 import { PACKAGE_VERSION } from "../generated/version.js";
+import * as path from "node:path";
 import { SecurityMonitor } from "../security/securityMonitor.js";
 import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
 import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
@@ -32,25 +33,36 @@ import { DisplayConfigHandler } from "../handlers/DisplayConfigHandler.js";
 import { IdentityHandler } from "../handlers/IdentityHandler.js";
 import { ConfigHandler } from "../handlers/ConfigHandler.js";
 import { SyncHandler } from "../handlers/SyncHandlerV2.js";
+import { PortfolioPullHandler } from "../handlers/PortfolioPullHandler.js";
 import { ToolRegistry } from "../handlers/ToolRegistry.js";
 import { ServerSetup } from "../server/index.js";
 import { PathValidator } from "../security/pathValidator.js";
 import { logger } from "../utils/logger.js";
 import { ErrorHandler } from "../utils/ErrorHandler.js";
 import { SubmitToPortfolioTool } from "../tools/portfolio/submitToPortfolioTool.js";
+import { GitHubAuthManager } from "../auth/GitHubAuthManager.js";
+import { GitHubRateLimiter } from "../utils/GitHubRateLimiter.js";
+import { PortfolioRepoManager } from "../portfolio/PortfolioRepoManager.js";
+import { GitHubPortfolioIndexer } from "../portfolio/GitHubPortfolioIndexer.js";
+import { PortfolioSyncManager } from "../portfolio/PortfolioSyncManager.js";
+import { getPortfolioRepositoryName } from "../config/portfolioConfig.js";
 import { ConfigManager } from "../config/ConfigManager.js";
 import { IndexConfigManager } from "../portfolio/config/IndexConfig.js";
 import { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
 import { BuildInfoService } from "../services/BuildInfoService.js";
 import { InitializationService } from "../services/InitializationService.js";
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
+import { ElementEventDispatcher } from "../events/ElementEventDispatcher.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
 import type { IActivationStateStore } from "../state/IActivationStateStore.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
+import { FileChallengeStore } from "../state/FileChallengeStore.js";
 import type { DatabaseActivationStateStore } from "../state/DatabaseActivationStateStore.js";
 import type { DatabaseConfirmationStore } from "../state/DatabaseConfirmationStore.js";
+import type { DatabaseChallengeStore } from "../state/DatabaseChallengeStore.js";
 import type { IConfirmationStore } from "../state/IConfirmationStore.js";
+import type { IChallengeStore } from "../state/IChallengeStore.js";
 import type { DatabaseInstance } from "../database/connection.js";
 import { DatabaseServiceRegistrar } from "./registrars/DatabaseServiceRegistrar.js";
 import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
@@ -60,12 +72,14 @@ import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 import { validateUserId } from "../paths/validateUserId.js";
 import { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
+import { SessionContainerRegistry } from "./SessionContainerRegistry.js";
 import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import { ContextTracker } from "../security/encryption/ContextTracker.js";
 import { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver } from "../context/SessionContext.js";
 import { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
+import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
 import type { UnifiedConsoleResult } from "../web/console/UnifiedConsole.js";
 import { PolicyExportService } from '../services/PolicyExportService.js';
 import { LogManager } from '../logging/LogManager.js';
@@ -94,6 +108,10 @@ import { ElementManagerServiceRegistrar } from './registrars/ElementManagerServi
 import { CollectionServiceRegistrar } from './registrars/CollectionServiceRegistrar.js';
 import { IndexingServiceRegistrar } from './registrars/IndexingServiceRegistrar.js';
 import { ServerServiceRegistrar } from './registrars/ServerServiceRegistrar.js';
+import {
+  AGENT_STATE_MAX_YAML_SIZE,
+  FileAgentStateStore,
+} from '../storage/FileAgentStateStore.js';
 
 // State is owned by PersonaManager and services
 
@@ -281,6 +299,45 @@ export class DollhouseContainer {
       await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
     }
 
+    // Storage layers for operator config, user config, and shared cache.
+    // Must run after DatabaseServiceRegistrar so DatabaseInstance is resolvable
+    // for the postgres backends; runs before consumers (ConfigManager façade in
+    // particular) so they can resolve the stores when their factories fire.
+    const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
+    await new StorageServiceRegistrar().bootstrapAndRegister(this);
+
+    // Auto-migrate legacy ~/.dollhouse/config.yml and keyfiles into the new
+    // stores in DB mode on first startup. Idempotent via marker file; throws
+    // on partial-migration failure so startup halts rather than running with
+    // half-migrated state.
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      const { runConfigToDatabaseMigration } = await import('../storage/migration/configToDatabase.js');
+      const userId = this.hasRegistration('BootstrappedUserId')
+        ? this.resolve<string>('BootstrappedUserId')
+        : null;
+      if (userId) {
+        const result = await runConfigToDatabaseMigration({
+          operatorStore: this.resolve('OperatorConfigStore'),
+          userStore: this.resolve('UserConfigStore'),
+          // SigningKeyStore is registered later by AuthServiceRegistrar; resolve
+          // it lazily by constructing a dedicated one here against the same DB.
+          signingKeyStore: await (await import('../storage/signingKeys/createSigningKeyStore.js')).createSigningKeyStore({
+            database: this.hasRegistration('SystemDatabaseInstance')
+              ? this.resolve('SystemDatabaseInstance')
+              : this.resolve('DatabaseInstance'),
+          }),
+          userId,
+        });
+        if (result.status === 'migrated') {
+          logger.info('[Container] Phase 4.5 legacy config migrated to database', {
+            configMigrated: result.configMigrated,
+            jwksMigrated: result.jwksMigrated,
+            cookieSecretMigrated: result.cookieSecretMigrated,
+          });
+        }
+      }
+    }
+
     // Unified auth (JWT) — feature-flag gated (default: off).
     // Must run after SecurityServiceRegistrar (ContextTracker) and
     // DatabaseServiceRegistrar (UserIdentityService).
@@ -448,8 +505,8 @@ export class DollhouseContainer {
    * Called by completeDeferredSetup() in MCP stdio mode, and directly
    * by the --web standalone path which IS the server (#1866).
    *
-   * Phase 4: this runs OUTSIDE any MCP tool-call's session scope (deferred
-   * post-connect work). Storage layers resolve `this.userId` from the active
+   * This runs outside any MCP tool-call's session scope during deferred
+   * post-connect work. Storage layers resolve `this.userId` from the active
    * ContextTracker session, so without a scope they'd throw. Wrap the whole
    * deferred batch in the stdio session's context so autoload, seed install,
    * and activation restore all see a valid user identity in DB mode.
@@ -919,7 +976,8 @@ export class DollhouseContainer {
       this.resolve('ConfigManager'),
       initService,
       indicatorService,
-      this.resolve('FileOperationsService')
+      this.resolve('FileOperationsService'),
+      this.resolve('PathService')
     );
 
     const displayConfigHandler = new DisplayConfigHandler(
@@ -972,9 +1030,14 @@ export class DollhouseContainer {
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
     // Issue #402: Pass DangerZoneEnforcer via HandlerRegistry
-    // Build handler registry, then add lazy metricsSink getter.
+    // Build handler registry, then add lazy getters for session-scoped services.
     // MemoryMetricsSink is registered during deferredSetup (after MetricsManager.start()),
     // so it isn't available at handler construction time — resolve on first access instead.
+    const sessionContainerRegistry = this.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const resolveActiveOrRoot = <T>(serviceName: string): T => {
+      const activeContainer = sessionContainerRegistry.getActiveContainer();
+      return (activeContainer ?? this).resolve<T>(serviceName);
+    };
     const handlerDeps: HandlerRegistry = {
       elementCRUD: elementCrudHandler,
       memoryManager: this.resolve('MemoryManager'),
@@ -992,8 +1055,6 @@ export class DollhouseContainer {
       buildInfoService: this.resolve('BuildInfoService'),
       cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
       gatekeeper,  // Issue #452: Policy engine for enforce()
-      dangerZoneEnforcer: this.resolve('DangerZoneEnforcer'),
-      verificationStore: this.resolve('ChallengeStore'),  // Issue #142, #1945: Verification codes via IChallengeStore
       verificationNotifier: this.resolve('VerificationNotifier'),  // Issue #522: OS dialog for codes
       memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),  // Issue #528: CRUDE-routed query_logs
       performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
@@ -1006,6 +1067,16 @@ export class DollhouseContainer {
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
       get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(handlerDeps, 'dangerZoneEnforcer', {
+      get: () => resolveActiveOrRoot<DangerZoneEnforcer>('DangerZoneEnforcer'),
+      configurable: true,
+      enumerable: true,
+    });
+    Object.defineProperty(handlerDeps, 'verificationStore', {
+      get: () => resolveActiveOrRoot<IChallengeStore>('ChallengeStore'),
       configurable: true,
       enumerable: true,
     });
@@ -1064,10 +1135,10 @@ export class DollhouseContainer {
     };
   }
 
-  // ── Shared-container HTTP session support (Phase 2) ────────────────────────
+  // ── Shared-container HTTP session support ─────────────────────────────────
 
-  /** Cached handler bundle bootstrapped once for HTTP mode. */
-  private httpHandlerBundle: HandlerBundle | null = null;
+  /** Root handler bundle bootstrapped once so shared root services are available in HTTP mode. */
+  private httpRootHandlerBundle: HandlerBundle | null = null;
 
   /**
    * Bootstrap handlers once for HTTP mode and cache the bundle.
@@ -1077,8 +1148,8 @@ export class DollhouseContainer {
    * a ToolRegistry or Server — those are per-session (see createServerForHttpSession).
    */
   public async bootstrapHttpHandlers(): Promise<HandlerBundle> {
-    this.httpHandlerBundle ??= await this.bootstrapHandlers();
-    return this.httpHandlerBundle;
+    this.httpRootHandlerBundle ??= await this.bootstrapHandlers();
+    return this.httpRootHandlerBundle;
   }
 
   /**
@@ -1086,10 +1157,8 @@ export class DollhouseContainer {
    *
    * Each HTTP session gets its own Server (SDK requirement), ToolRegistry,
    * and ServerSetup with a session-specific SessionResolver. Handlers are
-   * shared across sessions — they are stateless or session-aware (Phase 2 prereqs).
-   *
-   * Phase 3: Per-session ActivationStore. Currently all HTTP sessions
-   * share the container's global activation state.
+   * resolved from the session container when they capture session-owned state;
+   * shared root services must be stateless or session-aware.
    *
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
    * @returns Per-session Server instance plus a dispose callback
@@ -1098,13 +1167,12 @@ export class DollhouseContainer {
     server: Server;
     dispose: () => Promise<void>;
   }> {
-    if (!this.httpHandlerBundle) {
+    if (!this.httpRootHandlerBundle) {
       throw new Error(
         'HTTP handler bundle not initialized. Call bootstrapHttpHandlers() before creating sessions.'
       );
     }
 
-    const bundle = this.httpHandlerBundle;
     const contextTracker = this.resolve<ContextTracker>('ContextTracker');
     const sid = sessionContext.sessionId;
 
@@ -1122,6 +1190,31 @@ export class DollhouseContainer {
     const userBackupsDir = userPathResolver.getUserBackupsDir(httpUserId);
     const userSecurityDir = userPathResolver.getUserSecurityDir(httpUserId);
     const userPortfolioDir = userPathResolver.getUserPortfolioDir(httpUserId);
+
+    // ── Per-session element event dispatcher ────────────────────────
+    // Listener ownership model:
+    // - HTTP persona indicator caches subscribe to this child dispatcher, so
+    //   invalidations only observe events from this session.
+    // - Root application logging is a cross-cutting observer on the root
+    //   dispatcher; child dispatchers forward pre-attributed events to root so
+    //   logs and metrics get both userId and sessionId without listener-side
+    //   filtering discipline.
+    // - Session listeners should subscribe to the child dispatcher resolved
+    //   from SessionContainerRegistry; they never receive events from other
+    //   sessions.
+    child.register('ElementEventDispatcher', () => new ElementEventDispatcher(
+      contextTracker,
+      {
+        fanoutDispatcher: this.resolve<ElementEventDispatcher>('ElementEventDispatcher'),
+        boundSession: { userId: sessionContext.userId, sessionId: sid },
+      },
+    ));
+    child.register('PersonaIndicatorService', () => new PersonaIndicatorService(
+      this.resolve('PersonaManager'),
+      this.resolve('IndicatorConfig'),
+      this.resolve('StateChangeNotifier'),
+      child.resolve('ElementEventDispatcher'),
+    ));
 
     // ── Session-scoped PathValidator ────────────────────────────────
     // Restricts this session's file operations to the user's subtree.
@@ -1145,10 +1238,14 @@ export class DollhouseContainer {
       const db = this.resolve<DatabaseInstance>('DatabaseInstance');
       const DbActivation = this.resolve<typeof DatabaseActivationStateStore>('DatabaseActivationStateStoreClass');
       const DbConfirmation = this.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
+      const DbChallenge = this.resolve<typeof DatabaseChallengeStore>('DatabaseChallengeStoreClass');
       child.register('ActivationStore', () =>
         new DbActivation(db, httpUserId, sid));
       child.register('ConfirmationStore', () =>
         new DbConfirmation(db, httpUserId, sid));
+      child.register('ChallengeStore', () =>
+        new DbChallenge(db, httpUserId, sid));
+      child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
     } else {
@@ -1156,16 +1253,36 @@ export class DollhouseContainer {
         new FileActivationStateStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('ConfirmationStore', () =>
         new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid));
+      child.register('ChallengeStore', () =>
+        new FileChallengeStore(this.resolve('FileOperationsService'), userStateDir, sid));
+      child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
         new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+
+      child.register('AgentStateStore', () => new FileAgentStateStore({
+        stateDir: path.join(userPortfolioDir, ElementType.AGENT, '.state'),
+        fileLockManager: this.resolve('FileLockManager'),
+        fileOperations: this.resolve('FileOperationsService'),
+        serializationService: this.resolve('SerializationService'),
+        stateCache: new Map(),
+        maxYamlSize: AGENT_STATE_MAX_YAML_SIZE,
+      }));
+    }
+
+    try {
+      await child.resolve<IChallengeStore>('ChallengeStore').initialize?.();
+    } catch (initError) {
+      logger.warn('[HTTP Session] ChallengeStore initialization failed — starting fresh', {
+        error: initError instanceof Error ? initError.message : String(initError),
+      });
     }
 
     // ── Per-user service overrides (Group B) ──────────────────────────
     // TokenManager, BackupService, and DangerZoneEnforcer are root-scoped
-    // for stdio (single user). HTTP sessions override them with per-user
-    // instances so auth tokens, backups, and security blocks are isolated.
+    // for stdio (single user). HTTP sessions override stateful/session-owned
+    // services so auth tokens, backups, and security blocks are isolated.
     child.register('TokenManager', () => new TokenManager(
-      this.resolve('FileOperationsService'), userAuthDir
+      () => child.resolve<ITokenStore>('TokenStore'), () => httpUserId
     ));
     child.register('BackupService', () => new BackupService(
       this.resolve('FileOperationsService'),
@@ -1178,6 +1295,60 @@ export class DollhouseContainer {
     child.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService'), userSecurityDir
     ));
+
+    // ── Per-session GitHub/portfolio coordinators ───────────────────
+    // These services hold user-attributable state or capture TokenManager.
+    // Register them in the child so HTTP handlers resolve the active user's
+    // auth, repository, and sync collaborators instead of root singletons.
+    child.register('GitHubAuthManager', () => new GitHubAuthManager(
+      this.resolve('APICache'),
+      this.resolve('ConfigManager'),
+      child.resolve('TokenManager'),
+    ));
+    child.register('GitHubRateLimiter', () => new GitHubRateLimiter(
+      child.resolve('TokenManager'),
+    ));
+    child.register('PortfolioRepoManager', () => new PortfolioRepoManager(
+      child.resolve('TokenManager'),
+      getPortfolioRepositoryName(),
+    ));
+    child.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
+      child.resolve('PortfolioRepoManager'),
+      () => httpUserId,
+    ));
+    child.register('PortfolioPullHandler', () => new PortfolioPullHandler({
+      portfolioManager: this.resolve('PortfolioManager'),
+      indexManager: this.resolve('PortfolioIndexManager'),
+      githubIndexer: child.resolve('GitHubPortfolioIndexer'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      syncComparer: this.resolve('PortfolioSyncComparer'),
+      downloader: this.resolve('PortfolioDownloader'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+      storageLayerFactory: this.hasRegistration('StorageLayerFactory')
+        ? this.resolve('StorageLayerFactory')
+        : undefined,
+    }));
+    child.register('SubmitToPortfolioTool', () => new SubmitToPortfolioTool(this.resolve('APICache'), {
+      authManager: child.resolve('GitHubAuthManager'),
+      portfolioManager: this.resolve('PortfolioManager'),
+      portfolioIndexManager: this.resolve('PortfolioIndexManager'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      rateLimiter: child.resolve('GitHubRateLimiter'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+    }));
+    child.register('PortfolioSyncManager', () => new PortfolioSyncManager({
+      configManager: this.resolve('ConfigManager'),
+      portfolioManager: this.resolve('PortfolioManager'),
+      portfolioRepoManager: child.resolve('PortfolioRepoManager'),
+      indexer: child.resolve('GitHubPortfolioIndexer'),
+      fileOperations: this.resolve('FileOperationsService'),
+      tokenManager: child.resolve('TokenManager'),
+      storageLayerFactory: this.hasRegistration('StorageLayerFactory')
+        ? this.resolve('StorageLayerFactory')
+        : undefined,
+    }));
 
     // Bridge: attach per-session activation store to the activation registry
     const activationRegistry = this.resolve<SessionActivationRegistry>('SessionActivationRegistry');
@@ -1195,6 +1366,17 @@ export class DollhouseContainer {
       });
     }
     gatekeeper.registerSession(sid, httpGkSession);
+
+    const bundle = this.createHttpSessionHandlerBundle(child, userPortfolioDir);
+
+    child.register('ElementCRUDHandler', () => bundle.elementCrudHandler);
+    child.register('CollectionHandler', () => bundle.collectionHandler);
+    child.register('PortfolioHandler', () => bundle.portfolioHandler);
+    child.register('GitHubAuthHandler', () => bundle.githubAuthHandler);
+    child.register('ConfigHandler', () => bundle.configHandler);
+    child.register('SyncHandler', () => bundle.syncHandler);
+    child.register('mcpAqlHandler', () => bundle.mcpAqlHandler);
+    child.resolve<MCPAQLHandler>('mcpAqlHandler');
 
     // Per-session Server, ServerSetup, ToolRegistry — registered in child container
     const capabilities: Record<string, Record<string, unknown>> = { tools: {} };
@@ -1227,6 +1409,7 @@ export class DollhouseContainer {
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
       server,
@@ -1234,8 +1417,205 @@ export class DollhouseContainer {
         // Issue #1948: Child container disposal handles all session cleanup:
         // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
         // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
-        await child.dispose();
+        try {
+          await child.dispose();
+        } finally {
+          this.resolve<SessionContainerRegistry>('SessionContainerRegistry').unregister(sid);
+        }
       },
+    };
+  }
+
+  /**
+   * Build the handler graph for a single HTTP session.
+   *
+   * Root bootstrap still owns stdio/web-console handlers. HTTP sessions get
+   * fresh coordinator handlers so captured dependencies such as TokenManager,
+   * PortfolioRepoManager, and GitHubAuthManager resolve through the child
+   * SessionContainer.
+   */
+  private createHttpSessionHandlerBundle(
+    child: SessionContainer,
+    userPortfolioDir: string,
+  ): HandlerBundle {
+    const personaManager = this.resolve<PersonaManager>('PersonaManager');
+    const initService = this.resolve<InitializationService>('InitializationService');
+    const indicatorService = child.resolve<PersonaIndicatorService>('PersonaIndicatorService');
+    const personaExporter = new PersonaExporter(() => personaManager.getCurrentUserForAttribution());
+    const personaImporter = new PersonaImporter(
+      path.join(userPortfolioDir, ElementType.PERSONA),
+      () => personaManager.getCurrentUserForAttribution(),
+      undefined,
+      this.resolve('FileOperationsService'),
+    );
+    const activePersonaAccessor = {
+      get: () => personaManager.getActivePersona()?.filename || null,
+      set: (value: string | null) => {
+        if (value) {
+          personaManager.activatePersona(value).catch(err =>
+            logger.error(`[Container] HTTP persona activation failed for "${value}" — state accessor may be stale:`, err)
+          );
+        } else {
+          personaManager.deactivatePersona();
+        }
+      },
+    };
+
+    const personaHandler = new PersonaHandler(
+      personaManager,
+      personaExporter,
+      personaImporter,
+      initService,
+      indicatorService,
+      activePersonaAccessor,
+    );
+
+    const elementCrudHandler = new ElementCRUDHandler(
+      this.resolve('SkillManager'),
+      this.resolve('TemplateManager'),
+      this.resolve('TemplateRenderer'),
+      this.resolve('AgentManager'),
+      this.resolve('MemoryManager'),
+      this.resolve('EnsembleManager'),
+      personaManager,
+      this.resolve('PortfolioManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+      this.resolve('ElementQueryService'),
+      this.resolve('ValidationRegistry'),
+      child.resolve<IActivationStateStore>('ActivationStore'),
+      child.resolve('BackupService'),
+      this.resolve('PolicyExportService'),
+      this.resolve('SessionActivationRegistry'),
+      this.resolve('ContextTracker'),
+      this.hasRegistration('ForkOnEditStrategy') ? this.resolve('ForkOnEditStrategy') : undefined,
+    );
+
+    const collectionHandler = new CollectionHandler(
+      this.resolve('CollectionBrowser'),
+      this.resolve('CollectionSearch'),
+      this.resolve('PersonaDetails'),
+      this.resolve('ElementInstaller'),
+      this.resolve('CollectionCache'),
+      this.resolve('PortfolioManager'),
+      this.resolve('APICache'),
+      personaManager,
+      child.resolve('SubmitToPortfolioTool'),
+      this.resolve('UnifiedIndexManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+    );
+
+    child.resolve<SubmitToPortfolioTool>('SubmitToPortfolioTool')
+      .setAutoSubmitCheck(() => collectionHandler.isAutoSubmitEnabled());
+
+    const portfolioHandler = new PortfolioHandler(
+      child.resolve('GitHubAuthManager'),
+      this.resolve('PortfolioManager'),
+      child.resolve('PortfolioPullHandler'),
+      this.resolve('PortfolioIndexManager'),
+      this.resolve('UnifiedIndexManager'),
+      initService,
+      indicatorService,
+      this.resolve('ConfigManager'),
+      this.resolve('FileOperationsService'),
+      child.resolve('TokenManager'),
+      child.resolve('PortfolioRepoManager'),
+      collectionHandler,
+    );
+
+    const githubAuthHandler = new GitHubAuthHandler(
+      child.resolve('GitHubAuthManager'),
+      this.resolve('ConfigManager'),
+      initService,
+      indicatorService,
+      this.resolve('FileOperationsService'),
+      this.resolve('PathService'),
+    );
+
+    const displayConfigHandler = new DisplayConfigHandler(
+      personaManager,
+      initService,
+      indicatorService,
+    );
+
+    const identityHandler = new IdentityHandler(
+      personaManager,
+      initService,
+      indicatorService,
+      this.resolve('ContextTracker'),
+    );
+    if (this.hasRegistration('UserIdentityService')) {
+      identityHandler.setDatabaseIdentityServices(
+        this.resolve('UserIdentityService'),
+        this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      );
+    }
+
+    const configHandler = new ConfigHandler(
+      this.resolve('ConfigManager'),
+      initService,
+      indicatorService,
+    );
+    const syncHandler = new SyncHandler(
+      child.resolve('PortfolioSyncManager'),
+      this.resolve('ConfigManager'),
+      indicatorService,
+    );
+    const enhancedIndexHandler = new EnhancedIndexHandler(
+      this.resolve('EnhancedIndexManager'),
+      indicatorService,
+    );
+
+    const handlerDeps: HandlerRegistry = {
+      elementCRUD: elementCrudHandler,
+      memoryManager: this.resolve('MemoryManager'),
+      agentManager: this.resolve('AgentManager'),
+      templateRenderer: this.resolve('TemplateRenderer'),
+      elementQueryService: this.resolve('ElementQueryService'),
+      collectionHandler,
+      portfolioHandler,
+      authHandler: githubAuthHandler,
+      configHandler,
+      enhancedIndexHandler,
+      personaHandler,
+      syncHandler,
+      buildInfoService: this.resolve('BuildInfoService'),
+      cacheMemoryBudget: this.resolve('CacheMemoryBudget'),
+      gatekeeper: this.resolve('gatekeeper'),
+      dangerZoneEnforcer: child.resolve('DangerZoneEnforcer'),
+      verificationStore: child.resolve('ChallengeStore'),
+      verificationNotifier: this.resolve('VerificationNotifier'),
+      memorySink: this.resolve<MemoryLogSink>('MemoryLogSink'),
+      performanceMonitor: this.resolve<PerformanceMonitor>('PerformanceMonitor'),
+      operationMetricsTracker: this.resolve<OperationMetricsTracker>('OperationMetricsTracker'),
+      gatekeeperMetricsTracker: this.resolve<GatekeeperMetricsTracker>('GatekeeperMetricsTracker'),
+      circuitBreaker: this.resolve<CircuitBreakerState>('CircuitBreakerState'),
+      resilienceMetrics: this.resolve<ResilienceMetricsTracker>('ResilienceMetricsTracker'),
+      activationRegistry: this.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+      isDbMode: this.hasRegistration('DatabaseInstance'),
+    };
+    Object.defineProperty(handlerDeps, 'metricsSink', {
+      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      configurable: true,
+      enumerable: true,
+    });
+
+    return {
+      personaHandler,
+      elementCrudHandler,
+      collectionHandler,
+      portfolioHandler,
+      githubAuthHandler,
+      displayConfigHandler,
+      identityHandler,
+      configHandler,
+      syncHandler,
+      toolRegistry: undefined as unknown as ToolRegistry,
+      enhancedIndexHandler,
+      mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
     };
   }
 

@@ -50,8 +50,11 @@ if (!clientId || clientId === 'undefined') {
   process.exit(1);
 }
 
-// Log file for debugging (optional, can be disabled in production)
-const LOG_FILE = join(homedir(), '.dollhouse', 'oauth-helper.log');
+// User-scoped runtime files. The parent process passes these when the helper
+// is launched from a per-user session; standalone legacy launches keep the
+// historical operator-home locations.
+const AUTH_DIR = process.env.DOLLHOUSE_OAUTH_HELPER_AUTH_DIR || join(homedir(), '.dollhouse', '.auth');
+const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(homedir(), '.dollhouse', 'oauth-helper.log');
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 
 async function log(message) {
@@ -135,7 +138,7 @@ async function storeToken(token) {
     
     // Fallback: Write to a temporary file for the MCP server to pick up
     try {
-      const tempTokenFile = join(homedir(), '.dollhouse', '.auth', 'pending_token.txt');
+      const tempTokenFile = join(AUTH_DIR, 'pending_token.txt');
       const tempDir = dirname(tempTokenFile);
       
       // Create directory with secure permissions
@@ -165,7 +168,7 @@ async function storeToken(token) {
 
 function cleanupPidFileSync() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
     if (fsSync.existsSync(pidFile)) {
       fsSync.unlinkSync(pidFile);
     }
@@ -176,7 +179,7 @@ function cleanupPidFileSync() {
 
 async function cleanupPidFile() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
     await fs.unlink(pidFile).catch(() => {});
     await log('PID file cleaned up');
   } catch (error) {
@@ -186,7 +189,7 @@ async function cleanupPidFile() {
 
 async function writePidFile() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
+    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
     const pidDir = dirname(pidFile);
     
     await fs.mkdir(pidDir, { recursive: true, mode: 0o700 });

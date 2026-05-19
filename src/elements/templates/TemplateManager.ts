@@ -36,6 +36,7 @@ export class TemplateManager extends BaseElementManager<Template> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         storageLayerFactory: deps.storageLayerFactory,
         getCurrentUserId: deps.getCurrentUserId,
         publicElementDiscovery: deps.publicElementDiscovery,

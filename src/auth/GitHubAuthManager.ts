@@ -10,6 +10,8 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ConfigManager } from '../config/ConfigManager.js';
+import { env } from '../config/env.js';
+import { createHash } from 'node:crypto';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -62,6 +64,11 @@ export class GitHubAuthManager {
   private activePolling: AbortController | null = null;
   private tokenManager: TokenManager;
 
+  private userInfoCacheKey(token: string): string {
+    const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
+    return `${this.USER_URL}:token:${tokenHash}`;
+  }
+
   constructor(apiCache: APICache, configManager: ConfigManager, tokenManager: TokenManager) {
     this.apiCache = apiCache;
     this.configManager = configManager;
@@ -75,8 +82,12 @@ export class GitHubAuthManager {
    * @returns The OAuth Client ID to use for authentication
    */
   private async getClientId(): Promise<string | null> {
-    // Check environment variable first (for backward compatibility)
-    const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+    // Cycle 24 / cycle-23 security MEDIUM-1: route through env.X
+    // (Zod-validated) instead of raw process.env. Same sibling-fix-miss
+    // class as cycle 21's cookieSecret/inviteTokens sweep — a typo in
+    // the env name would previously fall through to the default client
+    // ID with no operator signal.
+    const envClientId = env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
       logger.debug('Using OAuth Client ID from environment variable');
       return envClientId;
@@ -634,7 +645,8 @@ export class GitHubAuthManager {
    */
   private async fetchUserInfo(token: string): Promise<any> {
     // Check cache first
-    const cached = this.apiCache.get(this.USER_URL);
+    const cacheKey = this.userInfoCacheKey(token);
+    const cached = this.apiCache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -704,7 +716,7 @@ export class GitHubAuthManager {
     });
     
     // Cache the result
-    this.apiCache.set(this.USER_URL, data);
+    this.apiCache.set(cacheKey, data);
     
     return data;
   }

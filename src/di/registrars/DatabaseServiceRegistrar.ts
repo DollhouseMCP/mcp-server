@@ -32,7 +32,7 @@
 import { env } from '../../config/env.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
-import type { UserIdResolver } from '../../database/UserContext.js';
+import type { SessionIdResolver, UserIdResolver } from '../../database/UserContext.js';
 
 import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
@@ -61,7 +61,8 @@ export class DatabaseServiceRegistrar {
     // Dynamic imports — drizzle-orm stays out of the static module graph
     // so file-mode deployments and tests never load it.
     const { bootstrapDatabase } = await import('../../database/bootstrap.js');
-    const { createUserIdResolver } = await import('../../database/UserContext.js');
+    const { createDatabaseConnection } = await import('../../database/connection.js');
+    const { createSessionIdResolver, createUserIdResolver } = await import('../../database/UserContext.js');
 
     const result = await bootstrapDatabase({
       connectionUrl: env.DOLLHOUSE_DATABASE_URL,
@@ -75,6 +76,16 @@ export class DatabaseServiceRegistrar {
     // Drizzle instance (resolved by stores and storage layers)
     container.register('DatabaseInstance', () => result.db);
 
+    const systemConnection = env.DOLLHOUSE_DATABASE_ADMIN_URL
+      ? createDatabaseConnection({
+          connectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
+          poolSize: Math.min(env.DOLLHOUSE_DATABASE_POOL_SIZE, 2),
+          ssl: env.DOLLHOUSE_DATABASE_SSL,
+        })
+      : result.connection;
+    container.register('SystemDatabaseConnection', () => systemConnection);
+    container.register('SystemDatabaseInstance', () => systemConnection.db);
+
     // Storage layer factory + state store classes — loaded here (async context)
     // so drizzle-orm stays out of the static import graph entirely. File-mode
     // code and tests never import these modules.
@@ -82,6 +93,7 @@ export class DatabaseServiceRegistrar {
     const { DatabaseActivationStateStore } = await import('../../state/DatabaseActivationStateStore.js');
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
+    const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
 
     container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
     container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
@@ -107,13 +119,21 @@ export class DatabaseServiceRegistrar {
         : undefined;
       return createUserIdResolver(tracker, registry);
     });
+    container.register('SessionIdResolver', () => {
+      const tracker = container.resolve<ContextTracker>('ContextTracker');
+      return createSessionIdResolver(tracker);
+    });
 
     // Override the file-mode StorageLayerFactory with the DB-backed variant.
     // Resolved AFTER UserIdResolver is registered so the factory captures
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
+    const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
     container.register('StorageLayerFactory', () =>
       new DatabaseStorageLayerFactory(result.db, userIdResolver)
+    );
+    container.register('AgentStateStore', () =>
+      new DatabaseAgentStateStore(result.db, userIdResolver, sessionIdResolver)
     );
 
     // UserIdentityService — resolves usernames to DB UUIDs on demand.

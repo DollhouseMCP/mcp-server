@@ -104,25 +104,27 @@ describe('PersonaManager', () => {
   });
 
 const seedPersonaCache = (entries: Array<[string, Persona]>) => {
-  // Seed the BaseElementManager cache directly
-  const elementsCache = (personaManager as any).elements;
-  const filenames: string[] = [];
+  const filenames = new Set<string>();
   const fileContents: Record<string, string> = {};
 
   for (const [filename, persona] of entries) {
-    // Use persona.id as the cache key (BaseElementManager uses ID-based caching)
-    elementsCache.set(persona.id || persona.unique_id || persona.metadata.unique_id, persona);
-    filenames.push(filename);
+    const cachePath = filename.endsWith('.md') ? filename : persona.filename;
+    const personaWithIdentity = persona as Persona & { id?: string; filePath?: string };
+    personaWithIdentity.id = personaWithIdentity.id || persona.unique_id || persona.metadata.unique_id || cachePath;
+    personaWithIdentity.filename = cachePath;
+    personaWithIdentity.filePath = cachePath;
+    (personaManager as any).cacheElement(personaWithIdentity, cachePath);
+    filenames.add(cachePath);
 
     // Create mock file content for this persona
     const frontmatter = Object.entries(persona.metadata)
       .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
       .join('\n');
-    fileContents[filename] = `---\n${frontmatter}\n---\n\n${persona.instructions || persona.content}`;
+    fileContents[cachePath] = `---\n${frontmatter}\n---\n\n${persona.instructions || persona.content}`;
   }
 
   // Mock PortfolioManager to return these filenames when listElements is called
-  mockPortfolioManager.listElements = jest.fn().mockResolvedValue(filenames);
+  mockPortfolioManager.listElements = jest.fn().mockResolvedValue([...filenames]);
 
   // Mock FileOperationsService.readElementFile to return persona content when files are read
   // BaseElementManager.load() uses fileOperations.readElementFile(), not fileLockManager.atomicReadFile()

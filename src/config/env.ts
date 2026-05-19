@@ -54,6 +54,11 @@ function parseAllowedHosts(rawValue: string | undefined): string[] | undefined {
 // Solution: Temporarily redirect stdout to stderr during dotenv initialization.
 // In --web mode, suppress both stdout AND stderr — the user only needs the
 // console URL banner, not dotenv's injection summary. Logs go to the web viewer.
+//
+// Cycle 19 / H3 note: this is the one site that legitimately reads
+// DOLLHOUSE_DEBUG / ENABLE_DEBUG raw from process.env — the schema isn't
+// parsed until line 572, and we need this decision before dotenv runs.
+// All other consumers should use env.DOLLHOUSE_DEBUG / env.ENABLE_DEBUG.
 const isWebSilent = process.argv.includes('--web')
   && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG;
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
@@ -124,6 +129,56 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_SESSION_POOL_SIZE: z.coerce.number().int().min(0).max(32).default(0),
   /** Start the web console alongside HTTP transport for session monitoring. */
   DOLLHOUSE_HTTP_WEB_CONSOLE: envBool(true),
+  /** Public HTTPS base URL used in OAuth discovery metadata for remote connectors. */
+  DOLLHOUSE_PUBLIC_BASE_URL: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Path to TLS certificate (PEM). When set with DOLLHOUSE_TLS_KEY_PATH, the HTTP transport binds HTTPS. */
+  DOLLHOUSE_TLS_CERT_PATH: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Path to TLS private key (PEM). Required alongside DOLLHOUSE_TLS_CERT_PATH for HTTPS. */
+  DOLLHOUSE_TLS_KEY_PATH: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** CI-only escape hatch: allow non-loopback bind without TLS. Never set in production. */
+  DOLLHOUSE_UNSAFE_NO_TLS: envBool(false),
+  /**
+   * Cycle-17: separate GitHub OAuth credentials for the §8.1 user-auth
+   * flow. The legacy `DOLLHOUSE_GITHUB_CLIENT_ID` is for the
+   * portfolio-sync feature (server → GitHub, device flow, no secret).
+   * The §8.1 GitHub method needs its own web-flow OAuth app with a
+   * registered callback URL — running both features against a single
+   * OAuth app is possible (enable both flows, register the §8.1
+   * callback) but operationally fragile. Splitting the env vars lets
+   * operators register distinct apps for the two purposes.
+   *
+   * Backward compat: when `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` is unset,
+   * AuthProviderFactory falls back to `DOLLHOUSE_GITHUB_CLIENT_ID` and
+   * logs a deprecation warning. Same fallback for the secret.
+   */
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * Legacy GitHub OAuth client secret. Predates the env-var split
+   * above. Kept as a fallback so existing operators don't break;
+   * prefer `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` for new deployments.
+   */
+  DOLLHOUSE_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * HMAC secret for invite-token / magic-link signing. ≥32 hex chars.
+   * Auto-generated and persisted with the AS signing key on first run if
+   * not provided. Set explicitly for multi-instance deployments so all
+   * instances share the secret.
+   */
+  DOLLHOUSE_INVITE_TOKEN_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  // SMTP for the magic-link auth method (must-fix #10 STARTTLS-mandatory).
+  DOLLHOUSE_SMTP_HOST: z.string().trim().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  DOLLHOUSE_SMTP_USER: z.string().trim().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_PASSWORD: z.string().optional().transform(v => v || undefined),
+  DOLLHOUSE_SMTP_FROM: z.string().trim().optional().transform(v => v || undefined),
 
   // ============================================================================
   // Database Configuration (Phase 4)
@@ -138,6 +193,34 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   /** SSL mode for database connection. */
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+  /** Base64-encoded 32-byte key used to wrap DB-stored OAuth token DEKs. Required in database mode. */
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+
+  // ============================================================================
+  // Auth Storage Configuration (§8.1)
+  // ============================================================================
+  /**
+   * Cycle 19 / B2: backend selector for the embedded AS storage layer.
+   * Previously read raw via process.env in createAuthStorage.pickBackend
+   * and cliAuthStorage.detectBackend, which silently allowed typos to
+   * fall through to the filesystem default. Schema enforcement makes
+   * misspelled values fail loudly at config parse with a clear error.
+   *
+   * `memory` is permitted for tests only — runtime use with durable
+   * methods (local-password, magic-link) requires
+   * DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true (see below).
+   */
+  DOLLHOUSE_AUTH_STORAGE_BACKEND: z.enum(['memory', 'filesystem', 'postgres']).optional(),
+  /**
+   * Cycle 19 / B2: explicit override that lets the in-memory AS storage
+   * backend serve durable auth methods (local-password, magic-link).
+   * Without this, createAuthStorage refuses the combination because
+   * accounts and refresh tokens are lost on restart. Routed through
+   * the schema so a typo (e.g. DOLLHOUS_ALLOW_MEMORY_AUTH_STORAGE)
+   * fails loudly instead of silently leaving the safety guard active.
+   */
+  DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE: envBool(false),
 
   // ============================================================================
   // Shared Pool Configuration (Step 4.6)
@@ -169,6 +252,18 @@ const envSchema = z.object({
   /** Enable the shared public element pool (Step 4.6). Default: false (opt-in). */
   DOLLHOUSE_SHARED_POOL_ENABLED: envBool(false),
   ENABLE_DEBUG: envBool(false),
+  /**
+   * Cycle 19 / H3: debug-mode flag for verbose logging and dev-friendly
+   * behaviors (console error verbosity, static-asset cache disable).
+   * Previously read raw via process.env across 5 src files; routing
+   * through the schema makes typos visible at config parse.
+   *
+   * NOTE: env.ts:58 (dotenv silencing) and utils/logger.ts:22 (logger
+   * minLevel default) intentionally still read process.env directly
+   * because both run before envSchema.parse() completes. See comments
+   * at those sites.
+   */
+  DOLLHOUSE_DEBUG: envBool(false),
   TEST_VERBOSE_LOGGING: envBool(false),
 
   // ============================================================================
@@ -276,8 +371,23 @@ const envSchema = z.object({
    */
   DOLLHOUSE_AUTH_ENABLED: envBool(false),
 
-  /** Auth provider: 'local' (self-signed JWTs for dev) or 'oidc' (external IdP). */
-  DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'oidc']).default('local'),
+  /** Auth provider: 'local' (self-signed JWTs), 'embedded' (Dollhouse OAuth AS), or 'oidc' (external IdP). */
+  DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'embedded', 'oidc']).default('local'),
+  /**
+   * Comma-separated list of auth methods exposed by the embedded AS.
+   * Recognized values (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
+   * 'trivial-consent', 'github', 'local-password', 'magic-link'.
+   *
+   * Multi-method is supported (Phase 2 shipped) — list any combination
+   * and the AS exposes them all simultaneously via the LoginChooser
+   * at /interaction time.
+   *
+   * Defaults to 'trivial-consent' (solo localhost) when unset.
+   * 'oidc-bridge' is NOT a method id — it's the outer provider mode
+   * selected via DOLLHOUSE_AUTH_PROVIDER=oidc.
+   */
+  DOLLHOUSE_AUTH_METHODS: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
 
   /** OIDC issuer URL (required when provider=oidc). */
   DOLLHOUSE_AUTH_ISSUER: z.string().optional(),
@@ -288,11 +398,123 @@ const envSchema = z.object({
   /** OIDC JWKS endpoint (auto-derived from issuer if omitted). */
   DOLLHOUSE_AUTH_JWKS_URI: z.string().optional(),
 
+  /**
+   * Cycle 19 / security-#6: enforce RFC 9068 `typ: at+jwt` on OIDC-bridge
+   * tokens. Default false because many managed IdPs (Auth0, Okta, Keycloak,
+   * AWS Cognito) don't stamp typ on access tokens by default; hard-requiring
+   * it would break those deployments. Operators whose IdP DOES stamp typ
+   * should enable this to close the id-token-as-access-token gap (where an
+   * id_token issued for the same audience with `mcp` scope would otherwise
+   * pass the resource-server check).
+   */
+  DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP: envBool(false),
+
+  /**
+   * Cycle 24 / smoke-test escape hatch: allow open Dynamic Client Registration
+   * at /reg without requiring an Initial Access Token. Default false (production
+   * shape): only callers holding an IAT can register clients, preventing random
+   * clients on the network from registering arbitrary redirect URIs and defeating
+   * the redirect-URI exact-match guarantee. Set true for localhost dev to let
+   * MCP clients (Gemini CLI, claude.ai web, etc.) self-register without an
+   * out-of-band IAT-issuance step.
+   *
+   * Threat model: open DCR is acceptable when the AS is bound to loopback and
+   * cannot be reached from outside the host. On a non-loopback bind, leaving
+   * this on widens the attack surface to anyone who can reach the AS.
+   *
+   * Follow-up: the dashboard tracks IAT issuance as a deferred admin-channel
+   * feature. Once that lands, operators won't need this escape hatch for
+   * remote deployments; loopback dev can keep it for convenience.
+   */
+  DOLLHOUSE_AUTH_OPEN_DCR: envBool(false),
+
   /** Key pair file path for local dev provider. */
   DOLLHOUSE_AUTH_LOCAL_KEY_FILE: z.string().optional(),
 
   /** Default subject for auto-generated startup token (local dev). */
   DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB: z.string().optional(),
+
+  /**
+   * GitHub OAuth client ID. Originally introduced for the legacy
+   * portfolio-sync feature (server → GitHub, device flow). Cycle-17
+   * split out a dedicated `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` for the
+   * §8.1 user-auth flow; this var remains the canonical name for
+   * portfolio sync AND serves as the fallback for §8.1 when the new
+   * var is unset (with a deprecation warning).
+   */
+  DOLLHOUSE_GITHUB_CLIENT_ID: z.string().optional(),
+
+  /**
+   * Cycle-8 fix (H8): cookie signing secret. When set, must be hex-
+   * encoded and decode to at least 32 bytes. Used as the keygrip key
+   * for oidc-provider's signed-cookie path AND (when
+   * `refreshRotationCheckIpUa=true`) as the HMAC salt for IP/UA
+   * hashes on refresh tokens. In multi-replica HA, every replica
+   * MUST read the same value here — file-loaded keys diverge per
+   * replica and break legitimate refresh rotations.
+   *
+   * The shape validation here catches "set but decodes to <32 bytes"
+   * at config load instead of at AS init (where the throw is buried
+   * inside `loadOrGenerateCookieSigningKeys`).
+   */
+  DOLLHOUSE_COOKIE_SIGNING_SECRET: z.string().trim().optional()
+    .refine(
+      (v) => {
+        if (v === undefined || v === '') return true;
+        // Must be hex-encoded ≥32 bytes (64 hex chars).
+        if (!/^[0-9a-fA-F]+$/.test(v)) return false;
+        if (v.length < 64) return false;
+        return true;
+      },
+      {
+        message:
+          'DOLLHOUSE_COOKIE_SIGNING_SECRET must be hex-encoded and decode to at least ' +
+          '32 bytes (64 hex characters). Generate one with: ' +
+          'node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"',
+      },
+    )
+    .transform((v) => (v === '' ? undefined : v)),
+
+  /**
+   * Round 5 / H4: trusted-proxy CIDR list for `app.set('trust proxy')`.
+   * Multiple comma-separated values; each is a CIDR or one of the
+   * recognized keywords (`loopback`, `linklocal`, `uniquelocal`).
+   * When unset, the default is `loopback`. Hosted multi-tenant
+   * deployments MUST set this explicitly — the
+   * AuthProviderFactory startup-fail guard refuses to run multi-user
+   * methods behind a non-loopback bind without it (per-IP rate-limit
+   * collapse hazard).
+   *
+   * Round 5 review fixup (MED-5): each entry is shape-validated. A
+   * misspelled value (e.g. `DOLLHOUSE_TRUSTED_PROXIES=foo`) used to
+   * pass the H4 startup-fail guard yet silently produce
+   * `app.set('trust proxy', ['foo'])` which Express's proxy-addr
+   * rejects at request time — leaving operators in the proxy-IP-
+   * collapse failure mode the guard was meant to prevent. Now the
+   * env load fails loudly with a clear shape error.
+   */
+  DOLLHOUSE_TRUSTED_PROXIES: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined)
+    .refine(
+      (entries) => {
+        if (entries === undefined) return true;
+        const keyword = /^(loopback|linklocal|uniquelocal)$/;
+        // Match an IPv4 CIDR (e.g. 10.0.0.0/8) or an IPv6 CIDR
+        // (e.g. fd00::/8) or a bare IPv4/IPv6 address. Not a full
+        // RFC-strict parser — proxy-addr does the strict check at
+        // mount time. This guard catches the common typo class
+        // (alphabetic non-keyword strings like 'foo') without
+        // re-implementing IP parsing.
+        const cidrLike = /^[0-9a-fA-F:.]+(\/\d{1,3})?$/;
+        return entries.every((entry) => keyword.test(entry) || cidrLike.test(entry));
+      },
+      {
+        message:
+          "DOLLHOUSE_TRUSTED_PROXIES entries must be CIDR ranges " +
+          "(e.g. '10.0.0.0/8') or one of the keywords " +
+          "'loopback' / 'linklocal' / 'uniquelocal'",
+      },
+    ),
 
   /**
    * Issue #1780: Optional override for the console token file location.

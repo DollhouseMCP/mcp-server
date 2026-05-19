@@ -17,6 +17,7 @@ import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
+import type { PathService } from '../paths/PathService.js';
 
 export class GitHubAuthHandler {
     constructor(
@@ -24,7 +25,8 @@ export class GitHubAuthHandler {
         private readonly configManager: ConfigManager,
         private readonly initService: InitializationService,
         private readonly indicatorService: PersonaIndicatorService,
-        private readonly fileOperations: FileOperationsService
+        private readonly fileOperations: FileOperationsService,
+        private readonly pathService?: PathService
     ) {}
 
     private async ensureInitialized(): Promise<void> {
@@ -152,7 +154,7 @@ export class GitHubAuthHandler {
               userCode: deviceResponse.user_code
             });
             
-            const stateFile = path.join(this.getDollhouseHomeDir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+            const stateFile = this.getOAuthHelperStateFile();
             const stateDir = path.dirname(stateFile);
             await this.fileOperations.createDirectory(stateDir);
             
@@ -246,7 +248,7 @@ export class GitHubAuthHandler {
           
           if (status.isAuthenticated) {
             if (helperHealth.exists) {
-              const stateFile = path.join(this.getDollhouseHomeDir(), '.dollhouse', '.auth', 'oauth-helper-state.json');
+              const stateFile = this.getOAuthHelperStateFile();
               // FileOperationsService.deleteFile already handles ENOENT gracefully
               await this.fileOperations.deleteFile(stateFile).catch(() => {}); // Preserve error swallowing pattern
             }
@@ -349,10 +351,9 @@ export class GitHubAuthHandler {
         await this.ensureInitialized();
         try {
           const health = await this.checkOAuthHelperHealth();
-          const homeDir = this.getDollhouseHomeDir();
-          const stateFile = path.join(homeDir, '.dollhouse', '.auth', 'oauth-helper-state.json');
-          const logFile = path.join(homeDir, '.dollhouse', 'oauth-helper.log');
-          const pidFile = path.join(homeDir, '.dollhouse', '.auth', 'oauth-helper.pid');
+          const stateFile = this.getOAuthHelperStateFile();
+          const logFile = this.getOAuthHelperLogFile();
+          const pidFile = this.getOAuthHelperPidFile();
           
           let statusText = `📊 **OAuth Helper Process Diagnostics**\n\n`;
           
@@ -452,9 +453,8 @@ setup_github_auth
     }
 
     private async checkOAuthHelperHealth() {
-        const homeDir = this.getDollhouseHomeDir();
-        const stateFile = path.join(homeDir, '.dollhouse', '.auth', 'oauth-helper-state.json');
-        const logFile = path.join(homeDir, '.dollhouse', 'oauth-helper.log');
+        const stateFile = this.getOAuthHelperStateFile();
+        const logFile = this.getOAuthHelperLogFile();
         
         const health = {
           exists: false,
@@ -687,8 +687,35 @@ setup_github_auth
         ], {
             detached: true,
             stdio: 'ignore',
-            windowsHide: true
+            windowsHide: true,
+            env: {
+                ...process.env,
+                DOLLHOUSE_OAUTH_HELPER_AUTH_DIR: this.getOAuthHelperAuthDir(),
+                DOLLHOUSE_OAUTH_HELPER_LOG_FILE: this.getOAuthHelperLogFile()
+            }
         });
+    }
+
+    private getOAuthHelperAuthDir(): string {
+        if (this.pathService) {
+            return this.pathService.getUserAuthDir();
+        }
+        return path.join(this.getDollhouseHomeDir(), '.dollhouse', '.auth');
+    }
+
+    private getOAuthHelperStateFile(): string {
+        return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper-state.json');
+    }
+
+    private getOAuthHelperLogFile(): string {
+        if (this.pathService) {
+            return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper.log');
+        }
+        return path.join(this.getDollhouseHomeDir(), '.dollhouse', 'oauth-helper.log');
+    }
+
+    private getOAuthHelperPidFile(): string {
+        return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper.pid');
     }
 
     private getDollhouseHomeDir(): string {

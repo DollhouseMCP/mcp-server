@@ -20,6 +20,7 @@ import {
   type StreamableHttpRuntimeHandle,
 } from '../../src/server/StreamableHttpServer.js';
 import { createHttpSession } from '../../src/context/HttpSession.js';
+import type { SessionContext } from '../../src/context/SessionContext.js';
 import { setHttpModeActive } from '../../src/index.js';
 import {
   createIngestRoutes,
@@ -33,12 +34,30 @@ export interface HttpTestEnvironmentOptions {
   rateLimitWindowMs?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  /**
+   * Override `DOLLHOUSE_HOME_DIR` for the test. By default the helper creates
+   * a fresh temp home with no `.dollhouse/` legacy root so
+   * `LegacyDetectingPathResolver.detect()` picks per-user layout anchored on
+   * the temp portfolio root.
+   *
+   * Restored on cleanup.
+   */
+  homeDirOverride?: string;
+  /**
+   * Sequence of userIds to inject into successive HTTP sessions. The session
+   * factory pulls userIds[N] for the Nth incoming connection. When the
+   * sequence is exhausted, subsequent sessions fall back to the default
+   * (`http-user`). Allows a single test to exercise multi-user semantics
+   * without a full auth-middleware setup.
+   */
+  userIdSequence?: string[];
 }
 
 export interface HttpTestEnvironment {
   runtime: StreamableHttpRuntimeHandle;
   container: DollhouseContainer;
   testDir: string;
+  sessionContexts: SessionContext[];
   cleanup: () => Promise<void>;
 }
 
@@ -70,22 +89,31 @@ export async function createHttpTestEnvironment(
   // Save env vars for restoration
   const savedEnv: Record<string, string | undefined> = {
     DOLLHOUSE_PORTFOLIO_DIR: process.env.DOLLHOUSE_PORTFOLIO_DIR,
+    DOLLHOUSE_HOME_DIR: process.env.DOLLHOUSE_HOME_DIR,
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
+    DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG,
   };
 
   // Create isolated portfolio directory
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-parity-'));
+  const ownsHomeDir = options.homeDirOverride === undefined;
+  const testHomeDir = options.homeDirOverride ?? await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-home-'));
   await Promise.all(
     ELEMENT_TYPES.map(t => fs.mkdir(path.join(testDir, t), { recursive: true })),
   );
 
   // Configure env before container construction
   process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
+  process.env.DOLLHOUSE_HOME_DIR = testHomeDir;
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+  // Suppress OS-native verification dialogs so unattended HTTP integration
+  // runs don't block on human input. Real dialogs still fire in stdio and
+  // production deployments where the env var is unset.
+  process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'true';
 
   // Bootstrap shared container (same pattern as startStreamableHttpServer)
   const container = new DollhouseContainer();
@@ -95,10 +123,20 @@ export async function createHttpTestEnvironment(
 
   setHttpModeActive(true);
 
+  // Index into options.userIdSequence consumed per incoming session.
+  // When the sequence runs dry, subsequent sessions fall back to the
+  // createHttpSession default ('http-user').
+  let sessionUserIdIdx = 0;
+  const sessionContexts: SessionContext[] = [];
+
   // Create HTTP runtime with session factory
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
-      const sessionContext = createHttpSession();
+      const userIdForSession = options.userIdSequence?.[sessionUserIdIdx++];
+      const sessionContext = userIdForSession !== undefined
+        ? createHttpSession({ userId: userIdForSession })
+        : createHttpSession();
+      sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
@@ -119,10 +157,14 @@ export async function createHttpTestEnvironment(
     runtime,
     container,
     testDir,
+    sessionContexts,
     cleanup: async () => {
       await runtime.close();
       await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+      if (ownsHomeDir) {
+        await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {});
+      }
       setHttpModeActive(false);
       // Restore env vars
       for (const [key, value] of Object.entries(savedEnv)) {
@@ -148,20 +190,26 @@ export async function createHttpTestEnvironmentWithConsole(
 ): Promise<HttpTestEnvironmentWithConsole> {
   const savedEnv: Record<string, string | undefined> = {
     DOLLHOUSE_PORTFOLIO_DIR: process.env.DOLLHOUSE_PORTFOLIO_DIR,
+    DOLLHOUSE_HOME_DIR: process.env.DOLLHOUSE_HOME_DIR,
     MCP_INTERFACE_MODE: process.env.MCP_INTERFACE_MODE,
     DOLLHOUSE_WEB_CONSOLE: process.env.DOLLHOUSE_WEB_CONSOLE,
     DOLLHOUSE_PERMISSION_SERVER: process.env.DOLLHOUSE_PERMISSION_SERVER,
+    DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG: process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG,
   };
 
   const testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-'));
+  const ownsHomeDir = options.homeDirOverride === undefined;
+  const testHomeDir = options.homeDirOverride ?? await fs.mkdtemp(path.join(os.tmpdir(), 'mcp-http-console-home-'));
   await Promise.all(
     ELEMENT_TYPES.map(t => fs.mkdir(path.join(testDir, t), { recursive: true })),
   );
 
   process.env.DOLLHOUSE_PORTFOLIO_DIR = testDir;
+  process.env.DOLLHOUSE_HOME_DIR = testHomeDir;
   process.env.MCP_INTERFACE_MODE = 'mcpaql';
   process.env.DOLLHOUSE_WEB_CONSOLE = 'false';
   process.env.DOLLHOUSE_PERMISSION_SERVER = 'false';
+  process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG = 'true';
 
   const container = new DollhouseContainer();
   await container.preparePortfolio();
@@ -175,10 +223,12 @@ export async function createHttpTestEnvironmentWithConsole(
     logBroadcast: () => {},
   });
   ingestRoutes.registerConsoleSession();
+  const sessionContexts: SessionContext[] = [];
 
   const runtime = await createStreamableHttpRuntime(
     async (transport) => {
       const sessionContext = createHttpSession();
+      sessionContexts.push(sessionContext);
       const { server, dispose } = await container.createServerForHttpSession(sessionContext);
       await server.connect(transport);
       return { dispose };
@@ -205,11 +255,15 @@ export async function createHttpTestEnvironmentWithConsole(
     runtime,
     container,
     testDir,
+    sessionContexts,
     ingestRoutes,
     cleanup: async () => {
       await runtime.close();
       await container.dispose().catch(() => {});
       await fs.rm(testDir, { recursive: true, force: true }).catch(() => {});
+      if (ownsHomeDir) {
+        await fs.rm(testHomeDir, { recursive: true, force: true }).catch(() => {});
+      }
       setHttpModeActive(false);
       for (const [key, value] of Object.entries(savedEnv)) {
         if (value === undefined) {

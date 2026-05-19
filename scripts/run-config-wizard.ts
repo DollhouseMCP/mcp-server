@@ -18,8 +18,9 @@ async function main() {
     const fileLockManager = new FileLockManager();
     const fileOperations = new FileOperationsService(fileLockManager);
 
-    // Initialize config manager
-    const configManager = new ConfigManager(fileOperations, os);
+    // Initialize config manager via the standalone factory — wires up
+    // operator + user stores against the default (filesystem) backend.
+    const configManager = await ConfigManager.createStandalone(fileOperations, os);
     await configManager.initialize();
 
     // Create and run wizard

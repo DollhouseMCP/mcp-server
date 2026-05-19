@@ -87,7 +87,21 @@ interface ParsedMemoryData {
 }
 
 export class MemoryManager extends BaseElementManager<Memory> {
-  private readonly memoriesDir: string;
+  /**
+   * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
+   * `this.elementDir` (the dynamic getter on BaseElementManager added
+   * for per-user filesystem isolation). Capturing this once at
+   * construction time was the original intent — but now the underlying
+   * `elementDir` resolves per-call to the current session's per-user
+   * dir, so this getter must re-resolve too. Otherwise the captured
+   * value is the flat root (no session active at root-container
+   * construction) while every other consumer of `elementDir` sees the
+   * per-user dir, splitting reads from writes across two filesystem
+   * subtrees.
+   */
+  private get memoriesDir(): string {
+    return this.elementDir;
+  }
   // Phase 2: Bounded content hash index replaces unbounded Map
   private contentHashIndex = new LRUCache<string>({
     name: 'memory:contentHash',
@@ -120,6 +134,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
         fileWatchService: deps.fileWatchService,
         memoryBudget: deps.memoryBudget,
         backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
         contextTracker: deps.contextTracker,
         activationRegistry: deps.activationRegistry,
         storageLayerFactory: deps.storageLayerFactory,
@@ -129,7 +144,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
       deps.fileOperationsService,
       deps.validationRegistry,
     );
-    this.memoriesDir = this.elementDir;
+    // Phase 4.5 follow-up: `memoriesDir` is now a getter that delegates to
+    // `this.elementDir`, so no construction-time capture is needed. See the
+    // getter declaration above for the rationale.
     this.metadataService = deps.metadataService;
     this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
     this.validationService = deps.validationRegistry.getValidationService();
@@ -511,6 +528,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return crypto.createHash('sha256').update(content).digest('hex');
   }
 
+  private memoryHashKey(rawKey: string): string {
+    return `${this.getCacheNamespace()}:${rawKey}`;
+  }
+
   /**
    * Get all date folders in memories directory.
    * Phase 2: Removed local cache — MemoryStorageLayer scan cooldown handles the hot path.
@@ -570,7 +591,8 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Deduplication telemetry: emit MEMORY_DUPLICATE_DETECTED if this element's
     // content hash matches a previously saved memory (informational — does not block).
     const contentHash = this.calculateContentHash(element);
-    const existingIndexKey = this.contentHashIndex.get(contentHash);
+    const namespacedContentHash = this.memoryHashKey(contentHash);
+    const existingIndexKey = this.contentHashIndex.get(namespacedContentHash);
     if (existingIndexKey) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_DUPLICATE_DETECTED,
@@ -719,8 +741,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const indexKey = isWritableStorageLayer(this.storageLayer)
       ? filePath
       : path.join(this.memoriesDir, filePath);
-    this.contentHashIndex.set(contentHash, indexKey);
-    this.contentHashByPath.set(indexKey, contentHash);
+    const namespacedContentHash = this.memoryHashKey(contentHash);
+    const namespacedIndexKey = this.memoryHashKey(indexKey);
+    this.contentHashIndex.set(namespacedContentHash, indexKey);
+    this.contentHashByPath.set(namespacedIndexKey, namespacedContentHash);
 
     // Audit event: successful memory save (with entry count for observability)
     const stats = element.getStats();
@@ -1557,10 +1581,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
       const indexKey = isWritableStorageLayer(this.storageLayer)
         ? resolvedRelative
         : path.join(this.memoriesDir, resolvedRelative);
-      const hash = this.contentHashByPath.get(indexKey);
+      const namespacedIndexKey = this.memoryHashKey(indexKey);
+      const hash = this.contentHashByPath.get(namespacedIndexKey);
       if (hash) {
         this.contentHashIndex.delete(hash);
-        this.contentHashByPath.delete(indexKey);
+        this.contentHashByPath.delete(namespacedIndexKey);
       }
     } catch (error) {
       // Preserve idempotent delete semantics: ENOENT is not an error

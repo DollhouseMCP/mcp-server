@@ -7,7 +7,9 @@
   "bin": {
     "dollhousemcp": "dist/index.js",
     "mcp-server": "dist/index.js",
-    "dollhouse-console-token": "dist/cli/console-token.js"
+    "dollhouse-console-token": "dist/cli/console-token.js",
+    "dollhouse-create-user": "dist/cli/create-user.js",
+    "dollhouse-admin-bootstrap": "dist/cli/admin-bootstrap.js"
   },
   "scripts": {
     "prebuild": "npm run build:safety && node scripts/generate-version.js && node scripts/generate-hashes.mjs",
@@ -188,6 +190,7 @@
   "dependencies": {
     "@dollhousemcp/safety": "^1.0.0",
     "@modelcontextprotocol/sdk": "^1.25.1",
+    "argon2": "^0.44.0",
     "chalk": "^5.6.2",
     "dompurify": "^3.4.0",
     "dotenv": "^17.2.3",
@@ -202,6 +205,8 @@
     "js-yaml": "^4.1.1",
     "jsdom": "^24.1.3",
     "node-fetch": "^3.3.2",
+    "nodemailer": "^8.0.7",
+    "oidc-provider": "^9.8.3",
     "otpauth": "^9.5.0",
     "postgres": "^3.4.9",
     "posthog-node": "^5.24.17",
@@ -222,6 +227,8 @@
     "@types/js-yaml": "^4.0.9",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^24.10.0",
+    "@types/nodemailer": "^8.0.0",
+    "@types/oidc-provider": "^9.5.0",
     "@types/qrcode": "^1.5.6",
     "@types/semver": "^7.7.1",
     "@types/supertest": "^7.2.0",

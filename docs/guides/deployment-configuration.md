@@ -202,6 +202,8 @@ The MCP endpoint is available at `http://127.0.0.1:3000/mcp` by default.
 | `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` | `0` | Pre-warmed session pool size. `0` disables the pool. |
 | `DOLLHOUSE_HTTP_WEB_CONSOLE` | `true` | Start the web console alongside the HTTP transport. |
 
+> **HTTP keep-alive (cycle 24):** the server sets `keepAliveTimeout=120s` and `headersTimeout=130s` on the listening socket. Node.js's defaults (5s and 60s) caused transient "MCP ERROR" pop-ups in clients that hold a Streamable HTTP connection across short idle gaps (Gemini CLI confirmed). The 120s window matches reverse-proxy industry norms (AWS ALB 60s, GCP LB 600s, Cloudflare 100s) and is hard-coded — not env-var configurable today. Operators behind a reverse proxy whose idle timeout is shorter than 120s should align the upstream value; otherwise the proxy closes the socket before the app does.
+
 #### CLI overrides
 
 You can override transport settings on the command line without modifying environment files:
@@ -594,6 +596,22 @@ DOLLHOUSE_DATABASE_POOL_SIZE=25
 
 **Do not use the admin role for runtime.** Only set `DOLLHOUSE_DATABASE_ADMIN_URL` — the server uses it for bootstrap only, then discards it. Use a separate, non-superuser credential for `DOLLHOUSE_DATABASE_URL`.
 
+### Managed Postgres providers
+
+If you don't want to operate Postgres yourself, any standards-compliant managed provider works. Choose based on what your deployment already touches:
+
+| Provider | Notes |
+|---|---|
+| **Supabase** | Postgres + connection pooler (pgbouncer) bundled. Use the direct connection string for migrations (`DOLLHOUSE_DATABASE_ADMIN_URL`) and the pooler string at runtime (`DOLLHOUSE_DATABASE_URL` with `?pgbouncer=true&connection_limit=1`). |
+| **Neon** | Serverless Postgres; auto-scales, suspends on idle. Cold-start adds ~1s on first connection after suspension. Free tier sufficient for a hobbyist deploy. |
+| **AWS RDS / Google Cloud SQL / Azure Database** | Standard managed Postgres. Pair with VPC peering or private IP from your app host. Use `DOLLHOUSE_DATABASE_SSL=require` (or `verify-full` if your CA is configured). |
+| **Crunchy Bridge** | Postgres-experts vendor with point-in-time recovery on by default. Quality-of-life small-team option. |
+| **Self-hosted on a separate VM** | You own backups, replication, version upgrades. Cheapest, most work. Use SSL `require` and firewall the PG port to your app host. |
+
+Whatever you pick, set `DOLLHOUSE_DATABASE_SSL=require` (or stricter) and constrain `DOLLHOUSE_DATABASE_POOL_SIZE` to fit inside the provider's `max_connections` allowance — serverless providers often have lower caps than self-hosted.
+
+For a production deploy walkthrough that includes the managed-PG bootstrap path, see the [Production Hosting Runbook](./production-hosting-runbook.md).
+
 ---
 
 ## Per-User Data Isolation
@@ -862,6 +880,28 @@ DOLLHOUSE_AUTH_JWKS_URI=https://your-tenant.example.com/custom/jwks
 
 The token's `sub` claim becomes the user's identity in DollhouseMCP. Most providers use a stable, opaque ID (for example, `auth0|64abc123`) — this becomes the user's key in the database.
 
+#### Optional: enforce RFC 9068 `typ: at+jwt` (`DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP`)
+
+The OIDC bridge validates every incoming JWT against the configured issuer + audience + signing algorithm allowlist + the `mcp` scope. By default it does **not** require the RFC 9068 `typ: at+jwt` header, because many managed IdPs (Auth0, Okta, Keycloak, AWS Cognito) do not stamp `typ` on access tokens. Hard-requiring it would break those deployments.
+
+Set this to `true` if your IdP **does** stamp `typ: at+jwt`:
+
+```bash
+DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP=true
+```
+
+**Why you might want it on.** Some IdPs issue both `id_token` and access-token JWTs for the same audience. id_tokens commonly carry `typ: JWT` or no `typ` at all, and depending on your IdP's configuration they may also surface scopes including `mcp` (Auth0 with custom claims, Keycloak with mapper rules). Without typ enforcement an id_token can satisfy the resource-server check and be replayed as an access token. When your IdP supports `typ: at+jwt`, enabling this option closes the gap.
+
+**Verify before flipping it on.** Mint a token from your IdP and decode it:
+
+```bash
+curl -s "$ISSUER/.well-known/openid-configuration" | jq .id_token_signing_alg_values_supported
+# obtain an access token via your IdP, then:
+echo "$ACCESS_TOKEN" | cut -d. -f1 | base64 -d | jq .typ
+```
+
+If `.typ` is `"at+jwt"`, you can enable the option. If it's `"JWT"` or missing, leave the option off (default) until you can configure your IdP to stamp the access-token typ.
+
 #### Auth0 example
 
 1. In the Auth0 dashboard, create a new **API**:
@@ -900,14 +940,111 @@ Keycloak's JWKS endpoint is derived automatically as `https://keycloak.example.c
 
 ---
 
+### Embedded authorization server (`DOLLHOUSE_AUTH_PROVIDER=embedded`)
+
+The `embedded` provider runs a full OAuth 2.1 / OIDC authorization server **inside this server** — no external IdP needed. This is the production target shape: hosted multi-tenant with PostgreSQL storage, multi-method authentication (GitHub, magic-link email, local passwords, or trivial-consent for solo dev), atomic refresh-token rotation, and admin-bootstrap CLI.
+
+> **Operator runbook:** [auth-server-setup.md](./auth-server-setup.md) walks through the four common setup paths (solo localhost smoke test, local-password on filesystem, github on filesystem, full Postgres-backed) end-to-end including bootstrap, tunnels, reverse-proxy, native HTTPS, and verification. The section below is the env-var reference.
+
+#### Choosing methods
+
+```
+DOLLHOUSE_AUTH_PROVIDER=embedded
+DOLLHOUSE_AUTH_METHODS=github
+```
+
+Comma-separated list. Multi-method deployments expose all methods at the same `/interaction` endpoint and present a chooser. Recognized values:
+
+| Method | Use case | Required setup |
+|---|---|---|
+| `github` | Hosted, users sign in with GitHub | Register GitHub OAuth app (web flow with callback URL); set `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` + `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET`. The legacy `DOLLHOUSE_GITHUB_CLIENT_ID` / `_SECRET` pair (originally for portfolio sync) still works as a fallback with a deprecation warning. |
+| `local-password` | Self-hosted, operator-issued accounts | None at the env level — admin uses `dollhouse-create-user` to issue invite URLs |
+| `magic-link` | Hosted, email-based passwordless | SMTP config (`DOLLHOUSE_SMTP_*`) |
+| `trivial-consent` | Solo localhost dev only | None — refuses to start on non-loopback bind |
+
+#### TLS termination
+
+Two supported deployment shapes:
+
+**Native HTTPS** (TLS at this server, no upstream proxy):
+```
+DOLLHOUSE_TLS_CERT_PATH=/path/to/cert.pem
+DOLLHOUSE_TLS_KEY_PATH=/path/to/key.pem
+DOLLHOUSE_TRUSTED_PROXIES=loopback
+```
+The `loopback` keyword tells Express to ignore X-Forwarded-* headers from external clients. `req.ip` resolves to the TCP peer.
+
+**Behind a TLS-terminating reverse proxy** (Cloudflare Tunnel, nginx, ALB, Cloud Run):
+```
+# Do NOT set DOLLHOUSE_TLS_CERT_PATH / KEY_PATH (proxy handles TLS)
+DOLLHOUSE_TRUSTED_PROXIES=10.0.0.0/8   # the proxy's CIDR range
+DOLLHOUSE_PUBLIC_BASE_URL=https://your.deployment.example
+```
+
+The startup safety guard (`assertHostedDeploymentSafety`) refuses to start in misconfigured states with operator-actionable error messages: it requires `DOLLHOUSE_AUTH_ENABLED=true` and a non-empty `DOLLHOUSE_TRUSTED_PROXIES` whenever you bind to a non-loopback host with a multi-user method configured. Setting `loopback`-only without native TLS while bound to a non-loopback host is also refused — that combination silently collapses per-IP rate limits to the proxy's egress IP.
+
+#### Bootstrap
+
+Multi-user methods refuse to serve auth flows until an operator pre-claims the admin identity. This eliminates the "first-to-arrive becomes admin" race.
+
+For GitHub or magic-link:
+```
+dollhouse-admin-bootstrap --method github --github-username <name>
+# OR
+dollhouse-admin-bootstrap --method magic-link --email <admin@example.com>
+```
+
+For local-password, the first invocation of `dollhouse-create-user` auto-claims:
+```
+dollhouse-create-user --username admin --email admin@example.com
+```
+
+`/readyz` returns 503 with `reason: "bootstrap_required"` until the bootstrap completes — Kubernetes will hold traffic correctly. After bootstrap, `/readyz` returns 200 and the admin's first sign-in stamps `roles: ["admin"]` on their JWT.
+
+#### Storage backend
+
+```
+DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres   # 'memory' | 'filesystem' | 'postgres'
+DOLLHOUSE_STORAGE_BACKEND=database         # required alongside auth=postgres
+DOLLHOUSE_DATABASE_URL=postgres://...
+```
+
+`postgres` is the recommended production target. `filesystem` is the default for solo / small-team deployments. `memory` is dev/test only — refuses to run with durable methods (`local-password`, `magic-link`) unless `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true` is set explicitly.
+
+#### Signing secrets — multi-replica HA
+
+For deployments running multiple replicas behind a load balancer, set the signing secrets via env so every replica reads the same key:
+
+```
+DOLLHOUSE_COOKIE_SIGNING_SECRET=<64+ hex chars>   # generate via:
+                                                   # node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+DOLLHOUSE_INVITE_TOKEN_SECRET=<base64 secret>     # for invite + magic-link tokens
+```
+
+Without these, each replica generates its own keys at first run and stores them in the run directory. Single-replica deployments are unaffected; multi-replica without env-var secrets produces non-deterministic JWKS and revoked refresh-token sessions on rotation. Multi-replica HA has additional limitations beyond signing-secret sharing (rate limits are per-replica; mode-switch invalidation can race across replicas; key rotation is not coordinated) — these are documented separately and tracked as follow-up work.
+
+The `DOLLHOUSE_COOKIE_SIGNING_SECRET` value is also used as the HMAC salt for IP/UA hashes when the optional `refreshRotationCheckIpUa: true` rotation-grace IP/UA gate is enabled.
+
+#### Refresh-token rotation grace
+
+Time-only grace window (industry-standard pattern from Auth0, better-auth, Apideck): a consumed refresh token's `consumed` marker stays hidden from `find()` for 30 seconds, so legitimate concurrent rotations succeed. Configurable via `EmbeddedAuthorizationServerOptions.refreshRotationGraceMs`. Optional IP/UA-bound gating via `refreshRotationCheckIpUa: true` (off by default — NAT/CGNAT realities make per-IP gating unreliable for legitimate users). DPoP (RFC 9449) sender-binding is a planned follow-up.
+
+#### Disaster recovery
+
+See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/restore procedures covering the four critical state pieces: auth tables (Postgres), JWKS signing keyfile, cookie signing secret, invite token secret.
+
+---
+
 ### What changes when auth is enabled
 
 | Endpoint | Auth required? |
 |----------|---------------|
 | `POST /mcp` | Yes — 401 without a valid Bearer token |
 | `GET /healthz` | No — always public |
-| `GET /readyz` | No — always public |
+| `GET /readyz` | No — always public (returns 503 pre-bootstrap when embedded AS is in multi-user mode) |
 | `GET /version` | No — always public |
+| `GET /auth/admin/me` | Yes — 401 without admin role (embedded AS only) |
+| `/.well-known/oauth-*` | No — always public (embedded AS only) |
 | Web console (`/`) | Depends on `DOLLHOUSE_WEB_AUTH_ENABLED` |
 
 - **Stdio mode is completely unaffected.** Auth has no effect on stdio connections regardless of how `DOLLHOUSE_AUTH_ENABLED` is set.
@@ -924,12 +1061,62 @@ Keycloak's JWKS endpoint is derived automatically as `https://keycloak.example.c
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DOLLHOUSE_AUTH_ENABLED` | `false` | Master switch. Set to `true` to enable token authentication on HTTP endpoints. |
-| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs) or `oidc` (external identity provider). |
+| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs), `oidc` (external IdP), or `embedded` (full OAuth 2.1 / OIDC AS in-process). |
 | `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. **Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`**. |
 | `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived)* | JWKS endpoint. Defaults to `<issuer>/.well-known/jwks.json`. Override only if your provider uses a non-standard path. |
+| `DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP` | `false` | When `true`, require RFC 9068 `typ: at+jwt` on incoming JWTs. Default off because many managed IdPs (Auth0, Okta, Keycloak, AWS Cognito) don't stamp typ on access tokens — hard-requiring it would break those deployments. Enable for hardening when your IdP stamps the typ; see [OIDC provider setup → Optional: enforce RFC 9068](#optional-enforce-rfc-9068-typ-atjwt-dollhouse_auth_oidc_require_typ) for the verification procedure. |
 | `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject for the startup convenience token printed to stderr. Defaults to your OS username. |
+
+#### Embedded authorization server (`DOLLHOUSE_AUTH_PROVIDER=embedded`)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Comma-separated list. Recognized: `github`, `magic-link`, `local-password`, `trivial-consent`. Multi-method deployments expose all configured methods at the same `/interaction` endpoint. |
+| `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived from bind)* | Public-facing base URL of this server. **Required behind a reverse proxy** so issued JWTs and `/.well-known/*` documents advertise the correct public origin. |
+| `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. `postgres` requires `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_DATABASE_URL` to be set. |
+| `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Required to be `true` for `BACKEND=memory` when durable methods (`local-password`, `magic-link`) are configured — otherwise refused at startup, since password hashes and pending invites would silently disappear on restart. Dev/test only. |
+| `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | 64+ hex chars used to sign /interaction session cookies AND as the HMAC salt for IP/UA hashes. **Required for multi-replica HA** — without it, each replica generates its own key, so cross-replica session cookies fail to verify. Generate via `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
+| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Base64 secret used to sign invite + magic-link tokens. **Required for multi-replica HA** — without it, an invite issued by replica A can't be redeemed on replica B. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth app client ID for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Register a web-flow OAuth app at <https://github.com/settings/developers> with the callback URL `<DOLLHOUSE_PUBLIC_BASE_URL>/auth/social/github/callback`. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_ID` (with a deprecation warning) when unset, so existing deployments don't break. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth app client secret for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Treat as a deployment secret. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_SECRET` when unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy GitHub OAuth client ID. Originally introduced for the portfolio-sync feature (server → GitHub, device flow). Still used by `setup_github_auth`; also serves as the user-auth fallback when `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` is unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | Legacy GitHub OAuth client secret. User-auth fallback only — portfolio-sync device flow does not need a secret. |
+| `DOLLHOUSE_TLS_CERT_PATH` | *(unset)* | Path to TLS certificate (PEM). Setting this AND `DOLLHOUSE_TLS_KEY_PATH` enables native HTTPS termination on this server. Leave unset when terminating TLS at an upstream proxy. |
+| `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
+| `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting that controls how `req.ip` resolves. `loopback` for native-HTTPS deployments; explicit CIDR (e.g. `10.0.0.0/8`) for hosted deployments behind a reverse proxy. **Misconfiguring this collapses per-IP rate limits to the proxy's egress IP.** |
+| `DOLLHOUSE_AUTH_OPEN_DCR` | `false` | When `true`, the `/reg` Dynamic Client Registration endpoint accepts unauthenticated registrations (no Initial Access Token required). **Localhost-only dev escape hatch** for MCP clients that auto-register without an IAT (Gemini CLI, claude.ai web). Default-off is the production shape. See [Dynamic Client Registration](#dynamic-client-registration-dollhouse_auth_open_dcr) for the trade-off and remote-deployment guidance. |
+
+> **Operator action — multi-replica HA:** if `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres` is set without `DOLLHOUSE_COOKIE_SIGNING_SECRET` and `DOLLHOUSE_INVITE_TOKEN_SECRET`, the server logs a warning at startup that brute-force protection is per-replica and that interaction sessions will not survive cross-replica routing. Set both env vars to the same value across all replicas.
+
+#### Dynamic Client Registration (`DOLLHOUSE_AUTH_OPEN_DCR`)
+
+The embedded AS supports RFC 7591 Dynamic Client Registration at `/reg`. MCP clients that don't have a pre-registered client_id — including Gemini CLI and claude.ai's web client — auto-register here on first connection to obtain a `client_id` they can use through the OAuth flow.
+
+DCR has two operating modes:
+
+**Default (`DOLLHOUSE_AUTH_OPEN_DCR=false`) — IAT-gated.** `/reg` requires an Initial Access Token (IAT) as a bearer credential. Random callers on the network cannot register clients. This is the production-target shape because it prevents a hostile caller from registering a client with an attacker-controlled `redirect_uri` and harvesting authorization codes intended for legitimate users. **IAT issuance is currently a deferred admin-channel feature** (see `L-R5-13` in `SECTION-8.1-STATUS.md`), so this mode effectively rejects MCP clients that don't already know a pre-registered `client_id`.
+
+**Escape hatch (`DOLLHOUSE_AUTH_OPEN_DCR=true`) — open registration.** `/reg` accepts unauthenticated registrations. Any caller who can reach the endpoint can self-register. Use this **only on loopback dev** where the AS is unreachable from the network.
+
+```bash
+# Localhost smoke test with Gemini CLI / claude.ai web:
+DOLLHOUSE_AUTH_OPEN_DCR=true
+DOLLHOUSE_HTTP_HOST=127.0.0.1
+```
+
+**Do not enable this on a deployment exposed to the public internet.** A remote attacker would be able to register a client with `redirect_uri=https://attacker.example.com/cb` and use that registration to phish authorization codes from legitimate user OAuth flows on your AS. Three paths exist for remote deployments that need MCP-client DCR support:
+
+1. **Tunnel the local AS** (Cloudflare Tunnel, ngrok). AS still binds loopback, `DOLLHOUSE_AUTH_OPEN_DCR=true` stays safe (nobody hits `/reg` directly — they hit the tunnel which proxies). MCP clients connect to the tunnel URL. This is the documented `npx dollhousemcp` shape.
+
+2. **Wait for constrained DCR.** Planned for §8.2: oidc-provider `features.registration.policies` to enforce `application_type: 'native'` + loopback-only `redirect_uris`. Lets Gemini CLI register but rejects attacker registrations regardless of network position.
+
+3. **Pre-registered client (no DCR).** The embedded AS pre-registers `DEFAULT_CLIENT_ID = 'dollhouse-claude-connector'` with native-app loopback policy. Claude Desktop and Claude Code can be configured to use this fixed `client_id` and skip DCR entirely. Gemini CLI does not currently expose configuration for a fixed `client_id`.
+
+Pre-cycle-24 deployments left DCR gated and the smoke-test of an MCP client that auto-registers (Gemini CLI) surfaced this gap. The cycle-24 docs above are the operator-facing answer.
+
+> **Operator action — admin bootstrap:** before the embedded AS will serve auth flows in any non-`trivial-consent` method, an operator must pre-claim the admin identity via `dollhouse-admin-bootstrap` (for `github` / `magic-link`) or via the first invocation of `dollhouse-create-user` (for `local-password`). `/readyz` returns 503 with `reason: "bootstrap_required"` until this completes.
 
 ---
 
@@ -1197,12 +1384,25 @@ All variables are optional unless marked **required**. Variables with no default
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DOLLHOUSE_AUTH_ENABLED` | `false` | Enable token authentication on HTTP endpoints. Has no effect on stdio mode. |
-| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local` (self-signed JWTs) or `oidc` (external identity provider). |
+| `DOLLHOUSE_AUTH_PROVIDER` | `local` | Auth provider: `local`, `oidc`, or `embedded`. See [Choosing an auth provider](#choosing-an-auth-provider). |
 | `DOLLHOUSE_AUTH_ISSUER` | *(unset)* | OIDC issuer URL. Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`. |
 | `DOLLHOUSE_AUTH_AUDIENCE` | *(unset)* | Expected `aud` claim. Required when `DOLLHOUSE_AUTH_PROVIDER=oidc`. |
 | `DOLLHOUSE_AUTH_JWKS_URI` | *(auto-derived from issuer)* | JWKS endpoint URL. Override only if your provider uses a non-standard path. |
 | `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject used for the startup convenience token printed to stderr. |
+| `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Embedded AS only. Comma-separated: `github`, `magic-link`, `local-password`, `trivial-consent`. |
+| `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | Embedded AS only. One of `memory`, `filesystem`, `postgres`. |
+| `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Embedded AS only. Required to be `true` for `BACKEND=memory` with durable methods. Dev/test only. |
+| `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived)* | Embedded AS only. Public-facing base URL. Required behind a reverse proxy. |
+| `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | Embedded AS only. 64+ hex chars. Required for multi-replica HA. |
+| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Embedded AS only. Base64 secret for invite + magic-link tokens. Required for multi-replica HA. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | Embedded AS only. User-auth (web flow). Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. |
+| `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | Embedded AS only. User-auth secret. Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. Deployment secret. |
+| `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy: portfolio-sync device flow. Also user-auth fallback when the AUTH-prefixed var is unset. |
+| `DOLLHOUSE_GITHUB_CLIENT_SECRET` | *(unset)* | Legacy: user-auth fallback only. |
+| `DOLLHOUSE_TLS_CERT_PATH` | *(unset)* | Path to TLS certificate (PEM). Enables native HTTPS termination. Leave unset when terminating TLS at an upstream proxy. |
+| `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
+| `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting. Use explicit CIDR (e.g. `10.0.0.0/8`) when behind a reverse proxy. |
 
 ### Web console
 
@@ -1291,6 +1491,23 @@ All variables are optional unless marked **required**. Variables with no default
 ---
 
 ## Common Deployment Scenarios
+
+> **For a real production deploy with a public hostname**, follow the [Production Hosting Runbook](./production-hosting-runbook.md). It's the end-to-end "I have mcp.example.com, here's how to deploy" walkthrough covering DNS, reverse proxy + Let's Encrypt, Postgres bootstrap, secret generation, GitHub OAuth on a stable URL, admin pre-claim, smoke verification, log location, and a production checklist. The scenarios below are starting points; the runbook is the full operational picture.
+
+### Container vs bare binary on a host
+
+For HTTP-mode deployments, you have two supervisor options:
+
+| | Container (Docker Compose) | Bare binary (Node + systemd) |
+|---|---|---|
+| **Best for** | Operators comfortable with Docker; multi-service deployments | Operators with existing Node infrastructure or managed-PG customers |
+| **Setup** | One compose file, one command | systemd unit + log rotation + user setup |
+| **Updates** | `docker compose pull && docker compose up -d` | `git pull && npm ci && npm run build && systemctl restart` |
+| **Process supervision** | Docker daemon (`restart: unless-stopped`) | systemd (`Restart=on-failure`) |
+| **Logging surface** | `docker compose logs` + JSON log drivers | `journalctl -u dollhousemcp` + `/var/log/dollhousemcp/` |
+| **Image reproducibility** | Pinned digest = same code everywhere | Whatever's checked out + built |
+
+**Default recommendation: container.** Removes the "right Node version" class of issue and gives a reproducible deploy unit. Bare binary makes sense if you already operate Node services this way. Both paths are documented in the [Production Hosting Runbook](./production-hosting-runbook.md).
 
 ### Local development (defaults, zero configuration)
 

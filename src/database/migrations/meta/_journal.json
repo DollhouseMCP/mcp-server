@@ -64,6 +64,76 @@
       "when": 1776900000000,
       "tag": "0008_shared_pool_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1778198400000,
+      "tag": "0009_auth_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1778544000000,
+      "tag": "0010_auth_accounts_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1778803200000,
+      "tag": "0011_auth_kv_grant_id_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1778900000000,
+      "tag": "0012_operator_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1778910000000,
+      "tag": "0013_user_settings_extension",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1778920000000,
+      "tag": "0014_shared_cache",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1778930000000,
+      "tag": "0015_auth_signing_keys",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1778940000000,
+      "tag": "0016_user_identity_config",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1778950000000,
+      "tag": "0017_user_oauth_tokens",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1778960000000,
+      "tag": "0018_agent_states_session_scope",
+      "breakpoints": true
     }
   ]
 }

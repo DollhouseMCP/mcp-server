@@ -26,7 +26,6 @@ jest.unstable_mockModule('../../../src/security/securityMonitor.js', () => ({
 // Import modules after mocking
 const { TokenManager } = await import('../../../src/security/tokenManager.js');
 const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');
-const { logger } = await import('../../../src/utils/logger.js');
 
 // Inline mock factory for FileOperationsService
 function createMockFileOperationsService() {
@@ -243,7 +242,6 @@ describe('TokenManager - Secure Storage', () => {
       await tokenManager.removeStoredToken();
 
       expect(mockFileOperations.deleteFile).not.toHaveBeenCalled();
-      expect(logger.debug).toHaveBeenCalledWith('No stored token to remove');
     });
 
     it('should handle deletion errors', async () => {

@@ -2,13 +2,25 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
 import { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
-import * as path from 'path';
+import { InMemoryOperatorConfigStore } from '../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
+
+// Phase 4.5 / Phase G: ConfigManager is now a façade over IOperatorConfigStore +
+// IUserConfigStore. Tests that previously asserted against mocked file I/O
+// (readFile/writeFile mocks) now assert against in-memory store state. The
+// new constructor signature requires both stores; this helper builds a fresh
+// pair per test so each test runs against an isolated state.
+function makeStores(): { operatorStore: InMemoryOperatorConfigStore; userStore: InMemoryUserConfigStore } {
+  return {
+    operatorStore: new InMemoryOperatorConfigStore(),
+    userStore: new InMemoryUserConfigStore(),
+  };
+}
 
 describe('ConfigManager', () => {
   let container: InstanceType<typeof DollhouseContainer>;
   let configManager: InstanceType<typeof ConfigManager>;
   const mockHomedir = '/home/testuser';
-  const configDir = path.join(mockHomedir, '.dollhouse');
 
   let mockFileOperations: jest.Mocked<IFileOperationsService>;
   let mockOs: any;
@@ -41,7 +53,8 @@ describe('ConfigManager', () => {
     mockOs.homedir.mockReturnValue(mockHomedir);
     delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
 
-    container.register('ConfigManager', () => new ConfigManager(mockFileOperations, mockOs));
+    const { operatorStore, userStore } = makeStores();
+    container.register('ConfigManager', () => new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null));
     configManager = container.resolve('ConfigManager');
   });
 
@@ -67,147 +80,73 @@ describe('ConfigManager', () => {
   });
 
   describe('Configuration Storage', () => {
-    it('should create config directory if it does not exist', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
+    // Phase 4.5 / Phase G: file I/O moved to FilesystemOperatorConfigStore +
+    // FilesystemUserConfigStore (with their own parity tests covering atomic
+    // writes, permissions, directory creation, error propagation, etc.).
+    // ConfigManager itself is now backend-agnostic — these tests verify the
+    // façade-layer semantic behavior against in-memory stores.
 
-      await configManager.initialize();
+    it('should load existing config from stores on initialize', async () => {
+      // Pre-populate the stores as if a previous run had saved data
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: { auth: { client_id: 'Ov23liTestClientId123' } },
+        syncConfig: {}, autoloadConfig: {}, retentionConfig: {}, wizardConfig: {},
+        displayConfig: {}, collectionConfig: {}, autoActivateConfig: {},
+        sourcePriorityConfig: {}, userIdentityConfig: {}, configVersion: 1,
+      });
 
-      // Verify createDirectory was called with the config directory
-      expect(mockFileOperations.createDirectory).toHaveBeenCalledWith(configDir);
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
+      expect(cm.getGitHubClientId()).toBe('Ov23liTestClientId123');
+    });
 
-      // Verify chmod was called to set directory permissions
-      expect(mockFileOperations.chmod).toHaveBeenCalledWith(
-        configDir,
-        0o700,
-        expect.objectContaining({ source: 'ConfigManager.initialize' })
+    it('should handle store load errors gracefully (returns defaults)', async () => {
+      // Simulate a store that throws on load
+      const failingStore = {
+        load: jest.fn(async () => { throw new Error('store unreachable'); }),
+        save: jest.fn(async () => {}),
+      };
+      const cm = new ConfigManager(
+        mockFileOperations,
+        mockOs,
+        failingStore as any,
+        new InMemoryUserConfigStore(),
+        null,
       );
-    });
-
-    it('should create config file if it does not exist', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await configManager.initialize();
-
-      // writeFile is called with temp path first, then renamed
-      expect(mockFileOperations.writeFile).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        expect.any(String),
-        expect.objectContaining({ source: 'ConfigManager.saveConfig' })
-      );
-    });
-
-    it('should load existing config file', async () => {
-      const yamlConfig = `version: '1.0.0'\ngithub:\n  auth:\n    client_id: 'Ov23liTestClientId123'`;
-      mockFileOperations.exists.mockResolvedValue(true);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.readFile.mockResolvedValue(yamlConfig);
-
-      await configManager.initialize();
-      expect(configManager.getGitHubClientId()).toBe('Ov23liTestClientId123');
-    });
-
-    it('should handle corrupted YAML gracefully', async () => {
-      mockFileOperations.exists.mockResolvedValue(true);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.readFile.mockResolvedValue('invalid: yaml: content');
-
-      await expect(configManager.initialize()).resolves.not.toThrow();
-      expect(configManager.getConfig().version).toBe('1.0.0');
-    });
-
-    it('should set file permissions to 0o600', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await configManager.setGitHubClientId('Ov23liNewClientId456');
-
-      // chmod should be called with 0o600 for the temp file
-      expect(mockFileOperations.chmod).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        0o600,
-        expect.objectContaining({ source: 'ConfigManager.saveConfig' })
-      );
-    });
-
-    it('should set directory permissions to 0o700', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await configManager.initialize();
-
-      // Verify chmod was called with 0o700 for directory
-      expect(mockFileOperations.chmod).toHaveBeenCalledWith(
-        configDir,
-        0o700,
-        expect.objectContaining({ source: 'ConfigManager.initialize' })
-      );
+      await cm.initialize();
+      // Should fall through to defaults rather than throwing
+      expect(cm.getConfig().version).toBe('1.0.0');
     });
 
     it('should handle permission errors gracefully', async () => {
-      mockFileOperations.createDirectory.mockRejectedValue({ code: 'EACCES' });
+      // No file ops involved anymore — initialize() resilience test.
+      // (Kept for backwards-compat naming; the actual error path is
+      // store-throw rather than fs-permission-denied.)
       await configManager.initialize();
       expect(configManager.getConfig().version).toBe('1.0.0');
-    });
-
-    describe('saveConfig error handling', () => {
-      it('propagates write errors (disk full) and attempts cleanup', async () => {
-        mockFileOperations.exists.mockResolvedValue(false);
-        mockFileOperations.createDirectory.mockResolvedValue(undefined);
-        mockFileOperations.chmod.mockResolvedValue(undefined);
-        const writeError = new Error('Disk full');
-        mockFileOperations.writeFile.mockRejectedValue(writeError);
-
-        await configManager.initialize();
-        await expect(configManager['saveConfig']()).rejects.toThrow('Disk full');
-        expect(mockFileOperations.writeFile).toHaveBeenCalled();
-        expect(mockFileOperations.renameFile).not.toHaveBeenCalled();
-      });
-
-      it('propagates rename errors (permission denied)', async () => {
-        mockFileOperations.exists.mockResolvedValue(true);
-        mockFileOperations.createDirectory.mockResolvedValue(undefined);
-        mockFileOperations.chmod.mockResolvedValue(undefined);
-        mockFileOperations.readFile.mockResolvedValue('version: "1.0.0"');
-        mockFileOperations.copyFile.mockResolvedValue(undefined);
-        mockFileOperations.writeFile.mockResolvedValue(undefined);
-        mockFileOperations.renameFile.mockRejectedValue(new Error('Permission denied'));
-
-        await configManager.initialize();
-        await expect(configManager['saveConfig']()).rejects.toThrow('Permission denied');
-        expect(mockFileOperations.renameFile).toHaveBeenCalled();
-      });
     });
   });
 
   describe('OAuth Client ID Management', () => {
     it('should save and retrieve GitHub client ID', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
+      // Phase 4.5: persistence verified by reading back through the
+      // ConfigManager (which loads from the store) — file-mock assertion
+      // is obsolete since ConfigManager no longer touches the filesystem.
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
 
-      await configManager.initialize();
       const testClientId = 'Ov23liValidClientId789';
-      await configManager.setGitHubClientId(testClientId);
-      expect(configManager.getGitHubClientId()).toBe(testClientId);
-      expect(mockFileOperations.writeFile).toHaveBeenCalled();
+      await cm.setGitHubClientId(testClientId);
+      expect(cm.getGitHubClientId()).toBe(testClientId);
+
+      // Round-trip: a fresh instance reading the same store must see the value.
+      const cm2 = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm2.initialize();
+      expect(cm2.getGitHubClientId()).toBe(testClientId);
     });
 
     it('should validate client ID format - valid format', () => {
@@ -248,60 +187,12 @@ describe('ConfigManager', () => {
     });
   });
 
-  describe('Cross-Platform Compatibility', () => {
-    it('should handle Windows paths correctly', async () => {
-      const windowsHome = 'C:\\Users\\TestUser';
-      mockOs.homedir.mockReturnValue(windowsHome);
-      const winConfigManager = new ConfigManager(mockFileOperations, mockOs);
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await winConfigManager.initialize();
-      const expectedPath = path.join(windowsHome, '.dollhouse');
-
-      // Verify createDirectory was called with the expected path
-      expect(mockFileOperations.createDirectory).toHaveBeenCalledWith(expectedPath);
-    });
-
-    it('should handle macOS paths correctly', async () => {
-      const macHome = '/Users/testuser';
-      mockOs.homedir.mockReturnValue(macHome);
-      const macConfigManager = new ConfigManager(mockFileOperations, mockOs);
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await macConfigManager.initialize();
-      const expectedPath = path.join(macHome, '.dollhouse');
-
-      // Verify createDirectory was called with the expected path
-      expect(mockFileOperations.createDirectory).toHaveBeenCalledWith(expectedPath);
-    });
-
-    it('should handle Linux paths correctly', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
-
-      await configManager.initialize();
-
-      // Verify createDirectory was called with the config directory
-      expect(mockFileOperations.createDirectory).toHaveBeenCalledWith(configDir);
-    });
-
-    it('should use proper path separators for the platform', () => {
-        const configPath = (configManager as any).configPath;
-        expect(configPath).toContain('.dollhouse');
-        expect(configPath).toContain('config.yml');
-    });
-  });
+  // Phase 4.5 / Phase G: 'Cross-Platform Compatibility' describe block removed.
+  // Cross-platform path resolution moved to PathService (resolveDataDirectory)
+  // and to FilesystemOperatorConfigStore / FilesystemUserConfigStore — each has
+  // its own tests covering Windows / macOS / Linux path behavior. ConfigManager
+  // is now path-agnostic; testing path separators here would just duplicate
+  // those FilesystemImpl tests.
 
   describe('Error Handling', () => {
     it('should handle file system errors gracefully', async () => {
@@ -335,79 +226,79 @@ describe('ConfigManager', () => {
     });
   });
 
-  describe('Atomic Operations', () => {
-    it('should use atomic file writes to prevent corruption', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
+  // Phase 4.5 / Phase G: 'Atomic Operations' describe block removed. Atomic
+  // writes are now the responsibility of FilesystemOperatorConfigStore +
+  // FilesystemUserConfigStore (write-temp + rename via FileLockManager) — both
+  // have parity tests asserting atomicity. ConfigManager itself never calls
+  // writeFile; the atomicity guarantee is structural via store abstraction.
 
-      await configManager.setGitHubClientId('Ov23liAtomicTest123456');
+  describe('Persistence and Round-trip', () => {
+    // Replaces the 'YAML Parser Selection' describe. The original tests
+    // verified that ConfigManager round-tripped values through YAML on disk;
+    // the new tests verify the same round-trip through the in-memory stores.
+    // YAML is now only used for export/import, not internal persistence.
 
-      expect(mockFileOperations.writeFile).toHaveBeenCalledWith(
-        expect.stringContaining('.tmp'),
-        expect.any(String),
-        expect.any(Object)
-      );
-      expect(mockFileOperations.renameFile).toHaveBeenCalled();
-    });
-  });
-
-  describe('YAML Parser Selection (Regression Test for Config Persistence Bug)', () => {
-    it('should use js-yaml for config files, NOT SecureYamlParser', async () => {
-      const yamlConfig = `user:\n  username: test-user`;
-      mockFileOperations.exists.mockResolvedValue(true);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.readFile.mockResolvedValue(yamlConfig);
-
-      await configManager.initialize();
-      expect(configManager.getConfig().user.username).toBe('test-user');
+    it('should round-trip values through stores on initialize', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: {}, syncConfig: {}, autoloadConfig: {}, retentionConfig: {},
+        wizardConfig: {}, displayConfig: {}, collectionConfig: {},
+        autoActivateConfig: {}, sourcePriorityConfig: {},
+        userIdentityConfig: { username: 'test-user' },
+        configVersion: 1,
+      });
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
+      expect(cm.getConfig().user.username).toBe('test-user');
     });
 
-    it('should persist config values between ConfigManager instances', async () => {
-        mockFileOperations.exists.mockResolvedValueOnce(false);
-        mockFileOperations.createDirectory.mockResolvedValue(undefined);
-        mockFileOperations.chmod.mockResolvedValue(undefined);
-        mockFileOperations.writeFile.mockResolvedValue(undefined);
-        mockFileOperations.renameFile.mockResolvedValue(undefined);
+    it('should persist values between ConfigManager instances using shared stores', async () => {
+      // Two ConfigManager instances backed by the SAME stores — verifies
+      // cross-instance persistence semantics.
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
 
-        await configManager.initialize();
-        await configManager.updateSetting('user.username', 'testuser');
-        const savedConfig = `user:\n  username: testuser`;
-        mockFileOperations.readFile.mockResolvedValue(savedConfig);
-        mockFileOperations.exists.mockResolvedValue(true);
+      const cm1 = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm1.initialize();
+      await cm1.updateSetting('user.username', 'testuser');
 
-        const newContainer = new DollhouseContainer();
-        newContainer.register('ConfigManager', () => new ConfigManager(mockFileOperations, mockOs));
-        const configManager2 = newContainer.resolve('ConfigManager') as InstanceType<typeof ConfigManager>;
-        await configManager2.initialize();
-        expect(configManager2.getConfig().user.username).toBe('testuser');
+      const cm2 = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm2.initialize();
+      expect(cm2.getConfig().user.username).toBe('testuser');
     });
 
-    it('should handle null and empty values correctly', async () => {
-        const yamlConfig = `user:\n  username: null`;
-        mockFileOperations.exists.mockResolvedValue(true);
-        mockFileOperations.createDirectory.mockResolvedValue(undefined);
-        mockFileOperations.chmod.mockResolvedValue(undefined);
-        mockFileOperations.readFile.mockResolvedValue(yamlConfig);
-
-        await configManager.initialize();
-        expect(configManager.getConfig().user.username).toBeNull();
+    it('should preserve null values from stored data', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: {}, syncConfig: {}, autoloadConfig: {}, retentionConfig: {},
+        wizardConfig: {}, displayConfig: {}, collectionConfig: {},
+        autoActivateConfig: {}, sourcePriorityConfig: {},
+        userIdentityConfig: { username: null, email: null, display_name: null },
+        configVersion: 1,
+      });
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
+      expect(cm.getConfig().user.username).toBeNull();
+      expect(cm.getConfig().user.email).toBeNull();
     });
 
-    it('should merge with defaults without overwriting saved values', async () => {
-        const yamlConfig = `user:\n  username: 'saveduser'`;
-        mockFileOperations.exists.mockResolvedValue(true);
-        mockFileOperations.createDirectory.mockResolvedValue(undefined);
-        mockFileOperations.chmod.mockResolvedValue(undefined);
-        mockFileOperations.readFile.mockResolvedValue(yamlConfig);
-
-        await configManager.initialize();
-        const config = configManager.getConfig();
-        expect(config.user.username).toBe('saveduser');
-        expect(config.sync.enabled).toBe(false);
+    it('should merge stored values with defaults without overwriting saved values', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: {}, syncConfig: {}, autoloadConfig: {}, retentionConfig: {},
+        wizardConfig: {}, displayConfig: {}, collectionConfig: {},
+        autoActivateConfig: {}, sourcePriorityConfig: {},
+        userIdentityConfig: { username: 'saveduser' },
+        configVersion: 1,
+      });
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
+      const config = cm.getConfig();
+      expect(config.user.username).toBe('saveduser'); // saved value wins
+      expect(config.sync.enabled).toBe(false); // default fills the gap
     });
   });
 
@@ -472,42 +363,45 @@ describe('ConfigManager', () => {
   });
 
   describe('Config File Format', () => {
-    it('should use correct YAML structure', async () => {
-      mockFileOperations.exists.mockResolvedValue(false);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
+    // Phase 4.5 / Phase G: format-on-disk concerns moved to FilesystemImpl
+    // tests. These remaining tests verify ConfigManager's responsibility:
+    // that writes propagate correctly through the store boundary.
 
-      await configManager.setGitHubClientId('Ov23liStructureTest1');
+    it('should expose updated GitHub client ID via getConfig after setGitHubClientId', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
 
-      const writeCall = mockFileOperations.writeFile.mock.calls[0];
-      const writtenContent = writeCall[1] as string;
+      await cm.setGitHubClientId('Ov23liStructureTest1');
 
-      expect(writtenContent).toMatch(/version:/);
-      expect(writtenContent).toMatch(/github:/);
-      expect(writtenContent).toMatch(/client_id: ['"]*Ov23liStructureTest1/);
+      // Round-trip through the store: a fresh instance should see the new value.
+      const cm2 = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm2.initialize();
+      expect(cm2.getGitHubClientId()).toBe('Ov23liStructureTest1');
     });
 
-    it('should preserve unknown fields when updating', async () => {
-      const existingConfig = `version: '1.0.0'\ngithub:\n  auth:\n    client_id: 'Ov23liOldId123'\nfutureFeature:\n  someValue: 'preserve-me'`;
+    it('should preserve other store sections when updating one', async () => {
+      // Pre-populate the operator store with a non-default value, then
+      // perform a per-user write. After the write, the operator-side value
+      // should still be present (the merge-split round-trip preserves it).
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await operatorStore.save({
+        enhancedIndexConfig: { telemetry: { enabled: true } },
+        consoleConfig: {}, licenseConfig: {}, defaultsConfig: {}, configVersion: 1,
+      });
 
-      mockFileOperations.readFile.mockResolvedValue(existingConfig);
-      mockFileOperations.exists.mockResolvedValue(true);
-      mockFileOperations.createDirectory.mockResolvedValue(undefined);
-      mockFileOperations.chmod.mockResolvedValue(undefined);
-      mockFileOperations.copyFile.mockResolvedValue(undefined);
-      mockFileOperations.writeFile.mockResolvedValue(undefined);
-      mockFileOperations.renameFile.mockResolvedValue(undefined);
+      const cm = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await cm.initialize();
+      await cm.setGitHubClientId('Ov23liNewId456789012');
 
-      await configManager.initialize();
-      await configManager.setGitHubClientId('Ov23liNewId456789012');
-
-      const writeCall = mockFileOperations.writeFile.mock.calls[0];
-      const writtenContent = writeCall[1] as string;
-
-      expect(writtenContent).toMatch(/futureFeature:/);
-      expect(writtenContent).toMatch(/someValue: ['"]*preserve-me/);
+      // Reload — the operator-side value (telemetry.enabled=true) must
+      // survive. (The deep-merge fills defaults around it, but the
+      // explicitly-set value is preserved.)
+      const reloadedOperator = await operatorStore.load();
+      const telemetry = (reloadedOperator.enhancedIndexConfig as Record<string, any>).telemetry;
+      expect(telemetry.enabled).toBe(true);
     });
   });
 });

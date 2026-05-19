@@ -53,11 +53,11 @@ export interface GitHubFetchOptions {
 }
 
 export class GitHubPortfolioIndexer {
-  private cache: GitHubPortfolioIndex | null = null;
-  private lastFetch: Date | null = null;
+  private readonly cacheByUser = new Map<string, GitHubPortfolioIndex>();
+  private readonly lastFetchByUser = new Map<string, Date>();
   private readonly ttl = 15 * 60 * 1000; // 15 minutes
-  private recentUserAction = false;
-  private actionTimestamp: Date | null = null;
+  private readonly recentUserActionByUser = new Map<string, boolean>();
+  private readonly actionTimestampByUser = new Map<string, Date>();
   private readonly actionGracePeriod = 2 * 60 * 1000; // 2 minutes after action
   
   private portfolioRepoManager: PortfolioRepoManager;
@@ -65,7 +65,10 @@ export class GitHubPortfolioIndexer {
   private rateLimitTracker: Map<string, number[]>;
   private readonly graphQLFeatureEnabled: boolean;
   
-  constructor(portfolioRepoManager?: PortfolioRepoManager) {
+  constructor(
+    portfolioRepoManager?: PortfolioRepoManager,
+    private readonly userKeyProvider: () => string = () => 'system',
+  ) {
     this.apiCache = new APICache(); // Uses default settings
     this.rateLimitTracker = new Map();
     this.portfolioRepoManager = portfolioRepoManager!;
@@ -83,19 +86,23 @@ export class GitHubPortfolioIndexer {
    */
   public async getIndex(force = false): Promise<GitHubPortfolioIndex> {
     try {
+      const userKey = this.currentUserKey();
       // Check if we need fresh data
-      if (force || this.shouldFetchFresh()) {
+      if (force || this.shouldFetchFresh(userKey)) {
         return await this.fetchFresh();
       }
+
+      const cachedIndex = this.cacheByUser.get(userKey);
+      const lastFetch = this.lastFetchByUser.get(userKey) ?? null;
       
       // Return cached data if available and valid
-      if (this.cache && this.isCacheValid()) {
+      if (cachedIndex && this.isCacheValid(userKey)) {
         logger.debug('Returning cached GitHub portfolio index', {
-          username: this.cache.username,
-          totalElements: this.cache.totalElements,
-          age: this.lastFetch ? Date.now() - this.lastFetch.getTime() : 'unknown'
+          username: cachedIndex.username,
+          totalElements: cachedIndex.totalElements,
+          age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
         });
-        return this.cache;
+        return cachedIndex;
       }
       
       // Try to fetch fresh, fall back to stale cache on failure
@@ -107,12 +114,12 @@ export class GitHubPortfolioIndexer {
         });
         
         // Return stale cache if available
-        if (this.cache) {
+        if (cachedIndex) {
           logger.info('Returning stale GitHub portfolio cache as fallback', {
-            username: this.cache.username,
-            age: this.lastFetch ? Date.now() - this.lastFetch.getTime() : 'unknown'
+            username: cachedIndex.username,
+            age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
           });
-          return this.cache;
+          return cachedIndex;
         }
         
         // Return empty index as last resort
@@ -123,8 +130,9 @@ export class GitHubPortfolioIndexer {
       ErrorHandler.logError('GitHubPortfolioIndexer.getIndex', error);
       
       // Return stale cache or empty index
-      if (this.cache) {
-        return this.cache;
+      const cachedIndex = this.cacheByUser.get(this.currentUserKey());
+      if (cachedIndex) {
+        return cachedIndex;
       }
       
       return this.createEmptyIndex();
@@ -137,8 +145,9 @@ export class GitHubPortfolioIndexer {
   public invalidateAfterAction(action: string): void {
     logger.info('Invalidating GitHub portfolio cache after user action', { action });
     
-    this.recentUserAction = true;
-    this.actionTimestamp = new Date();
+    const userKey = this.currentUserKey();
+    this.recentUserActionByUser.set(userKey, true);
+    this.actionTimestampByUser.set(userKey, new Date());
     
     // Log security event for audit trail
     SecurityMonitor.logSecurityEvent({
@@ -154,10 +163,10 @@ export class GitHubPortfolioIndexer {
    * Clear all cached data
    */
   public clearCache(): void {
-    this.cache = null;
-    this.lastFetch = null;
-    this.recentUserAction = false;
-    this.actionTimestamp = null;
+    this.cacheByUser.clear();
+    this.lastFetchByUser.clear();
+    this.recentUserActionByUser.clear();
+    this.actionTimestampByUser.clear();
     this.apiCache.clear();
     
     logger.info('GitHub portfolio cache cleared');
@@ -174,12 +183,20 @@ export class GitHubPortfolioIndexer {
     totalElements: number;
   } {
     return {
-      hasCachedData: this.cache !== null,
-      lastFetch: this.lastFetch,
-      isStale: !this.isCacheValid(),
-      recentUserAction: this.recentUserAction,
-      totalElements: this.cache?.totalElements || 0
+      hasCachedData: this.cacheByUser.has(this.currentUserKey()),
+      lastFetch: this.lastFetchByUser.get(this.currentUserKey()) ?? null,
+      isStale: !this.isCacheValid(this.currentUserKey()),
+      recentUserAction: this.recentUserActionByUser.get(this.currentUserKey()) ?? false,
+      totalElements: this.cacheByUser.get(this.currentUserKey())?.totalElements || 0
     };
+  }
+
+  private currentUserKey(): string {
+    try {
+      return this.userKeyProvider();
+    } catch {
+      return 'system';
+    }
   }
 
   /**
@@ -205,10 +222,11 @@ export class GitHubPortfolioIndexer {
       const index = await this.fetchRepositoryContent(username, repository);
       
       // Update cache
-      this.cache = index;
-      this.lastFetch = new Date();
-      this.recentUserAction = false;
-      this.actionTimestamp = null;
+      const userKey = this.currentUserKey();
+      this.cacheByUser.set(userKey, index);
+      this.lastFetchByUser.set(userKey, new Date());
+      this.recentUserActionByUser.delete(userKey);
+      this.actionTimestampByUser.delete(userKey);
       
       const duration = Date.now() - startTime;
       logger.info('GitHub portfolio index fetched successfully', {
@@ -544,39 +562,42 @@ export class GitHubPortfolioIndexer {
   /**
    * Check if cache is valid
    */
-  private isCacheValid(): boolean {
-    if (!this.cache || !this.lastFetch) {
+  private isCacheValid(userKey: string = this.currentUserKey()): boolean {
+    const lastFetch = this.lastFetchByUser.get(userKey);
+    if (!this.cacheByUser.has(userKey) || !lastFetch) {
       return false;
     }
     
-    const age = Date.now() - this.lastFetch.getTime();
+    const age = Date.now() - lastFetch.getTime();
     return age < this.ttl;
   }
 
   /**
    * Determine if we should fetch fresh data
    */
-  private shouldFetchFresh(): boolean {
+  private shouldFetchFresh(userKey: string = this.currentUserKey()): boolean {
     // Always fetch if no cache
-    if (!this.cache || !this.lastFetch) {
+    if (!this.cacheByUser.has(userKey) || !this.lastFetchByUser.has(userKey)) {
       return true;
     }
     
     // Check for recent user actions
-    if (this.recentUserAction && this.actionTimestamp) {
-      const actionAge = Date.now() - this.actionTimestamp.getTime();
+    const recentUserAction = this.recentUserActionByUser.get(userKey) ?? false;
+    const actionTimestamp = this.actionTimestampByUser.get(userKey) ?? null;
+    if (recentUserAction && actionTimestamp) {
+      const actionAge = Date.now() - actionTimestamp.getTime();
       if (actionAge < this.actionGracePeriod) {
         logger.debug('Fetching fresh due to recent user action', { actionAge });
         return true;
       } else {
         // Grace period expired, clear action flag
-        this.recentUserAction = false;
-        this.actionTimestamp = null;
+        this.recentUserActionByUser.delete(userKey);
+        this.actionTimestampByUser.delete(userKey);
       }
     }
     
     // Check TTL
-    return !this.isCacheValid();
+    return !this.isCacheValid(userKey);
   }
 
   /**
@@ -604,8 +625,6 @@ export class GitHubPortfolioIndexer {
     this.clearCache();
     this.apiCache.clear();
     this.rateLimitTracker.clear();
-    this.recentUserAction = false;
-    this.actionTimestamp = null;
   }
 
 
