@@ -31,7 +31,7 @@ import type { IAuthStorageLayer } from '../../../../src/auth/embedded-as/storage
 class AlwaysFailGetStorage implements IAuthStorageLayer {
   constructor(private readonly inner: IAuthStorageLayer) {}
 
-  async genericGet(_model: string, _id: string): Promise<unknown | null> {
+  async genericGet(_model: string, _id: string): Promise<unknown> {
     throw new Error('storage unreachable (simulated init failure)');
   }
 

@@ -19,32 +19,32 @@ import { describe, it, expect, jest } from '@jest/globals';
 import { CollectionHandler } from '../../../src/handlers/CollectionHandler.js';
 import { ElementType } from '../../../src/portfolio/PortfolioManager.js';
 
-describe('CollectionHandler.installContent — error propagation', () => {
-  function buildHandler(installContentImpl: () => Promise<unknown>): CollectionHandler {
-    // Constructor positional args (see CollectionHandler.ts:35-48):
-    //   0 collectionBrowser, 1 collectionSearch, 2 personaDetails,
-    //   3 elementInstaller, 4 collectionCache, 5 portfolioManager,
-    //   6 apiCache, 7 personaManager, 8 submitToPortfolioTool,
-    //   9 unifiedIndexManager, 10 initService, 11 indicatorService,
-    //   12 fileOperations.
-    const stub = (overrides: object = {}) => overrides as never;
-    return new (CollectionHandler as unknown as new (...args: unknown[]) => CollectionHandler)(
-      stub(),                                          // 0 collectionBrowser
-      stub(),                                          // 1 collectionSearch
-      stub({ getElementDetails: jest.fn() }),          // 2 personaDetails
-      stub({ installContent: installContentImpl, formatInstallSuccess: jest.fn(() => 'formatted-install-success') }), // 3 elementInstaller
-      stub(),                                          // 4 collectionCache
-      stub(),                                          // 5 portfolioManager
-      stub(),                                          // 6 apiCache
-      stub({ reload: jest.fn() }),                     // 7 personaManager
-      stub(),                                          // 8 submitToPortfolioTool
-      stub(),                                          // 9 unifiedIndexManager
-      stub(),                                          // 10 initService
-      stub({ getPersonaIndicator: jest.fn(() => '') }), // 11 indicatorService
-      stub(),                                          // 12 fileOperations
-    );
-  }
+function buildHandler(installContentImpl: () => Promise<unknown>): CollectionHandler {
+  // Constructor positional args (see CollectionHandler.ts:35-48):
+  //   0 collectionBrowser, 1 collectionSearch, 2 personaDetails,
+  //   3 elementInstaller, 4 collectionCache, 5 portfolioManager,
+  //   6 apiCache, 7 personaManager, 8 submitToPortfolioTool,
+  //   9 unifiedIndexManager, 10 initService, 11 indicatorService,
+  //   12 fileOperations.
+  const stub = (overrides: object = {}) => overrides as never;
+  return new (CollectionHandler as unknown as new (...args: unknown[]) => CollectionHandler)(
+    stub(),                                          // 0 collectionBrowser
+    stub(),                                          // 1 collectionSearch
+    stub({ getElementDetails: jest.fn() }),          // 2 personaDetails
+    stub({ installContent: installContentImpl, formatInstallSuccess: jest.fn(() => 'formatted-install-success') }), // 3 elementInstaller
+    stub(),                                          // 4 collectionCache
+    stub(),                                          // 5 portfolioManager
+    stub(),                                          // 6 apiCache
+    stub({ reload: jest.fn() }),                     // 7 personaManager
+    stub(),                                          // 8 submitToPortfolioTool
+    stub(),                                          // 9 unifiedIndexManager
+    stub(),                                          // 10 initService
+    stub({ getPersonaIndicator: jest.fn(() => '') }), // 11 indicatorService
+    stub(),                                          // 12 fileOperations
+  );
+}
 
+describe('CollectionHandler.installContent — error propagation', () => {
   it('propagates errors thrown by ElementInstaller (was: swallowed into a friendly text response)', async () => {
     const handler = buildHandler(async () => {
       throw new Error('Security validation failed: instructions: Field exceeds maximum length');

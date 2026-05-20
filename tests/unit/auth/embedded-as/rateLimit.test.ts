@@ -1,6 +1,13 @@
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { LocalLoginRateLimiter } from '../../../../src/auth/embedded-as/rateLimit.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import {
+  CLIENT_PRIMARY,
+  CLIENT_ATTACKER,
+  CLIENT_SATURATION_A,
+  CLIENT_SATURATION_B,
+  CLIENT_DRAIN_TRIGGER,
+} from '../../../fixtures/test-ips.js';
 
 describe('LocalLoginRateLimiter (must-fix #16)', () => {
   let storage: InMemoryAuthStorageLayer;
@@ -13,7 +20,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
   it('allows the first 5 failed attempts then backs off', async () => {
     const sub = 'local_alice';
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 5; i += 1) {
       expect(limiter.check(sub, ip).allowed).toBe(true);
       await limiter.noteFailure(sub, ip);
@@ -25,34 +32,34 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
   it('emits brute-force audit event at threshold (account dimension)', async () => {
     const sub = 'local_alice';
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 5; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
     const events = await storage.listIdentityEvents();
     const fired = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
-        && (e.details as Record<string, unknown> | undefined)?.dimension === 'account',
+        && e.details?.dimension === 'account',
     );
     expect(fired).toBeDefined();
   });
 
   it('only fires the brute-force audit ONCE per breach (not on every failure)', async () => {
     const sub = 'local_alice';
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 8; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
     const events = await storage.listIdentityEvents();
     const accountFires = events.filter(
       e => e.type === 'auth.local.brute_force_suspected'
-        && (e.details as Record<string, unknown> | undefined)?.dimension === 'account',
+        && e.details?.dimension === 'account',
     );
     expect(accountFires).toHaveLength(1);
   });
 
   it('locks an IP after 20 failures across many accounts', async () => {
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 20; i += 1) {
       await limiter.noteFailure(`local_user_${i}`, ip);
     }
@@ -63,7 +70,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     const events = await storage.listIdentityEvents();
     const ipFire = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
-        && (e.details as Record<string, unknown> | undefined)?.dimension === 'ip',
+        && e.details?.dimension === 'ip',
     );
     expect(ipFire).toBeDefined();
   });
@@ -74,7 +81,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // failures cannot use that success to reset the threshold for a
     // fresh probe round on the same account.
     const sub = 'local_alice';
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 4; i += 1) {
       await limiter.noteFailure(sub, ip);
     }
@@ -88,7 +95,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
   it('still allows the legitimate user immediate access after success when sub-threshold', async () => {
     const sub = 'local_alice';
-    const ip = '10.0.0.1';
+    const ip = CLIENT_PRIMARY;
     await limiter.noteFailure(sub, ip);
     await limiter.noteFailure(sub, ip);
     await limiter.noteSuccess(sub, ip);
@@ -110,7 +117,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     const events = await storage.listIdentityEvents();
     const ipFire = events.find(
       e => e.type === 'auth.local.brute_force_suspected'
-        && (e.details as Record<string, unknown> | undefined)?.dimension === 'ip',
+        && e.details?.dimension === 'ip',
     );
     expect(ipFire).toBeUndefined();
   });
@@ -119,12 +126,12 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // Otherwise an attacker can bypass the per-IP limit by alternating
     // between the IPv4-mapped IPv6 form and the bare IPv4 form.
     for (let i = 0; i < 10; i += 1) {
-      await limiter.noteFailure(`local_user_${i}`, '::ffff:10.0.0.1');
+      await limiter.noteFailure(`local_user_${i}`, `::ffff:${CLIENT_PRIMARY}`);
     }
     for (let i = 10; i < 20; i += 1) {
-      await limiter.noteFailure(`local_user_${i}`, '10.0.0.1');
+      await limiter.noteFailure(`local_user_${i}`, CLIENT_PRIMARY);
     }
-    const check = limiter.check('local_someone_else', '10.0.0.1');
+    const check = limiter.check('local_someone_else', CLIENT_PRIMARY);
     expect(check.allowed).toBe(false);
     expect(check.reason).toMatch(/ip locked/);
   });
@@ -165,7 +172,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
     // Single failure → hits noteFailure → calls boundAccounts on a
     // small table → early-returns with flag reset.
-    await limiter.noteFailure('local_drain_check', '10.0.0.99');
+    await limiter.noteFailure('local_drain_check', CLIENT_ATTACKER);
 
     expect(internal.accountSaturationFired).toBe(false);
     expect(internal.ipSaturationFired).toBe(false);
@@ -198,7 +205,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // pushes size to 10_002; pass 1 finds nothing safe-to-evict
     // (within window + locked); pass 2 finds nothing non-locked;
     // pass 3 FIFO-evicts a locked entry → saturation fires.
-    await limiter.noteFailure('saturation_trigger_1', '10.0.0.10');
+    await limiter.noteFailure('saturation_trigger_1', CLIENT_SATURATION_A);
 
     let saturationEvents = (await storage.listIdentityEvents()).filter(
       e => e.type === 'auth.local.rate_limit_saturated',
@@ -212,7 +219,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
     // Triggering noteFailure on a small table → boundAccounts early-
     // returns → resets the flag.
-    await limiter.noteFailure('drain_trigger', '10.0.0.42');
+    await limiter.noteFailure('drain_trigger', CLIENT_DRAIN_TRIGGER);
 
     // Re-saturate with another locked-entry flood.
     for (let i = 0; i < 10_001; i += 1) {
@@ -222,7 +229,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
         bruteForceFired: true,
       });
     }
-    await limiter.noteFailure('saturation_trigger_2', '10.0.0.11');
+    await limiter.noteFailure('saturation_trigger_2', CLIENT_SATURATION_B);
 
     saturationEvents = (await storage.listIdentityEvents()).filter(
       e => e.type === 'auth.local.rate_limit_saturated',

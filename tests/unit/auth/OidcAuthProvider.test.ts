@@ -22,7 +22,6 @@ import {
   exportJWK,
   generateKeyPair,
   createLocalJWKSet,
-  type JWK,
   type JWTVerifyGetKey,
 } from 'jose';
 import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
@@ -30,6 +29,19 @@ import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
 const ISSUER = 'https://tenant.example.com/';
 const AUDIENCE = 'mcp-resource';
 const ALGORITHM = 'ES256';
+
+async function mintTokenWithTyp(signKey: CryptoKey, typ: string | undefined): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
+  const builder = new SignJWT({ scope: 'mcp' })
+    .setProtectedHeader(typ ? { alg: ALGORITHM, kid: 'test-kid', typ }
+                             : { alg: ALGORITHM, kid: 'test-kid' })
+    .setIssuer(ISSUER)
+    .setAudience(AUDIENCE)
+    .setSubject('alice')
+    .setIssuedAt(now)
+    .setExpirationTime(now + 3600);
+  return builder.sign(signKey);
+}
 
 describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () => {
   let signKey: CryptoKey;
@@ -45,7 +57,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     publicJwk.kid = 'test-kid';
     publicJwk.alg = ALGORITHM;
     publicJwk.use = 'sig';
-    verifyJwks = createLocalJWKSet({ keys: [publicJwk as JWK] });
+    verifyJwks = createLocalJWKSet({ keys: [publicJwk] });
 
     // A second keypair for the signature-mismatch test.
     const wrong = await generateKeyPair(ALGORITHM, { extractable: true });
@@ -53,7 +65,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     wrongJwk.kid = 'test-kid'; // same kid so jose doesn't fail on lookup
     wrongJwk.alg = ALGORITHM;
     wrongJwk.use = 'sig';
-    wrongJwks = createLocalJWKSet({ keys: [wrongJwk as JWK] });
+    wrongJwks = createLocalJWKSet({ keys: [wrongJwk] });
 
     provider = new OidcAuthProvider({
       issuer: ISSUER,
@@ -196,30 +208,17 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
   });
 
   describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
-    async function mintTokenWithTyp(typ: string | undefined): Promise<string> {
-      const now = Math.floor(Date.now() / 1000);
-      const builder = new SignJWT({ scope: 'mcp' })
-        .setProtectedHeader(typ ? { alg: ALGORITHM, kid: 'test-kid', typ }
-                                 : { alg: ALGORITHM, kid: 'test-kid' })
-        .setIssuer(ISSUER)
-        .setAudience(AUDIENCE)
-        .setSubject('alice')
-        .setIssuedAt(now)
-        .setExpirationTime(now + 3600);
-      return builder.sign(signKey);
-    }
-
     it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
       // The cycle 19 fix is opt-in. Default behavior must preserve
       // compat with Auth0/Okta/Keycloak/Cognito, which typically don't
       // stamp typ on access tokens.
-      const token = await mintTokenWithTyp(undefined);
+      const token = await mintTokenWithTyp(signKey, undefined);
       const result = await provider.validate(token);
       expect(result.ok).toBe(true);
     });
 
     it('default (option off): accepts a token with typ:JWT (legacy stamp)', async () => {
-      const token = await mintTokenWithTyp('JWT');
+      const token = await mintTokenWithTyp(signKey, 'JWT');
       const result = await provider.validate(token);
       expect(result.ok).toBe(true);
     });
@@ -231,7 +230,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         jwksGetter: verifyJwks,
         requireAccessTokenTyp: true,
       });
-      const token = await mintTokenWithTyp('at+jwt');
+      const token = await mintTokenWithTyp(signKey, 'at+jwt');
       const result = await strict.validate(token);
       expect(result.ok).toBe(true);
     });
@@ -247,7 +246,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         jwksGetter: verifyJwks,
         requireAccessTokenTyp: true,
       });
-      const token = await mintTokenWithTyp(undefined);
+      const token = await mintTokenWithTyp(signKey, undefined);
       const result = await strict.validate(token);
       expect(result.ok).toBe(false);
     });
@@ -262,7 +261,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         jwksGetter: verifyJwks,
         requireAccessTokenTyp: true,
       });
-      const token = await mintTokenWithTyp('JWT');
+      const token = await mintTokenWithTyp(signKey, 'JWT');
       const result = await strict.validate(token);
       expect(result.ok).toBe(false);
     });
@@ -280,7 +279,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         jwksGetter: verifyJwks,
         requireAccessTokenTyp: true,
       });
-      const token = await mintTokenWithTyp('JWT');
+      const token = await mintTokenWithTyp(signKey, 'JWT');
       const result = await strict.validate(token);
       expect(result.ok).toBe(false);
       if (!result.ok) {

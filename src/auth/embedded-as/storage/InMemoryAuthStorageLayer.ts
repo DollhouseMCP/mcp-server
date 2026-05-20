@@ -20,8 +20,13 @@
  * @module auth/embedded-as/storage/InMemoryAuthStorageLayer
  */
 
+import { randomUUID } from 'node:crypto';
 import { logger } from '../../../utils/logger.js';
 import type {
+  AllowlistAddInput,
+  AllowlistMatchValues,
+  AllowlistUpdatePatch,
+  AuthAllowlistEntry,
   BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
@@ -172,7 +177,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     const record = this.genericStore.get(genericKey(model, id));
     if (!record) return null;
     if (record.expiresAt && record.expiresAt <= Date.now()) {
@@ -225,7 +230,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
    * Map iteration tolerates concurrent delete (Node 22+ documented behavior),
    * which the inline GC pass relies on.
    */
-  async genericFindByUid(uid: string): Promise<unknown | null> {
+  async genericFindByUid(uid: string): Promise<unknown> {
     const now = Date.now();
     for (const [key, record] of this.genericStore.entries()) {
       if (record.expiresAt && record.expiresAt <= now) {
@@ -299,6 +304,76 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
       }
     }
   }
+
+  // ---- Sign-in allowlist ----
+
+  private readonly allowlist = new Map<string, AuthAllowlistEntry>(); // id → entry
+  private readonly allowlistByKindValue = new Map<string, string>();   // `${kind}|${value}` → id
+
+  async allowlistList(): Promise<AuthAllowlistEntry[]> {
+    return [...this.allowlist.values()].map(cloneEntry);
+  }
+
+  async allowlistFind(id: string): Promise<AuthAllowlistEntry | null> {
+    const found = this.allowlist.get(id);
+    return found ? cloneEntry(found) : null;
+  }
+
+  async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
+    const value = input.value.toLowerCase();
+    const idxKey = allowlistIndexKey(input.kind, value);
+    if (this.allowlistByKindValue.has(idxKey)) {
+      throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
+    }
+    const entry: AuthAllowlistEntry = {
+      id: randomUUID(),
+      kind: input.kind,
+      value,
+      note: input.note ?? null,
+      createdBy: input.createdBy ?? null,
+      createdAt: new Date(),
+    };
+    this.allowlist.set(entry.id, entry);
+    this.allowlistByKindValue.set(idxKey, entry.id);
+    return cloneEntry(entry);
+  }
+
+  async allowlistUpdate(id: string, patch: AllowlistUpdatePatch): Promise<AuthAllowlistEntry | null> {
+    const found = this.allowlist.get(id);
+    if (!found) return null;
+    // Only `note` is mutable; kind/value remove+recreate.
+    if (patch.note !== undefined) found.note = patch.note;
+    return cloneEntry(found);
+  }
+
+  async allowlistRemove(id: string): Promise<boolean> {
+    const found = this.allowlist.get(id);
+    if (!found) return false;
+    this.allowlist.delete(id);
+    this.allowlistByKindValue.delete(allowlistIndexKey(found.kind, found.value));
+    return true;
+  }
+
+  async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    if (values.email && this.allowlistByKindValue.has(allowlistIndexKey('email', values.email.toLowerCase()))) {
+      return true;
+    }
+    if (values.githubUsername && this.allowlistByKindValue.has(allowlistIndexKey('github_username', values.githubUsername.toLowerCase()))) {
+      return true;
+    }
+    if (values.githubId && this.allowlistByKindValue.has(allowlistIndexKey('github_id', values.githubId))) {
+      return true;
+    }
+    return false;
+  }
+}
+
+function cloneEntry(entry: AuthAllowlistEntry): AuthAllowlistEntry {
+  return { ...entry, createdAt: new Date(entry.createdAt) };
+}
+
+function allowlistIndexKey(kind: string, value: string): string {
+  return `${kind}|${value}`;
 }
 
 function externalKey(provider: string, externalSub: string): string {

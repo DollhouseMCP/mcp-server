@@ -214,9 +214,9 @@ describe('Cycle 24 smoke-test regressions', () => {
       });
       jar.ingest(consentGet.headers);
       const html = await consentGet.text();
-      const csrfMatch = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+      const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
       expect(csrfMatch).not.toBeNull();
-      const csrfToken = csrfMatch![1]!;
+      const csrfToken = csrfMatch![1];
 
       // POST consent — this is what the user clicking "Approve" does.
       const postConsent = await fetch(interactionUrl, {

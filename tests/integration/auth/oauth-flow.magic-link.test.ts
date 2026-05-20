@@ -33,6 +33,8 @@ import {
 
 const REDIRECT_URI = 'http://127.0.0.1/callback';
 const CLIENT_ID = 'dollhouse-claude-connector';
+const FORM_CONTENT_TYPE = 'application/x-www-form-urlencoded';
+const OAUTH_SCOPES = 'mcp offline_access';
 
 class CollectingEmailSender implements EmailSender {
   sent: SendMagicLinkInput[] = [];
@@ -62,14 +64,14 @@ async function postRequestLinkForm(
   });
   jar.ingest(consent.headers);
   const html = await consent.text();
-  const csrfMatch = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
   if (!csrfMatch) throw new Error('CSRF token not found in magic-link request render');
-  const csrfToken = csrfMatch[1]!;
+  const csrfToken = csrfMatch[1];
 
   return fetch(interactionUrl, {
     method: 'POST', redirect: 'manual',
     headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
+      'Content-Type': FORM_CONTENT_TYPE,
       Cookie: jar.header(),
     },
     body: new URLSearchParams({
@@ -129,7 +131,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       clientId: CLIENT_ID,
       redirectUri: REDIRECT_URI,
       resource: `${harness.publicBaseUrl}/mcp`,
-      scope: 'mcp offline_access',
+      scope: OAUTH_SCOPES,
     });
 
     // POST the request-link form. Stays on a 200 "check your email" page.
@@ -138,7 +140,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(requestResp.status).toBe(200);
     expect(emailSender.sent).toHaveLength(1);
 
-    const magicUrl = emailSender.sent[0]!.url;
+    const magicUrl = emailSender.sent[0].url;
     expect(magicUrl).toContain('/auth/email/verify?token=');
 
     // GET the magic-link URL — must NOT consume the token (must-fix #1).
@@ -154,7 +156,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': FORM_CONTENT_TYPE,
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ token: tokenParam }),
@@ -172,7 +174,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
 
     const tokenResp = await fetch(authServer.token_endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': FORM_CONTENT_TYPE },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         client_id: CLIENT_ID,
@@ -205,7 +207,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       baseUrl: harness.baseUrl,
       authServerMetadata: authServer,
       clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
-      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp offline_access',
+      resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
     });
     const knownResp = await postRequestLinkForm(a.interactionUrl, a.jar, 'alice@example.com');
     const knownText = await knownResp.text();
@@ -216,7 +218,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       baseUrl: harness.baseUrl,
       authServerMetadata: authServer,
       clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
-      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp offline_access',
+      resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
     });
     const unknownResp = await postRequestLinkForm(b.interactionUrl, b.jar, 'nobody@example.com');
     const unknownText = await unknownResp.text();
@@ -238,7 +240,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
         baseUrl: harness.baseUrl,
         authServerMetadata: authServer,
         clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
-        resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp offline_access',
+        resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
       });
       await postRequestLinkForm(interactionUrl, jar, 'flooder@example.com');
     }
@@ -257,17 +259,17 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       baseUrl: harness.baseUrl,
       authServerMetadata: authServer,
       clientId: CLIENT_ID, redirectUri: REDIRECT_URI,
-      resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp offline_access',
+      resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
     });
     await postRequestLinkForm(interactionUrl, jar, 'replay@example.com');
-    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
 
     // First POST consumes (we don't follow the redirect; that path is
     // already covered by the end-to-end test above).
     const first = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': FORM_CONTENT_TYPE,
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ token: tokenParam }),
@@ -278,7 +280,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     const second = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': FORM_CONTENT_TYPE,
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ token: tokenParam }),
@@ -300,12 +302,12 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
     });
     await postRequestLinkForm(interactionUrl, jar, 'csrf@example.com');
-    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
 
     // POST without the cookie jar → cookie binding mismatches.
     const noCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': FORM_CONTENT_TYPE },
       body: new URLSearchParams({ token: tokenParam }),
     });
     expect(noCookie.status).toBe(400);
@@ -315,7 +317,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     const withCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': FORM_CONTENT_TYPE,
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ token: tokenParam }),
@@ -354,11 +356,11 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     });
     await postRequestLinkForm(interactionUrl, jar, adminEmail);
 
-    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': FORM_CONTENT_TYPE,
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ token: tokenParam }),
@@ -373,7 +375,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     });
     const tokenResp = await fetch(authServer.token_endpoint, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: { 'Content-Type': FORM_CONTENT_TYPE },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
         client_id: CLIENT_ID, redirect_uri: REDIRECT_URI,

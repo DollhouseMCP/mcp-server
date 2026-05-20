@@ -286,7 +286,7 @@ export interface IAuthStorageLayer {
   // RefreshToken, AccessToken, RegistrationAccessToken, ReplayDetection,
   // PushedAuthorizationRequest, BackchannelAuthenticationRequest.
 
-  genericGet(model: string, id: string): Promise<unknown | null>;
+  genericGet(model: string, id: string): Promise<unknown>;
   genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void>;
   genericDestroy(model: string, id: string): Promise<void>;
 
@@ -361,7 +361,114 @@ export interface IAuthStorageLayer {
   sweepExpiredKv(): Promise<number>;
 
   /** Optional secondary indexes oidc-provider expects when those features are enabled. */
-  genericFindByUserCode?(userCode: string): Promise<unknown | null>;
-  genericFindByUid?(uid: string): Promise<unknown | null>;
+  genericFindByUserCode?(userCode: string): Promise<unknown>;
+  genericFindByUid?(uid: string): Promise<unknown>;
   genericRevokeByGrantId?(grantId: string): Promise<void>;
+
+  // --- Sign-in allowlist (gates GitHub OAuth, magic-link, local-password) ---
+
+  /**
+   * List all allowlist entries. Used by the MCP-AQL admin read-allowlist
+   * operation. Order is implementation-defined; callers that need a stable
+   * order should sort by `createdAt` (also stable).
+   */
+  allowlistList(): Promise<AuthAllowlistEntry[]>;
+
+  /**
+   * Look up a single allowlist entry by id. Returns null if not found.
+   * Used by the MCP-AQL admin update/delete operations to validate the
+   * target exists before issuing the mutation.
+   */
+  allowlistFind(id: string): Promise<AuthAllowlistEntry | null>;
+
+  /**
+   * Insert a new allowlist entry. Returns the persisted row (including the
+   * generated `id` and `createdAt`). The `value` is lowercased by the
+   * storage layer; callers may pass mixed case. Throws on duplicate
+   * `(kind, value)` — the unique index enforces this in Postgres and the
+   * filesystem/in-memory layers reject equivalently.
+   *
+   * `createdBy` is the admin sub who issued the add. Pass `null` for the
+   * seed-file path (no human admin attribution).
+   */
+  allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry>;
+
+  /**
+   * Update mutable fields on an existing entry. Only `note` is mutable —
+   * `kind`/`value` changes require remove + recreate so the audit trail
+   * has a clean delete/add pair instead of an opaque "edited" event.
+   * Returns the updated row, or null if `id` was not found.
+   */
+  allowlistUpdate(id: string, patch: AllowlistUpdatePatch): Promise<AuthAllowlistEntry | null>;
+
+  /**
+   * Remove an allowlist entry by id. Returns true if a row was deleted,
+   * false if the id did not exist. Lockout protection (refuse delete that
+   * would leave zero allowed admins) is the responsibility of the caller —
+   * storage is mechanical.
+   */
+  allowlistRemove(id: string): Promise<boolean>;
+
+  /**
+   * Gate-path check: does the active allowlist match ANY of the provided
+   * identity values? Called on every sign-in completion (GitHub callback,
+   * magic-link consume, local-password invite redeem) before the upsert.
+   *
+   * Pass only the identity values you have. The check is OR across the
+   * three kinds — passing email + githubUsername returns true if either
+   * is on the list. Values should be lowercased by the caller; storage
+   * matches case-sensitively against the (already-lowercased) stored
+   * values.
+   *
+   * Returns false when the allowlist is empty regardless of `required`
+   * flag — the caller layer combines this result with
+   * `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED` to compute the gate decision.
+   * Bootstrap-admin-always-passes is also a caller-layer concern.
+   *
+   * Implementations:
+   *   - InMemory + Filesystem: linear scan over the loaded entries.
+   *   - Postgres: indexed lookup via the unique (kind, value) index.
+   */
+  allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+}
+
+/**
+ * Sign-in allowlist entry as persisted. The Drizzle schema in
+ * `src/database/schema/authAllowlist.ts` mirrors this shape.
+ */
+export interface AuthAllowlistEntry {
+  id: string;
+  kind: AuthAllowlistKind;
+  value: string;
+  note: string | null;
+  createdBy: string | null;
+  createdAt: Date;
+}
+
+/** Match-key kind discriminator. Constrained at the DB layer to these three values. */
+export type AuthAllowlistKind = 'email' | 'github_username' | 'github_id';
+
+/** Input shape for `allowlistAdd`. `id` and `createdAt` are storage-assigned. */
+export interface AllowlistAddInput {
+  kind: AuthAllowlistKind;
+  value: string;
+  note?: string | null;
+  createdBy?: string | null;
+}
+
+/** Mutable fields on an allowlist entry. */
+export interface AllowlistUpdatePatch {
+  note?: string | null;
+}
+
+/**
+ * Identity values passed to `allowlistMatchesIdentity`. All optional — pass
+ * only what you have. Values should be lowercased by the caller. For
+ * `githubId` (numeric in upstream API), pass it as a string for index-key
+ * uniformity with the stored values.
+ */
+export interface AllowlistMatchValues {
+  email?: string;
+  githubUsername?: string;
+  githubId?: string;
 }

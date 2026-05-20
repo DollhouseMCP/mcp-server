@@ -134,6 +134,13 @@
       "when": 1778960000000,
       "tag": "0018_agent_states_session_scope",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1778970000000,
+      "tag": "0019_auth_allowlist",
+      "breakpoints": true
     }
   ]
 }

@@ -63,7 +63,7 @@ async function postConsentForm(
   });
   jar.ingest(consent.headers);
   const html = await consent.text();
-  const csrfMatch = html.match(/name="csrf_token"\s+value="([^"]+)"/);
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
   if (!csrfMatch) throw new Error('CSRF token not found in interaction render');
   return fetch(interactionUrl, {
     method: 'POST', redirect: 'manual',
@@ -71,7 +71,7 @@ async function postConsentForm(
       'Content-Type': 'application/x-www-form-urlencoded',
       Cookie: jar.header(),
     },
-    body: new URLSearchParams({ csrf_token: csrfMatch[1]!, ...body }),
+    body: new URLSearchParams({ csrf_token: csrfMatch[1], ...body }),
   });
 }
 

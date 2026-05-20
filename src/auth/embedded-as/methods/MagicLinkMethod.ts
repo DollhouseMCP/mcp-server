@@ -42,9 +42,10 @@ import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
 import { normalizeIp } from '../rateLimit.js';
 
-const PROVIDER_NAME = 'magic-link';
+const PROVIDER_NAME = 'magic-link' as const;
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const REQUEST_RATE_LIMIT_PER_EMAIL = 3;
 const REQUEST_RATE_LIMIT_PER_IP = 5;
@@ -101,6 +102,14 @@ export interface MagicLinkMethodOptions {
    * the suite fast; production should never override.
    */
   requestResponseFloorMs?: number;
+  /**
+   * Sign-in allowlist enforcement. Mirrors `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`.
+   * When `true`, an empty allowlist means "bootstrap admin only"; when
+   * `false` (default), an empty allowlist means "no gate". Bootstrap admin
+   * always passes regardless. See `allowlistGate.ts` for the full decision
+   * rules.
+   */
+  allowlistRequired?: boolean;
 }
 
 interface RequestRateBucket {
@@ -111,7 +120,7 @@ interface RequestRateBucket {
 }
 
 export class MagicLinkMethod implements IAuthMethod {
-  readonly id = 'magic-link' as const;
+  readonly id = PROVIDER_NAME;
   readonly displayName = 'Email magic link';
 
   private readonly perEmailRequests = new Map<string, RequestRateBucket>();
@@ -254,6 +263,14 @@ export class MagicLinkMethod implements IAuthMethod {
             res.status(400).type('html').send(renderMagicLinkError(consume.reason));
             return;
           }
+          if (consume.kind === 'denied') {
+            // Sign-in allowlist denied this identity. Audit event already
+            // emitted inside the gate. Render the dedicated denied page
+            // (rather than renderMagicLinkError, which reads as "your
+            // link broke" — wrong message).
+            res.status(403).type('html').send(renderAllowlistDeniedPage());
+            return;
+          }
           if (!consume.interactionId) {
             // Token was issued without an interactionId (CLI-issued, or an
             // older client that didn't stamp it). The user is authenticated
@@ -287,7 +304,7 @@ export class MagicLinkMethod implements IAuthMethod {
   verifyMagicLink(token: string): { ok: true; interactionId?: string } | { ok: false; reason: string } {
     const verified = this.options.invites.verify(token);
     if (!verified.ok) return { ok: false, reason: GENERIC_LINK_INVALID };
-    if (verified.payload.purpose !== 'magic-link') {
+    if (verified.payload.purpose !== PROVIDER_NAME) {
       return { ok: false, reason: GENERIC_LINK_INVALID };
     }
     return { ok: true, interactionId: verified.payload.interactionId };
@@ -301,6 +318,7 @@ export class MagicLinkMethod implements IAuthMethod {
    */
   async consumeMagicLink(token: string): Promise<
     | { kind: 'ok'; interactionId: string | undefined; identity: AuthenticatedIdentity }
+    | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
     const consume = await this.options.invites.consume(token);
@@ -312,7 +330,7 @@ export class MagicLinkMethod implements IAuthMethod {
       }
       return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }
-    if (consume.payload.purpose !== 'magic-link') {
+    if (consume.payload.purpose !== PROVIDER_NAME) {
       return { kind: 'error', reason: GENERIC_LINK_INVALID };
     }
 
@@ -320,12 +338,31 @@ export class MagicLinkMethod implements IAuthMethod {
     const email = consume.payload.email;
     const now = Date.now();
 
+    // Sign-in allowlist gate. Runs BEFORE the account upsert so a denied
+    // sign-in leaves no persistent account state. Bootstrap admin always
+    // passes via checkAllowlistGate's rule 1. The token has already been
+    // consumed at this point (consume.ok above), so a denied user can't
+    // replay the link.
+    const gate = await checkAllowlistGate(
+      {
+        sub,
+        method: PROVIDER_NAME,
+        email,
+        provider: PROVIDER_NAME,
+        externalSub: hashEmail(email),
+      },
+      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
+
     // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
     // pre-claimed this email's sub before the gate opened. If we match,
     // grant admin role on the account. Round 5 / H5 — see
     // bootstrapAdmin.ts for why setAccountRoles is split off from the
     // upsertAccount payload.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, 'magic-link');
+    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, PROVIDER_NAME);
 
     const existing = await this.options.storage.getAccount(sub);
     await this.options.storage.upsertAccount({
@@ -406,7 +443,7 @@ export class MagicLinkMethod implements IAuthMethod {
       const token = this.options.invites.issue({
         sub,
         email,
-        purpose: 'magic-link',
+        purpose: PROVIDER_NAME,
         interactionId,
       });
       const url = new URL(this.options.verifyUrl);
@@ -557,7 +594,7 @@ function renderCheckEmailPage(): string {
 }
 
 function renderConfirmationPage(token: string): string {
-  const safeToken = token.replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+  const safeToken = token.replaceAll('&', '&amp;').replaceAll('"', '&quot;');
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Confirm sign-in</title>
 <style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}button{background:#185c37;color:white;border:0;border-radius:6px;padding:12px 16px;font-weight:700;cursor:pointer;margin-top:16px}</style>
@@ -567,7 +604,7 @@ function renderConfirmationPage(token: string): string {
 }
 
 function escapeHtml(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 function renderMagicLinkError(reason: string): string {

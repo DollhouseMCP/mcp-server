@@ -34,7 +34,13 @@ import {
   authIdentityEvents,
   authKv,
 } from '../../../database/schema/auth.js';
+import { authAllowlist } from '../../../database/schema/authAllowlist.js';
 import type {
+  AllowlistAddInput,
+  AllowlistMatchValues,
+  AllowlistUpdatePatch,
+  AuthAllowlistEntry,
+  AuthAllowlistKind,
   BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
@@ -282,7 +288,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select({ payload: authKv.payload, expiresAt: authKv.expiresAt })
         .from(authKv)
@@ -290,7 +296,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .limit(1),
     );
     if (rows.length === 0) return null;
-    const row = rows[0]!;
+    const row = rows[0];
     if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
       // Lazy expiry; best-effort cleanup.
       void this.genericDestroy(model, id);
@@ -305,11 +311,11 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       await tx.insert(authKv).values({
         model,
         id,
-        payload: payload as AuthKvRow['payload'],
+        payload,
         expiresAt,
       }).onConflictDoUpdate({
         target: [authKv.model, authKv.id],
-        set: { payload: payload as AuthKvRow['payload'], expiresAt },
+        set: { payload, expiresAt },
       });
     });
   }
@@ -342,13 +348,13 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .values({
           model,
           id,
-          payload: payload as AuthKvRow['payload'],
+          payload,
           expiresAt,
         })
         .onConflictDoUpdate({
           target: [authKv.model, authKv.id],
           set: {
-            payload: payload as AuthKvRow['payload'],
+            payload,
             expiresAt,
           },
           // Only overwrite when the existing row has expired. Live
@@ -418,12 +424,12 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       await tx.delete(authKv).where(or(
         and(eq(authKv.model, 'Grant'), eq(authKv.id, grantId)),
         sql`${authKv.payload}->>'grantId' = ${grantId}`,
-      )!);
+      ));
     });
   }
 
   /** Uses idx_auth_kv_session_uid partial expression index. */
-  async genericFindByUid(uid: string): Promise<unknown | null> {
+  async genericFindByUid(uid: string): Promise<unknown> {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select({ payload: authKv.payload }).from(authKv).where(
         and(
@@ -433,7 +439,97 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         ),
       ).limit(1),
     );
-    return rows.length > 0 ? rows[0]!.payload : null;
+    return rows.length > 0 ? rows[0].payload : null;
+  }
+
+  // ---- Sign-in allowlist ----
+
+  async allowlistList(): Promise<AuthAllowlistEntry[]> {
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.select().from(authAllowlist),
+    );
+    return rows.map(rowToAllowlistEntry);
+  }
+
+  async allowlistFind(id: string): Promise<AuthAllowlistEntry | null> {
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.select().from(authAllowlist).where(eq(authAllowlist.id, id)).limit(1),
+    );
+    return rows.length > 0 ? rowToAllowlistEntry(rows[0]) : null;
+  }
+
+  async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
+    const value = input.value.toLowerCase();
+    try {
+      const rows = await withSystemContext(this.db, (tx) =>
+        tx.insert(authAllowlist).values({
+          kind: input.kind,
+          value,
+          note: input.note ?? null,
+          createdBy: input.createdBy ?? null,
+        }).returning(),
+      );
+      return rowToAllowlistEntry(rows[0]);
+    } catch (err) {
+      // The (kind, value) unique index fires on duplicate. Normalize the
+      // Postgres-specific error (code 23505 = unique_violation) to the
+      // same message shape InMemory + Filesystem throw, so callers (the
+      // CLI, future UI) can pattern-match without backend-sniffing.
+      // Drizzle wraps the underlying pg error on `.cause`; check both
+      // for resilience to driver-layer changes.
+      const direct = err as { code?: string };
+      const wrapped = (err as { cause?: { code?: string } }).cause;
+      if (direct?.code === '23505' || wrapped?.code === '23505') {
+        throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
+      }
+      throw err;
+    }
+  }
+
+  async allowlistUpdate(id: string, patch: AllowlistUpdatePatch): Promise<AuthAllowlistEntry | null> {
+    // Only `note` is mutable. If the patch has no fields, treat as a no-op
+    // round-trip (return the current row).
+    if (patch.note === undefined) {
+      return this.allowlistFind(id);
+    }
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.update(authAllowlist)
+        .set({ note: patch.note ?? null })
+        .where(eq(authAllowlist.id, id))
+        .returning(),
+    );
+    return rows.length > 0 ? rowToAllowlistEntry(rows[0]) : null;
+  }
+
+  async allowlistRemove(id: string): Promise<boolean> {
+    const result = await withSystemContext(this.db, (tx) =>
+      tx.delete(authAllowlist).where(eq(authAllowlist.id, id)).returning({ id: authAllowlist.id }),
+    );
+    return result.length > 0;
+  }
+
+  async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    // Build the OR predicate over whichever identity values were supplied.
+    // No values supplied → trivially false (no possible match).
+    const predicates: SQL[] = [];
+    if (values.email) {
+      const pred = and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()));
+      if (pred) predicates.push(pred);
+    }
+    if (values.githubUsername) {
+      const pred = and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()));
+      if (pred) predicates.push(pred);
+    }
+    if (values.githubId) {
+      const pred = and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId));
+      if (pred) predicates.push(pred);
+    }
+    if (predicates.length === 0) return false;
+
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.select({ id: authAllowlist.id }).from(authAllowlist).where(or(...predicates)).limit(1),
+    );
+    return rows.length > 0;
   }
 }
 
@@ -483,7 +579,7 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
   // in-memory and filesystem backends (which preserve undefined when
   // the field was never set).
   if (Array.isArray(row.roles) && row.roles.length > 0) {
-    account.roles = row.roles as string[];
+    account.roles = row.roles;
   }
   return account;
 }
@@ -498,5 +594,16 @@ function rowToIdentityEvent(row: IdentityEventRow): IdentityAuditEvent {
   if (row.externalSub !== null) event.externalSub = row.externalSub;
   if (row.details !== null) event.details = row.details as Record<string, unknown>;
   return event;
+}
+
+function rowToAllowlistEntry(row: typeof authAllowlist.$inferSelect): AuthAllowlistEntry {
+  return {
+    id: row.id,
+    kind: row.kind as AuthAllowlistKind,
+    value: row.value,
+    note: row.note,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt,
+  };
 }
 

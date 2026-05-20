@@ -193,7 +193,7 @@ describe('Multi-method (GitHub + MagicLink) — OAuth E2E', () => {
     const initial = await fetch(chosen, { method: 'GET', redirect: 'manual', headers: { Cookie: jar.header() } });
     jar.ingest(initial.headers);
     const html = await initial.text();
-    const csrfToken = html.match(/name="csrf_token"\s+value="([^"]+)"/)![1]!;
+    const csrfToken = /name="csrf_token"\s+value="([^"]+)"/.exec(html)![1];
 
     const requestResp = await fetch(interactionUrl, {
       method: 'POST', redirect: 'manual',
@@ -210,7 +210,7 @@ describe('Multi-method (GitHub + MagicLink) — OAuth E2E', () => {
     expect(requestResp.status).toBe(200);
     expect(emailSender.sent).toHaveLength(1);
 
-    const tokenParam = new URL(emailSender.sent[0]!.url).searchParams.get('token')!;
+    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {

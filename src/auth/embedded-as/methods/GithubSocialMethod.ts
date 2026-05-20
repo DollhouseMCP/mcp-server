@@ -44,6 +44,7 @@ import { renderInteractionBindingError, verifyInteractionCookieMatches } from '.
 import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_API_USER_URL,
@@ -90,6 +91,14 @@ export interface GithubSocialMethodOptions {
    * Defaults to 7 days. A value of 0 disables the downgrade.
    */
   emailVerifiedCacheTtlMs?: number;
+  /**
+   * Sign-in allowlist enforcement mode. Mirrors
+   * `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`. When `true`, an empty allowlist
+   * means "bootstrap admin only". When `false` (default), an empty
+   * allowlist means "no gate" (back-compat). The bootstrap admin always
+   * passes regardless. Resolved at construction so tests can override.
+   */
+  allowlistRequired?: boolean;
 }
 
 interface GithubProfile {
@@ -102,6 +111,7 @@ interface GithubProfile {
 
 export type GithubCallbackResult =
   | { kind: 'ok'; interactionId: string; identity: AuthenticatedIdentity }
+  | { kind: 'denied'; reason: string }
   | { kind: 'error'; reason: string };
 
 export class GithubSocialMethod implements IAuthMethod {
@@ -248,6 +258,14 @@ export class GithubSocialMethod implements IAuthMethod {
             res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
             return;
           }
+          if (result.kind === 'denied') {
+            // Sign-in allowlist denied this identity. The audit event was
+            // already emitted inside the gate. Render a friendly HTML
+            // page (matching the rest of the AS's UX) instead of a raw
+            // 403 JSON blob.
+            res.status(403).type('html').send(renderAllowlistDeniedPage());
+            return;
+          }
           // Restore the request URL to the interaction so oidc-provider's
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
@@ -287,6 +305,26 @@ export class GithubSocialMethod implements IAuthMethod {
       email: profile.verifiedPrimaryEmail,
       emailVerified: true, // We only got here if the verified-primary lookup succeeded.
     };
+
+    // Sign-in allowlist gate. Runs BEFORE any account write so a denied
+    // sign-in leaves no persistent state (no account row, no grant-revoke
+    // side effects, no identity-change audit). Bootstrap admin always
+    // passes via checkAllowlistGate's rule 1.
+    const gate = await checkAllowlistGate(
+      {
+        sub: identity.sub,
+        method: 'github',
+        email: profile.verifiedPrimaryEmail,
+        githubUsername: profile.login,
+        githubId: String(profile.id),
+        provider: GITHUB_PROVIDER,
+        externalSub: String(profile.id),
+      },
+      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
 
     // must-fix #21: emit identity-change audit if the email mapping moved.
     const existing = await this.options.storage.findAccountByExternalId(

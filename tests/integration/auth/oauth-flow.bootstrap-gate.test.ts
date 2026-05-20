@@ -43,6 +43,12 @@ async function fetchAuthServerMetadata(baseUrl: string) {
   }>;
 }
 
+function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
+  const invites = new InviteTokenStore(randomBytes(32), storage);
+  const rateLimiter = new LocalLoginRateLimiter({ storage });
+  return new LocalAccountMethod({ storage, invites, rateLimiter });
+}
+
 describe('Bootstrap gate (must-fix #22)', () => {
   let harness: ASHarness | null = null;
 
@@ -50,12 +56,6 @@ describe('Bootstrap gate (must-fix #22)', () => {
     if (harness) await harness.close();
     harness = null;
   });
-
-  function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
-    const invites = new InviteTokenStore(randomBytes(32), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
-    return new LocalAccountMethod({ storage, invites, rateLimiter });
-  }
 
   it('multi-user mode + no bootstrap → /authorize returns 503 bootstrap_required', async () => {
     const storage = new InMemoryAuthStorageLayer();

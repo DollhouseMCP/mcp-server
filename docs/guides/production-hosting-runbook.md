@@ -89,54 +89,109 @@ The same-compose layout is the assumed default below. The [Managed Postgres note
 
 ### Authenticated-user allowlist
 
-GitHub OAuth via the embedded AS will let any GitHub-account holder complete the OAuth flow and obtain a regular-user JWT. The only built-in gate today is the **admin pre-claim**, which controls admin role assignment — not whether sign-in itself succeeds. If you need to restrict who can sign in at all (both for MCP and for the web console), pick one of the patterns below.
+GitHub OAuth via the embedded AS will let any GitHub-account holder complete the OAuth flow and obtain a regular-user JWT unless you gate sign-up. For production deployments, gate it — see Pattern 1 below.
 
-The patterns differ in **what they gate** and **what MCP clients need to do** to authenticate:
+Five patterns exist; the **built-in allowlist (Pattern 1)** is the recommended starting point because it requires no extra infrastructure and covers MCP and web console uniformly. The other patterns are fits for specific operational constraints (existing GitHub Org, defense-in-depth at the edge, etc.).
 
 | Pattern | Where the gate lives | Gates MCP? | Gates console? | MCP client impact |
 |---|---|---|---|---|
-| **1. GitHub Org membership check** | GitHub's OAuth-app config | Yes | Yes | None. The OAuth flow just fails for non-members at the GitHub consent step. |
-| **2. Cloudflare Access in front of the hostname** | Cloudflare edge | Yes | Yes | MCP clients need Cloudflare service tokens (CF supports this). Browser-based clients SSO normally. |
-| **3. `oauth2-proxy` sidecar in front of everything** | Reverse proxy layer | Yes | Yes | MCP clients need a static-token bypass (oauth2-proxy can accept Bearer tokens and skip its own auth for specific paths). Adds a service to operate. |
-| **4. No allowlist + admin-only pre-claim** | Nothing | No | No | None. Anyone with a GitHub account can sign in as a regular user; only the pre-claimed account is admin. |
+| **1. Built-in allowlist** (recommended) | DollhouseMCP `auth_allowlist` table or `~/.dollhouse/auth/allowlist.json` | Yes | Yes | None — gate is invisible when the user is on the list. |
+| **2. GitHub Org membership check** | GitHub's OAuth-app config | Yes | Yes | None. Non-members fail at GitHub's consent screen. |
+| **3. Cloudflare Access in front of the hostname** | Cloudflare edge | Yes | Yes | MCP clients need Cloudflare service tokens. Browser users SSO normally. |
+| **4. `oauth2-proxy` sidecar in front of everything** | Reverse proxy layer | Yes | Yes | MCP clients need a static-token bypass; adds a service to operate. |
+| **5. No allowlist + admin-only pre-claim** | Nothing | No | No | None. Anyone with a GitHub account can sign in; only the pre-claimed account is admin. |
 
-> **What's NOT currently a built-in option:** an AS-level allowlist that gates sign-in by email or GitHub username inside DollhouseMCP itself. The embedded AS's GitHub method upserts an account row for any GitHub user with a verified primary email. A future enhancement is planned that adds an `auth_allowlist` table with admin-managed CRUD via MCP-AQL — once that lands, this section will document it as the preferred pattern. Until then, use one of patterns 1–3 above.
+#### Pattern 1: Built-in sign-in allowlist (recommended)
 
-#### Pattern 1: GitHub Organization membership
+DollhouseMCP ships an `auth_allowlist` table (DB mode) or `~/.dollhouse/auth/allowlist.json` (filesystem mode). The gate fires on **every** sign-in method — GitHub OAuth, magic-link, and local-password — uniformly. The bootstrap admin always passes, so you cannot lock yourself out.
 
-Strongest fit for "I have a team org and only that org should sign in." No DollhouseMCP changes, no extra services.
+**Enforcement mode:** controlled by `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`.
+
+| Setting | Behavior |
+|---|---|
+| `false` (default) | Empty list = no gate (back-compat). Once you add a first entry, the gate activates. |
+| `true` (recommended for hosted production) | Empty list = bootstrap admin only. Even unconfigured deploys won't sit open to the public internet. |
+
+When `REQUIRED=false` AND the server binds to a non-loopback host AND a social method (`github` / `magic-link`) is configured, a startup warning fires naming the open-sign-in risk. Set `REQUIRED=true` to silence it.
+
+**Managing the list:** the dedicated `dollhouse-allowlist` CLI. NOT exposed through MCP-AQL (security policy stays out of AI-mediated surfaces).
+
+```bash
+# Add by email
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist add --kind email --value mick@example.com --note "engineering"
+
+# Add by GitHub username (case-insensitive)
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist add --kind github_username --value insomnolence
+
+# Add by stable GitHub numeric ID (survives rename)
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist add --kind github_id --value 1125822 --note "founder"
+
+# List entries (sorted by kind)
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist list
+
+# Remove
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist remove --kind email --value mick@example.com
+
+# Update note (kind/value are immutable — remove + re-add to change those)
+docker compose run --rm dollhousemcp \
+  npx dollhouse-allowlist update --id <uuid> --note "new note"
+```
+
+For **filesystem mode** (no DB), the same CLI works, OR you can edit `~/.dollhouse/auth/allowlist.json` directly — the server picks up changes within ~1 second via fsnotify, no restart needed.
+
+**Match rules:** the gate ORs across all configured kinds. An entry matches if **any** of the verified identity values (email, GitHub username, GitHub numeric ID) is on the list. Values are lowercased on insert; matching is case-insensitive for emails and usernames.
+
+**Denial behavior:** a denied user sees an "Access denied" HTML page (not a raw JSON error), and an `auth.allowlist_denied` event lands in `auth_identity_events` with their identity values for operator diagnosis. The audit log is queryable via `psql` or the future web console.
+
+**Optional seed file:** for GitOps shops, set `DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE=/path/to/seed.json`. On startup, the AS idempotently upserts each entry from the seed file into the active store. Useful for keeping the allowlist alongside the rest of your infrastructure-as-code:
+
+```json
+{
+  "entries": [
+    { "kind": "email", "value": "todd@example.com", "note": "founder" },
+    { "kind": "github_username", "value": "insomnolence" }
+  ]
+}
+```
+
+The seed file is **additive** — entries already in the store stay, even if not in the seed. To remove an entry, use the CLI.
+
+#### Pattern 2: GitHub Organization membership
+
+Fits "I have a team org and only that org should sign in." Stacks cleanly on Pattern 1 if you want both.
 
 1. Create or use a private GitHub org. Add every user who should have access.
-2. In the GitHub OAuth app's settings → **Organization access** → request OAuth access for the org. Approve the request as the org owner.
-3. In the org's settings → **Third-party access** → either restrict to approved apps OR open access. Your OAuth app must be approved.
-4. Anyone who isn't a member of the org will see "You don't have access" at GitHub's consent screen and never reach the callback.
+2. In the GitHub OAuth app's settings → **Organization access** → request OAuth access for the org. Approve as the org owner.
+3. In the org's settings → **Third-party access** → restrict to approved apps OR open access; your OAuth app must be approved.
+4. Anyone who isn't a member of the org sees "You don't have access" at GitHub's consent screen and never reaches the callback.
 
-Gates MCP automatically because both the web console and MCP go through the same `/auth/social/github/callback` flow.
+Gates both MCP and console because both flow through the same `/auth/social/github/callback`.
 
-#### Pattern 2: Cloudflare Access
+#### Pattern 3: Cloudflare Access
 
-Strongest defense-in-depth. Unallowed users can't even see your AS endpoints.
+Strongest defense-in-depth — unallowed users can't even see the AS endpoints. Stacks with Pattern 1 if you want belt-and-suspenders.
 
 1. Add the hostname to a Cloudflare Access policy (Zero Trust → Access → Applications → Add → Self-hosted).
-2. Configure the identity provider (Google Workspace, GitHub, one-time PIN, etc.) and allow rules (email allowlist, group membership, etc.).
-3. **For MCP clients**, create a Service Token (Zero Trust → Access → Service Auth → Service Tokens). The token is a `CF-Access-Client-Id` + `CF-Access-Client-Secret` header pair. Configure your MCP client to send these on every request, or wrap them in a pre-share script that the user runs once.
+2. Configure the identity provider (Google Workspace, GitHub, one-time PIN, etc.) and allow rules.
+3. **For MCP clients**, create a Service Token (Zero Trust → Access → Service Auth → Service Tokens). The token is a `CF-Access-Client-Id` + `CF-Access-Client-Secret` header pair. Configure your MCP client to send these on every request.
 4. **For browser users**, Cloudflare handles SSO transparently.
 
 Setup time: ~30 min. Free tier supports up to 50 users.
 
-#### Pattern 3: `oauth2-proxy` sidecar applied to all paths
+#### Pattern 4: `oauth2-proxy` sidecar
 
-Run [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as a reverse-proxy sidecar in front of the MCP server. Configure it as an OIDC client of the embedded AS (or against an external IdP) and gate all paths — MCP and console — behind an `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` allowlist.
+Run [oauth2-proxy](https://oauth2-proxy.github.io/oauth2-proxy/) as a reverse-proxy sidecar. Configure it as an OIDC client of the embedded AS (or against an external IdP) and gate all paths behind an `OAUTH2_PROXY_AUTHENTICATED_EMAILS_FILE` allowlist.
 
-For MCP clients to bypass the oauth2-proxy interactive flow, they need to present a pre-issued token that oauth2-proxy treats as valid (via `OAUTH2_PROXY_SKIP_AUTH_ROUTES` for specific paths, or via a Bearer-token validation extension). The straight-up "MCP client uses GitHub OAuth via the AS, then sends its JWT as Bearer" pattern works only if oauth2-proxy passes the request through unmolested — which it doesn't by default for paths it gates.
+MCP clients need a static-token bypass (`OAUTH2_PROXY_SKIP_AUTH_ROUTES` for specific paths, or a Bearer-token validation extension). The most operational complexity of the four; use only if Patterns 1–3 don't fit.
 
-This is the most operational complexity of the three. Use it only if patterns 1 and 2 don't fit (e.g., you don't want GitHub-org dependency AND don't want Cloudflare in the request path).
+#### Pattern 5: No allowlist (back-compat default)
 
-#### Pattern 4: No allowlist (default)
-
-Acceptable for very-small deploys where every account is welcome. Anyone with a GitHub account can sign in; only your pre-claimed account is admin. Combine with secure-by-default — `DOLLHOUSE_AUTH_OPEN_DCR=false`, host hardening, etc. — to bound the blast radius.
-
-This is what the rest of the runbook assumes. Adjust the production checklist below if you pick a different pattern.
+`DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=false` with an empty list. Anyone with a GitHub account can sign in. Only acceptable for personal-use deploys where every account is welcome. Combine with secure-by-default — `DOLLHOUSE_AUTH_OPEN_DCR=false`, host hardening, etc. — to bound the blast radius. The runbook's checklist nudges you toward Pattern 1 for production.
 
 ---
 
@@ -864,7 +919,8 @@ Don't go live until all of these are true:
 - [ ] `DOLLHOUSE_AUTH_OPEN_DCR=false` (or absent — defaults to false)
 - [ ] Admin identity pre-claimed via `dollhouse-admin-bootstrap`
 - [ ] `/readyz` returns 200 (not 503 with `bootstrap_required`)
-- [ ] You have explicitly chosen an authenticated-users gate (GitHub Org / Cloudflare Access / oauth2-proxy sidecar / no allowlist) — see [Authenticated-user allowlist](#authenticated-user-allowlist). Default — no allowlist — is acceptable for tiny deploys but document the choice.
+- [ ] `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true` AND the allowlist is populated (or you've consciously chosen a different gate from [Patterns 2–4](#authenticated-user-allowlist)). If you're on Pattern 5 (no allowlist), document why.
+- [ ] If using Pattern 1: at least one allowlist entry covering you (the operator) — check with `dollhouse-allowlist list`. The bootstrap admin pre-claim handles the lockout case, but explicit entries make the list self-documenting.
 
 **Secrets**
 - [ ] `DOLLHOUSE_COOKIE_SIGNING_SECRET` and `DOLLHOUSE_INVITE_TOKEN_SECRET` generated fresh, set via env, 64+ hex chars

@@ -41,11 +41,16 @@
  * @module auth/embedded-as/storage/FilesystemAuthStorageLayer
  */
 
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
 import type {
+  AllowlistAddInput,
+  AllowlistMatchValues,
+  AllowlistUpdatePatch,
+  AuthAllowlistEntry,
   BootstrapState,
   IAuthStorageLayer,
   IdentityAuditEvent,
@@ -78,6 +83,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly auditPath: string;
   private readonly kvDir: string;
   private readonly bootstrapPath: string;
+  private readonly allowlistPath: string;
   private readonly locks = new FileLockManager();
   private initialized = false;
 
@@ -92,6 +98,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     this.auditPath = path.join(this.rootDir, 'audit.jsonl');
     this.kvDir = path.join(this.rootDir, 'kv');
     this.bootstrapPath = path.join(this.rootDir, 'bootstrap.json');
+    this.allowlistPath = path.join(this.rootDir, 'allowlist.json');
   }
 
   // ---- Accounts (must-fix #18) ----
@@ -125,7 +132,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       // Surgical update under the same lock that guards upsertAccount —
       // protects the lastAuthAt write from being clobbered by a
       // concurrent upsert that re-writes the row from a stale read.
-      accounts[idx] = { ...accounts[idx]!, lastAuthAt, updatedAt: Date.now() };
+      accounts[idx] = { ...accounts[idx], lastAuthAt, updatedAt: Date.now() };
       await this.ensureRoot();
       await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
       return true;
@@ -138,7 +145,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       const idx = accounts.findIndex(a => a.sub === sub);
       if (idx < 0) return false;
       const next: StoredAccount = {
-        ...accounts[idx]!,
+        ...accounts[idx],
         updatedAt: Date.now(),
       };
       // Empty array → drop the field entirely so the on-disk shape
@@ -291,44 +298,60 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   // ---- Grants (Phase 5 H14) ----
 
   async findGrantsByAccountId(sub: string): Promise<string[]> {
-    const grantDir = this.modelDir('Grant');
-    let entries: string[];
-    try {
-      entries = await fs.readdir(grantDir);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-    const ids: string[] = [];
+    const entries = await this.safelyListJsonEntries(this.modelDir('Grant'));
+    if (entries.length === 0) return [];
     const now = Date.now();
+    const ids: string[] = [];
     for (const entry of entries) {
-      if (!entry.endsWith('.json')) continue;
       const id = entry.slice(0, -'.json'.length);
-      // Cycle-16 sibling-fix: tolerate a single unreadable / malformed
-      // Grant file the same way `genericRevokeByGrantId` does. Without
-      // this, a stray non-base64url file in kv/Grant/ throws from the
-      // first `readKv` call and breaks every GitHub login (each callback
-      // calls findGrantsByAccountId before the token exchange).
-      let record: KvRecord | null;
-      try {
-        record = await this.readKv('Grant', id);
-      } catch (err) {
-        logger.warn('[FilesystemAuthStorageLayer] skipping unreadable Grant file', {
-          id, error: err instanceof Error ? err.message : String(err),
-        });
-        continue;
-      }
-      if (!record) continue;
-      if (record.exp !== null && record.exp <= now) continue;
-      const payload = record.value as { accountId?: string } | null;
-      if (payload?.accountId === sub) ids.push(id);
+      const matched = await this.grantBelongsTo(id, sub, now);
+      if (matched) ids.push(id);
     }
     return ids;
   }
 
+  /**
+   * Cycle-16 sibling-fix: tolerate a single unreadable / malformed Grant
+   * file the same way `genericRevokeByGrantId` does. Without this, a
+   * stray non-base64url file in kv/Grant/ throws from the first `readKv`
+   * call and breaks every GitHub login.
+   */
+  private async grantBelongsTo(id: string, sub: string, now: number): Promise<boolean> {
+    let record: KvRecord | null;
+    try {
+      record = await this.readKv('Grant', id);
+    } catch (err) {
+      logger.warn('[FilesystemAuthStorageLayer] skipping unreadable Grant file', {
+        id, error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    if (!record) return false;
+    if (record.exp !== null && record.exp <= now) return false;
+    const payload = record.value as { accountId?: string } | null;
+    return payload?.accountId === sub;
+  }
+
+  /**
+   * List `.json` files in a kv directory, tolerating ENOENT (the directory
+   * doesn't exist yet because nothing's been written to that model).
+   * Other errors propagate. Used by sweep/scan operations that walk one
+   * kv subdirectory and must distinguish "empty/uninitialized" from
+   * "filesystem broken".
+   */
+  private async safelyListJsonEntries(dir: string): Promise<string[]> {
+    try {
+      const entries = await fs.readdir(dir);
+      return entries.filter(e => e.endsWith('.json'));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+  }
+
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
-  async genericGet(model: string, id: string): Promise<unknown | null> {
+  async genericGet(model: string, id: string): Promise<unknown> {
     // Defense in depth: assert at the public surface in addition to the
     // internal `readKv` check. Keeps the path-traversal guarantee from
     // depending on a private helper a future refactor might bypass.
@@ -434,44 +457,45 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     if (SAFE_ID_RE.test(grantId)) {
       await this.unlinkKv('Grant', grantId);
     }
+    const models = await this.listModelDirs();
+    for (const model of models) {
+      await this.revokeModelEntriesReferencingGrant(model, grantId);
+    }
+  }
+
+  private async listModelDirs(): Promise<string[]> {
     let entries: string[];
     try {
       entries = await fs.readdir(this.kvDir);
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
-    for (const model of entries) {
-      // Skip non-directory entries defensively.
-      if (!SAFE_MODEL_RE.test(model)) continue;
-      let ids: string[];
+    // Skip non-directory entries defensively.
+    return entries.filter(m => SAFE_MODEL_RE.test(m));
+  }
+
+  private async revokeModelEntriesReferencingGrant(model: string, grantId: string): Promise<void> {
+    const ids = await this.safelyListJsonEntries(path.join(this.kvDir, model));
+    for (const idFile of ids) {
+      const id = idFile.slice(0, -'.json'.length);
+      // A single malformed/orphan file in the kv directory must not
+      // abort the entire revoke — without this guard, one bad file
+      // permanently blocks H14 grant revocation. assertSafeId throws
+      // in readKv on suspicious names; readJSON throws on parse fail.
+      let record;
       try {
-        ids = await fs.readdir(path.join(this.kvDir, model));
+        record = await this.readKv(model, id);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw err;
+        logger.warn('[FilesystemAuthStorageLayer] skipping unreadable kv file during grant revoke', {
+          model, id, error: err instanceof Error ? err.message : String(err),
+        });
+        continue;
       }
-      for (const idFile of ids) {
-        if (!idFile.endsWith('.json')) continue;
-        const id = idFile.slice(0, -'.json'.length);
-        // A single malformed/orphan file in the kv directory must not
-        // abort the entire revoke — without this guard, one bad file
-        // permanently blocks H14 grant revocation. assertSafeId throws
-        // in readKv on suspicious names; readJSON throws on parse fail.
-        let record;
-        try {
-          record = await this.readKv(model, id);
-        } catch (err) {
-          logger.warn('[FilesystemAuthStorageLayer] skipping unreadable kv file during grant revoke', {
-            model, id, error: err instanceof Error ? err.message : String(err),
-          });
-          continue;
-        }
-        if (!record) continue;
-        const payload = record.value as { grantId?: string } | null;
-        if (payload?.grantId === grantId) {
-          await this.unlinkKv(model, id);
-        }
+      if (!record) continue;
+      const payload = record.value as { grantId?: string } | null;
+      if (payload?.grantId === grantId) {
+        await this.unlinkKv(model, id);
       }
     }
   }
@@ -480,22 +504,21 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     let deleted = 0;
     for (const model of models) {
       assertSafeModel(model);
-      const dir = this.modelDir(model);
-      let entries: string[];
+      deleted += await this.clearOneModel(model);
+    }
+    return deleted;
+  }
+
+  private async clearOneModel(model: string): Promise<number> {
+    const dir = this.modelDir(model);
+    const entries = await this.safelyListJsonEntries(dir);
+    let deleted = 0;
+    for (const entry of entries) {
       try {
-        entries = await fs.readdir(dir);
+        await fs.unlink(path.join(dir, entry));
+        deleted += 1;
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw err;
-      }
-      for (const entry of entries) {
-        if (!entry.endsWith('.json')) continue;
-        try {
-          await fs.unlink(path.join(dir, entry));
-          deleted += 1;
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        }
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
       }
     }
     return deleted;
@@ -503,52 +526,68 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
 
   async sweepExpiredKv(): Promise<number> {
     const kvRoot = path.join(this.rootDir, 'kv');
-    let modelDirs: string[];
-    try {
-      modelDirs = await fs.readdir(kvRoot);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-      throw err;
-    }
+    const modelDirs = await this.safelyListDirectory(kvRoot);
     const now = Date.now();
     let deleted = 0;
     for (const model of modelDirs) {
-      const dir = path.join(kvRoot, model);
-      let entries: string[];
-      try {
-        entries = await fs.readdir(dir);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
-        throw err;
-      }
-      for (const entry of entries) {
-        if (!entry.endsWith('.json')) continue;
-        const id = entry.slice(0, -'.json'.length);
-        let record: KvRecord | null;
-        try {
-          record = await this.readKv(model, id);
-        } catch {
-          continue;
-        }
-        if (!record || record.exp === null) continue;
-        if (record.exp <= now) {
-          try {
-            await fs.unlink(path.join(dir, entry));
-            deleted += 1;
-          } catch (err) {
-            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-          }
-        }
-      }
+      deleted += await this.sweepExpiredKvInModel(kvRoot, model, now);
     }
     return deleted;
+  }
+
+  private async sweepExpiredKvInModel(kvRoot: string, model: string, now: number): Promise<number> {
+    const dir = path.join(kvRoot, model);
+    const entries = await this.safelyListJsonEntries(dir);
+    let deleted = 0;
+    for (const entry of entries) {
+      const id = entry.slice(0, -'.json'.length);
+      if (await this.deleteIfExpired(model, id, dir, entry, now)) deleted += 1;
+    }
+    return deleted;
+  }
+
+  private async deleteIfExpired(
+    model: string,
+    id: string,
+    dir: string,
+    entry: string,
+    now: number,
+  ): Promise<boolean> {
+    let record: KvRecord | null;
+    try {
+      record = await this.readKv(model, id);
+    } catch {
+      return false;
+    }
+    if (record?.exp == null || record.exp > now) return false;
+    try {
+      await fs.unlink(path.join(dir, entry));
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      return false;
+    }
+  }
+
+  /**
+   * `readdir` with ENOENT tolerated as an empty result. Other errors
+   * propagate. Companion to `safelyListJsonEntries` for callers that
+   * want every entry, not just `.json` files.
+   */
+  private async safelyListDirectory(dir: string): Promise<string[]> {
+    try {
+      return await fs.readdir(dir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
   }
 
   /**
    * Linear scan over the Session model. Tolerated cost given solo/team
    * deployment volumes; the Postgres backend should index `uid`.
    */
-  async genericFindByUid(uid: string): Promise<unknown | null> {
+  async genericFindByUid(uid: string): Promise<unknown> {
     const sessionDir = this.modelDir('Session');
     let entries: string[];
     try {
@@ -666,6 +705,129 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private modelDir(model: string): string {
     return path.join(this.kvDir, model);
   }
+
+  // ---- Sign-in allowlist ----
+
+  async allowlistList(): Promise<AuthAllowlistEntry[]> {
+    return this.readAllowlist();
+  }
+
+  async allowlistFind(id: string): Promise<AuthAllowlistEntry | null> {
+    const entries = await this.readAllowlist();
+    return entries.find(e => e.id === id) ?? null;
+  }
+
+  async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const value = input.value.toLowerCase();
+      const duplicate = entries.find(e => e.kind === input.kind && e.value === value);
+      if (duplicate) {
+        throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
+      }
+      const entry: AuthAllowlistEntry = {
+        id: randomUUID(),
+        kind: input.kind,
+        value,
+        note: input.note ?? null,
+        createdBy: input.createdBy ?? null,
+        createdAt: new Date(),
+      };
+      entries.push(entry);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      return { ...entry, createdAt: new Date(entry.createdAt) };
+    });
+  }
+
+  async allowlistUpdate(id: string, patch: AllowlistUpdatePatch): Promise<AuthAllowlistEntry | null> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const idx = entries.findIndex(e => e.id === id);
+      if (idx < 0) return null;
+      if (patch.note !== undefined) entries[idx].note = patch.note;
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      const updated = entries[idx];
+      return { ...updated, createdAt: new Date(updated.createdAt) };
+    });
+  }
+
+  async allowlistRemove(id: string): Promise<boolean> {
+    return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
+      const entries = await this.readAllowlistRaw();
+      const idx = entries.findIndex(e => e.id === id);
+      if (idx < 0) return false;
+      entries.splice(idx, 1);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.allowlistPath, serializeAllowlist(entries));
+      return true;
+    });
+  }
+
+  async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    const entries = await this.readAllowlist();
+    if (entries.length === 0) return false;
+    const email = values.email?.toLowerCase();
+    const githubUsername = values.githubUsername?.toLowerCase();
+    const githubId = values.githubId;
+    for (const e of entries) {
+      if (e.kind === 'email' && email && e.value === email) return true;
+      if (e.kind === 'github_username' && githubUsername && e.value === githubUsername) return true;
+      if (e.kind === 'github_id' && githubId && e.value === githubId) return true;
+    }
+    return false;
+  }
+
+  private async readAllowlist(): Promise<AuthAllowlistEntry[]> {
+    const raw = await this.readAllowlistRaw();
+    return raw.map(e => ({ ...e, createdAt: new Date(e.createdAt) }));
+  }
+
+  private async readAllowlistRaw(): Promise<AuthAllowlistEntry[]> {
+    try {
+      const raw = await fs.readFile(this.allowlistPath, 'utf8');
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        logger.warn('[AuthStorage:fs] allowlist.json is not an array; treating as empty', {
+          path: this.allowlistPath,
+        });
+        return [];
+      }
+      return parsed
+        .filter((e): e is AuthAllowlistEntry & { createdAt: string | Date } =>
+          typeof e === 'object' && e !== null
+          && typeof (e as { id?: unknown }).id === 'string'
+          && typeof (e as { kind?: unknown }).kind === 'string'
+          && ['email', 'github_username', 'github_id'].includes((e as { kind: string }).kind)
+          && typeof (e as { value?: unknown }).value === 'string')
+        .map(e => ({
+          id: e.id,
+          kind: e.kind,
+          value: e.value,
+          note: typeof e.note === 'string' ? e.note : null,
+          createdBy: typeof e.createdBy === 'string' ? e.createdBy : null,
+          createdAt: typeof e.createdAt === 'string' ? new Date(e.createdAt) : e.createdAt,
+        }));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') return [];
+      if (err instanceof SyntaxError) {
+        logger.warn('[AuthStorage:fs] allowlist.json failed to parse; treating as empty', {
+          path: this.allowlistPath,
+          error: err.message,
+        });
+        return [];
+      }
+      throw err;
+    }
+  }
+}
+
+function serializeAllowlist(entries: AuthAllowlistEntry[]): string {
+  // Pretty-print so operators editing the file by hand get readable output.
+  // Dates serialize to ISO-8601 via Date.prototype.toJSON.
+  return JSON.stringify(entries, null, 2);
 }
 
 function assertSafeModel(model: string): void {

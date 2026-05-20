@@ -127,27 +127,27 @@ describe('createUnifiedAuthMiddleware', () => {
  * the legitimate 64-hex console token the browser injects gets rejected
  * before the console-token middleware ever runs.
  */
-describe('withJwtFallthrough', () => {
-  // Build an app where the unified middleware is wrapped + a downstream
-  // "fallback" middleware sets a sentinel header so the test can tell
-  // whether the request reached it.
-  function createChainedApp(
-    provider: IAuthProvider,
-  ): express.Express {
-    const app = express();
-    app.use(express.json());
-    const strict = createUnifiedAuthMiddleware({ provider });
-    app.use('/api', withJwtFallthrough(strict));
-    app.use('/api', (_req, res, next) => {
-      res.setHeader('x-fallback-reached', 'true');
-      next();
-    });
-    app.get('/api/data', (_req, res) => {
-      res.json({ data: 'ok', claims: res.locals.authClaims });
-    });
-    return app;
-  }
+// Build an app where the unified middleware is wrapped + a downstream
+// "fallback" middleware sets a sentinel header so the test can tell
+// whether the request reached it.
+function createChainedApp(
+  provider: IAuthProvider,
+): express.Express {
+  const app = express();
+  app.use(express.json());
+  const strict = createUnifiedAuthMiddleware({ provider });
+  app.use('/api', withJwtFallthrough(strict));
+  app.use('/api', (_req, res, next) => {
+    res.setHeader('x-fallback-reached', 'true');
+    next();
+  });
+  app.get('/api/data', (_req, res) => {
+    res.json({ data: 'ok', claims: res.locals.authClaims });
+  });
+  return app;
+}
 
+describe('withJwtFallthrough', () => {
   it('falls through to next middleware when no Authorization header is present', async () => {
     const provider = createMockProvider(async () => ({ ok: true, claims: { sub: 'user' } }));
     const app = createChainedApp(provider);

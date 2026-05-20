@@ -397,7 +397,7 @@ Set `DOLLHOUSE_STORAGE_BACKEND=database` to switch from filesystem to PostgreSQL
 
 ```bash
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:yourpassword@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
 ```
 
 See [PostgreSQL Setup](#postgresql-setup) for complete setup instructions.
@@ -572,7 +572,7 @@ Run the contents of `docker/init-db.sql` against the `dollhousemcp` database to 
 **Step 3: Run migrations**
 
 ```bash
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:your-strong-password-here@your-host:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@your-host:5432/dollhousemcp \
   npm run db:migrate
 ```
 
@@ -1087,6 +1087,8 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_TLS_KEY_PATH` | *(unset)* | Path to TLS private key (PEM). Permissions must be 0600 or stricter. |
 | `DOLLHOUSE_TRUSTED_PROXIES` | `loopback` | Express `trust proxy` setting that controls how `req.ip` resolves. `loopback` for native-HTTPS deployments; explicit CIDR (e.g. `10.0.0.0/8`) for hosted deployments behind a reverse proxy. **Misconfiguring this collapses per-IP rate limits to the proxy's egress IP.** |
 | `DOLLHOUSE_AUTH_OPEN_DCR` | `false` | When `true`, the `/reg` Dynamic Client Registration endpoint accepts unauthenticated registrations (no Initial Access Token required). **Localhost-only dev escape hatch** for MCP clients that auto-register without an IAT (Gemini CLI, claude.ai web). Default-off is the production shape. See [Dynamic Client Registration](#dynamic-client-registration-dollhouse_auth_open_dcr) for the trade-off and remote-deployment guidance. |
+| `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED` | `false` | When `true`, every sign-in (GitHub OAuth, magic-link, local-password) is gated by the `auth_allowlist` table / `~/.dollhouse/auth/allowlist.json` file. Empty list with `REQUIRED=true` means only the bootstrap admin can sign in. The bootstrap admin always passes regardless of this setting. Recommended `true` for any non-loopback deployment with a social method configured — a startup warning fires when this is false and a social method is configured on a non-loopback bind. Manage entries via the `dollhouse-allowlist` CLI; the allowlist is intentionally NOT exposed through MCP-AQL to keep security-policy mutations out of AI-mediated surfaces. |
+| `DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE` | *(unset)* | Optional path to a JSON file with `{entries: [{kind, value, note?}, ...]}`. On startup, the AS idempotently upserts each entry into the active storage backend. Additive — existing entries not in the seed are NOT removed. For GitOps shops keeping the allowlist alongside infrastructure config. |
 
 > **Operator action — multi-replica HA:** if `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres` is set without `DOLLHOUSE_COOKIE_SIGNING_SECRET` and `DOLLHOUSE_INVITE_TOKEN_SECRET`, the server logs a warning at startup that brute-force protection is per-replica and that interaction sessions will not survive cross-replica routing. Set both env vars to the same value across all replicas.
 
@@ -1262,8 +1264,8 @@ npm run db:import -- --verbose
 Required environment variables:
 
 ```bash
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:password@localhost:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:password@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@localhost:5432/dollhousemcp
 ```
 
 The import resolves user identity from the OS username via `bootstrapDatabase()`, the same mechanism the server uses on first run. All element types are supported, including memories (with full entry sync).
@@ -1618,8 +1620,8 @@ DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS=300
 
 # Storage
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:strong-password@db.internal:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@db.internal:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp
 DOLLHOUSE_DATABASE_SSL=require
 DOLLHOUSE_DATABASE_POOL_SIZE=20
 
@@ -1657,15 +1659,15 @@ npm run db:setup
 For a managed database (RDS, Cloud SQL, and so on), run migrations manually after creating the roles:
 
 ```bash
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp \
   npm run db:migrate
 ```
 
 **Import an existing portfolio** (if you have one to carry over):
 
 ```bash
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:strong-password@db.internal:5432/dollhousemcp \
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp \
   npm run db:import
 ```
 
@@ -1691,8 +1693,8 @@ DOLLHOUSE_HTTP_PORT=3000
 
 # Storage
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:password@localhost:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:password@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@localhost:5432/dollhousemcp
 
 # Authentication
 DOLLHOUSE_AUTH_ENABLED=true

@@ -12,6 +12,8 @@ import {
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
+const TRIVIAL_CONSENT_ID = 'trivial-consent';
+
 describe('AuthProviderFactory two-level structure', () => {
   describe('selectAuthMode', () => {
     it('routes local to embedded mode', () => {
@@ -30,16 +32,16 @@ describe('AuthProviderFactory two-level structure', () => {
   describe('resolveAuthMethods', () => {
     it('defaults to trivial-consent for embedded mode', () => {
       const config: AuthConfig = { enabled: true, provider: 'embedded' };
-      expect(resolveAuthMethods(config)).toEqual(['trivial-consent']);
+      expect(resolveAuthMethods(config)).toEqual([TRIVIAL_CONSENT_ID]);
     });
 
     it('honors explicit methods config', () => {
       const config: AuthConfig = {
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent', 'github'],
+        methods: [TRIVIAL_CONSENT_ID, 'github'],
       };
-      expect(resolveAuthMethods(config)).toEqual(['trivial-consent', 'github']);
+      expect(resolveAuthMethods(config)).toEqual([TRIVIAL_CONSENT_ID, 'github']);
     });
 
     it('returns empty methods list for oidc provider (bypasses embedded-AS methods)', () => {
@@ -51,7 +53,7 @@ describe('AuthProviderFactory two-level structure', () => {
       const config: AuthConfig = {
         enabled: true,
         provider: 'oidc',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
       };
       expect(resolveAuthMethods(config)).toEqual([]);
     });
@@ -61,7 +63,7 @@ describe('AuthProviderFactory two-level structure', () => {
     it('rejects unregistered methods', async () => {
       const factory = new AuthMethodFactory();
       // Intentionally do NOT register 'github'
-      factory.register('trivial-consent');
+      factory.register(TRIVIAL_CONSENT_ID);
 
       await expect(
         createAuthProvider({
@@ -75,13 +77,13 @@ describe('AuthProviderFactory two-level structure', () => {
 
     it('accepts methods registered in the default factory', async () => {
       const factory = createDefaultAuthMethodFactory();
-      // 'trivial-consent' is registered by default; this should not throw at validation.
+      // TRIVIAL_CONSENT_ID is registered by default; this should not throw at validation.
       // We catch errors from later construction (key file IO etc.) and only assert
       // the validation step passes.
       const result = await createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
         methodFactory: factory,
         publicBaseUrl: 'http://127.0.0.1:65530',
       }).catch(err => err);
@@ -108,7 +110,7 @@ describe('AuthProviderFactory two-level structure', () => {
   describe('createDefaultAuthMethodFactory', () => {
     it('registers trivial-consent', () => {
       const factory = createDefaultAuthMethodFactory();
-      expect(factory.has('trivial-consent')).toBe(true);
+      expect(factory.has(TRIVIAL_CONSENT_ID)).toBe(true);
     });
 
     it('registers github (C7)', () => {
@@ -166,7 +168,7 @@ describe('AuthProviderFactory two-level structure', () => {
       await expect(createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
       })).rejects.toThrow(/non-loopback bind '0\.0\.0\.0'/);
     });
 
@@ -175,7 +177,7 @@ describe('AuthProviderFactory two-level structure', () => {
       await expect(createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
       })).rejects.toThrow(/non-loopback bind/);
     });
 
@@ -184,7 +186,7 @@ describe('AuthProviderFactory two-level structure', () => {
       await expect(createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
         publicBaseUrl: 'https://public.example.com',
       })).rejects.toThrow(/non-loopback public URL/);
     });
@@ -194,7 +196,7 @@ describe('AuthProviderFactory two-level structure', () => {
       const provider = await createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
         publicBaseUrl: 'http://127.0.0.1:65530',
       });
       expect(provider).toBeDefined();
@@ -205,7 +207,7 @@ describe('AuthProviderFactory two-level structure', () => {
       const provider = await createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
         publicBaseUrl: 'http://127.0.0.2:65530',
       });
       expect(provider).toBeDefined();
@@ -216,7 +218,7 @@ describe('AuthProviderFactory two-level structure', () => {
       const provider = await createAuthProvider({
         enabled: true,
         provider: 'embedded',
-        methods: ['trivial-consent'],
+        methods: [TRIVIAL_CONSENT_ID],
         publicBaseUrl: 'http://[::1]:65530', // NOSONAR — test asserts http:// IS accepted on loopback per assertSafePublicBaseUrl spec
       });
       expect(provider).toBeDefined();
@@ -244,16 +246,16 @@ describe('AuthProviderFactory two-level structure', () => {
     const ORIGINAL_AUTH_SECRET = process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
 
     afterEach(() => {
-      if (ORIGINAL_HOST !== undefined) process.env.DOLLHOUSE_HTTP_HOST = ORIGINAL_HOST;
-      else delete process.env.DOLLHOUSE_HTTP_HOST;
-      if (ORIGINAL_ID !== undefined) process.env.DOLLHOUSE_GITHUB_CLIENT_ID = ORIGINAL_ID;
-      else delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
-      if (ORIGINAL_SECRET !== undefined) process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET = ORIGINAL_SECRET;
-      else delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
-      if (ORIGINAL_AUTH_ID !== undefined) process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID = ORIGINAL_AUTH_ID;
-      else delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
-      if (ORIGINAL_AUTH_SECRET !== undefined) process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET = ORIGINAL_AUTH_SECRET;
-      else delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
+      if (ORIGINAL_HOST === undefined) delete process.env.DOLLHOUSE_HTTP_HOST;
+      else process.env.DOLLHOUSE_HTTP_HOST = ORIGINAL_HOST;
+      if (ORIGINAL_ID === undefined) delete process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+      else process.env.DOLLHOUSE_GITHUB_CLIENT_ID = ORIGINAL_ID;
+      if (ORIGINAL_SECRET === undefined) delete process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET;
+      else process.env.DOLLHOUSE_GITHUB_CLIENT_SECRET = ORIGINAL_SECRET;
+      if (ORIGINAL_AUTH_ID === undefined) delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID;
+      else process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_ID = ORIGINAL_AUTH_ID;
+      if (ORIGINAL_AUTH_SECRET === undefined) delete process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET;
+      else process.env.DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET = ORIGINAL_AUTH_SECRET;
     });
 
     it('rejects when DOLLHOUSE_GITHUB_CLIENT_SECRET is missing but ID is set', async () => {

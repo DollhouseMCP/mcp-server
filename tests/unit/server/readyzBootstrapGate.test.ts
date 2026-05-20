@@ -38,31 +38,31 @@ import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js'
 import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { randomBytes } from 'node:crypto';
 
+async function buildRuntime(
+  isReadyForTraffic?: () => Promise<boolean>,
+): Promise<StreamableHttpRuntimeHandle> {
+  return createStreamableHttpRuntime(
+    // Session factory — never invoked for /readyz; minimal stub.
+    async () => ({ dispose: async () => undefined }),
+    {
+      host: '127.0.0.1',
+      port: 0,
+      mcpPath: '/mcp',
+      rateLimitMaxRequests: 0,
+      sessionIdleTimeoutMs: 0,
+      sessionPoolSize: 0,
+      registerSignalHandlers: false,
+      oauthProvider: isReadyForTraffic ? {
+        createRouter: () => express.Router(),
+        isReadyForTraffic,
+      } : undefined,
+    },
+  );
+}
+
 describe('/readyz — H3 bootstrap gate consultation', () => {
   beforeAll(() => setHttpModeActive(true));
   afterAll(() => setHttpModeActive(false));
-
-  async function buildRuntime(
-    isReadyForTraffic?: () => Promise<boolean>,
-  ): Promise<StreamableHttpRuntimeHandle> {
-    return createStreamableHttpRuntime(
-      // Session factory — never invoked for /readyz; minimal stub.
-      async () => ({ dispose: async () => undefined }),
-      {
-        host: '127.0.0.1',
-        port: 0,
-        mcpPath: '/mcp',
-        rateLimitMaxRequests: 0,
-        sessionIdleTimeoutMs: 0,
-        sessionPoolSize: 0,
-        registerSignalHandlers: false,
-        oauthProvider: isReadyForTraffic ? {
-          createRouter: () => express.Router(),
-          isReadyForTraffic,
-        } : undefined,
-      },
-    );
-  }
 
   it('returns 200 when no oauthProvider is wired (legacy / non-AS deployments)', async () => {
     const runtime = await buildRuntime();
@@ -129,6 +129,8 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
  * bootstrapReadyLatch field. These tests fix that gap by exercising
  * the real method directly.
  */
+const LOOPBACK_BASE_URL = 'http://127.0.0.1:65530';
+
 describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch coverage', () => {
   let tmpDir: string;
 
@@ -150,7 +152,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       return originalGet();
     };
     const as = new EmbeddedAuthorizationServer({
-      publicBaseUrl: 'http://127.0.0.1:65530',
+      publicBaseUrl: LOOPBACK_BASE_URL,
       keyFilePath: path.join(tmpDir, 'key-1.json'),
       methods: [new TrivialConsentMethod({ defaultSubject: 'readyz-test' })],
       storage,
@@ -166,7 +168,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
-      publicBaseUrl: 'http://127.0.0.1:65530',
+      publicBaseUrl: LOOPBACK_BASE_URL,
       keyFilePath: path.join(tmpDir, 'key-2.json'),
       methods: [method],
       storage,
@@ -188,7 +190,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
-      publicBaseUrl: 'http://127.0.0.1:65530',
+      publicBaseUrl: LOOPBACK_BASE_URL,
       keyFilePath: path.join(tmpDir, 'key-3.json'),
       methods: [method],
       storage,
@@ -235,7 +237,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       const rateLimiter = new LocalLoginRateLimiter({ storage });
       const method = new LocalAccountMethod({ storage, invites, rateLimiter });
       const as = new EmbeddedAuthorizationServer({
-        publicBaseUrl: 'http://127.0.0.1:65530',
+        publicBaseUrl: LOOPBACK_BASE_URL,
         keyFilePath: path.join(tmpDir, 'key-warn.json'),
         methods: [method],
         storage,
@@ -269,7 +271,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       const rateLimiter = new LocalLoginRateLimiter({ storage });
       const method = new LocalAccountMethod({ storage, invites, rateLimiter });
       const as = new EmbeddedAuthorizationServer({
-        publicBaseUrl: 'http://127.0.0.1:65530',
+        publicBaseUrl: LOOPBACK_BASE_URL,
         keyFilePath: path.join(tmpDir, 'key-nowarn.json'),
         methods: [method],
         storage,
@@ -296,7 +298,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     const rateLimiter = new LocalLoginRateLimiter({ storage });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
-      publicBaseUrl: 'http://127.0.0.1:65530',
+      publicBaseUrl: LOOPBACK_BASE_URL,
       keyFilePath: path.join(tmpDir, 'key-4.json'),
       methods: [method],
       storage,

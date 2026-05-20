@@ -2,6 +2,18 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GithubSocialMethod } from '../../../../../src/auth/embedded-as/methods/GithubSocialMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
+function resolveUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function extractBody(body: BodyInit | null | undefined): string | undefined {
+  if (typeof body === 'string') return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  return undefined;
+}
+
 interface FetchCall {
   url: string;
   method: string;
@@ -14,11 +26,14 @@ function makeFetchMock(handlers: Record<string, (call: FetchCall) => Response>):
 } {
   const calls: FetchCall[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
+    const url = resolveUrl(input);
     const call: FetchCall = {
       url,
       method: init?.method ?? 'GET',
-      body: init?.body ? String(init.body) : undefined,
+      // Production calls fetch with either a string body or URLSearchParams
+      // (the OAuth token POST uses the latter). Narrow explicitly so we don't
+      // stringify a BodyInit subtype with no meaningful toString().
+      body: extractBody(init?.body),
     };
     calls.push(call);
     for (const [matcher, handler] of Object.entries(handlers)) {
@@ -37,6 +52,9 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
   });
 }
+
+const CALLBACK_URL = 'https://example.com/cb';
+const TEST_EMAIL = 'a@example.com';
 
 describe('GithubSocialMethod', () => {
   let storage: InMemoryAuthStorageLayer;
@@ -107,7 +125,7 @@ describe('GithubSocialMethod', () => {
 
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
 
@@ -115,7 +133,7 @@ describe('GithubSocialMethod', () => {
       expect(result.kind).toBe('ok');
 
       const stored = await storage.findAccountByExternalId('github', '42');
-      const raw = stored?.rawProfile as Record<string, unknown> | undefined;
+      const raw = stored?.rawProfile;
       expect(raw).toBeDefined();
       const userField = raw?.user as Record<string, unknown> | undefined;
       // Whitelisted fields present:
@@ -186,7 +204,7 @@ describe('GithubSocialMethod', () => {
 
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
 
@@ -222,7 +240,7 @@ describe('GithubSocialMethod', () => {
 
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
 
@@ -268,7 +286,7 @@ describe('GithubSocialMethod', () => {
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
       const result = await method.processCallback({ code: 'c', state: 'i' });
@@ -285,7 +303,7 @@ describe('GithubSocialMethod', () => {
       // Audit event records the revocation count.
       const events = await storage.listIdentityEvents({ type: 'auth.social.identity_changed' });
       expect(events).toHaveLength(1);
-      expect(events[0]!.details).toMatchObject({ grantsRevoked: 2 });
+      expect(events[0].details).toMatchObject({ grantsRevoked: 2 });
     });
 
     it('does NOT emit identity_changed when the email is unchanged', async () => {
@@ -310,7 +328,7 @@ describe('GithubSocialMethod', () => {
 
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
 
@@ -327,7 +345,7 @@ describe('GithubSocialMethod', () => {
 
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: fetch,
       });
 
@@ -338,7 +356,7 @@ describe('GithubSocialMethod', () => {
     it('rejects empty code or state', async () => {
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
@@ -352,7 +370,7 @@ describe('GithubSocialMethod', () => {
       }) as unknown as typeof fetch;
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl,
       });
       const result = await method.processCallback({ code: 'c', state: 'i' });
@@ -368,7 +386,7 @@ describe('GithubSocialMethod', () => {
       })) as unknown as typeof fetch;
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl,
       });
       const result = await method.processCallback({ code: 'c', state: 'i' });
@@ -380,16 +398,16 @@ describe('GithubSocialMethod', () => {
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
       });
       // Wrap to throw on /user
-      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
+      const wrapped: typeof fetch = async (input, init) => {
+        const url = resolveUrl(input);
         if (url.includes('api.github.com/user') && !url.includes('/emails')) {
           throw new TypeError('fetch failed: ETIMEDOUT');
         }
         return fetch(input, init);
-      }) as unknown as typeof fetch;
+      };
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: wrapped,
       });
       const result = await method.processCallback({ code: 'c', state: 'i' });
@@ -403,16 +421,16 @@ describe('GithubSocialMethod', () => {
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
         'api.github.com/user': () => jsonResponse({ id: 42, login: 'octo', name: 'Octo' }),
       });
-      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input.toString();
+      const wrapped: typeof fetch = async (input, init) => {
+        const url = resolveUrl(input);
         if (url.includes('api.github.com/user/emails')) {
           throw new TypeError('fetch failed: ETIMEDOUT');
         }
         return fetch(input, init);
-      }) as unknown as typeof fetch;
+      };
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage, fetchImpl: wrapped,
       });
       const result = await method.processCallback({ code: 'c', state: 'i' });
@@ -426,7 +444,7 @@ describe('GithubSocialMethod', () => {
     it('returns null for non-github subs', async () => {
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
@@ -440,7 +458,7 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'a@example.com',
+        email: TEST_EMAIL,
         emailVerified: true,
         displayName: 'A',
         createdAt: now, updatedAt: now,
@@ -448,13 +466,13 @@ describe('GithubSocialMethod', () => {
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
       const found = await method.findAccount('github_42');
       expect(found?.sub).toBe('github_42');
-      expect(found?.email).toBe('a@example.com');
+      expect(found?.email).toBe(TEST_EMAIL);
       expect(found?.emailVerified).toBe(true);
     });
 
@@ -470,7 +488,7 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'a@example.com',
+        email: TEST_EMAIL,
         emailVerified: true,
         displayName: 'A',
         createdAt: eightDaysAgo, updatedAt: eightDaysAgo,
@@ -478,14 +496,14 @@ describe('GithubSocialMethod', () => {
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
       const found = await method.findAccount('github_42');
       expect(found).not.toBeNull();
       expect(found?.sub).toBe('github_42');
-      expect(found?.email).toBe('a@example.com');
+      expect(found?.email).toBe(TEST_EMAIL);
       expect(found?.emailVerified).toBe(false); // downgraded
     });
 
@@ -497,14 +515,14 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'a@example.com',
+        email: TEST_EMAIL,
         emailVerified: true,
         displayName: 'A',
         createdAt: 1, updatedAt: 1,
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });
@@ -519,7 +537,7 @@ describe('GithubSocialMethod', () => {
         sub: 'github_42',
         provider: 'github',
         externalSub: '42',
-        email: 'a@example.com',
+        email: TEST_EMAIL,
         emailVerified: true,
         displayName: 'A',
         createdAt: ancient, updatedAt: ancient,
@@ -527,7 +545,7 @@ describe('GithubSocialMethod', () => {
       });
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
         emailVerifiedCacheTtlMs: 0,
@@ -541,7 +559,7 @@ describe('GithubSocialMethod', () => {
     it('denies — GitHub flow completes via the callback route, not the consent POST', async () => {
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
-        callbackUrl: 'https://example.com/cb',
+        callbackUrl: CALLBACK_URL,
         storage,
         fetchImpl: jest.fn() as unknown as typeof fetch,
       });

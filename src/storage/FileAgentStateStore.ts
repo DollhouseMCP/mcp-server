@@ -71,31 +71,30 @@ export class FileAgentStateStore implements IAgentStateStore {
 
     await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
       const existingState = await this.load(key);
-      if (existingState?.stateVersion !== undefined && state.stateVersion !== undefined) {
-        if (existingState.stateVersion > state.stateVersion) {
-          logger.warn(`State version conflict detected for agent ${key.name}`, {
+      if (existingState?.stateVersion !== undefined && state.stateVersion !== undefined
+          && existingState.stateVersion > state.stateVersion) {
+        logger.warn(`State version conflict detected for agent ${key.name}`, {
+          existingVersion: existingState.stateVersion,
+          attemptedVersion: state.stateVersion,
+        });
+
+        SecurityMonitor.logSecurityEvent({
+          type: 'MEMORY_SAVE_FAILED',
+          severity: 'MEDIUM',
+          source: 'FileAgentStateStore.save',
+          details: 'State version conflict: attempted to save stale state',
+          additionalData: {
+            agentName: key.name,
             existingVersion: existingState.stateVersion,
             attemptedVersion: state.stateVersion,
-          });
+          },
+        });
 
-          SecurityMonitor.logSecurityEvent({
-            type: 'MEMORY_SAVE_FAILED',
-            severity: 'MEDIUM',
-            source: 'FileAgentStateStore.save',
-            details: 'State version conflict: attempted to save stale state',
-            additionalData: {
-              agentName: key.name,
-              existingVersion: existingState.stateVersion,
-              attemptedVersion: state.stateVersion,
-            },
-          });
-
-          throw new Error(
-            `State version conflict: current version is ${existingState.stateVersion}, ` +
-            `but attempted to save version ${state.stateVersion}. ` +
-            `State may have been modified concurrently.`,
-          );
-        }
+        throw new Error(
+          `State version conflict: current version is ${existingState.stateVersion}, ` +
+          `but attempted to save version ${state.stateVersion}. ` +
+          `State may have been modified concurrently.`,
+        );
       }
 
       state.stateVersion = (state.stateVersion || 0) + 1;
@@ -170,12 +169,12 @@ export class FileAgentStateStore implements IAgentStateStore {
     }
 
     return name
-      .replace(/([a-z])([A-Z])/g, '$1-$2')
-      .replace(/[\s_]+/g, '-')
+      .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
+      .replaceAll(/[\s_]+/g, '-')
       .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-+|-+$/g, ''); // NOSONAR — anchored alternation, each branch has a single quantifier; no overlap, no backtracking
+      .replaceAll(/[^a-z0-9-]/g, '-')
+      .replaceAll(/-+/g, '-')
+      .replaceAll(/^-+|-+$/g, ''); // NOSONAR — anchored alternation, each branch has a single quantifier; no overlap, no backtracking
   }
 
   private prepareStateForSerialization(state: AgentState): Record<string, unknown> {
@@ -183,20 +182,20 @@ export class FileAgentStateStore implements IAgentStateStore {
       ...state,
       lastActive: state.lastActive instanceof Date ? state.lastActive.toISOString() : state.lastActive,
       sessionCount: String(state.sessionCount ?? 0),
-      stateVersion: state.stateVersion !== undefined ? String(state.stateVersion) : '1',
+      stateVersion: state.stateVersion === undefined ? '1' : String(state.stateVersion),
       goals: state.goals.map(goal => ({
         ...goal,
         createdAt: goal.createdAt instanceof Date ? goal.createdAt.toISOString() : goal.createdAt,
         updatedAt: goal.updatedAt instanceof Date ? goal.updatedAt.toISOString() : goal.updatedAt,
         completedAt: goal.completedAt instanceof Date ? goal.completedAt.toISOString() : goal.completedAt,
-        importance: goal.importance !== undefined ? String(goal.importance) : undefined,
-        urgency: goal.urgency !== undefined ? String(goal.urgency) : undefined,
-        estimatedEffort: goal.estimatedEffort !== undefined ? String(goal.estimatedEffort) : undefined,
+        importance: goal.importance === undefined ? undefined : String(goal.importance),
+        urgency: goal.urgency === undefined ? undefined : String(goal.urgency),
+        estimatedEffort: goal.estimatedEffort === undefined ? undefined : String(goal.estimatedEffort),
       })),
       decisions: state.decisions.map(decision => ({
         ...decision,
         timestamp: decision.timestamp instanceof Date ? decision.timestamp.toISOString() : decision.timestamp,
-        confidence: decision.confidence !== undefined ? String(decision.confidence) : undefined,
+        confidence: decision.confidence === undefined ? undefined : String(decision.confidence),
       })),
     };
   }
@@ -209,10 +208,10 @@ export class FileAgentStateStore implements IAgentStateStore {
     if (state.sessionCount !== undefined) {
       state.sessionCount = Number.parseInt(String(state.sessionCount), 10);
     }
-    if (state.stateVersion !== undefined) {
-      state.stateVersion = Number.parseInt(String(state.stateVersion), 10);
-    } else {
+    if (state.stateVersion === undefined) {
       state.stateVersion = 1;
+    } else {
+      state.stateVersion = Number.parseInt(String(state.stateVersion), 10);
     }
     if (state.lastActive) {
       state.lastActive = new Date(state.lastActive);
