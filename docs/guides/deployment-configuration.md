@@ -397,7 +397,7 @@ Set `DOLLHOUSE_STORAGE_BACKEND=database` to switch from filesystem to PostgreSQL
 
 ```bash
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:yourpassword@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
 ```
 
 See [PostgreSQL Setup](#postgresql-setup) for complete setup instructions.
@@ -572,7 +572,7 @@ Run the contents of `docker/init-db.sql` against the `dollhousemcp` database to 
 **Step 3: Run migrations**
 
 ```bash
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:your-strong-password-here@your-host:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@your-host:5432/dollhousemcp \
   npm run db:migrate
 ```
 
@@ -1264,8 +1264,8 @@ npm run db:import -- --verbose
 Required environment variables:
 
 ```bash
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:password@localhost:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:password@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@localhost:5432/dollhousemcp
 ```
 
 The import resolves user identity from the OS username via `bootstrapDatabase()`, the same mechanism the server uses on first run. All element types are supported, including memories (with full entry sync).
@@ -1620,8 +1620,8 @@ DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS=300
 
 # Storage
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:strong-password@db.internal:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@db.internal:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp
 DOLLHOUSE_DATABASE_SSL=require
 DOLLHOUSE_DATABASE_POOL_SIZE=20
 
@@ -1659,15 +1659,15 @@ npm run db:setup
 For a managed database (RDS, Cloud SQL, and so on), run migrations manually after creating the roles:
 
 ```bash
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp \
   npm run db:migrate
 ```
 
 **Import an existing portfolio** (if you have one to carry over):
 
 ```bash
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:strong-password@db.internal:5432/dollhousemcp \
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:admin-password@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@db.internal:5432/dollhousemcp \
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@db.internal:5432/dollhousemcp \
   npm run db:import
 ```
 
@@ -1693,8 +1693,8 @@ DOLLHOUSE_HTTP_PORT=3000
 
 # Storage
 DOLLHOUSE_STORAGE_BACKEND=database
-DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:password@localhost:5432/dollhousemcp
-DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:password@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_URL=postgres://dollhouse_app:<DB_APP_PASSWORD>@localhost:5432/dollhousemcp
+DOLLHOUSE_DATABASE_ADMIN_URL=postgres://dollhouse:<DB_ADMIN_PASSWORD>@localhost:5432/dollhousemcp
 
 # Authentication
 DOLLHOUSE_AUTH_ENABLED=true
