@@ -18,8 +18,8 @@ const ALICE_EMAIL = 'alice@example.com';
 const BOB_EMAIL = 'bob@example.com';
 const SET_PASSWORD_ACTION = 'set-password';
 const VALID_PASSWORD = 'a-very-long-password';
-const INTERACTION_URL = 'http://app/i/x';
-const INVITE_URL = 'http://app/auth/local/invite';
+const INTERACTION_URL = 'https://app/i/x';
+const INVITE_URL = 'https://app/auth/local/invite';
 
 describe('LocalAccountMethod', () => {
   let storage: InMemoryAuthStorageLayer;

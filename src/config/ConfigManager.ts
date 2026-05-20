@@ -766,8 +766,8 @@ export class ConfigManager {
       },
       github: deepMergeSection(defaults.github, user.githubConfig),
       sync: deepMergeSection(defaults.sync, user.syncConfig),
-      collection: { ...defaults.collection, ...user.collectionConfig } as CollectionConfig,
-      autoLoad: { ...defaults.autoLoad, ...user.autoloadConfig } as AutoLoadConfig,
+      collection: { ...defaults.collection, ...user.collectionConfig },
+      autoLoad: { ...defaults.autoLoad, ...user.autoloadConfig },
       elements: {
         auto_activate: { ...defaults.elements.auto_activate, ...user.autoActivateConfig },
         default_element_dir: (operator.defaultsConfig.default_element_dir as string)
@@ -778,10 +778,10 @@ export class ConfigManager {
         ),
       },
       display: deepMergeSection(defaults.display, user.displayConfig),
-      wizard: { ...defaults.wizard, ...user.wizardConfig } as WizardConfig,
+      wizard: { ...defaults.wizard, ...user.wizardConfig },
       retentionPolicy: deepMergeSection(defaults.retentionPolicy, user.retentionConfig),
-      license: { ...defaults.license, ...operator.licenseConfig } as LicenseConfig,
-      console: { ...defaults.console, ...operator.consoleConfig } as ConsoleConfig,
+      license: { ...defaults.license, ...operator.licenseConfig },
+      console: { ...defaults.console, ...operator.consoleConfig },
       source_priority: Object.keys(user.sourcePriorityConfig).length > 0
         ? user.sourcePriorityConfig as unknown as SourcePriorityConfigData
         : undefined,

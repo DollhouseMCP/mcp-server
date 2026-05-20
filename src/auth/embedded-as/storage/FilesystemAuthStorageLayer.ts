@@ -559,7 +559,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     } catch {
       return false;
     }
-    if (!record || record.exp === null || record.exp > now) return false;
+    if (record?.exp == null || record.exp > now) return false;
     try {
       await fs.unlink(path.join(dir, entry));
       return true;

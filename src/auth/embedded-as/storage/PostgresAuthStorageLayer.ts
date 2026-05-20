@@ -513,13 +513,16 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // No values supplied → trivially false (no possible match).
     const predicates: SQL[] = [];
     if (values.email) {
-      predicates.push(and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()))!);
+      const pred = and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()));
+      if (pred) predicates.push(pred);
     }
     if (values.githubUsername) {
-      predicates.push(and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()))!);
+      const pred = and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()));
+      if (pred) predicates.push(pred);
     }
     if (values.githubId) {
-      predicates.push(and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId))!);
+      const pred = and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId));
+      if (pred) predicates.push(pred);
     }
     if (predicates.length === 0) return false;
 

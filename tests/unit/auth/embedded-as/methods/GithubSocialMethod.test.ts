@@ -2,6 +2,18 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GithubSocialMethod } from '../../../../../src/auth/embedded-as/methods/GithubSocialMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
+function resolveUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.href;
+  return input.url;
+}
+
+function extractBody(body: BodyInit | null | undefined): string | undefined {
+  if (typeof body === 'string') return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  return undefined;
+}
+
 interface FetchCall {
   url: string;
   method: string;
@@ -14,18 +26,14 @@ function makeFetchMock(handlers: Record<string, (call: FetchCall) => Response>):
 } {
   const calls: FetchCall[] = [];
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = resolveUrl(input);
     const call: FetchCall = {
       url,
       method: init?.method ?? 'GET',
       // Production calls fetch with either a string body or URLSearchParams
       // (the OAuth token POST uses the latter). Narrow explicitly so we don't
       // stringify a BodyInit subtype with no meaningful toString().
-      body: typeof init?.body === 'string'
-        ? init.body
-        : init?.body instanceof URLSearchParams
-          ? init.body.toString()
-          : undefined,
+      body: extractBody(init?.body),
     };
     calls.push(call);
     for (const [matcher, handler] of Object.entries(handlers)) {
@@ -390,13 +398,13 @@ describe('GithubSocialMethod', () => {
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
       });
       // Wrap to throw on /user
-      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const wrapped: typeof fetch = async (input, init) => {
+        const url = resolveUrl(input);
         if (url.includes('api.github.com/user') && !url.includes('/emails')) {
           throw new TypeError('fetch failed: ETIMEDOUT');
         }
         return fetch(input, init);
-      }) as unknown as typeof fetch;
+      };
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
         callbackUrl: CALLBACK_URL,
@@ -413,13 +421,13 @@ describe('GithubSocialMethod', () => {
         'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
         'api.github.com/user': () => jsonResponse({ id: 42, login: 'octo', name: 'Octo' }),
       });
-      const wrapped = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const wrapped: typeof fetch = async (input, init) => {
+        const url = resolveUrl(input);
         if (url.includes('api.github.com/user/emails')) {
           throw new TypeError('fetch failed: ETIMEDOUT');
         }
         return fetch(input, init);
-      }) as unknown as typeof fetch;
+      };
       const method = new GithubSocialMethod({
         clientId: 'c', clientSecret: 's',
         callbackUrl: CALLBACK_URL,
