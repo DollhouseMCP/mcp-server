@@ -272,9 +272,10 @@ function checkString(spec: ConfigFieldSpec, value: unknown, path: string): Valid
     return { ok: false, error: `Configuration path '${path}' expects string, got ${describeValue(value)}.` };
   }
   if (spec.enum && !spec.enum.includes(value)) {
+    const allowed = spec.enum.map(v => `'${v}'`).join(', ');
     return {
       ok: false,
-      error: `Configuration path '${path}' must be one of: ${spec.enum.map(v => `'${v}'`).join(', ')}. Got '${value}'.`,
+      error: `Configuration path '${path}' must be one of: ${allowed}. Got '${value}'.`,
     };
   }
   return { ok: true };
@@ -329,7 +330,7 @@ export function suggestNearestPath(candidate: string): string | undefined {
  * available.
  */
 export function listKnownPaths(prefix?: string): string[] {
-  const all = Object.keys(CONFIG_SCHEMA).sort();
+  const all = Object.keys(CONFIG_SCHEMA).sort((a, b) => a.localeCompare(b));
   if (!prefix) return all;
   return all.filter(p => p.startsWith(prefix));
 }
@@ -348,7 +349,7 @@ function levenshtein(a: string, b: string): number {
   for (let i = 1; i <= a.length; i++) {
     curr[0] = i;
     for (let j = 1; j <= b.length; j++) {
-      const cost = a.charCodeAt(i - 1) === b.charCodeAt(j - 1) ? 0 : 1;
+      const cost = a.codePointAt(i - 1) === b.codePointAt(j - 1) ? 0 : 1;
       curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
     }
     for (let j = 0; j <= b.length; j++) prev[j] = curr[j];

@@ -819,13 +819,19 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       return 'unnamed';
     }
 
+    // Anchored leading/trailing dash trim split into two separate replaceAll
+    // calls. Combined as `/^-+|-+$/g` it tripped sonarjs S5852 (super-linear
+    // backtracking) even though the alternation is anchored to disjoint
+    // positions and not actually exploitable. Two single-anchor regexes
+    // sidestep the analysis without changing behaviour.
     return name
       .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
       .replaceAll(/[\s_]+/g, '-')
       .toLowerCase()
       .replaceAll(/[^a-z0-9-]/g, '-')
       .replaceAll(/-+/g, '-')
-      .replaceAll(/^-+|-+$/g, '');
+      .replaceAll(/^-+/g, '')
+      .replaceAll(/-+$/g, '');
   }
 
   /**

@@ -1040,7 +1040,7 @@ export class ConfigManager {
     }
 
     // Set the value using secure property setter
-    const lastKey = keys[keys.length - 1];
+    const lastKey = keys.at(-1)!;
     safeSetProperty(current, lastKey, value);
 
     // Persist to both stores (split + parallel save).
@@ -1120,7 +1120,7 @@ export class ConfigManager {
       }
       current = current[key];
     }
-    const lastKey = keys[keys.length - 1];
+    const lastKey = keys.at(-1)!;
     if (safeHasOwnProperty(current, lastKey)) {
       delete current[lastKey];
     }
@@ -1429,7 +1429,7 @@ export class ConfigManager {
           defaultSection = defaultSection[sectionKeys[i]];
         }
 
-        const lastKey = sectionKeys[sectionKeys.length - 1];
+        const lastKey = sectionKeys.at(-1)!;
         // SECURITY: Use secure property setter to avoid prototype chain pollution
         safeSetProperty(current, lastKey, defaultSection[lastKey]);
       } else {

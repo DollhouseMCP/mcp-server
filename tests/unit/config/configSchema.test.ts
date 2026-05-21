@@ -139,8 +139,8 @@ describe('listKnownPaths', () => {
   it('returns all schema paths when no prefix is given', () => {
     const paths = listKnownPaths();
     expect(paths.length).toBe(Object.keys(CONFIG_SCHEMA).length);
-    // Sorted
-    const sorted = [...paths].sort();
+    // Sorted with explicit comparator (matches listKnownPaths implementation)
+    const sorted = [...paths].sort((a, b) => a.localeCompare(b));
     expect(paths).toEqual(sorted);
   });
 

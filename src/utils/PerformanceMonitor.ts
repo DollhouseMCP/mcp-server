@@ -430,7 +430,7 @@ export class PerformanceMonitor {
       };
     }
 
-    const current = this.memorySnapshots[this.memorySnapshots.length - 1];
+    const current = this.memorySnapshots.at(-1)!;
     const peak = this.memorySnapshots.reduce((max, snapshot) =>
       snapshot.heapUsed > max.heapUsed ? snapshot : max,
       this.memorySnapshots[0]
