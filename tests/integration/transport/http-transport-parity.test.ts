@@ -220,6 +220,9 @@ describe('HTTP Transport — Session Context Propagation', () => {
 
   beforeAll(async () => {
     env = await createHttpTestEnvironment();
+    // create_element is gatekeeper-gated; pre-confirm so the mutations
+    // below proceed without an approval prompt.
+    preConfirmAllOperations(env.container);
     handle = await connectHttpClient(env.runtime);
   }, ENV_STARTUP_TIMEOUT);
 
@@ -228,9 +231,24 @@ describe('HTTP Transport — Session Context Propagation', () => {
     await env?.cleanup();
   });
 
+  // These tests use mutations (create_element) rather than READ operations
+  // because READ ops only emit debug-level logs, which production
+  // LOG_LEVEL=info filters out. Mutations route through
+  // SecurityMonitor.OPERATION_COMPLETED at info level, exercising the
+  // session-attribution path at the log level operators actually run with.
+  const sessionTestPersona = (suffix: string): Record<string, unknown> => ({
+    operation: 'create_element',
+    params: {
+      element_name: `session-ctx-${suffix}-${Date.now()}`,
+      element_type: 'persona',
+      description: 'Session context propagation test fixture',
+      instructions: 'Test persona used to verify HTTP session attribution in logs.',
+    },
+  });
+
   it('should propagate HTTP session identity to logs', async () => {
-    // Trigger an operation that generates log entries
-    await read(handle.client, { operation: 'get_build_info' });
+    // Trigger a mutation that generates info-level log entries
+    await create(handle.client, sessionTestPersona('propagate'));
 
     // Query logs to inspect session attribution
     const logsText = await read(handle.client, {
@@ -247,9 +265,9 @@ describe('HTTP Transport — Session Context Propagation', () => {
     const handle2 = await connectHttpClient(env.runtime);
 
     try {
-      // Both clients perform an operation
-      await read(handle.client, { operation: 'get_build_info' });
-      await read(handle2.client, { operation: 'get_build_info' });
+      // Both clients perform a mutation (info-level log emission)
+      await create(handle.client, sessionTestPersona('unique-1'));
+      await create(handle2.client, sessionTestPersona('unique-2'));
 
       // query_logs is session-scoped: each session sees only its own entries.
       // Query from both sessions and extract their session UUIDs.
@@ -279,7 +297,7 @@ describe('HTTP Transport — Session Context Propagation', () => {
   });
 
   it('should use http-user identity (not stdio local-user)', async () => {
-    await read(handle.client, { operation: 'introspect' });
+    await create(handle.client, sessionTestPersona('identity'));
 
     const logsText = await read(handle.client, {
       operation: 'query_logs',

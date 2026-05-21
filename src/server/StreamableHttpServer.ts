@@ -16,6 +16,11 @@ import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
+
+/** Constant form of the streamable-http transport name. Used in /healthz,
+ *  /readyz, and runtime selection — extracted so changes (or typos) can't
+ *  drift across the multiple emission sites. */
+const STREAMABLE_HTTP: RuntimeTransportName = 'streamable-http';
 export type DeferredSetupMode = 'full' | 'sink-only' | 'none';
 
 export interface AttachTransportOptions {
@@ -59,6 +64,13 @@ export interface StreamableHttpRuntimeOptions {
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
   onSessionDisposed?: (sessionId: string) => void;
+  /**
+   * Optional PerformanceMonitor. When provided, /healthz includes
+   * per-op auth timing aggregates (latency p50/p95/p99, success rate)
+   * under the `auth` key so operators can spot slow OAuth round-trips,
+   * JWKS misses, etc.
+   */
+  performanceMonitor?: import('../utils/PerformanceMonitor.js').PerformanceMonitor;
 }
 
 export interface StreamableHttpRuntimeHandle {
@@ -213,7 +225,7 @@ function getProcessMemorySnapshot(): Record<string, number> {
 
 export function getRequestedTransportName(): RuntimeTransportName {
   if (process.argv.includes('--streamable-http') || process.argv.includes('--http')) {
-    return 'streamable-http';
+    return STREAMABLE_HTTP;
   }
 
   return env.DOLLHOUSE_TRANSPORT;
@@ -656,7 +668,7 @@ export async function createStreamableHttpRuntime(
     res.json({
       name: 'dollhousemcp',
       version: PACKAGE_VERSION,
-      transport: 'streamable-http',
+      transport: STREAMABLE_HTTP,
       mcpPath,
       connectorUrl: publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, '')}${mcpPath}` : mcpPath,
       health: '/healthz',
@@ -669,13 +681,14 @@ export async function createStreamableHttpRuntime(
   app.get('/healthz', (_req, res) => {
     res.status(200).json({
       ok: true,
-      transport: 'streamable-http',
+      transport: STREAMABLE_HTTP,
       version: PACKAGE_VERSION,
       sessions: {
         active: sessions.size,
         pooled: pooledSessions.length,
         ...sessionTelemetry,
       },
+      auth: options.performanceMonitor?.getAuthOpStats() ?? {},
       memory: getProcessMemorySnapshot(),
     });
   });
@@ -696,14 +709,14 @@ export async function createStreamableHttpRuntime(
             res.status(503).json({
               ready: false,
               reason: 'bootstrap_required',
-              transport: 'streamable-http',
+              transport: STREAMABLE_HTTP,
             });
             return;
           }
         }
         res.status(200).json({
           ready: true,
-          transport: 'streamable-http',
+          transport: STREAMABLE_HTTP,
           activeSessions: sessions.size,
           pooledSessions: pooledSessions.length,
           sessionTelemetry,

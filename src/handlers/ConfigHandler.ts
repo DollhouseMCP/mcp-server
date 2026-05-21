@@ -49,7 +49,7 @@ const INDICATOR_PATH_MAP: Record<string, keyof IndicatorConfig> = {
 };
 
 export interface ConfigOperationOptions {
-  action: 'get' | 'set' | 'reset' | 'export' | 'import' | 'wizard';
+  action: 'get' | 'set' | 'reset' | 'export' | 'import' | 'wizard' | 'delete';
   setting?: string;
   value?: any;
   section?: string;
@@ -103,28 +103,31 @@ export class ConfigHandler {
       switch (options.action) {
         case 'get':
           return this.handleGet(options, indicator);
-        
+
         case 'set':
           return this.handleSet(options, indicator);
-        
+
+        case 'delete':
+          return this.handleDelete(options, indicator);
+
         case 'reset':
           return this.handleReset(options, indicator);
-        
+
         case 'export':
           return this.handleExport(options, indicator);
-        
+
         case 'import':
           return this.handleImport(options, indicator);
-        
+
         case 'wizard':
           return await this.handleWizard(indicator);
-        
+
         default:
           return {
             content: [{
               type: "text",
               text: `${indicator}❌ Invalid action '${options.action}'.\n\n` +
-                    `Valid actions: get, set, reset, export, import, wizard`
+                    `Valid actions: get, set, delete, reset, export, import, wizard`
             }]
           };
       }
@@ -239,7 +242,19 @@ export class ConfigHandler {
       }
     }
 
-    await this.configManager.updateSetting(options.setting, coercedValue);
+    const result = await this.configManager.updateSetting(options.setting, coercedValue);
+
+    if (!result.success) {
+      // ConfigManager rejected the write — schema violation, admin gate, or
+      // type validation. Surface the rejection to the caller rather than
+      // emitting a false "Configuration Updated" success.
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ ${result.message}`
+        }]
+      };
+    }
 
     return {
       content: [{
@@ -251,6 +266,38 @@ export class ConfigHandler {
     };
   }
   
+  private async handleDelete(options: ConfigOperationOptions, indicator: string) {
+    if (!options.setting) {
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ 'setting' is required for delete operation.\n\n` +
+                `Example: \`dollhouse_config action: "delete", setting: "sync.privacy.excluded_patterns"\``
+        }]
+      };
+    }
+
+    const result = await this.configManager.deleteSetting(options.setting);
+
+    if (!result.success) {
+      return {
+        content: [{
+          type: "text",
+          text: `${indicator}❌ ${result.message}`
+        }]
+      };
+    }
+
+    return {
+      content: [{
+        type: "text",
+        text: `${indicator}🗑️ **Configuration Setting Deleted**\n\n` +
+              `**${options.setting}** removed. Consumer will now see the schema default.\n\n` +
+              `Previous value: ${JSON.stringify(result.previousValue, null, 2)}`
+      }]
+    };
+  }
+
   private async handleReset(options: ConfigOperationOptions, indicator: string) {
     // Reset configuration to defaults
     if (options.section) {
@@ -294,10 +341,18 @@ export class ConfigHandler {
   }
   
   private async handleExport(options: ConfigOperationOptions, indicator: string) {
-    // Export configuration
+    // Serialize the in-memory config for the MCP response. Previously this
+    // called configManager.exportConfig(format) which takes a *filePath*,
+    // not a format — so it was writing a file at path './yaml' and
+    // returning a ConfigActionResult that interpolated as `[object Object]`
+    // in the text below. Inlining the serializer keeps the operator-facing
+    // export side-effect-free and surfaces the actual content.
     const format = options.format || 'yaml';
-    const exported = await this.configManager.exportConfig(format);
-    
+    const config = this.configManager.getConfig();
+    const exported = format === 'yaml'
+      ? yaml.dump(config, { lineWidth: -1 })
+      : JSON.stringify(config, null, 2);
+
     return {
       content: [{
         type: "text",
@@ -452,12 +507,9 @@ Customize how DollhouseMCP shows information.
       }
     }
 
-    // Display settings
-    if (friendly.display) {
-      // These are typically booleans, but handle nulls just in case
-      if (friendly.display.show_persona_indicator === null) {
-        friendly.display.show_persona_indicator = true; // Default value
-      }
+    // Display settings — these are typically booleans, but handle nulls just in case
+    if (friendly.display?.show_persona_indicator === null) {
+      friendly.display.show_persona_indicator = true; // Default value
     }
 
     // Collection settings

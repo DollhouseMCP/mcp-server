@@ -35,6 +35,9 @@ import {
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
+import { instrumentAuthMethod } from './embedded-as/instrumentAuthMethod.js';
+import { instrumentAuthProvider } from './instrumentAuthProvider.js';
 
 export type AuthProviderMode = 'embedded' | 'oidc-bridge';
 
@@ -83,6 +86,13 @@ export interface AuthConfig {
    * Forwarded to EmbeddedAuthorizationServer; ignored by other providers.
    */
   signingKeyStore?: import('../storage/signingKeys/ISigningKeyStore.js').ISigningKeyStore;
+  /**
+   * Optional PerformanceMonitor for instrumenting auth-flow timing.
+   * When present, each method's beginInteraction / completeInteraction /
+   * findAccount calls record into `recordAuthOp` so operators can see
+   * per-method latency in /healthz. When absent, calls run uninstrumented.
+   */
+  performanceMonitor?: PerformanceMonitor;
 }
 
 /**
@@ -141,12 +151,12 @@ export async function createAuthProvider(config: AuthConfig): Promise<IAuthProvi
   });
 
   if (config.provider === 'oidc') {
-    return createOidcProvider(config);
+    return instrumentAuthProvider(await createOidcProvider(config), config.performanceMonitor);
   }
   if (config.provider === 'embedded') {
-    return createEmbeddedProvider(config, methods);
+    return instrumentAuthProvider(await createEmbeddedProvider(config, methods), config.performanceMonitor);
   }
-  return createLocalDevProvider(config);
+  return instrumentAuthProvider(await createLocalDevProvider(config), config.performanceMonitor);
 }
 
 /**
@@ -219,7 +229,11 @@ async function createEmbeddedProvider(
   // simultaneously and let the LoginChooser pick at /interaction time.
   const builtMethods: import('./embedded-as/IAuthMethod.js').IAuthMethod[] = [];
   for (const id of methods) {
-    builtMethods.push(await buildAuthMethod(id, { storage, baseUrl, ensureInvites, config }));
+    const raw = await buildAuthMethod(id, { storage, baseUrl, ensureInvites, config });
+    // Wrap with PerformanceMonitor instrumentation when one was injected.
+    // No-op when monitor is undefined; otherwise records per-method timing
+    // for the three IAuthMethod entry points.
+    builtMethods.push(instrumentAuthMethod(raw, config.performanceMonitor));
   }
 
   return new EmbeddedAuthorizationServer({

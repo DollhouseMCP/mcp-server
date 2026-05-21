@@ -587,6 +587,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._cache.getScopedValues();
   }
 
+  /**
+   * Record an access on a cached element by ID. Exposes ElementCache.touchById
+   * so subclasses doing name- or filename-based iteration (which can't go
+   * through `get(id)`) can keep the LRU ordering and hit metrics honest.
+   */
+  protected touchCachedElement(id: string): T | undefined {
+    return this._cache.touchById(id);
+  }
+
   protected getCacheStats(): { elementCount: number; pathMappings: number } {
     return this._cache.getCacheStats();
   }
@@ -810,13 +819,20 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       return 'unnamed';
     }
 
+    // The `/-+/g` collapse above reduces any run of dashes to a single
+    // dash, so the trims below only ever need to remove ONE leading or
+    // trailing dash — no `+` quantifier needed. The quantifier-free
+    // form also sidesteps sonarjs S5852, which flagged `/-+$/g` as
+    // super-linear even though it's O(n) when anchored to a disjoint
+    // position.
     return name
-      .replace(/([a-z])([A-Z])/g, '$1-$2')
-      .replace(/[\s_]+/g, '-')
+      .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
+      .replaceAll(/[\s_]+/g, '-')
       .toLowerCase()
-      .replace(/[^a-z0-9-]/g, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-+|-+$/g, '');
+      .replaceAll(/[^a-z0-9-]/g, '-')
+      .replaceAll(/-+/g, '-')
+      .replaceAll(/^-/g, '')
+      .replaceAll(/-$/g, '');
   }
 
   /**

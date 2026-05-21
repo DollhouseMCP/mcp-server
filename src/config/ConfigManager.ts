@@ -45,6 +45,7 @@ import {
   safeHasOwnProperty
 } from '../utils/securityUtils.js';
 import { env } from './env.js';
+import { isKnownConfigPath, validateConfigPath } from './configSchema.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { IOperatorConfigStore, OperatorConfig } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import type { IUserConfigStore, UserConfig as UserConfigPayload } from '../storage/userConfig/IUserConfigStore.js';
@@ -1010,6 +1011,20 @@ export class ConfigManager {
       value = validated;
     }
 
+    // Schema validation: reject unknown paths and type mismatches so typos
+    // and renamed-key drift surface as errors instead of silently writing
+    // phantom keys into the JSONB blob. Strict-by-default; operators can
+    // set DOLLHOUSE_CONFIG_STRICT_PATHS=false to opt back to "anything goes"
+    // for back-compat with workflows that still rely on old/unenumerated paths.
+    const validation = validateConfigPath(path, value, { strict: env.DOLLHOUSE_CONFIG_STRICT_PATHS });
+    if (!validation.ok) {
+      logger.warn('[ConfigManager] Rejected config write (schema violation)', {
+        path,
+        error: validation.error,
+      });
+      return { success: false, message: validation.error };
+    }
+
     const keys = path.split('.');
     let current: any = this.config;
     const previousValue = this.getSetting(path);
@@ -1025,7 +1040,7 @@ export class ConfigManager {
     }
 
     // Set the value using secure property setter
-    const lastKey = keys[keys.length - 1];
+    const lastKey = keys.at(-1)!;
     safeSetProperty(current, lastKey, value);
 
     // Persist to both stores (split + parallel save).
@@ -1042,6 +1057,83 @@ export class ConfigManager {
       message: `Setting '${path}' updated successfully`,
       previousValue,
       newValue: value,
+    };
+  }
+
+  /**
+   * Remove a setting from the config so the consumer sees the schema
+   * default. Useful for cleaning up phantom keys (typos from before
+   * schema validation existed, or paths from renamed/removed features).
+   *
+   * Returns success=false when:
+   *   - the path is server-wide (per-host) and the caller lacks 'admin'
+   *   - the path doesn't currently have a stored value (nothing to delete)
+   *
+   * Prototype-pollution guards mirror `updateSetting`.
+   */
+  public async deleteSetting(path: string): Promise<ConfigUpdateResult> {
+    const userId = this.resolveUserId();
+    if (!this.config) {
+      await this.initialize();
+    }
+
+    validatePropertyPath(path, 'path');
+
+    // Same admin gate as updateSetting — per-host paths require 'admin'.
+    if (ConfigManager.isPerHostPath(path) && this.contextTracker) {
+      const callerRoles = this.contextTracker.getSessionContext()?.roles ?? [];
+      if (!callerRoles.includes('admin')) {
+        const reason = `Configuration path '${path}' is server-wide and requires the 'admin' role.`;
+        logger.warn('[ConfigManager] Rejected non-admin operator-config delete', {
+          path,
+          callerUserId: userId,
+        });
+        return {
+          success: false,
+          message: `${reason} Per-host settings can only be changed by an admin operator.`,
+        };
+      }
+    }
+
+    const previousValue = this.getSetting(path);
+    if (previousValue === undefined) {
+      return {
+        success: false,
+        message: `Configuration path '${path}' has no stored value to delete.`,
+      };
+    }
+    if (!isKnownConfigPath(path) && isPlainObject(previousValue)) {
+      return {
+        success: false,
+        message: `Configuration path '${path}' is a section, not a leaf setting. Delete a specific setting path instead.`,
+      };
+    }
+
+    const keys = path.split('.');
+    let current: any = this.config;
+    // Navigate to the parent
+    for (let i = 0; i < keys.length - 1; i++) {
+      const key = keys[i];
+      if (!safeHasOwnProperty(current, key)) {
+        // Parent missing — nothing to delete; return idempotently
+        return { success: true, message: `Setting '${path}' was already unset`, previousValue };
+      }
+      current = current[key];
+    }
+    const lastKey = keys.at(-1)!;
+    if (safeHasOwnProperty(current, lastKey)) {
+      delete current[lastKey];
+    }
+
+    await this.persistMerged(userId, this.config!);
+
+    logger.info('Configuration setting deleted', { path, previousValue });
+
+    return {
+      success: true,
+      message: `Setting '${path}' deleted (consumer will now see schema default)`,
+      previousValue,
+      newValue: undefined,
     };
   }
 
@@ -1337,7 +1429,7 @@ export class ConfigManager {
           defaultSection = defaultSection[sectionKeys[i]];
         }
 
-        const lastKey = sectionKeys[sectionKeys.length - 1];
+        const lastKey = sectionKeys.at(-1)!;
         // SECURITY: Use secure property setter to avoid prototype chain pollution
         safeSetProperty(current, lastKey, defaultSection[lastKey]);
       } else {
@@ -1473,4 +1565,10 @@ export class ConfigManager {
       sortKeys: false
     });
   }
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }

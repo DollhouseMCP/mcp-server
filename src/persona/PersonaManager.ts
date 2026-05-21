@@ -56,6 +56,137 @@ export interface PersonaManagerDeps extends ElementManagerDeps {
   contextTracker?: ContextTracker;
 }
 
+/**
+ * Validate + sanitize an edit-value through the security pipeline
+ * (Unicode normalization → ContentValidator). Logs a CONTENT_INJECTION_ATTEMPT
+ * security event on rejection. Throws on any validation failure; returns
+ * the sanitized value on success. Extracted from editPersona to keep its
+ * cognitive complexity ≤15 (S3776).
+ */
+function validateAndSanitizeEditValue(value: string, fieldName: string): string {
+  const unicodeResult = UnicodeValidator.normalize(value);
+  if (!unicodeResult.isValid && unicodeResult.severity === 'critical') {
+    throw new Error(`Value contains dangerous Unicode patterns: ${unicodeResult.detectedIssues?.join(', ')}`);
+  }
+  const valueValidation = ContentValidator.validateAndSanitize(unicodeResult.normalizedContent);
+  if (!valueValidation.isValid) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_INJECTION_ATTEMPT',
+      severity: 'MEDIUM',
+      source: 'PersonaManager.editPersona',
+      details: `Edit value validation failed: ${valueValidation.detectedPatterns?.join(', ')}`,
+      additionalData: {
+        field: fieldName,
+        severity: valueValidation.severity,
+      },
+    });
+    throw new Error(`Security Validation Failed: The new value contains prohibited content: ${valueValidation.detectedPatterns?.join(', ')}`);
+  }
+  return valueValidation.sanitizedContent || unicodeResult.normalizedContent;
+}
+
+/**
+ * Dispatch a sanitized edit value into the matching persona field.
+ * Mutates `persona` in place. Extracted from editPersona to keep its
+ * cognitive complexity ≤15 (S3776).
+ */
+function applyEditValueToPersona(
+  persona: PersonaElement,
+  field: string,
+  sanitizedValue: string,
+): void {
+  if (field === 'instructions') {
+    persona.instructions = sanitizedValue;
+    return;
+  }
+  if (field === 'triggers') {
+    persona.metadata.triggers = sanitizedValue
+      .split(',')
+      .map(t => sanitizeInput(t.trim(), 50))
+      .filter(t => t.length > 0);
+    return;
+  }
+  if (field === 'name') {
+    persona.metadata.name = sanitizeInput(sanitizedValue, 100);
+    return;
+  }
+  if (field === 'category') {
+    persona.metadata.category = sanitizeInput(sanitizedValue, 50)?.toLowerCase() || 'general';
+    return;
+  }
+  if (field === 'description') {
+    persona.metadata.description = sanitizedValue;
+    return;
+  }
+  if (field === 'version') {
+    persona.metadata.version = sanitizedValue;
+    persona.version = sanitizedValue;
+  }
+}
+
+/**
+ * Auto-increment a persona's version following semver rules. Pre-release
+ * versions bump the pre-release counter; standard versions bump patch.
+ * Returns the new version string. Extracted from editPersona to keep
+ * its cognitive complexity ≤15 (S3776).
+ */
+function bumpPatchVersion(currentVersion: string | undefined): string {
+  if (!currentVersion) return '1.0.0';
+  const normalized = normalizeVersion(String(currentVersion));
+  const versionMatch = normalized.match(/^(\d+)\.(\d+)\.(\d+)(-.*)?$/);
+  if (!versionMatch) return '1.0.1';
+
+  const [, major, minor, patch, preRelease] = versionMatch;
+  if (!preRelease) {
+    return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
+  }
+
+  const preReleaseMatch = preRelease.match(/^-([a-zA-Z]+)\.?(\d+)?$/);
+  if (!preReleaseMatch) {
+    return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
+  }
+  const [, preReleaseType, preReleaseNum] = preReleaseMatch;
+  const nextNum = Number.parseInt(preReleaseNum || '0') + 1;
+  return `${major}.${minor}.${patch}-${preReleaseType}.${nextNum}`;
+}
+
+/**
+ * Validate and sanitize a username for setUserIdentity. Applies Unicode
+ * normalization, refuses critical Unicode patterns, enforces the
+ * project-wide username format (3-50 chars, alphanumeric + `-` + `_`),
+ * and returns the sanitized value. Throws on any rejection. Extracted
+ * from setUserIdentity for the cognitive-complexity refactor.
+ */
+function validateAndSanitizeUsername(username: string): string {
+  const usernameUnicode = UnicodeValidator.normalize(username);
+  if (!usernameUnicode.isValid && usernameUnicode.severity === 'critical') {
+    throw new Error(`Username contains dangerous Unicode patterns: ${usernameUnicode.detectedIssues?.join(', ')}`);
+  }
+  const usernameRegex = /^[a-zA-Z0-9\-_]{3,50}$/;
+  if (!usernameRegex.test(usernameUnicode.normalizedContent)) {
+    throw new Error(
+      'Invalid username format. Must be 3-50 characters, alphanumeric with hyphens/underscores only'
+    );
+  }
+  return sanitizeInput(usernameUnicode.normalizedContent, 50);
+}
+
+/**
+ * Validate an email's Unicode normalization + format. Throws on any
+ * rejection. Caller is responsible for storing the normalized value.
+ * Extracted from setUserIdentity for the cognitive-complexity refactor.
+ */
+function validateEmail(email: string): void {
+  const emailUnicode = UnicodeValidator.normalize(email);
+  if (!emailUnicode.isValid && emailUnicode.severity === 'critical') {
+    throw new Error(`Email contains dangerous Unicode patterns: ${emailUnicode.detectedIssues?.join(', ')}`);
+  }
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(emailUnicode.normalizedContent)) {
+    throw new Error('Invalid email format');
+  }
+}
+
 export class PersonaManager extends BaseElementManager<PersonaElement> {
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActivePersonas: Set<string> = new Set();
@@ -376,7 +507,23 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return undefined;
     }
 
-    return this.getCachedElementsForCurrentNamespace().find(p => this.matchesIdentifier(p, identifier));
+    const candidate = this.getCachedElementsForCurrentNamespace()
+      .find(p => this.matchesIdentifier(p, identifier));
+
+    if (candidate) {
+      // Issue #843 follow-up: the iteration above scans cache values
+      // without going through LRUCache.get(), so the LRU never sees the
+      // access — hits don't get recorded and frequently-read personas
+      // can be evicted before stale ones under memory pressure. Touch
+      // the entry by ID so the LRU promotes it to MRU and bumps its
+      // internal hit counter.
+      this.touchCachedElement(candidate.id);
+      this.cacheMissMetrics.cacheHits++;
+    } else {
+      this.cacheMissMetrics.cacheMisses++;
+    }
+
+    return candidate;
   }
 
   /** In-flight disk lookups to prevent duplicate reads for the same identifier */
@@ -395,14 +542,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * share a single disk read to avoid redundant I/O in bridge/swarm scenarios.
    */
   async findPersonaAsync(identifier: string): Promise<PersonaElement | undefined> {
-    // Fast path: check LRU cache (synchronous, O(cache size))
+    // Fast path: check LRU cache (synchronous, O(cache size)).
+    // findPersona() now records hit/miss in cacheMissMetrics and touches
+    // the LRU on hit, so we don't double-count here.
     const cached = this.findPersona(identifier);
     if (cached) {
-      this.cacheMissMetrics.cacheHits++;
       return cached;
     }
-
-    this.cacheMissMetrics.cacheMisses++;
 
     // Deduplicate concurrent disk lookups for the same identifier
     const lookupKey = identifier.trim().toLowerCase();
@@ -676,37 +822,51 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     };
 
     if (metadataOverrides) {
-      if (typeof metadataOverrides.category === 'string') {
-        // SECURITY FIX: Use ValidationService to validate BEFORE sanitization
-        const categoryResult = this.validationService.validateCategory(metadataOverrides.category);
-        if (categoryResult.isValid && categoryResult.sanitizedValue) {
-          metadata.category = categoryResult.sanitizedValue.toLowerCase();
-        }
-      }
-
-      if (Array.isArray(metadataOverrides.triggers) && metadataOverrides.triggers.length > 0) {
-        // Use TriggerValidationService to apply proper validation
-        const validationResult = this.triggerValidationService.validateTriggers(
-          metadataOverrides.triggers,
-          ElementType.PERSONA,
-          metadata.name
-        );
-        // CRITICAL: Preserve undefined behavior
-        metadata.triggers = validationResult.validTriggers.length > 0
-          ? validationResult.validTriggers
-          : undefined;
-      }
-
-      if (typeof metadataOverrides.age_rating === 'string') {
-        const sanitizedAgeRating = sanitizeInput(metadataOverrides.age_rating, 10);
-        if (sanitizedAgeRating) {
-          metadata.age_rating = sanitizedAgeRating.toLowerCase();
-        }
-      }
+      this.applyMetadataOverrideSanitization(metadata, metadataOverrides);
     }
 
     // Convert legacy PersonaMetadata to PersonaElementMetadata before returning
     return this.toPersonaElementMetadata(metadata);
+  }
+
+  /**
+   * Apply override-specific sanitization (category, triggers, age_rating)
+   * to a partially-built metadata object. Extracted from
+   * buildPersonaMetadata to keep its cognitive complexity ≤15 (S3776);
+   * each override case applies independent validation and would inflate
+   * the host function otherwise.
+   */
+  private applyMetadataOverrideSanitization(
+    metadata: PersonaMetadata,
+    metadataOverrides: Partial<PersonaMetadata>,
+  ): void {
+    if (typeof metadataOverrides.category === 'string') {
+      // SECURITY FIX: Use ValidationService to validate BEFORE sanitization
+      const categoryResult = this.validationService.validateCategory(metadataOverrides.category);
+      if (categoryResult.isValid && categoryResult.sanitizedValue) {
+        metadata.category = categoryResult.sanitizedValue.toLowerCase();
+      }
+    }
+
+    if (Array.isArray(metadataOverrides.triggers) && metadataOverrides.triggers.length > 0) {
+      // Use TriggerValidationService to apply proper validation
+      const validationResult = this.triggerValidationService.validateTriggers(
+        metadataOverrides.triggers,
+        ElementType.PERSONA,
+        metadata.name
+      );
+      // CRITICAL: Preserve undefined behavior
+      metadata.triggers = validationResult.validTriggers.length > 0
+        ? validationResult.validTriggers
+        : undefined;
+    }
+
+    if (typeof metadataOverrides.age_rating === 'string') {
+      const sanitizedAgeRating = sanitizeInput(metadataOverrides.age_rating, 10);
+      if (sanitizedAgeRating) {
+        metadata.age_rating = sanitizedAgeRating.toLowerCase();
+      }
+    }
   }
 
   /**
@@ -1032,81 +1192,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     let editablePersona = this.clonePersona(persona, { writableCopy: isDefault });
 
     try {
-      // SECURITY: Phase 4.3 - Apply Unicode validation to edit values
-      const unicodeResult = UnicodeValidator.normalize(value);
-      if (!unicodeResult.isValid && unicodeResult.severity === 'critical') {
-        throw new Error(`Value contains dangerous Unicode patterns: ${unicodeResult.detectedIssues?.join(', ')}`);
-      }
+      const sanitizedValue = validateAndSanitizeEditValue(value, normalizedField);
+      applyEditValueToPersona(editablePersona, normalizedField, sanitizedValue);
 
-      const valueValidation = ContentValidator.validateAndSanitize(unicodeResult.normalizedContent);
-      // SECURITY: Phase 4.1 - Block ALL invalid content, not just critical
-      if (!valueValidation.isValid) {
-        // SECURITY: Phase 4.4 - Log validation failures
-        SecurityMonitor.logSecurityEvent({
-          type: 'CONTENT_INJECTION_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'PersonaManager.editPersona',
-          details: `Edit value validation failed: ${valueValidation.detectedPatterns?.join(', ')}`,
-          additionalData: {
-            field: normalizedField,
-            severity: valueValidation.severity
-          }
-        });
-        throw new Error(`Security Validation Failed: The new value contains prohibited content: ${valueValidation.detectedPatterns?.join(', ')}`);
-      }
-
-      let sanitizedValue = valueValidation.sanitizedContent || unicodeResult.normalizedContent;
-      
-      if (normalizedField === 'instructions') {
-        editablePersona.instructions = sanitizedValue;
-      } else if (normalizedField === 'triggers') {
-        editablePersona.metadata.triggers = sanitizedValue
-          .split(',')
-          .map(t => sanitizeInput(t.trim(), 50))
-          .filter(t => t.length > 0);
-      } else if (normalizedField === 'name') {
-        editablePersona.metadata.name = sanitizeInput(sanitizedValue, 100);
-      } else if (normalizedField === 'category') {
-        editablePersona.metadata.category =
-          sanitizeInput(sanitizedValue, 50)?.toLowerCase() || 'general';
-      } else if (normalizedField === 'description') {
-        editablePersona.metadata.description = sanitizedValue;
-      } else if (normalizedField === 'version') {
-        editablePersona.metadata.version = sanitizedValue;
-        editablePersona.version = sanitizedValue;
-      }
-
-      // Auto-increment version if not explicitly setting version field
+      // Auto-increment version when an unrelated field changed
       if (normalizedField !== 'version') {
-        if (editablePersona.version) {
-          // Normalize to 3-part format first (handles legacy "1.0" format)
-          const normalized = normalizeVersion(String(editablePersona.version));
-          const versionMatch = normalized.match(/^(\d+)\.(\d+)\.(\d+)(-.*)?$/);
-
-          if (versionMatch) {
-            const [, major, minor, patch, preRelease] = versionMatch;
-
-            if (preRelease) {
-              // Increment pre-release version
-              const preReleaseMatch = preRelease.match(/^-([a-zA-Z]+)\.?(\d+)?$/);
-              if (preReleaseMatch) {
-                const [, preReleaseType, preReleaseNum] = preReleaseMatch;
-                const nextNum = Number.parseInt(preReleaseNum || '0') + 1;
-                editablePersona.version = `${major}.${minor}.${patch}-${preReleaseType}.${nextNum}`;
-              } else {
-                editablePersona.version = `${major}.${minor}.${Number.parseInt(patch) + 1}`;
-              }
-            } else {
-              // Standard version, bump patch
-              editablePersona.version = `${major}.${minor}.${Number.parseInt(patch) + 1}`;
-            }
-          } else {
-            editablePersona.version = '1.0.1';
-          }
-        } else {
-          editablePersona.version = '1.0.0';
-        }
-        // Sync to metadata
+        editablePersona.version = bumpPatchVersion(editablePersona.version);
         editablePersona.metadata.version = editablePersona.version;
       }
 
@@ -1231,56 +1322,28 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * SECURITY: Phase 4.6 - Added username and email validation
    */
   setUserIdentity(username: string | null, email?: string): void {
-    if (username) {
-      // SECURITY: Phase 4.3 - Apply Unicode normalization FIRST
-      const usernameUnicode = UnicodeValidator.normalize(username);
-      if (!usernameUnicode.isValid && usernameUnicode.severity === 'critical') {
-        throw new Error(`Username contains dangerous Unicode patterns: ${usernameUnicode.detectedIssues?.join(', ')}`);
-      }
-
-      // SECURITY: Phase 4.6 - Validate username format AFTER normalization (alphanumeric, hyphens, underscores)
-      const usernameRegex = /^[a-zA-Z0-9\-_]{3,50}$/;
-      if (!usernameRegex.test(usernameUnicode.normalizedContent)) {
-        throw new Error(
-          'Invalid username format. Must be 3-50 characters, alphanumeric with hyphens/underscores only'
-        );
-      }
-
-      // Sanitize username
-      const validUsername = sanitizeInput(usernameUnicode.normalizedContent, 50);
-
-      if (email) {
-        // SECURITY: Phase 4.3 - Apply Unicode normalization FIRST
-        const emailUnicode = UnicodeValidator.normalize(email);
-        if (!emailUnicode.isValid && emailUnicode.severity === 'critical') {
-          throw new Error(`Email contains dangerous Unicode patterns: ${emailUnicode.detectedIssues?.join(', ')}`);
-        }
-
-        // SECURITY: Phase 4.6 - Validate email format AFTER normalization
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(emailUnicode.normalizedContent)) {
-          throw new Error('Invalid email format');
-        }
-
-        // Email validation passed — it will be stored in session state below
-      }
-
-      // Issue #1946: Write identity to session-scoped state only (no singleton, no process.env)
-      const previous = this.getSessionUserIdentity()?.username ?? null;
-      this.setSessionUserIdentity({
-        username: validUsername,
-        ...(email ? { email: sanitizeInput(UnicodeValidator.normalize(email).normalizedContent, 100) } : {}),
-      });
-
-      logger.info('User identity set', { username: validUsername });
-      this.notifyPersonaChange('user-changed', previous, validUsername);
-    } else {
+    if (!username) {
       const previous = this.getSessionUserIdentity()?.username ?? null;
       this.setSessionUserIdentity(undefined);
-
       logger.info('User identity cleared');
       this.notifyPersonaChange('user-changed', previous, null);
+      return;
     }
+
+    const validUsername = validateAndSanitizeUsername(username);
+    if (email) {
+      validateEmail(email);  // throws on bad format; value is sanitized below
+    }
+
+    // Issue #1946: Write identity to session-scoped state only (no singleton, no process.env)
+    const previous = this.getSessionUserIdentity()?.username ?? null;
+    this.setSessionUserIdentity({
+      username: validUsername,
+      ...(email ? { email: sanitizeInput(UnicodeValidator.normalize(email).normalizedContent, 100) } : {}),
+    });
+
+    logger.info('User identity set', { username: validUsername });
+    this.notifyPersonaChange('user-changed', previous, validUsername);
   }
   
   /**

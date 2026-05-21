@@ -6,6 +6,7 @@ import { env } from './config/env.js';
 
 import * as path from 'path';
 import { realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
@@ -40,6 +41,7 @@ import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
 import { ConfigManager } from "./config/ConfigManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
+import { validateUserId } from './paths/validateUserId.js';
 
 // Transport-aware error handlers.
 // Issue #1948: Process lifecycle managed by LifecycleService singleton.
@@ -66,6 +68,27 @@ export function setHttpModeActive(active: boolean): void {
 // Only log execution environment in debug mode
 if (env.DOLLHOUSE_DEBUG) {
   console.error('[DollhouseMCP] Debug mode enabled');
+}
+
+/**
+ * Convert an authenticated subject into a path-safe internal user id for
+ * file-mode HTTP sessions. Embedded/local providers already issue safe
+ * subjects (e.g. github_123), but generic OIDC subjects often contain
+ * provider separators, URLs, or exceed our path segment limits. Preserve
+ * safe subjects for readability; hash unsafe ones into a stable ID.
+ */
+function toPathSafeAuthUserId(subject: string, providerName: string | undefined): string {
+  try {
+    return validateUserId(subject);
+  } catch {
+    const digest = createHash('sha256')
+      .update(providerName ?? 'auth')
+      .update('\0')
+      .update(subject)
+      .digest('base64url')
+      .slice(0, 43);
+    return `auth_${digest}`;
+  }
 }
 
 export class DollhouseMCPServer implements IToolHandler {
@@ -857,18 +880,42 @@ async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
  *
  * @returns IngestRoutesResult for wiring HTTP session lifecycle into the console
  */
+const HTTP_CONSOLE_LOG_PREFIX = '[HTTP Console]';
+
+/**
+ * Try to resolve an optional service from the container, logging a
+ * debug message with the shared prefix when the registration is absent.
+ * Extracted to bring `startHttpConsole` cognitive complexity ≤15 (S3776)
+ * and to keep all "not registered → use fallback" warnings on one line.
+ */
+function tryResolveOptional<T>(
+  container: DollhouseContainer,
+  registration: string,
+  description: string,
+): T | undefined {
+  try {
+    return container.resolve<T>(registration);
+  } catch (e) {
+    logger.debug(`${HTTP_CONSOLE_LOG_PREFIX} ${description}`, { error: (e as Error).message });
+    return undefined;
+  }
+}
+
 async function startHttpConsole(
   container: DollhouseContainer,
 ): Promise<import('./web/console/IngestRoutes.js').IngestRoutesResult> {
   const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
 
   // Resolve sinks from the shared container
-  let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
-  let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
-  let logManager: import('./logging/LogManager.js').LogManager | undefined;
-  try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch (e) { logger.debug('[HTTP Console] MemoryLogSink not registered, using fallback', { error: (e as Error).message }); }
-  try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch (e) { logger.debug('[HTTP Console] MemoryMetricsSink not registered, using fallback', { error: (e as Error).message }); }
-  try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch (e) { logger.debug('[HTTP Console] LogManager not registered', { error: (e as Error).message }); }
+  let memorySink = tryResolveOptional<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>(
+    container, 'MemoryLogSink', 'MemoryLogSink not registered, using fallback',
+  );
+  let metricsSink = tryResolveOptional<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>(
+    container, 'MemoryMetricsSink', 'MemoryMetricsSink not registered, using fallback',
+  );
+  const logManager = tryResolveOptional<import('./logging/LogManager.js').LogManager>(
+    container, 'LogManager', 'LogManager not registered',
+  );
 
   // Fallback sinks if not available from the container
   if (!memorySink) {
@@ -894,15 +941,16 @@ async function startHttpConsole(
   try {
     await tokenStore.ensureInitialized(pickRandomTokenName());
   } catch (err) {
-    logger.warn('[HTTP Console] Failed to initialize console token store', err);
+    logger.warn(`${HTTP_CONSOLE_LOG_PREFIX} Failed to initialize console token store`, err);
   }
 
   // Resolve web console port
   const resolvedPort = await resolvePortFromConfig() ?? env.DOLLHOUSE_WEB_CONSOLE_PORT;
 
   // Resolve MCP-AQL handler for gateway routes
-  let mcpAqlHandler: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler | undefined;
-  try { mcpAqlHandler = container.resolve<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>('mcpAqlHandler'); } catch (e) { logger.debug('[HTTP Console] MCPAQLHandler not registered', { error: (e as Error).message }); }
+  const mcpAqlHandler = tryResolveOptional<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>(
+    container, 'mcpAqlHandler', 'MCPAQLHandler not registered',
+  );
 
   // Wire unified auth into the console when DOLLHOUSE_AUTH_ENABLED is on
   // (Phase 9 M4/Q7). Without this, MCP transport routes are protected
@@ -975,6 +1023,13 @@ async function startStreamableHttpServer(
   const authProvider = container.hasRegistration('AuthProvider')
     ? container.resolve<unknown>('AuthProvider')
     : undefined;
+  const authProviderName = (() => {
+    if (typeof authProvider !== 'object' || authProvider === null || !('name' in authProvider)) {
+      return undefined;
+    }
+    const rawName = (authProvider as { name?: unknown }).name;
+    return typeof rawName === 'string' ? rawName : 'auth';
+  })();
   const oauthProvider = isEmbeddedOAuthProvider(authProvider) ? authProvider : undefined;
 
   // Fallback userId for unauthenticated sessions (DB mode bootstrap user)
@@ -992,17 +1047,33 @@ async function startStreamableHttpServer(
     : undefined;
 
   return createStreamableHttpRuntime(async (transport, authClaims) => {
-    // When auth is active, resolve the DB user UUID BEFORE creating the
-    // session — the session's userId must be a UUID, not a username string.
+    // SECURITY: fail-closed per-user isolation. Authenticated HTTP
+    // sessions must never collapse onto the unauthenticated fallback user.
+    //
+    // Resolution order:
+    //   1. DB mode + UserIdentityService.resolveOrCreateUser succeeds → UUID.
+    //   2. DB mode + resolve fails → abort session setup; continuing with a
+    //      non-UUID subject would poison RLS-scoped state.
+    //   3. File mode → path-safe stable id derived from authClaims.sub.
+    //   4. No authClaims at all (auth disabled) → fallbackUserId.
     let sessionUserId = fallbackUserId;
-    if (authClaims?.sub && userIdentityService) {
-      try {
-        sessionUserId = await userIdentityService.resolveOrCreateUser(
-          authClaims.sub,
-          authClaims.displayName,
-        );
-      } catch (err) {
-        logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
+    let resolvedDbUserId = false;
+    if (authClaims?.sub) {
+      if (userIdentityService) {
+        try {
+          sessionUserId = await userIdentityService.resolveOrCreateUser(
+            authClaims.sub,
+            authClaims.displayName,
+          );
+          resolvedDbUserId = true;
+        } catch (err) {
+          logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
+          throw new Error('Failed to resolve database user for authenticated HTTP session');
+        }
+      } else {
+        // File mode: no DB UUID resolution layer. Use a stable path-safe
+        // internal ID so generic OIDC subjects cannot break path resolution.
+        sessionUserId = toPathSafeAuthUserId(authClaims.sub, authProviderName);
       }
     }
 
@@ -1021,7 +1092,7 @@ async function startStreamableHttpServer(
 
     // Store the resolved DB UUID on the session activation state so
     // UserIdResolver picks it up for RLS-scoped queries.
-    if (authClaims?.sub && activationRegistry && sessionUserId !== fallbackUserId) {
+    if (resolvedDbUserId && activationRegistry) {
       const state = activationRegistry.getOrCreate(sessionContext.sessionId);
       state.dbUserId = sessionUserId;
     }
@@ -1044,6 +1115,12 @@ async function startStreamableHttpServer(
     oauthProvider,
     tlsConfig: container.hasRegistration('TlsConfig')
       ? container.resolve<import('./server/TlsConfig.js').TlsConfig>('TlsConfig')
+      : undefined,
+    // Forward PerformanceMonitor so /healthz can surface auth-flow timing
+    // aggregates alongside session telemetry. Resolved from the container
+    // which ObservabilityServiceRegistrar wires unconditionally.
+    performanceMonitor: container.hasRegistration('PerformanceMonitor')
+      ? container.resolve<import('./utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor')
       : undefined,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {

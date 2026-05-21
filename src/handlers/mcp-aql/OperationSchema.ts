@@ -60,13 +60,13 @@ export interface ParamDef {
    * Checked in order before falling back to the primary param name.
    *
    * Supports dot notation for nested access:
-   * - 'input.elementType' - checks input.elementType
+   * - SRC.INPUT_ELEMENT_TYPE_CAMEL - checks input.elementType
    * - 'params.type' - checks params.type (same as just checking the param)
    *
    * Use case: elementType can come from input.elementType OR params.type
    *
    * @example
-   * type: { type: 'string', sources: ['input.elementType', 'params.type'] }
+   * type: { type: 'string', sources: [SRC.INPUT_ELEMENT_TYPE_CAMEL, 'params.type'] }
    */
   sources?: string[];
 }
@@ -141,7 +141,7 @@ export interface OperationDef {
   /**
    * Whether this operation needs access to the full OperationInput.
    * When true, SchemaDispatcher passes the full input for source resolution.
-   * Required for operations that use param sources like 'input.elementType'.
+   * Required for operations that use param sources like SRC.INPUT_ELEMENT_TYPE_CAMEL.
    */
   needsFullInput?: boolean;
   /**
@@ -199,6 +199,42 @@ export type OperationSchemaMap = Record<string, OperationDef>;
 // Collection Operations Schema (Proof of Concept)
 // ============================================================================
 
+// ──────────────────────────────────────────────────────────────────────────
+// Shared string constants — extracted to satisfy `sonarjs/no-duplicate-string`
+// and to make the operation schema easier to navigate. When adding a new
+// operation, prefer reusing these over inlining the same literal again.
+// ──────────────────────────────────────────────────────────────────────────
+
+const CATEGORY = {
+  AGENT_EXECUTION: 'Agent Execution',
+  COMMUNITY: 'Community Collection',
+  CONFIG: 'Configuration & Diagnostics',
+  ELEMENT_DISCOVERY: 'Element Discovery',
+  ELEMENT_LIFECYCLE: 'Element Lifecycle',
+  GITHUB_AUTH: 'GitHub Authentication',
+  MANAGEMENT_CONSOLE: 'Management Console',
+  PORTFOLIO: 'Portfolio Management',
+  SECURITY: 'Security & Permissions',
+} as const;
+
+const DESC = {
+  ELEMENT_TYPE: 'Element type',
+  ELEMENT_NAME: 'Element name',
+  SEARCH_QUERY: 'Search query',
+  FIELDS_INCLUDE: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+  BROWSER_OPEN_RESULT: 'Confirmation with the URL of the opened browser',
+} as const;
+
+const SRC = {
+  INPUT_ELEMENT_TYPE_CAMEL: 'input.elementType',
+  INPUT_ELEMENT_TYPE_SNAKE: 'input.element_type',
+  PARAMS_ELEMENT_TYPE: 'params.element_type',
+} as const;
+
+/** Schema-param `type:` string for fields accepting either a single string
+ *  or an array of strings (e.g. element selectors, fields-to-include). */
+const TYPE_STRING_OR_STRING_ARRAY = 'string | string[]';
+
 /**
  * Collection operations schema
  *
@@ -214,7 +250,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'browseCollection',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Browse the DollhouseMCP community collection by section and type',
     optional: true,
     params: {
@@ -228,11 +264,11 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'searchCollection',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Search the community collection for elements by keywords',
     optional: true,
     params: {
-      query: { type: 'string', required: true, description: 'Search query' },
+      query: { type: 'string', required: true, description: DESC.SEARCH_QUERY },
     },
     returns: { name: 'CollectionSearchResult', kind: 'object', description: 'Matching elements from collection' },
     examples: ['{ operation: "search_collection", params: { query: "code review" } }'],
@@ -241,12 +277,12 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'searchCollectionEnhanced',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Advanced search with pagination, filtering, and sorting',
     optional: true,
     argBuilder: 'spread',
     params: {
-      query: { type: 'string', required: true, description: 'Search query' },
+      query: { type: 'string', required: true, description: DESC.SEARCH_QUERY },
     },
     returns: { name: 'EnhancedSearchResult', kind: 'object', description: 'Paginated search results with metadata' },
     examples: ['{ operation: "search_collection_enhanced", params: { query: "assistant", limit: 10 } }'],
@@ -255,7 +291,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'getCollectionContent',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Get detailed information about content from the collection',
     optional: true,
     params: {
@@ -268,7 +304,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'collectionHandler',
     method: 'getCollectionCacheHealth',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Get health status and statistics for the collection cache',
     optional: true,
     params: {},
@@ -279,7 +315,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'collectionHandler',
     method: 'installContent',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Install an element from the collection to your local portfolio',
     optional: true,
     params: {
@@ -292,7 +328,7 @@ export const COLLECTION_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'collectionHandler',
     method: 'submitContent',
-    category: 'Community Collection',
+    category: CATEGORY.COMMUNITY,
     description: 'Submit a local element to the community collection via GitHub',
     optional: true,
     params: {
@@ -312,7 +348,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'authHandler',
     method: 'setupGitHubAuth',
-    category: 'GitHub Authentication',
+    category: CATEGORY.GITHUB_AUTH,
     description: 'Set up GitHub authentication using device flow',
     optional: true,
     params: {},
@@ -323,7 +359,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'authHandler',
     method: 'checkGitHubAuth',
-    category: 'GitHub Authentication',
+    category: CATEGORY.GITHUB_AUTH,
     description: 'Check current GitHub authentication status',
     optional: true,
     params: {},
@@ -334,7 +370,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'DELETE',
     handler: 'authHandler',
     method: 'clearGitHubAuth',
-    category: 'GitHub Authentication',
+    category: CATEGORY.GITHUB_AUTH,
     description: 'Remove GitHub authentication and disconnect',
     optional: true,
     params: {},
@@ -345,7 +381,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'authHandler',
     method: 'configureOAuth',
-    category: 'GitHub Authentication',
+    category: CATEGORY.GITHUB_AUTH,
     description: 'Configure GitHub OAuth client ID',
     optional: true,
     params: {
@@ -358,7 +394,7 @@ export const AUTH_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'authHandler',
     method: 'getOAuthHelperStatus',
-    category: 'GitHub Authentication',
+    category: CATEGORY.GITHUB_AUTH,
     description: 'Get diagnostic information about OAuth helper process',
     optional: true,
     params: {
@@ -513,7 +549,7 @@ export const PERSONA_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'personaHandler',
     method: 'importPersona',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Import a persona from a file path or JSON string',
     optional: true,
     params: {
@@ -534,12 +570,12 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'configHandler',
     method: 'handleConfigOperation',
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Manage DollhouseMCP configuration settings',
     optional: true,
     argBuilder: 'named',
     params: {
-      action: { type: 'string', required: true, description: 'get, set, reset, export, import, wizard' },
+      action: { type: 'string', required: true, description: 'get, set, delete, reset, export, import, wizard' },
       setting: { type: 'string' },
       value: { type: 'string' },
       section: { type: 'string' },
@@ -556,7 +592,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'configHandler',
     method: 'convertSkillFormat',
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Convert between current Agent Skill and Dollhouse Skill formats (both directions) with structured warnings and optional roundtrip state for lossless supported-field restoration',
     optional: true,
     argBuilder: 'named',
@@ -572,16 +608,16 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     },
     returns: { name: 'SkillConversionResult', kind: 'object', description: 'Converted artifact plus machine-readable conversion report and warnings' },
     examples: [
-      '{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }',
-      '{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", security_mode: "warn", path_mode: "lossless", agent_skill: { "SKILL.md": "---\\nname: my-skill\\ndescription: test\\n---\\n\\nUse this skill." } } }',
-      '{ operation: "convert_skill_format", params: { direction: "dollhouse_to_agent", path_mode: "lossless", dollhouse_markdown: "---\\nname: my-skill\\ndescription: test\\ninstructions: Use this skill.\\n---\\n\\nReference content" } }',
+      String.raw`{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", agent_skill: { "SKILL.md": "---\nname: my-skill\ndescription: test\n---\n\nUse this skill." } } }`,
+      String.raw`{ operation: "convert_skill_format", params: { direction: "agent_to_dollhouse", security_mode: "warn", path_mode: "lossless", agent_skill: { "SKILL.md": "---\nname: my-skill\ndescription: test\n---\n\nUse this skill." } } }`,
+      String.raw`{ operation: "convert_skill_format", params: { direction: "dollhouse_to_agent", path_mode: "lossless", dollhouse_markdown: "---\nname: my-skill\ndescription: test\ninstructions: Use this skill.\n---\n\nReference content" } }`,
     ],
   },
   get_build_info: {
     endpoint: 'READ',
     handler: 'buildInfoService',
     method: '__buildInfo__', // Special marker for build info
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Get comprehensive build and runtime information',
     optional: true,
     params: {},
@@ -592,7 +628,7 @@ export const CONFIG_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'cacheMemoryBudget',
     method: '__cacheBudget__',
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Get global cache memory budget report with per-cache diagnostics',
     optional: true,
     params: {},
@@ -625,7 +661,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'portfolioStatus',
-    category: 'Portfolio Management',
+    category: CATEGORY.PORTFOLIO,
     description: 'Check GitHub portfolio repository status and element counts',
     optional: true,
     argBuilder: 'single',
@@ -639,7 +675,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'portfolioHandler',
     method: 'initPortfolio',
-    category: 'Portfolio Management',
+    category: CATEGORY.PORTFOLIO,
     description: 'Initialize a new GitHub portfolio repository',
     optional: true,
     argBuilder: 'named',
@@ -656,7 +692,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'portfolioConfig',
-    category: 'Portfolio Management',
+    category: CATEGORY.PORTFOLIO,
     description: 'Configure portfolio settings (auto-sync, visibility, etc.)',
     optional: true,
     argBuilder: 'named',
@@ -674,7 +710,7 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'portfolioHandler',
     method: 'syncPortfolio',
-    category: 'Portfolio Management',
+    category: CATEGORY.PORTFOLIO,
     description: 'Sync local portfolio with GitHub repository',
     optional: true,
     argBuilder: 'named',
@@ -706,13 +742,13 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchAll',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'Unified search across local, GitHub, and collection sources with flexible scope',
     optional: true,
     normalizer: 'searchParams',
     argBuilder: 'named',
     params: {
-      query: { type: 'string', required: true, description: 'Search query' },
+      query: { type: 'string', required: true, description: DESC.SEARCH_QUERY },
       scope: { type: 'unknown', description: 'Search scope: "local", "github", "collection", "all", or array of scopes' },
       type: { type: 'string', description: 'Filter by element type' },
       page: { type: 'number', description: 'Page number for pagination' },
@@ -721,8 +757,8 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
       filters: { type: 'object', description: 'Filter options: { tags, author, createdAfter, createdBefore }' },
       options: { type: 'object', description: 'Search options: { fuzzyMatch, includeKeywords, includeTags }' },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'UnifiedSearchResult', kind: 'object', description: 'Paginated search results from specified scopes' },
@@ -740,13 +776,13 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchPortfolio',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'Search local portfolio by content name, keywords, or tags',
     optional: true,
     argBuilder: 'named',
     paramStyle: 'snakeToCamel',
     params: {
-      query: { type: 'string', required: true, description: 'Search query' },
+      query: { type: 'string', required: true, description: DESC.SEARCH_QUERY },
       type: { type: 'string', mapTo: 'elementType', description: 'Filter by element type' },
       fuzzy_match: { type: 'boolean', description: 'Enable fuzzy matching' },
       max_results: { type: 'number', description: 'Maximum number of results' },
@@ -755,8 +791,8 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
       include_triggers: { type: 'boolean', description: 'Search in triggers' },
       include_descriptions: { type: 'boolean', description: 'Search in descriptions' },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'PortfolioSearchResult', kind: 'object', description: 'Matching elements from local portfolio' },
@@ -769,21 +805,21 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'portfolioHandler',
     method: 'searchAll',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'Unified search across local, GitHub, and collection sources',
     optional: true,
     argBuilder: 'named',
     paramStyle: 'snakeToCamel',
     params: {
-      query: { type: 'string', required: true, description: 'Search query' },
+      query: { type: 'string', required: true, description: DESC.SEARCH_QUERY },
       sources: { type: 'string[]', description: 'Sources to search: local, github, collection' },
       type: { type: 'string', mapTo: 'elementType', description: 'Filter by element type' },
       page: { type: 'number', description: 'Page number for pagination' },
       page_size: { type: 'number', description: 'Results per page' },
       sort_by: { type: 'string', description: 'Sort field' },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'UnifiedSearchResult', kind: 'object', description: 'Search results from all sources with source attribution' },
@@ -796,14 +832,14 @@ export const PORTFOLIO_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'syncHandler',
     method: 'handleSyncOperation',
-    category: 'Portfolio Management',
+    category: CATEGORY.PORTFOLIO,
     description: 'Manage individual elements between local and GitHub',
     optional: true,
     argBuilder: 'named',
     params: {
       operation: { type: 'string', required: true, description: 'list-remote, download, upload, compare' },
       element_name: { type: 'string', description: 'Element name to operate on' },
-      element_type: { type: 'string', description: 'Element type' },
+      element_type: { type: 'string', description: DESC.ELEMENT_TYPE },
       filter: { type: 'object', description: 'Filter options for list operations' },
       options: { type: 'object', description: 'Operation options (force, dry_run, etc.)' },
     },
@@ -835,18 +871,18 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'elementCRUD',
     method: 'createElement',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Create a new element of any type. Note: Gatekeeper may return a confirmation prompt instead of creating immediately — use confirm_operation to approve, then retry.',
     needsFullInput: true,
     argBuilder: 'namedWithType',
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
         description: 'Element type (persona, skill, template, agent, memory, ensemble)',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       description: { type: 'string', required: true, description: 'Element description' },
       // Issue #602 resolved: Both 'instructions' and 'content' are first-class fields with distinct semantic roles.
@@ -881,9 +917,9 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       // Issue #602: Dual-field examples showing both 'instructions' (behavioral) and 'content' (reference)
       '{ operation: "create_element", element_type: "persona", params: { element_name: "MyPersona", description: "A helpful assistant", instructions: "You ARE a helpful assistant. ALWAYS provide clear, accurate responses." } }',
       '{ operation: "create_element", element_type: "agent", params: { element_name: "CodeReviewer", description: "Automated code review agent", instructions: "You are methodical and thorough. ALWAYS check security first. Report issues by severity.", goal: { template: "Review {files} for {review_type} issues", parameters: [{ name: "files", type: "string", required: true }, { name: "review_type", type: "string", required: true }], successCriteria: ["Review completed", "Issues documented"] } } }',
-      '{ operation: "create_element", element_type: "skill", params: { element_name: "CodeReview", description: "Reviews code for quality", instructions: "ANALYZE code systematically. CHECK security patterns FIRST. Report findings by severity.", content: "# Code Review Reference\\n\\n## Common Patterns\\n- OWASP Top 10\\n- CWE/SANS Top 25" } }',
+      String.raw`{ operation: "create_element", element_type: "skill", params: { element_name: "CodeReview", description: "Reviews code for quality", instructions: "ANALYZE code systematically. CHECK security patterns FIRST. Report findings by severity.", content: "# Code Review Reference\n\n## Common Patterns\n- OWASP Top 10\n- CWE/SANS Top 25" } }`,
       '{ operation: "create_element", element_type: "skill", params: { element_name: "read-only-review", description: "Review session with write restrictions", instructions: "When active, ALLOW browsing and analysis but REQUIRE confirmation for edits.", gatekeeper: { allow: ["read_*", "list_*", "search_*", "get_*"], confirm: ["create_*", "edit_*", "update_*"], deny: ["delete_*"], externalRestrictions: { description: "Review shell guardrails", allowPatterns: ["Read:*", "Glob:*", "Grep:*"], confirmPatterns: ["Edit:*", "Write:*", "Bash:git push*"], denyPatterns: ["Bash:rm *", "WebSearch:*"] } } } }',
-      '{ operation: "create_element", element_type: "template", params: { element_name: "BugReport", description: "Bug report template", content: "## Bug Report\\n\\n**Summary:** {{summary}}\\n**Steps:** {{steps}}\\n**Expected:** {{expected}}", instructions: "Render all sections. NEVER omit required fields." } }',
+      String.raw`{ operation: "create_element", element_type: "template", params: { element_name: "BugReport", description: "Bug report template", content: "## Bug Report\n\n**Summary:** {{summary}}\n**Steps:** {{steps}}\n**Expected:** {{expected}}", instructions: "Render all sections. NEVER omit required fields." } }`,
       // Memory relationship patterns - naming conventions for element-linked memories:
       // agent-{name}-context: Agent execution state and learned behaviors
       '{ operation: "create_element", element_type: "memory", params: { element_name: "agent-code-reviewer-context", description: "Stores context and learned preferences for code-reviewer agent" } }',
@@ -901,7 +937,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'listElements',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'List elements with pagination, filtering, sorting, and aggregation. Returns structured JSON: { items, pagination, sorting, element_type }. Default: page 1, pageSize 20, sorted by name ascending. TIP: If the user wants to browse, explore, or view their portfolio visually, prefer open_portfolio_browser instead — it opens a full web UI with search, filters, and detail views.',
     needsFullInput: true,
     argBuilder: 'typeWithParams', // (type, fullParams) for pagination support
@@ -911,7 +947,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
         required: true,
         mapTo: 'elementType',
         description: 'Element type to list (persona, skill, template, agent, memory, ensemble)',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       page: { type: 'number', default: 1, description: 'Page number (1-indexed)' },
       pageSize: { type: 'number', default: 20, description: 'Items per page (max 100)' },
@@ -932,7 +968,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
       },
       aggregate: { type: 'object', description: "Aggregation: { count: true } returns count only (~50 tokens). { count: true, group_by: 'category' } returns grouped counts. Allowed group_by fields: author, category, status, tags, version." },
       fields: {
-        type: 'string | string[]',
+        type: TYPE_STRING_OR_STRING_ARRAY,
         description: 'Fields to include: preset ("minimal", "standard", "full") or array of field names',
       },
     },
@@ -955,22 +991,22 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'getElementDetails',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Get a specific element by name. TIP: If the user wants to browse or explore multiple elements rather than retrieve one specific element, prefer open_portfolio_browser instead.',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'Element', kind: 'object', description: 'Full element details' },
@@ -988,22 +1024,22 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'getElementDetails',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Get detailed information about a specific element including extended metadata. TIP: If the user wants to browse or explore multiple elements rather than retrieve one specific element, prefer open_portfolio_browser instead.',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType)
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'ElementDetails', kind: 'object', description: 'Complete element with all metadata' },
@@ -1016,18 +1052,18 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'UPDATE',
     handler: 'elementCRUD',
     method: 'editElement',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Edit an element using GraphQL-aligned nested input objects',
     needsFullInput: true,
     argBuilder: 'namedWithType',
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       input: { type: 'object', required: true, description: 'Nested object with fields to update (deep-merged with existing element). Common fields (all types): instructions, content, description, tags, triggers, category, gatekeeper. Agent fields: goal, activates, tools, systemPrompt (or system_prompt), autonomy, resilience. Ensemble fields: elements (array of { element_name, element_type, role, priority?, activation? } — merges by name; use _remove: true to remove). Gatekeeper: { allow?, confirm?, deny?, scopeRestrictions?: { allowedTypes?, blockedTypes? } } — dynamic security policy that takes effect when the element is active. Snake_case keys are auto-normalized to camelCase.' },
     },
@@ -1045,7 +1081,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'UPDATE',
     handler: 'elementCRUD',
     method: 'upgradeElement',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Upgrade element from v1 single-body format to v2.0 dual-field format (instructions + content). Reads existing body text, assigns to instructions or content based on element type, saves in new format with instructions in YAML frontmatter.',
     needsFullInput: true,
     argBuilder: 'namedWithType',
@@ -1055,8 +1091,8 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       dry_run: { type: 'boolean', description: 'Preview changes without writing to disk (default: false)' },
       instructions_override: { type: 'string', description: 'Manually specify instructions (overrides auto-detection from body text)' },
@@ -1072,18 +1108,18 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: 'validateElement',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Validate an existing element by name',
     needsFullInput: true,
     argBuilder: 'namedWithType',
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       strict: { type: 'boolean', description: 'Use strict validation' },
     },
@@ -1094,18 +1130,18 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'DELETE',
     handler: 'elementCRUD',
     method: 'deleteElement',
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Delete an element',
     needsFullInput: true,
     argBuilder: 'namedWithType',
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       deleteData: { type: 'boolean', description: 'Also delete associated data' },
     },
@@ -1116,18 +1152,18 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'elementCRUD',
     method: '__export__', // Special marker - uses internal handler
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Export an element to a portable format',
     needsFullInput: true,
     argBuilder: 'single', // (elementName, elementType, format)
     params: {
-      element_name: { type: 'string', required: true, mapTo: 'elementName', description: 'Element name' },
+      element_name: { type: 'string', required: true, mapTo: 'elementName', description: DESC.ELEMENT_NAME },
       element_type: {
         type: 'string',
         required: true,
         mapTo: 'elementType',
-        description: 'Element type',
-        sources: ['input.element_type', 'input.elementType', 'params.element_type'],
+        description: DESC.ELEMENT_TYPE,
+        sources: [SRC.INPUT_ELEMENT_TYPE_SNAKE, SRC.INPUT_ELEMENT_TYPE_CAMEL, SRC.PARAMS_ELEMENT_TYPE],
       },
       format: { type: 'string', default: 'json', description: 'Export format (json or yaml)' },
     },
@@ -1138,7 +1174,7 @@ export const ELEMENT_CRUD_OPERATIONS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'elementCRUD',
     method: '__import__', // Special marker - uses internal handler
-    category: 'Element Lifecycle',
+    category: CATEGORY.ELEMENT_LIFECYCLE,
     description: 'Import an element from exported data',
     argBuilder: 'named',
     params: {
@@ -1220,7 +1256,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Start execution of an agent. The agent must have a goal.template defined (set during create_element). Pass values for the template placeholders in parameters. ' +
       'Canonical loop: call execute_agent once to start, then use mcp_aql_create record_execution_step after each work chunk, inspect autonomy.continue and autonomy.notifications, and call complete_execution when done. continue_execution is only for resuming an already-paused execution and is not the normal next call after execute_agent. ' +
       'Lifecycle: Elements listed in the agent\'s activates field (e.g., activates: { personas: ["Reviewer"], skills: ["code-analysis"] }) are automatically activated when execution begins — their gatekeeper policies, instructions, and capabilities become active for the duration. ' +
@@ -1241,7 +1277,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Query current execution state including progress and findings. Use the same element_name you passed to execute_agent for this execution.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name. Reuse the same element_name from execute_agent.' },
@@ -1257,7 +1293,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Record execution progress, step completion, or findings. This is the normal follow-up call after execute_agent. Returns autonomy directive with continue/pause decision and notifications.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1278,7 +1314,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Signal that execution finished successfully with summary',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1295,7 +1331,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Resume a previously paused execution from saved state. Use only after a pause or handoff boundary, not as the normal next call after execute_agent. Pass the same goal parameters used for execute_agent so the goal template can be revalidated before resuming.',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name' },
@@ -1311,7 +1347,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Abort a running agent execution, rejecting further operations for the goalId',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name to abort' },
@@ -1327,7 +1363,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Get aggregated execution data (steps, decisions, findings, and summary statistics) for a specific goal',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name' },
@@ -1343,7 +1379,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Serialize goal progress into a portable handoff block for session transfer',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name to prepare handoff for' },
@@ -1361,7 +1397,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchExecute',
-    category: 'Agent Execution',
+    category: CATEGORY.AGENT_EXECUTION,
     description: 'Resume agent execution from a handoff block with integrity validation',
     params: {
       element_name: { type: 'string', required: true, description: 'Agent name to resume (must match handoff block)' },
@@ -1393,7 +1429,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Confirm a pending operation that requires user approval (Gatekeeper flow)',
     params: {
       operation: { type: 'string', required: true, description: 'Operation name to confirm (e.g., "create_element")' },
@@ -1409,7 +1445,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Submit verification code to unblock a danger zone operation',
     params: {
       challenge_id: { type: 'string', required: true, description: 'UUID v4 challenge ID from danger zone trigger' },
@@ -1425,7 +1461,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Recover from a restrictive permission deadlock by showing a human-only verification code, then deactivating all active elements and clearing current-session activation state',
     params: {
       challenge_id: { type: 'string', description: 'Challenge ID from the first release_deadlock call' },
@@ -1441,7 +1477,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'CREATE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Safe-trigger the full danger zone verification pipeline for testing purposes',
     params: {
       agent_name: { type: 'string', description: 'Agent to block (defaults to "beetlejuice-test-agent")' },
@@ -1459,7 +1495,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Evaluate a CLI-level permission prompt (Bash, Edit, Write, MCP tools). Returns allow/deny decision for non-interactive Claude Code sessions using --permission-prompt-tool.',
     params: {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write", "mcp__server__tool")' },
@@ -1477,7 +1513,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Evaluate CLI permission for a tool via HTTP/hook. Returns platform-formatted response (claude_code, gemini, cursor, windsurf, codex). Alternative to permission_prompt for interactive sessions using PreToolUse hooks.',
     params: {
       tool_name: { type: 'string', required: true, description: 'The tool requesting permission (e.g., "Bash", "Edit", "Write")' },
@@ -1496,7 +1532,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Get effective CLI-level permission policies across all active elements',
     params: {
       tool_name: { type: 'string', description: 'Optional: evaluate a specific tool (e.g., "Bash", "Edit:src/index.ts")' },
@@ -1512,7 +1548,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Get the current permission-authority mode for supported hosts. Read-only: AI can inspect authority state but cannot change it.',
     params: {
       host: { type: 'string', description: 'Optional host to inspect (e.g., "claude-code", "codex")' },
@@ -1528,7 +1564,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'EXECUTE',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Approve a pending CLI tool permission request. Used by bridges (Zulip, Slack) to relay human approval for tools that require it.',
     params: {
       request_id: { type: 'string', required: true, description: 'Approval request ID from permission_prompt deny response (format: cli-<UUID>)' },
@@ -1544,7 +1580,7 @@ export const GATEKEEPER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchGatekeeper',
-    category: 'Security & Permissions',
+    category: CATEGORY.SECURITY,
     description: 'Get all pending CLI tool approval requests for this session. Returns unapproved requests that are waiting for human authorization.',
     params: {},
     returns: { name: 'PendingApprovals', kind: 'object', description: '{ pending: CliApprovalRecord[], count: number }' },
@@ -1571,7 +1607,7 @@ export const LOGGING_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchLogging',
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Query recent log entries from the in-memory buffer. Returns filtered, paginated results sorted newest-first. Only queries the hot tier (in-memory); evicted entries exist only in disk log files.',
     params: {
       category: { type: 'string', description: "Log category filter: 'application', 'security', 'performance', 'telemetry', or 'all'. Default: 'all'" },
@@ -1609,7 +1645,7 @@ export const METRICS_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchMetrics',
-    category: 'Configuration & Diagnostics',
+    category: CATEGORY.CONFIG,
     description: 'Query collected metrics snapshots. Returns filtered, paginated results sorted newest-first. Supports filtering by metric name (prefix or exact), source, type, and time range.',
     params: {
       names: { type: 'string[]', description: "Metric name filters. Exact match or prefix match with trailing '.' or '.*' (e.g., 'system.memory.*')" },
@@ -1714,7 +1750,7 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchSearch',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'Full-text search across element names, descriptions, and content with pagination and sorting. TIP: If the user wants to browse or explore their portfolio visually rather than get text results, prefer open_portfolio_browser with a q parameter instead — it opens a web UI with the search pre-populated.',
     params: {
       query: { type: 'string', required: true, description: 'Search query string (max 1000 characters)' },
@@ -1723,8 +1759,8 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
       pageSize: { type: 'number', description: 'Results per page' },
       sort: { type: 'object', description: 'Sort options: { sortBy, sortOrder }' },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'SearchResult', kind: 'object', description: 'Search results: { items: [{ type, name, description, matchedIn }], pagination: { page, pageSize, totalItems, totalPages }, sorting }' },
@@ -1739,7 +1775,7 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchSearch',
-    category: 'Element Discovery',
+    category: CATEGORY.ELEMENT_DISCOVERY,
     description: 'Query elements with filters, sorting, pagination, and count aggregation. Returns structured JSON.',
     params: {
       element_type: { type: 'string', required: true, description: 'Element type to query (required)' },
@@ -1748,8 +1784,8 @@ export const SEARCH_SCHEMAS: OperationSchemaMap = {
       pagination: { type: 'object', description: 'Pagination: { page, pageSize }' },
       aggregate: { type: 'object', description: 'Aggregation: { count?: boolean, group_by?: string }. group_by groups results by a metadata field and returns counts per group. Allowed group_by fields: category, author, tags, status, version. Use group_by: "category" to discover existing categories in the portfolio.' },
       fields: {
-        type: 'string | string[]',
-        description: 'Fields to include: array like ["element_name", "description"] OR preset: "minimal", "standard", "full"',
+        type: TYPE_STRING_OR_STRING_ARRAY,
+        description: DESC.FIELDS_INCLUDE,
       },
     },
     returns: { name: 'QueryResult', kind: 'object', description: 'Query results: { items: [{ name, description, type, version, tags }], pagination, sorting, filters }. With aggregate: adds count (total), groups (if group_by used, e.g. { development: 5, security: 3 }).' },
@@ -1802,7 +1838,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
-    category: 'Management Console',
+    category: CATEGORY.MANAGEMENT_CONSOLE,
     description: `Start the portfolio web UI and open it in the system browser. The web server runs on localhost:${env.DOLLHOUSE_WEB_CONSOLE_PORT} and shows all portfolio elements with search, filtering, and detail views. Supports URL parameters for deep-linking with pre-populated search, filters, and element navigation. Aliases: open_console, open_management_console, open_dollhouse_mcp.`,
     params: {
       tab: { type: 'string', description: 'Tab to open (portfolio, logs, metrics, permissions, setup). Default: last-used tab.', required: false },
@@ -1813,7 +1849,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
       category: { type: 'string', description: 'Filter by category on logs tab (application, security, performance).' },
       since: { type: 'string', description: 'Time range filter (ISO 8601 or relative: 5m, 1h, 24h, 7d) on logs/metrics tabs.' },
     },
-    returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
+    returns: { name: 'BrowserResult', kind: 'object', description: DESC.BROWSER_OPEN_RESULT },
     examples: [
       '{ operation: "open_portfolio_browser" }',
       '{ operation: "open_portfolio_browser", params: { tab: "logs" } }',
@@ -1825,7 +1861,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
-    category: 'Management Console',
+    category: CATEGORY.MANAGEMENT_CONSOLE,
     description: 'Open the management console directly on the logs tab. Supports URL parameters for pre-filtered views. Aliases: open_dollhouse_logs, open_dollhouse_mcp_logs.',
     params: {
       level: { type: 'string', description: 'Filter by minimum log level (debug, info, warn, error).' },
@@ -1834,7 +1870,7 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
       q: { type: 'string', description: 'Search log messages.' },
       since: { type: 'string', description: 'Time range (ISO 8601 or relative: 5m, 1h, 24h, 7d).' },
     },
-    returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
+    returns: { name: 'BrowserResult', kind: 'object', description: DESC.BROWSER_OPEN_RESULT },
     examples: [
       '{ operation: "open_logs" }',
       '{ operation: "open_logs", params: { level: "error", since: "1h" } }',
@@ -1844,13 +1880,13 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
-    category: 'Management Console',
+    category: CATEGORY.MANAGEMENT_CONSOLE,
     description: 'Open the management console directly on the metrics tab. Supports URL parameters for filtered views. Aliases: open_dollhouse_metrics, open_dollhouse_mcp_metrics.',
     params: {
       since: { type: 'string', description: 'Time range (15m, 30m, 1h).' },
       refresh: { type: 'number', description: 'Auto-refresh interval in seconds. 0 disables.' },
     },
-    returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
+    returns: { name: 'BrowserResult', kind: 'object', description: DESC.BROWSER_OPEN_RESULT },
     examples: [
       '{ operation: "open_metrics" }',
       '{ operation: "open_metrics", params: { since: "1h", refresh: 5 } }',
@@ -1860,20 +1896,20 @@ export const BROWSER_SCHEMAS: OperationSchemaMap = {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
-    category: 'Management Console',
+    category: CATEGORY.MANAGEMENT_CONSOLE,
     description: 'Open the management console directly on the permissions tab. Aliases: open_dollhouse_permissions.',
     params: {},
-    returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
+    returns: { name: 'BrowserResult', kind: 'object', description: DESC.BROWSER_OPEN_RESULT },
     examples: ['{ operation: "open_permissions" }'],
   },
   open_setup: {
     endpoint: 'READ',
     handler: 'mcpAqlHandler',
     method: 'dispatchBrowser',
-    category: 'Management Console',
+    category: CATEGORY.MANAGEMENT_CONSOLE,
     description: 'Open the management console directly on the setup/install tab. Aliases: open_dollhouse_setup, open_installer.',
     params: {},
-    returns: { name: 'BrowserResult', kind: 'object', description: 'Confirmation with the URL of the opened browser' },
+    returns: { name: 'BrowserResult', kind: 'object', description: DESC.BROWSER_OPEN_RESULT },
     examples: ['{ operation: "open_setup" }'],
   },
 } as const;
@@ -1959,7 +1995,7 @@ export function schemaToParameterInfo(schema: ParamSchema | undefined): Paramete
     type: def.type,
     required: def.required ?? false,
     description: def.description ?? `${name} parameter`,
-    ...(def.default !== undefined ? { default: def.default } : {}),
+    ...(def.default === undefined ? {} : { default: def.default }),
   }));
 }
 

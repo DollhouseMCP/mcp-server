@@ -61,15 +61,55 @@ export interface SlowQuery {
   timestamp: Date;
 }
 
+/**
+ * Wall-clock timing for a single auth-flow operation. Operators read
+ * these from /healthz to distinguish whether sign-in latency is in
+ * GitHub's token endpoint, JWKS validation, DB lookups, or signing.
+ */
+export interface AuthOpMetrics {
+  /**
+   * Identifier of the timed operation, e.g. `'token-exchange'`,
+   * `'jwks-load'`, `'find-account'`, `'refresh-rotate'`. Free-form but
+   * should stay stable across releases for dashboarding.
+   */
+  op: string;
+  /** Duration in milliseconds. */
+  duration: number;
+  /** True if the op completed normally; false if it threw / errored. */
+  success: boolean;
+  /**
+   * Optional method identifier for multi-method auth flows: `'github'`,
+   * `'magic-link'`, `'local-password'`, `'trivial-consent'`, `'oidc'`.
+   */
+  method?: string;
+  timestamp: Date;
+}
+
+/**
+ * Aggregate per-op stats for a single auth op, surfaced via /healthz.
+ */
+export interface AuthOpAggregate {
+  count: number;
+  successCount: number;
+  errorCount: number;
+  successRate: number;
+  avgMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+}
+
 export class PerformanceMonitor {
   private searchMetrics: SearchMetrics[] = [];
   private slowQueries: SlowQuery[] = [];
   private memorySnapshots: MemoryUsage[] = [];
   private cacheMetrics: Map<string, CachePerformance> = new Map();
+  private authOpMetrics: AuthOpMetrics[] = [];
 
   // Configuration
   private readonly maxMetricsHistory = 1000;
   private readonly slowQueryThreshold = 100; // ms
+  private readonly slowAuthOpThreshold = 1000; // ms — auth round-trips are slower
   private readonly memorySnapshotInterval = 30000; // 30 seconds
   private readonly maxSlowQueries = 100;
 
@@ -187,6 +227,107 @@ export class PerformanceMonitor {
   }
 
   /**
+   * Record a single auth-flow operation timing. Silently no-ops when
+   * monitoring is off, so call sites can wrap unconditionally without
+   * a check.
+   */
+  recordAuthOp(metrics: AuthOpMetrics): void {
+    if (!this.isMonitoring) {
+      return;
+    }
+
+    this.authOpMetrics.push(metrics);
+
+    if (metrics.duration > this.slowAuthOpThreshold) {
+      this.logListener?.('warn', 'Detect slow auth op', {
+        op: metrics.op,
+        method: metrics.method,
+        duration: metrics.duration,
+        success: metrics.success,
+      });
+      logger.warn('Slow auth op detected', {
+        op: metrics.op,
+        method: metrics.method,
+        duration: metrics.duration,
+        success: metrics.success,
+      });
+    }
+
+    // Trim history to bound memory
+    if (this.authOpMetrics.length > this.maxMetricsHistory) {
+      this.authOpMetrics = this.authOpMetrics.slice(-this.maxMetricsHistory);
+    }
+  }
+
+  /**
+   * Time an auth op, recording success/failure automatically. Returns
+   * whatever the wrapped function returns; rethrows on error after
+   * recording the timing. Use this when the call site is async and you
+   * want the metrics without manual try/catch.
+   */
+  async timeAuthOp<T>(op: string, fn: () => Promise<T>, method?: string): Promise<T> {
+    const start = Date.now();
+    try {
+      const result = await fn();
+      this.recordAuthOp({
+        op,
+        duration: Date.now() - start,
+        success: true,
+        method,
+        timestamp: new Date(),
+      });
+      return result;
+    } catch (err) {
+      this.recordAuthOp({
+        op,
+        duration: Date.now() - start,
+        success: false,
+        method,
+        timestamp: new Date(),
+      });
+      throw err;
+    }
+  }
+
+  /**
+   * Aggregate per-op auth statistics for /healthz exposure. Empty map
+   * when monitoring is off or no ops have been recorded.
+   */
+  getAuthOpStats(): Record<string, AuthOpAggregate> {
+    if (this.authOpMetrics.length === 0) {
+      return {};
+    }
+
+    const byOp = new Map<string, AuthOpMetrics[]>();
+    for (const m of this.authOpMetrics) {
+      const bucket = byOp.get(m.op);
+      if (bucket) {
+        bucket.push(m);
+      } else {
+        byOp.set(m.op, [m]);
+      }
+    }
+
+    const result: Record<string, AuthOpAggregate> = {};
+    for (const [op, entries] of byOp.entries()) {
+      const durations = entries.map(e => e.duration).sort((a, b) => a - b);
+      const successCount = entries.filter(e => e.success).length;
+      const sum = durations.reduce((acc, d) => acc + d, 0);
+      result[op] = {
+        count: entries.length,
+        successCount,
+        errorCount: entries.length - successCount,
+        successRate: successCount / entries.length,
+        avgMs: sum / entries.length,
+        p50Ms: durations[Math.floor(durations.length * 0.5)],
+        p95Ms: durations[Math.floor(durations.length * 0.95)],
+        p99Ms: durations[Math.floor(durations.length * 0.99)],
+      };
+    }
+    return result;
+  }
+
+  /**
    * Record cache performance metrics
    */
   recordCachePerformance(cacheName: string, stats: CachePerformance): void {
@@ -289,7 +430,7 @@ export class PerformanceMonitor {
       };
     }
 
-    const current = this.memorySnapshots[this.memorySnapshots.length - 1];
+    const current = this.memorySnapshots.at(-1)!;
     const peak = this.memorySnapshots.reduce((max, snapshot) =>
       snapshot.heapUsed > max.heapUsed ? snapshot : max,
       this.memorySnapshots[0]
@@ -397,7 +538,8 @@ export class PerformanceMonitor {
     this.slowQueries = [];
     this.memorySnapshots = [];
     this.cacheMetrics.clear();
-    
+    this.authOpMetrics = [];
+
     logger.info('Performance metrics reset');
   }
 

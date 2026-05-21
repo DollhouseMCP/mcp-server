@@ -222,6 +222,16 @@ const envSchema = z.object({
    */
   DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE: envBool(false),
 
+  /**
+   * Strict-mode toggle for `dollhouse_config set <path> <value>`. When
+   * true (default), unknown paths and type mismatches are rejected with
+   * a clear error. When false, unknown paths produce a warning but are
+   * accepted — preserves back-compat for operator workflows that may
+   * have stored config paths the schema registry hasn't catalogued yet.
+   * See src/config/configSchema.ts for the path registry.
+   */
+  DOLLHOUSE_CONFIG_STRICT_PATHS: envBool(true),
+
   // ============================================================================
   // Shared Pool Configuration (Step 4.6)
   // ============================================================================
