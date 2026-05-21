@@ -19,6 +19,9 @@
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
+
+const CONSOLE_PORT_PATH = 'console.port';
+const SYNC_ENABLED_PATH = 'sync.enabled';
 import { InMemoryOperatorConfigStore } from '../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
@@ -86,7 +89,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
   describe('isPerHostPath classifier', () => {
     it.each([
       'version',
-      'console.port',
+      CONSOLE_PORT_PATH,
       'console',
       'license.tier',
       'license',
@@ -100,7 +103,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
     it.each([
       'user.username',
       'github.auth.use_oauth',
-      'sync.enabled',
+      SYNC_ENABLED_PATH,
       'autoLoad.token_budget',
       'retentionPolicy.defaults.ttl_days',
       'wizard.completed',
@@ -117,10 +120,10 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
     it('rejects per-host write with a clear message naming the path', async () => {
       const session = makeSession({ roles: [] });
       const result = await runWithSession(contextTracker, session, () =>
-        manager.updateSetting('console.port', 41716),
+        manager.updateSetting(CONSOLE_PORT_PATH, 41716),
       );
       expect(result.success).toBe(false);
-      expect(result.message).toContain('console.port');
+      expect(result.message).toContain(CONSOLE_PORT_PATH);
       expect(result.message).toContain("'admin' role");
       // operator_settings was NOT mutated
       const operator = await operatorStore.load();
@@ -146,7 +149,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
     it('still allows per-user writes (RLS-scoped, no admin needed)', async () => {
       const session = makeSession({ roles: [] });
       const result = await runWithSession(contextTracker, session, () =>
-        manager.updateSetting('sync.enabled', true),
+        manager.updateSetting(SYNC_ENABLED_PATH, true),
       );
       expect(result.success).toBe(true);
     });
@@ -156,7 +159,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
     it('allows per-host writes', async () => {
       const session = makeSession({ roles: ['admin'] });
       const result = await runWithSession(contextTracker, session, () =>
-        manager.updateSetting('console.port', 41717),
+        manager.updateSetting(CONSOLE_PORT_PATH, 41717),
       );
       expect(result.success).toBe(true);
       const operator = await operatorStore.load();
@@ -166,11 +169,36 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
     it('allows per-host writes alongside per-user writes (no surprise blocking)', async () => {
       const session = makeSession({ roles: ['admin'] });
       await runWithSession(contextTracker, session, async () => {
-        const a = await manager.updateSetting('license.tier', 'pro');
-        const b = await manager.updateSetting('sync.enabled', true);
+        const a = await manager.updateSetting('license.tier', 'paid-commercial');
+        const b = await manager.updateSetting(SYNC_ENABLED_PATH, true);
         expect(a.success).toBe(true);
         expect(b.success).toBe(true);
       });
+    });
+  });
+
+  describe('deleteSetting leaf safety', () => {
+    it('rejects deleting an entire config section', async () => {
+      const session = makeSession({ roles: ['admin'] });
+      const result = await runWithSession(contextTracker, session, () =>
+        manager.deleteSetting('sync'),
+      );
+      expect(result.success).toBe(false);
+      expect(result.message).toContain('section');
+      expect(manager.getSetting(SYNC_ENABLED_PATH)).toBe(false);
+    });
+
+    it('allows deleting a specific leaf setting', async () => {
+      const session = makeSession({ roles: [] });
+      await runWithSession(contextTracker, session, () =>
+        manager.updateSetting(SYNC_ENABLED_PATH, true),
+      );
+      const result = await runWithSession(contextTracker, session, () =>
+        manager.deleteSetting(SYNC_ENABLED_PATH),
+      );
+      expect(result.success).toBe(true);
+      expect(result.previousValue).toBe(true);
+      expect(manager.getSetting(SYNC_ENABLED_PATH)).toBe(false);
     });
   });
 
@@ -180,7 +208,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
       // common pattern for buggy callers or background tasks. The gate
       // defaults to "no roles" so privilege escalation via forgetting to
       // scope is not possible.
-      const result = await manager.updateSetting('console.port', 41718);
+      const result = await manager.updateSetting(CONSOLE_PORT_PATH, 41718);
       expect(result.success).toBe(false);
       expect(result.message).toContain("'admin' role");
     });
@@ -203,7 +231,7 @@ describe('ConfigManager admin-role gate on per-host writes', () => {
         null, // no ContextTracker
       );
       await standaloneManager.initialize();
-      const result = await standaloneManager.updateSetting('console.port', 41719);
+      const result = await standaloneManager.updateSetting(CONSOLE_PORT_PATH, 41719);
       expect(result.success).toBe(true);
     });
   });

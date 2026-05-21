@@ -17,6 +17,7 @@ import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { IAuthProvider } from '../../auth/IAuthProvider.js';
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -106,6 +107,14 @@ export class AuthServiceRegistrar {
       // Phase 4.5: signing key store (filesystem or postgres backend
       // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
       signingKeyStore,
+      // PerformanceMonitor for auth-flow timing. Optional — when present,
+      // each method's three IAuthMethod entry points (beginInteraction /
+      // completeInteraction / findAccount) record per-call duration into
+      // recordAuthOp so operators can see latency in /healthz. Resolved
+      // from the root container which ObservabilityServiceRegistrar wires.
+      performanceMonitor: container.hasRegistration('PerformanceMonitor')
+        ? container.resolve<PerformanceMonitor>('PerformanceMonitor')
+        : undefined,
     });
 
     if (!provider) return;

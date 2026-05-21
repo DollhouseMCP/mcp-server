@@ -158,6 +158,17 @@ export class ElementCache<T extends IElement> {
     return this.getCachedByAbsolutePath(filePath);
   }
 
+  /**
+   * Trigger LRU bookkeeping for an element ID already known to be cached.
+   * Promotes the entry to most-recently-used and bumps the LRU's internal
+   * hit counter. Use after a `getScopedValues()`-based iteration when the
+   * caller has identified the matching element but still needs the LRU to
+   * see the access.
+   */
+  touchById(id: string): T | undefined {
+    return this.elements.get(this.key(id));
+  }
+
   getScopedValues(): T[] {
     const prefix = this.keyPrefix();
     return this.elements

@@ -115,91 +115,87 @@ export class OidcAuthProvider implements IAuthProvider {
 
   async validate(token: string): Promise<AuthResult> {
     try {
-      // Cycle-12 fix (M12-1): pin algorithms explicitly. The peer
-      // providers do this; OIDC bridge mode was missing the parity
-      // hardening. jose's default is permissive (any alg the JWKS
-      // keys support); explicit allowlist refuses `none`/HMAC even
-      // if the upstream JWKS were ever compromised in a way that
-      // included symmetric keys.
+      // Cycle-12 fix (M12-1): pin algorithms explicitly. jose's default
+      // is permissive (any alg the JWKS keys support); explicit allowlist
+      // refuses `none`/HMAC even if the upstream JWKS were ever
+      // compromised in a way that included symmetric keys.
+      // Cycle 19 / security-#6: opt-in RFC 9068 typ enforcement — default
+      // off for compat with IdPs that don't stamp typ; on closes the
+      // id-token-as-access-token gap.
       const { payload } = await jwtVerify(token, this.jwks, {
         issuer: this.issuer,
         audience: this.audience,
         algorithms: [...this.algorithms],
-        // Cycle 19 / security-#6: opt-in RFC 9068 typ enforcement.
-        // Default off for compat with IdPs that don't stamp typ; on
-        // closes the id-token-as-access-token gap.
         ...(this.requireAccessTokenTyp ? { typ: 'at+jwt' } : {}),
       });
-
-      if (!payload.sub) {
-        return { ok: false, reason: 'token missing sub claim' };
-      }
-
-      const scopes = extractScopes(payload);
-      // Defense in depth: the bridge must enforce the same `mcp` scope
-      // requirement as the embedded AS — an external IdP token issued
-      // for our audience but lacking `mcp` represents a different
-      // permission surface (e.g. an admin console token) and must not
-      // satisfy the resource-server check here.
-      if (!scopes?.includes('mcp')) {
-        return { ok: false, reason: 'token missing mcp scope' };
-      }
-
-      const claims: AuthClaims = {
-        sub: payload.sub,
-        displayName: extractStringClaim(payload, 'name', 'display_name', 'preferred_username'),
-        email: extractStringClaim(payload, 'email'),
-        tenantId: extractStringClaim(payload, 'tenant_id', 'org_id') ?? null,
-        scopes,
-        roles: Array.isArray(payload.roles)
-          ? payload.roles.filter((r): r is string => typeof r === 'string')
-          : undefined,
-        exp: payload.exp,
-      };
-
-      return { ok: true, claims };
+      return buildOidcAuthResult(payload);
     } catch (error) {
-      // Cycle-11 fix (H11-1 / M11-1): use jose's typed errors instead of
-      // substring-matching on .message. The earlier substring-matching
-      // pattern was a sibling of the same bug class cycle 8 fixed in
-      // EmbeddedAuthorizationServer.validate and cycle 10 fixed in
-      // LocalDevAuthProvider.validate. This is the third site —
-      // missed both times — exactly the recurring drift class user
-      // memory `feedback_scan_for_class_when_fixing` flags.
-      //
-      // Reason text aligned across all three providers (M11-1):
-      // 'token expired', 'invalid signature', 'invalid issuer',
-      // 'invalid audience'. Operator log-grep stays consistent
-      // regardless of which provider is mounted.
-      if (error instanceof joseErrors.JWTExpired) {
-        return { ok: false, reason: 'token expired' };
-      }
-      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
-        return { ok: false, reason: 'invalid signature' };
-      }
-      // Cycle-13 fix: JOSEAlgNotAllowed gets its own reason string so
-      // operator log triage can distinguish "token had a forbidden alg"
-      // from generic "token validation failed". Sibling of the M11-1
-      // alignment work — that round caught aud/iss/expired/signature
-      // but not alg.
-      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
-        return { ok: false, reason: 'algorithm not allowed' };
-      }
-      if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        const claim = error.claim;
-        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
-        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
-        // Cycle 22 / cycle-21 security-LOW-1: align typ-rejection
-        // reason with EmbeddedAuthorizationServer.validate so operator
-        // log-grep sees consistent strings across providers when an
-        // upstream typ check fails. Same drift class as M11-1
-        // alignment work.
-        if (claim === 'typ') return { ok: false, reason: 'wrong token type' };
-        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
-      }
-      return { ok: false, reason: 'token validation failed' };
+      return { ok: false, reason: mapOidcVerifyError(error) };
     }
   }
+}
+
+/**
+ * Build an AuthResult from a verified OIDC JWT payload. Enforces the
+ * required `mcp` scope (defence-in-depth: an external IdP token issued
+ * for our audience but lacking `mcp` represents a different permission
+ * surface and must not satisfy the resource-server check here).
+ * Extracted from validate() to keep its cognitive complexity ≤15 (S3776).
+ */
+function buildOidcAuthResult(payload: Record<string, unknown>): AuthResult {
+  if (!payload.sub || typeof payload.sub !== 'string') {
+    return { ok: false, reason: 'token missing sub claim' };
+  }
+
+  const scopes = extractScopes(payload);
+  if (!scopes?.includes('mcp')) {
+    return { ok: false, reason: 'token missing mcp scope' };
+  }
+
+  const claims: AuthClaims = {
+    sub: payload.sub,
+    displayName: extractStringClaim(payload, 'name', 'display_name', 'preferred_username'),
+    email: extractStringClaim(payload, 'email'),
+    tenantId: extractStringClaim(payload, 'tenant_id', 'org_id') ?? null,
+    scopes,
+    roles: Array.isArray(payload.roles)
+      ? payload.roles.filter((r): r is string => typeof r === 'string')
+      : undefined,
+    exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+  };
+  return { ok: true, claims };
+}
+
+/**
+ * Map a jose JWT-verification error to a stable, operator-friendly
+ * reason string. Cycle-11 / M11-1 fix: use jose's typed errors instead
+ * of substring-matching .message — substrings like 'exp' / 'signature'
+ * collide with unrelated error text and produce misleading reasons in
+ * operator logs. Reasons aligned across all three providers so
+ * operator log-grep is consistent regardless of which provider is
+ * mounted. Extracted from validate() for the cognitive-complexity
+ * refactor; behaviour is identical to the inline cascade it replaced.
+ */
+function mapOidcVerifyError(error: unknown): string {
+  if (error instanceof joseErrors.JWTExpired) {
+    return 'token expired';
+  }
+  if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
+    return 'invalid signature';
+  }
+  if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+    return 'algorithm not allowed';
+  }
+  if (error instanceof joseErrors.JWTClaimValidationFailed) {
+    const claim = error.claim;
+    if (claim === 'aud') return 'invalid audience';
+    if (claim === 'iss') return 'invalid issuer';
+    // Cycle 22 / cycle-21 security-LOW-1: align typ-rejection reason
+    // with the embedded AS so operator log-grep sees consistent strings.
+    if (claim === 'typ') return 'wrong token type';
+    return `claim validation failed: ${claim ?? 'unknown'}`;
+  }
+  return 'token validation failed';
 }
 
 function extractStringClaim(payload: Record<string, unknown>, ...keys: string[]): string | undefined {

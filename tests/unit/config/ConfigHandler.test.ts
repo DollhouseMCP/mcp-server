@@ -324,7 +324,10 @@ describe('ConfigHandler', () => {
 
   describe('handleIndicatorSet (immediate + persistent config)', () => {
     beforeEach(() => {
-      mockConfigManager.updateSetting = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      // Real ConfigManager.updateSetting returns Promise<ConfigUpdateResult>;
+      // the handler now checks .success to surface validation rejections.
+      mockConfigManager.updateSetting = jest.fn<() => Promise<{ success: boolean; message: string }>>()
+        .mockResolvedValue({ success: true, message: 'Setting updated' });
     });
 
     it('should update indicator style with both persistence and runtime effect', async () => {

@@ -1018,7 +1018,7 @@ For deployments running multiple replicas behind a load balancer, set the signin
 ```
 DOLLHOUSE_COOKIE_SIGNING_SECRET=<64+ hex chars>   # generate via:
                                                    # node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-DOLLHOUSE_INVITE_TOKEN_SECRET=<base64 secret>     # for invite + magic-link tokens
+DOLLHOUSE_INVITE_TOKEN_SECRET=<hex secret>        # for invite + magic-link tokens; openssl rand -hex 32
 ```
 
 Without these, each replica generates its own keys at first run and stores them in the run directory. Single-replica deployments are unaffected; multi-replica without env-var secrets produces non-deterministic JWKS and revoked refresh-token sessions on rotation. Multi-replica HA has additional limitations beyond signing-secret sharing (rate limits are per-replica; mode-switch invalidation can race across replicas; key rotation is not coordinated) — these are documented separately and tracked as follow-up work.
@@ -1078,7 +1078,7 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. `postgres` requires `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_DATABASE_URL` to be set. |
 | `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Required to be `true` for `BACKEND=memory` when durable methods (`local-password`, `magic-link`) are configured — otherwise refused at startup, since password hashes and pending invites would silently disappear on restart. Dev/test only. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | 64+ hex chars used to sign /interaction session cookies AND as the HMAC salt for IP/UA hashes. **Required for multi-replica HA** — without it, each replica generates its own key, so cross-replica session cookies fail to verify. Generate via `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
-| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Base64 secret used to sign invite + magic-link tokens. **Required for multi-replica HA** — without it, an invite issued by replica A can't be redeemed on replica B. |
+| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Hex-encoded secret (decodes to ≥16 bytes) used to sign invite + magic-link tokens. Generate via `openssl rand -hex 32`. **Required for multi-replica HA** — without it, an invite issued by replica A can't be redeemed on replica B. |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | GitHub OAuth app client ID for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Register a web-flow OAuth app at <https://github.com/settings/developers> with the callback URL `<DOLLHOUSE_PUBLIC_BASE_URL>/auth/social/github/callback`. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_ID` (with a deprecation warning) when unset, so existing deployments don't break. |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | GitHub OAuth app client secret for the embedded-AS user-auth flow. **Required when `github` is in `DOLLHOUSE_AUTH_METHODS`.** Treat as a deployment secret. Falls back to the legacy `DOLLHOUSE_GITHUB_CLIENT_SECRET` when unset. |
 | `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy GitHub OAuth client ID. Originally introduced for the portfolio-sync feature (server → GitHub, device flow). Still used by `setup_github_auth`; also serves as the user-auth fallback when `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` is unset. |
@@ -1397,7 +1397,7 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Embedded AS only. Required to be `true` for `BACKEND=memory` with durable methods. Dev/test only. |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived)* | Embedded AS only. Public-facing base URL. Required behind a reverse proxy. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | Embedded AS only. 64+ hex chars. Required for multi-replica HA. |
-| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Embedded AS only. Base64 secret for invite + magic-link tokens. Required for multi-replica HA. |
+| `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Embedded AS only. Hex-encoded secret (≥16 bytes) for invite + magic-link tokens. Required for multi-replica HA. |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | *(unset)* | Embedded AS only. User-auth (web flow). Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | *(unset)* | Embedded AS only. User-auth secret. Required when `github` is in `DOLLHOUSE_AUTH_METHODS`. Deployment secret. |
 | `DOLLHOUSE_GITHUB_CLIENT_ID` | *(unset)* | Legacy: portfolio-sync device flow. Also user-auth fallback when the AUTH-prefixed var is unset. |

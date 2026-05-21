@@ -311,60 +311,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         typ: 'at+jwt',
         crit: {},
       });
-
-      if (!protectedHeader.kid) {
-        return { ok: false, reason: 'token missing kid header' };
-      }
-      if (protectedHeader.kid !== keyset.kid) {
-        return { ok: false, reason: 'unknown key id' };
-      }
-      if (!payload.sub) {
-        return { ok: false, reason: 'token missing sub claim' };
-      }
-
-      // Defense in depth (H6): require the `mcp` scope on the token.
-      // Tokens we issue always carry it (resource server scope wired in
-      // the resourceIndicators config), but a key-rotation bug or a
-      // future code path that accidentally minted a token without scope
-      // would otherwise pass everything else here. Reject unconditionally.
-      const scopeClaim = typeof payload.scope === 'string' ? payload.scope : '';
-      const scopes = new Set(scopeClaim.split(/\s+/).filter(Boolean));
-      if (!scopes.has('mcp')) {
-        return { ok: false, reason: 'token missing mcp scope' };
-      }
-
-      return { ok: true, claims: claimsFromPayload(payload) };
+      return buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid);
     } catch (error) {
-      // Use jose's typed errors instead of substring-matching .message —
-      // substrings like 'iss' or 'typ' collide with unrelated error text
-      // ('issuer', 'unexpected', 'cryptographic', 'type'), producing
-      // misleading reasons in operator logs.
-      //
-      // Cycle-11 fix (M11-1): added JWSSignatureVerificationFailed
-      // branch for parity with LocalDevAuthProvider and OidcAuthProvider
-      // — without it, tampered tokens fell through to the generic
-      // "token validation failed" reason while the other two providers
-      // returned "invalid signature". Operator log triage now sees
-      // consistent reason text across all three IAuthProvider impls.
-      if (error instanceof joseErrors.JWTExpired) {
-        return { ok: false, reason: 'token expired' };
-      }
-      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
-        return { ok: false, reason: 'invalid signature' };
-      }
-      // Cycle-13 fix: distinct reason for alg-rejection across all 3
-      // providers (M11-1 alignment + cycle-13 follow-up).
-      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
-        return { ok: false, reason: 'algorithm not allowed' };
-      }
-      if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        const claim = error.claim;
-        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
-        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
-        if (claim === 'typ') return { ok: false, reason: 'wrong token type' };
-        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
-      }
-      return { ok: false, reason: 'token validation failed' };
+      return { ok: false, reason: mapEmbeddedAsVerifyError(error) };
     }
   }
 
@@ -935,7 +884,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       methodIds: this.methods.map((m) => m.id),
       issuer: this.issuer,
       primaryKid: keyset.kid,
-      primaryCookieKey: cookieKeys[0]!,
+      primaryCookieKey: cookieKeys[0],
     };
     const fingerprintResult = await checkModeFingerprint(this.storage, fingerprintInputs);
 
@@ -980,7 +929,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       await persistModeFingerprint(this.storage, {
         ...fingerprintInputs,
         primaryKid: keyset.kid,
-        primaryCookieKey: cookieKeys[0]!,
+        primaryCookieKey: cookieKeys[0],
       });
       await this.storage.recordIdentityEvent({
         type: 'auth.mode_switch_invalidation',
@@ -1315,6 +1264,69 @@ function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
       : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined,
   };
+}
+
+/**
+ * Build an AuthResult from a successfully-verified embedded-AS JWT.
+ * Enforces kid presence, kid match against the active keyset (so a
+ * token signed with a rotated-out key can't validate), sub presence,
+ * and the `mcp` scope (defence-in-depth: H6 — tokens we issue always
+ * carry it, but a key-rotation bug or a future code path that
+ * accidentally minted a token without scope would otherwise pass
+ * everything else here). Extracted from validate() to keep its
+ * cognitive complexity ≤15 (S3776).
+ */
+function buildEmbeddedAsAuthResult(
+  payload: Record<string, unknown>,
+  protectedHeader: { kid?: string },
+  activeKid: string,
+): AuthResult {
+  if (!protectedHeader.kid) {
+    return { ok: false, reason: 'token missing kid header' };
+  }
+  if (protectedHeader.kid !== activeKid) {
+    return { ok: false, reason: 'unknown key id' };
+  }
+  if (!payload.sub) {
+    return { ok: false, reason: 'token missing sub claim' };
+  }
+  const scopeClaim = typeof payload.scope === 'string' ? payload.scope : '';
+  const scopes = new Set(scopeClaim.split(/\s+/).filter(Boolean));
+  if (!scopes.has('mcp')) {
+    return { ok: false, reason: 'token missing mcp scope' };
+  }
+  return { ok: true, claims: claimsFromPayload(payload) };
+}
+
+/**
+ * Map a jose JWT-verification error to a stable reason string. Uses
+ * jose's typed errors instead of substring-matching .message —
+ * substrings like 'iss' or 'typ' collide with unrelated error text
+ * ('issuer', 'unexpected', 'cryptographic', 'type'). Cycle-11 (M11-1)
+ * added the JWSSignatureVerificationFailed branch for parity with the
+ * other two providers; cycle-13 added JOSEAlgNotAllowed. Reason
+ * strings are aligned across all three providers so operator log-grep
+ * sees consistent text regardless of which provider is mounted.
+ * Extracted from validate() for the cognitive-complexity refactor.
+ */
+function mapEmbeddedAsVerifyError(error: unknown): string {
+  if (error instanceof joseErrors.JWTExpired) {
+    return 'token expired';
+  }
+  if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
+    return 'invalid signature';
+  }
+  if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+    return 'algorithm not allowed';
+  }
+  if (error instanceof joseErrors.JWTClaimValidationFailed) {
+    const claim = error.claim;
+    if (claim === 'aud') return 'invalid audience';
+    if (claim === 'iss') return 'invalid issuer';
+    if (claim === 'typ') return 'wrong token type';
+    return `claim validation failed: ${claim ?? 'unknown'}`;
+  }
+  return 'token validation failed';
 }
 
 /**

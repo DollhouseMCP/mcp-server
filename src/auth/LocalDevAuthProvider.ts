@@ -50,6 +50,81 @@ function extractScopes(payload: Record<string, unknown>): string[] | undefined {
   return undefined;
 }
 
+/**
+ * Build an AuthResult from a successfully-verified JWT payload. Returns
+ * an error result when required claims (typ, sub, mcp scope) are
+ * missing or wrong-shaped. Extracted from validate() to keep that
+ * function's cognitive complexity ≤15 (S3776).
+ */
+function buildLocalAuthResult(
+  payload: Record<string, unknown>,
+  protectedHeader: { typ?: string },
+): AuthResult {
+  // RFC 9068: access tokens carry `typ: at+jwt` so an id_token (or any
+  // other JWT signed by the same key) can't be replayed as an access
+  // token. Mirror the embedded AS's enforcement.
+  if (protectedHeader.typ && protectedHeader.typ !== 'at+jwt') {
+    return { ok: false, reason: 'invalid token type' };
+  }
+  if (!payload.sub || typeof payload.sub !== 'string') {
+    return { ok: false, reason: 'token missing sub claim' };
+  }
+
+  // Cycle-16 fix: validate the spec-standard `scope` (RFC 8693 §4.2,
+  // space-separated string) AND legacy `scopes` (array) for tokens
+  // issued by older versions of this provider. Both forms decode to
+  // the same string array internally. New issuance uses `scope`
+  // exclusively so a token issued under DOLLHOUSE_AUTH_PROVIDER=local
+  // can be verified by the embedded AS (which requires `scope`).
+  const scopes = extractScopes(payload);
+  if (!scopes?.includes('mcp')) {
+    return { ok: false, reason: 'token missing mcp scope' };
+  }
+
+  const claims: AuthClaims = {
+    sub: payload.sub,
+    displayName: typeof payload.display_name === 'string' ? payload.display_name : undefined,
+    email: typeof payload.email === 'string' ? payload.email : undefined,
+    tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
+    scopes,
+    roles: Array.isArray(payload.roles)
+      ? payload.roles.filter((r): r is string => typeof r === 'string')
+      : undefined,
+    exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+  };
+  return { ok: true, claims };
+}
+
+/**
+ * Map a jose JWT-verification error to a stable, operator-friendly
+ * reason string. Cycle-10 fix (H10-3): use jose's typed errors rather
+ * than substring-matching .message — substrings like 'exp' / 'signature'
+ * collide with unrelated error text and produce misleading reasons in
+ * operator logs. Extracted from validate() for the cognitive-complexity
+ * refactor; behaviour is identical to the inline cascade it replaced.
+ */
+function mapJwtVerifyError(error: unknown): string {
+  if (error instanceof joseErrors.JWTExpired) {
+    return 'token expired';
+  }
+  if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
+    return 'invalid signature';
+  }
+  // Cycle-13 fix: parity with OidcAuthProvider — distinct reason for
+  // alg-rejection so operator triage doesn't fold it into the generic
+  // "token validation failed" bucket.
+  if (error instanceof joseErrors.JOSEAlgNotAllowed) {
+    return 'algorithm not allowed';
+  }
+  if (error instanceof joseErrors.JWTClaimValidationFailed) {
+    const claim = error.claim;
+    if (claim === 'aud') return 'invalid audience';
+    if (claim === 'iss') return 'invalid issuer';
+    return `claim validation failed: ${claim ?? 'unknown'}`;
+  }
+  return 'token validation failed';
+}
+
 export class LocalDevAuthProvider implements IAuthProvider {
   readonly name = 'local-dev';
 
@@ -71,69 +146,9 @@ export class LocalDevAuthProvider implements IAuthProvider {
         audience: AUDIENCE,
         algorithms: [ALGORITHM],
       });
-
-      // RFC 9068: access tokens carry `typ: at+jwt` so an id_token
-      // (or any other JWT signed by the same key) can't be replayed
-      // as an access token. Mirror the embedded AS's enforcement.
-      if (protectedHeader.typ && protectedHeader.typ !== 'at+jwt') {
-        return { ok: false, reason: 'invalid token type' };
-      }
-
-      if (!payload.sub) {
-        return { ok: false, reason: 'token missing sub claim' };
-      }
-
-      // Cycle-16 fix: validate the spec-standard `scope` (RFC 8693 §4.2,
-      // space-separated string) AND legacy `scopes` (array) for tokens
-      // issued by older versions of this provider. Both forms decode to
-      // the same string array internally. New issuance uses `scope`
-      // exclusively so a token issued under DOLLHOUSE_AUTH_PROVIDER=local
-      // can be verified by the embedded AS (which requires `scope`).
-      const scopes = extractScopes(payload);
-      if (!scopes?.includes('mcp')) {
-        return { ok: false, reason: 'token missing mcp scope' };
-      }
-
-      const claims: AuthClaims = {
-        sub: payload.sub,
-        displayName: typeof payload.display_name === 'string' ? payload.display_name : undefined,
-        email: typeof payload.email === 'string' ? payload.email : undefined,
-        tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
-        scopes,
-        roles: Array.isArray(payload.roles)
-          ? payload.roles.filter((r): r is string => typeof r === 'string')
-          : undefined,
-        exp: payload.exp,
-      };
-
-      return { ok: true, claims };
+      return buildLocalAuthResult(payload, protectedHeader);
     } catch (error) {
-      // Cycle-10 fix (H10-3): use jose's typed errors instead of
-      // substring-matching .message. Substrings like 'exp' / 'signature'
-      // collide with unrelated error text ('issuer' contains 'iss',
-      // 'expected' contains 'exp', 'unexpected signal' contains
-      // 'signature') and produce misleading reasons in operator logs.
-      // Cycle 8 made the same fix in EmbeddedAuthorizationServer.validate;
-      // this is the sibling site that was missed at the time.
-      if (error instanceof joseErrors.JWTExpired) {
-        return { ok: false, reason: 'token expired' };
-      }
-      if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
-        return { ok: false, reason: 'invalid signature' };
-      }
-      // Cycle-13 fix: parity with OidcAuthProvider — distinct reason
-      // for alg-rejection so operator triage doesn't fold it into the
-      // generic "token validation failed" bucket.
-      if (error instanceof joseErrors.JOSEAlgNotAllowed) {
-        return { ok: false, reason: 'algorithm not allowed' };
-      }
-      if (error instanceof joseErrors.JWTClaimValidationFailed) {
-        const claim = error.claim;
-        if (claim === 'aud') return { ok: false, reason: 'invalid audience' };
-        if (claim === 'iss') return { ok: false, reason: 'invalid issuer' };
-        return { ok: false, reason: `claim validation failed: ${claim ?? 'unknown'}` };
-      }
-      return { ok: false, reason: 'token validation failed' };
+      return { ok: false, reason: mapJwtVerifyError(error) };
     }
   }
 
