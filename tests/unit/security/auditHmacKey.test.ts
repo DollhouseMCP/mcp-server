@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
@@ -10,6 +11,7 @@ jest.unstable_mockModule('../../../src/database/admin.js', () => ({
 }));
 
 const { AuditHmacKeyResolver, StaticAuditHmacKeyResolver } = await import('../../../src/security/auditHmacKey.js');
+type DatabaseInstance = import('../../../src/database/connection.js').DatabaseInstance;
 
 describe('StaticAuditHmacKeyResolver', () => {
   it('rejects weak or malformed keys', () => {
@@ -38,7 +40,7 @@ describe('AuditHmacKeyResolver — file mode', () => {
   let rootDir: string;
 
   beforeEach(async () => {
-    rootDir = path.join(os.tmpdir(), `audit-hmac-${Date.now()}-${Math.random().toString(36).slice(2)}`, 'audit-hmac-key');
+    rootDir = path.join(os.tmpdir(), `audit-hmac-${randomUUID()}`, 'audit-hmac-key');
   });
 
   it('auto-generates a 32-byte key on first resolve and persists it at 0600', async () => {
@@ -104,6 +106,25 @@ describe('AuditHmacKeyResolver — file mode', () => {
   });
 });
 
+/**
+ * Build a fake Drizzle transaction whose `select(...).from(...).where(...).limit(...)`
+ * chain resolves to `rowsFn()` and whose `insert(...).values(...)` resolves to
+ * `valuesFn()`. Keeps the test bodies flat instead of inlining the 5-level
+ * fluent-builder boilerplate at every call site.
+ */
+function makeDrizzleTx(opts: {
+  rowsFn: () => unknown[] | Promise<unknown[]>;
+  valuesFn: () => Promise<unknown>;
+}): unknown {
+  const limit = async () => opts.rowsFn();
+  const where = () => ({ limit });
+  const from = () => ({ where });
+  const select = () => ({ from });
+  const values = () => opts.valuesFn();
+  const insert = () => ({ values });
+  return { select, insert };
+}
+
 describe('AuditHmacKeyResolver — DB mode race', () => {
   beforeEach(() => {
     delete process.env.DOLLHOUSE_AUDIT_HMAC_SECRET;
@@ -115,35 +136,24 @@ describe('AuditHmacKeyResolver — DB mode race', () => {
     const winnerSecret = Buffer.alloc(32, 0x42).toString('base64');
     const calls: Array<'read' | 'insert'> = [];
 
-    withSystemContextMock.mockImplementation(async (_db, cb) => {
-      // First call: SELECT active=true -> empty (we lose the race here).
-      // Second call: INSERT -> throws unique-violation (winner already inserted).
-      // Third call: SELECT active=true -> winner row.
-      const tx = {
-        select: () => ({
-          from: () => ({
-            where: () => ({
-              limit: async () => {
-                calls.push('read');
-                if (calls.filter(c => c === 'read').length === 1) return [];
-                return [{ kid: winnerKid, secret: winnerSecret, active: true }];
-              },
-            }),
-          }),
-        }),
-        insert: () => ({
-          values: async () => {
-            calls.push('insert');
-            const err = new Error('duplicate key value violates unique constraint') as Error & { code: string };
-            err.code = '23505';
-            throw err;
-          },
-        }),
-      };
-      return cb(tx as never);
-    });
+    // First call: SELECT active=true -> empty (we lose the race here).
+    // Second call: INSERT -> throws unique-violation (winner already inserted).
+    // Third call: SELECT active=true -> winner row.
+    const rowsFn = () => {
+      calls.push('read');
+      if (calls.filter(c => c === 'read').length === 1) return [];
+      return [{ kid: winnerKid, secret: winnerSecret, active: true }];
+    };
+    const valuesFn = async () => {
+      calls.push('insert');
+      const err = new Error('duplicate key value violates unique constraint') as Error & { code: string };
+      err.code = '23505';
+      throw err;
+    };
 
-    const resolver = new AuditHmacKeyResolver({ database: {} as never });
+    withSystemContextMock.mockImplementation(async (_db, cb) => cb(makeDrizzleTx({ rowsFn, valuesFn })));
+
+    const resolver = new AuditHmacKeyResolver({ database: {} as DatabaseInstance });
     const material = await resolver.resolve();
 
     expect(material.keyId).toBe(winnerKid);
@@ -152,21 +162,12 @@ describe('AuditHmacKeyResolver — DB mode race', () => {
   });
 
   it('propagates non-unique-violation errors instead of swallowing them', async () => {
-    withSystemContextMock.mockImplementation(async (_db, cb) => {
-      const tx = {
-        select: () => ({
-          from: () => ({ where: () => ({ limit: async () => [] }) }),
-        }),
-        insert: () => ({
-          values: async () => {
-            throw new Error('connection refused');
-          },
-        }),
-      };
-      return cb(tx as never);
-    });
+    const rowsFn = () => [];
+    const valuesFn = async (): Promise<unknown> => { throw new Error('connection refused'); };
 
-    const resolver = new AuditHmacKeyResolver({ database: {} as never });
+    withSystemContextMock.mockImplementation(async (_db, cb) => cb(makeDrizzleTx({ rowsFn, valuesFn })));
+
+    const resolver = new AuditHmacKeyResolver({ database: {} as DatabaseInstance });
     await expect(resolver.resolve()).rejects.toThrow(/connection refused/);
   });
 });

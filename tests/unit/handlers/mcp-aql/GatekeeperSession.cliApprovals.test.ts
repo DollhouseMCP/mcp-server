@@ -4,10 +4,28 @@
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { GatekeeperSession } from '../../../../src/handlers/mcp-aql/GatekeeperSession.js';
+import type { CreateCliApprovalArgs } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
 
 const TOOL_BASH = 'Bash';
 const NPM_INSTALL = { command: 'npm install' };
+
+const dangerousArgs = (
+  toolName: string,
+  toolInput: Record<string, unknown> = {},
+  denyReason = 'test',
+  ttlMs?: number,
+): CreateCliApprovalArgs => ({
+  toolName, toolInput, riskLevel: 'dangerous', riskScore: 80, irreversible: false, denyReason, ttlMs,
+});
+
+const moderateArgs = (
+  toolName: string,
+  toolInput: Record<string, unknown> = {},
+  denyReason = 'test',
+): CreateCliApprovalArgs => ({
+  toolName, toolInput, riskLevel: 'moderate', riskScore: 40, irreversible: false, denyReason,
+});
 
 describe('GatekeeperSession CLI approval store', () => {
   let session: GatekeeperSession;
@@ -20,15 +38,13 @@ describe('GatekeeperSession CLI approval store', () => {
   describe('createCliApprovalRequest', () => {
     it('should create a request with cli- prefixed UUID', async () => {
       const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'dangerous command'
+        dangerousArgs(TOOL_BASH, NPM_INSTALL, 'dangerous command'),
       );
       expect(requestId).toMatch(/^cli-[0-9a-f-]{36}$/);
     });
 
     it('should store the request as pending', async () => {
-      await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'dangerous command'
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL, 'dangerous command'));
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
       expect(pending[0].toolName).toBe(TOOL_BASH);
@@ -40,9 +56,7 @@ describe('GatekeeperSession CLI approval store', () => {
       const smallSession = new GatekeeperSession(undefined, 100, 3, undefined, undefined, auditResolver);
       const ids: string[] = [];
       for (let i = 0; i < 4; i++) {
-        ids.push(await smallSession.createCliApprovalRequest(
-          `Tool${i}`, {}, 'moderate', 40, false, 'test'
-        ));
+        ids.push(await smallSession.createCliApprovalRequest(moderateArgs(`Tool${i}`)));
       }
       const pending = smallSession.getPendingCliApprovals();
       expect(pending).toHaveLength(3);
@@ -53,9 +67,7 @@ describe('GatekeeperSession CLI approval store', () => {
 
   describe('approveCliRequest', () => {
     it('should set approvedAt on approval', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       const record = session.approveCliRequest(requestId, 'single');
       expect(record).toBeDefined();
       expect(record!.approvedAt).toBeDefined();
@@ -67,18 +79,14 @@ describe('GatekeeperSession CLI approval store', () => {
     });
 
     it('should return undefined for already approved request', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
       const secondApproval = session.approveCliRequest(requestId, 'single');
       expect(secondApproval).toBeUndefined();
     });
 
     it('should promote to session approvals for tool_session scope', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'tool_session');
 
       // Should be findable via checkCliApproval for same tool
@@ -90,9 +98,7 @@ describe('GatekeeperSession CLI approval store', () => {
 
   describe('checkCliApproval', () => {
     it('should return and consume single-scope approvals', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
 
       // First check returns the approval
@@ -106,9 +112,7 @@ describe('GatekeeperSession CLI approval store', () => {
     });
 
     it('should return but preserve tool_session-scope approvals', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'tool_session');
 
       // Multiple checks should all succeed
@@ -123,17 +127,13 @@ describe('GatekeeperSession CLI approval store', () => {
     });
 
     it('should return undefined for unapproved requests', async () => {
-      await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       const result = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
       expect(result).toBeUndefined();
     });
 
     it('should not match different tool names', async () => {
-      const requestId = await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
 
       const result = session.checkCliApproval('Edit', { file_path: 'foo.ts' });
@@ -143,8 +143,8 @@ describe('GatekeeperSession CLI approval store', () => {
 
   describe('getPendingCliApprovals', () => {
     it('should return only unapproved records', async () => {
-      const id1 = await session.createCliApprovalRequest(TOOL_BASH, {}, 'dangerous', 80, false, 'test');
-      await session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      const id1 = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH));
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
       session.approveCliRequest(id1, 'single');
 
       const pending = session.getPendingCliApprovals();
@@ -159,9 +159,7 @@ describe('GatekeeperSession CLI approval store', () => {
 
   describe('expiry', () => {
     it('should expire stale unapproved requests', async () => {
-      await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
 
       // Manually backdate the request
       const pending = session.getPendingCliApprovals();
@@ -171,7 +169,7 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 600_000).toISOString();
 
       // Creating a new request triggers lazy expiry
-      await session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       // Original should be expired, only the new one remains
@@ -181,9 +179,7 @@ describe('GatekeeperSession CLI approval store', () => {
 
     it('should use per-record ttlMs when set (Issue #644)', async () => {
       // Create a record with 60s TTL
-      await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test', undefined, 60_000
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL, 'test', 60_000));
 
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
@@ -193,7 +189,7 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 70_000).toISOString();
 
       // Trigger lazy expiry
-      await session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       expect(remaining).toHaveLength(1);
@@ -202,9 +198,7 @@ describe('GatekeeperSession CLI approval store', () => {
 
     it('should use default 300s TTL when ttlMs is not set (Issue #644)', async () => {
       // Create a record without TTL
-      await session.createCliApprovalRequest(
-        TOOL_BASH, NPM_INSTALL, 'dangerous', 80, false, 'test'
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
 
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
@@ -213,7 +207,7 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 200_000).toISOString();
 
       // Trigger lazy expiry
-      await session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       // Original should NOT be expired (200s < 300s default)
@@ -223,8 +217,8 @@ describe('GatekeeperSession CLI approval store', () => {
 
   describe('summary', () => {
     it('should include cliApprovalCount in summary', async () => {
-      await session.createCliApprovalRequest(TOOL_BASH, {}, 'dangerous', 80, false, 'test');
-      await session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH));
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const summary = session.getSummary();
       expect(summary.cliApprovalCount).toBe(2);

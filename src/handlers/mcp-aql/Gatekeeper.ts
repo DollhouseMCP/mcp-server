@@ -31,6 +31,7 @@ import {
   type GatekeeperAuditEntry,
   type CliApprovalRecord,
   type CliApprovalScope,
+  type CreateCliApprovalArgs,
 } from './GatekeeperTypes.js';
 import {
   getDefaultPermissionLevel,
@@ -420,27 +421,23 @@ export class Gatekeeper {
    * Create a CLI approval request.
    * Delegates to session and logs the event.
    */
-  async createCliApprovalRequest(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    riskLevel: string,
-    riskScore: number,
-    irreversible: boolean,
-    denyReason: string,
-    policySource?: string,
-    ttlMs?: number,
-  ): Promise<string> {
+  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
     const session = this.resolveSession();
-    const requestId = await session.createCliApprovalRequest(
-      toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs
-    );
+    const requestId = await session.createCliApprovalRequest(args);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CLI_APPROVAL_REQUESTED',
       severity: 'MEDIUM',
       source: 'Gatekeeper.createCliApprovalRequest',
-      details: `CLI approval requested for ${toolName}: ${denyReason}`,
-      additionalData: { requestId, toolName, riskLevel, riskScore, irreversible, sessionId: session.sessionId },
+      details: `CLI approval requested for ${args.toolName}: ${args.denyReason}`,
+      additionalData: {
+        requestId,
+        toolName: args.toolName,
+        riskLevel: args.riskLevel,
+        riskScore: args.riskScore,
+        irreversible: args.irreversible,
+        sessionId: session.sessionId,
+      },
     });
 
     return requestId;

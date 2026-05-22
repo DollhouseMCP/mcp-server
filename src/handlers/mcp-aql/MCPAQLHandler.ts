@@ -3194,16 +3194,16 @@ export class MCPAQLHandler {
 
           const approvalPolicy = resolveCliApprovalPolicy(activeElements);
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
-          const requestId = await this.gatekeeper.createCliApprovalRequest(
+          const requestId = await this.gatekeeper.createCliApprovalRequest({
             toolName,
             toolInput,
-            classification.riskLevel,
-            risk.score,
-            risk.irreversible,
-            elementDecision.message || `Confirmation required by element policy`,
+            riskLevel: classification.riskLevel,
+            riskScore: risk.score,
+            irreversible: risk.irreversible,
+            denyReason: elementDecision.message || `Confirmation required by element policy`,
             policySource,
             ttlMs,
-          );
+          });
 
           return {
             behavior: 'deny',
@@ -3266,16 +3266,16 @@ export class MCPAQLHandler {
           this.resolveCliApprovalLimiter().consumeToken();
 
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
-          const requestId = await this.gatekeeper.createCliApprovalRequest(
+          const requestId = await this.gatekeeper.createCliApprovalRequest({
             toolName,
             toolInput,
-            classification.riskLevel,
-            risk.score,
-            risk.irreversible,
-            `Tool '${toolName}' classified as ${classification.riskLevel}: ${classification.reason}`,
+            riskLevel: classification.riskLevel,
+            riskScore: risk.score,
+            irreversible: risk.irreversible,
+            denyReason: `Tool '${toolName}' classified as ${classification.riskLevel}: ${classification.reason}`,
             policySource,
             ttlMs,
-          );
+          });
 
           return {
             behavior: 'deny',

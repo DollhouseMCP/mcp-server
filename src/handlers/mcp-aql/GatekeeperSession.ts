@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope } from './GatekeeperTypes.js';
+import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope, CreateCliApprovalArgs } from './GatekeeperTypes.js';
 import { env } from '../../config/env.js';
 import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
 import { logger } from '../../utils/logger.js';
@@ -378,16 +378,8 @@ export class GatekeeperSession {
    * Create a CLI approval request.
    * Returns a unique request ID (format: cli-<UUIDv4>).
    */
-  async createCliApprovalRequest(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    riskLevel: string,
-    riskScore: number,
-    irreversible: boolean,
-    denyReason: string,
-    policySource?: string,
-    ttlMs?: number,
-  ): Promise<string> {
+  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
+    const { toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs } = args;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
 

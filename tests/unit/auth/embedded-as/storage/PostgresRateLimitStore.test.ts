@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, jest } from '@jest/globals';
+import type { DatabaseInstance } from '../../../../../src/database/connection.js';
 
 const executeMock = jest.fn<() => Promise<unknown[]>>();
 
@@ -21,7 +22,7 @@ describe('PostgresRateLimitStore', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ state: { failures: 2 }, version: 2 }])
       .mockResolvedValueOnce([{ version: 3 }]);
-    const store = new PostgresRateLimitStore({} as never);
+    const store = new PostgresRateLimitStore({} as DatabaseInstance);
     const seenStates: Array<{ failures: number } | null> = [];
 
     const result = await store.update<{ failures: number }, number>(
@@ -46,7 +47,7 @@ describe('PostgresRateLimitStore', () => {
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ state: { failures: 2 }, version: 2 }])
       .mockResolvedValueOnce([]);
-    const store = new PostgresRateLimitStore({} as never);
+    const store = new PostgresRateLimitStore({} as DatabaseInstance);
 
     await expect(store.update(
       'login',

@@ -34,11 +34,21 @@ const MAX_FIELD_CHARS = 256;
 const MAX_DIGEST_BYTES = 4096;
 const TRUNC_SUFFIX = (original: number) => `...[truncated, ${original} chars original]`;
 /**
- * Deny-list pattern for field NAMES that should never have their value
- * persisted. Case-insensitive substring match, so `accessToken`,
- * `client-id`, `Private_Key` all match.
+ * Deny-list keywords for field NAMES. Substring match against a
+ * normalized form (lower-case, separator-stripped) so `accessToken`,
+ * `client-id`, `Private_Key`, and `clientsecret` all match without
+ * needing a complex alternation regex.
  */
-const SECRET_KEY_PATTERN = /password|token|secret|api[_-]?key|auth|credential|cookie|bearer|signature|sig|nonce|private[_-]?key|client[_-]?id|client[_-]?secret/i;
+const SECRET_KEY_KEYWORDS = [
+  'password', 'token', 'secret', 'apikey', 'auth', 'credential',
+  'cookie', 'bearer', 'signature', 'sig', 'nonce', 'privatekey',
+  'clientid', 'clientsecret',
+];
+
+function isSecretKeyName(name: string): boolean {
+  const normalized = name.toLowerCase().replaceAll(/[_-]/g, '');
+  return SECRET_KEY_KEYWORDS.some((kw) => normalized.includes(kw));
+}
 /**
  * Specific-format secret detectors. Ordered most-specific to least.
  * Add new detectors here as concrete prefix-anchored formats, never as
@@ -47,25 +57,25 @@ const SECRET_KEY_PATTERN = /password|token|secret|api[_-]?key|auth|credential|co
  */
 const SECRET_VALUE_PATTERNS = [
   // Cloud providers
-  /AKIA[0-9A-Z]{16}/,                                       // AWS access key id
-  /AIza[A-Za-z0-9_-]{35}/,                                  // Google API key
+  /AKIA[0-9A-Z]{16}/,                              // AWS access key id
+  /AIza[\w-]{35}/,                                 // Google API key
   // Version-control hosts
-  /ghp_[A-Za-z0-9]{36}/,                                    // GitHub classic PAT
-  /github_pat_[A-Za-z0-9_]{82}/,                            // GitHub fine-grained PAT
-  /glpat-[A-Za-z0-9_-]{20}/,                                // GitLab PAT
+  /ghp_[A-Za-z0-9]{36}/,                           // GitHub classic PAT
+  /github_pat_\w{82}/,                             // GitHub fine-grained PAT
+  /glpat-[\w-]{20}/,                               // GitLab PAT
   // AI providers
-  /sk-ant-[A-Za-z0-9_-]{20,}/,                              // Anthropic API key (must precede generic sk-)
-  /sk-[A-Za-z0-9]{32,}/,                                    // OpenAI API key
+  /sk-ant-[\w-]{20,}/,                             // Anthropic API key (must precede generic sk-)
+  /sk-[A-Za-z0-9]{32,}/,                           // OpenAI API key
   // Payments / chat / package managers
-  /sk_(live|test)_[A-Za-z0-9]{24,}/,                        // Stripe secret key
-  /xox[abprs]-[A-Za-z0-9-]{10,}/,                           // Slack tokens (bot / user / app / refresh / etc.)
-  /npm_[A-Za-z0-9]{36,}/,                                   // npm automation token
-  /discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/i, // Discord webhook URL
+  /sk_(live|test)_[A-Za-z0-9]{24,}/,               // Stripe secret key
+  /xox[abprs]-[\w-]{10,}/,                         // Slack tokens (bot / user / app / refresh / etc.)
+  /npm_[A-Za-z0-9]{36,}/,                          // npm automation token
+  /discord(?:app)?\.com\/api\/webhooks\/\d+\/[\w-]+/i, // Discord webhook URL
   // Standard formats
-  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/,      // JWT (base64url header.payload.signature)
-  /Bearer\s+[A-Za-z0-9._\-+/=]{20,}/i,                      // Bearer-prefixed token
-  /-----BEGIN [A-Z ]+-----/,                                // PEM block header (private keys, certs)
-  /\b[a-f0-9]{32,}\b/i,                                     // Long hex (last-resort)
+  /eyJ[\w-]+\.[\w-]+\.[\w-]+/,                     // JWT (base64url header.payload.signature)
+  /Bearer\s+[\w.+/=-]{20,}/i,                      // Bearer-prefixed token
+  /-----BEGIN [A-Z ]+-----/,                       // PEM block header (private keys, certs)
+  /\b[a-f0-9]{32,}\b/i,                            // Long hex (last-resort)
 ];
 const SENSITIVE_QUERY_PARAMS = new Set([
   'access_token',
@@ -248,7 +258,7 @@ function genericRedact(input: Record<string, unknown>, depth = 0): Record<string
 }
 
 function genericRedactValue(key: string, value: unknown, depth = 0): unknown {
-  if (SECRET_KEY_PATTERN.test(key)) return '[REDACTED]';
+  if (isSecretKeyName(key)) return '[REDACTED]';
   if (typeof value === 'string') return redactString(value);
   if (Array.isArray(value)) {
     if (depth >= MAX_REDACTION_DEPTH) return DEPTH_TRUNCATED;
@@ -326,22 +336,28 @@ function scrubNonAbsoluteUrl(value: string): string {
   // "is the API key abc? maybe" (which is not a URL, but contained `?`).
   // We accept word/dot/slash characters before the `?` and require at
   // least one `=` in the query portion to confirm it's a query string.
-  return value.replaceAll(NON_ABSOLUTE_URL_RE, (_, prefix, query) => {
-    if (!query.includes('=')) return `${prefix}?${query}`;
-    const params = new URLSearchParams(query);
-    scrubSearchParams(params);
-    return `${prefix}?${params.toString()}`;
-  });
+  return value
+    .replaceAll(NON_ABSOLUTE_URL_DOTTED_RE, scrubQueryReplacement)
+    .replaceAll(NON_ABSOLUTE_URL_SLASHED_RE, scrubQueryReplacement);
 }
 
-// Matches a host/path-shaped prefix followed by `?` and a query string.
-// The prefix MUST contain a `.` or `/` to qualify — that's what
-// distinguishes a URL-shaped fragment from prose containing a question
-// mark. Two alternatives:
-//   (a) dotted name with optional path:  `example.com`, `a.b.c/x/y`
-//   (b) slashed path:                    `/api/v1`, `foo/bar`
-// `query`: continues until whitespace or another `?`.
-const NON_ABSOLUTE_URL_RE = /([\w-]+(?:\.[\w-]+)+(?:\/[\w./-]*)?|[\w.-]*\/[\w./-]+)\?([^\s?]+)/g;
+// Two narrowly-scoped regexes for URL-shaped fragments preceding `?...`.
+// Kept as separate alternatives (instead of one big alternation regex) so
+// each one's complexity stays well under static-analysis thresholds and
+// so a future change to either form is isolated. The prefix MUST contain
+// a `.` or `/` to qualify — that's what distinguishes a URL-shaped
+// fragment from prose containing a question mark.
+//   `[\w-]+(?:\.[\w-]+)+` — dotted name (with optional `/path` tail)
+const NON_ABSOLUTE_URL_DOTTED_RE = /([\w-]+(?:\.[\w-]+)+(?:\/[\w./-]*)?)\?([^\s?]+)/g;
+//   `[\w.-]*\/[\w./-]+` — slashed path (must contain at least one `/`)
+const NON_ABSOLUTE_URL_SLASHED_RE = /([\w.-]*\/[\w./-]+)\?([^\s?]+)/g;
+
+function scrubQueryReplacement(_match: string, prefix: string, query: string): string {
+  if (!query.includes('=')) return `${prefix}?${query}`;
+  const params = new URLSearchParams(query);
+  scrubSearchParams(params);
+  return `${prefix}?${params.toString()}`;
+}
 
 function scrubSearchParams(params: URLSearchParams): void {
   for (const key of Array.from(params.keys())) {

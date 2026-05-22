@@ -46,7 +46,7 @@ async function hasDatabaseCliApprovals(database: DatabaseInstance): Promise<bool
       WHERE jsonb_array_length(cli_approvals) > 0
       LIMIT 1
     `),
-  ) as unknown[];
+  );
   return rows.length > 0;
 }
 

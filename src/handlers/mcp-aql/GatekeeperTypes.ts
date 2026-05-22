@@ -165,6 +165,23 @@ export interface CliApprovalPolicy {
 }
 
 /**
+ * Caller-supplied inputs for creating a CLI approval request. Bundled
+ * into one object so the Gatekeeper / GatekeeperSession entry points
+ * stay under the static-analysis parameter cap and so adding new
+ * approval-policy fields doesn't require breaking every call site.
+ */
+export interface CreateCliApprovalArgs {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  riskLevel: string;
+  riskScore: number;
+  irreversible: boolean;
+  denyReason: string;
+  policySource?: string;
+  ttlMs?: number;
+}
+
+/**
  * Record of a CLI tool approval request.
  * Created when permission_prompt encounters a tool that requires approval.
  */
