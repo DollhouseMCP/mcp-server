@@ -21,6 +21,7 @@ import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalA
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { randomBytes } from 'node:crypto';
 import {
   type ASHarness,
@@ -36,7 +37,7 @@ const VALID_PASSWORD = 'a-very-long-password';
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
   const invites = new InviteTokenStore(randomBytes(32), storage);
-  const rateLimiter = new LocalLoginRateLimiter({ storage });
+  const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
   return new LocalAccountMethod({ storage, invites, rateLimiter });
 }
 

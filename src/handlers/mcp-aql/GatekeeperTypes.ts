@@ -173,8 +173,12 @@ export interface CliApprovalRecord {
   requestId: string;
   /** The tool that was requested */
   toolName: string;
-  /** The tool input parameters */
-  toolInput: Record<string, unknown>;
+  /** Safe redacted digest of the tool input parameters */
+  toolInputDigest: Record<string, unknown>;
+  /** HMAC-SHA256 over canonical raw tool input, prefixed with key id */
+  toolInputHash: string;
+  /** Raw tool input parameters. Present only when explicitly retained. */
+  toolInputDetail?: Record<string, unknown>;
   /** Risk level from classification */
   riskLevel: string;
   /** Numeric risk score (0-100) */

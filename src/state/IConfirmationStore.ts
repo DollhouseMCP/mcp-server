@@ -17,6 +17,23 @@
 
 import type { ConfirmationRecord, CliApprovalRecord } from '../handlers/mcp-aql/GatekeeperTypes.js';
 
+export interface ApprovalRef {
+  sessionId: string;
+  approvalId: string;
+  toolName: string;
+  approvedAt?: string;
+  requestedAt: string;
+  digest: Record<string, unknown>;
+}
+
+export interface ApprovalSearchFilter {
+  userId?: string;
+  sessionId?: string;
+  approvalId?: string;
+  after?: number;
+  before?: number;
+}
+
 /**
  * Persistence-only contract for Gatekeeper confirmation and CLI approval state.
  */
@@ -113,6 +130,10 @@ export interface IConfirmationStore {
    * Used by GatekeeperSession.initialize() to restore promoted approvals.
    */
   getAllCliSessionApprovals(): CliApprovalRecord[];
+
+  findApprovals(filter: ApprovalSearchFilter): Promise<ApprovalRef[]>;
+
+  getRawApprovalDetail(sessionId: string, approvalId: string): Promise<Record<string, unknown> | null>;
 
   // ── Permission Prompt Tracking ────────────────────────────────────
 

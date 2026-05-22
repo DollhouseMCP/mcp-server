@@ -34,6 +34,7 @@ import {
   type AuthMethodId,
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
+import type { IRateLimitStore } from './embedded-as/storage/IRateLimitStore.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { instrumentAuthMethod } from './embedded-as/instrumentAuthMethod.js';
@@ -86,6 +87,8 @@ export interface AuthConfig {
    * Forwarded to EmbeddedAuthorizationServer; ignored by other providers.
    */
   signingKeyStore?: import('../storage/signingKeys/ISigningKeyStore.js').ISigningKeyStore;
+  /** Shared auth rate-limit state store. Required for multi-replica Postgres deployments. */
+  rateLimitStore?: IRateLimitStore;
   /**
    * Optional PerformanceMonitor for instrumenting auth-flow timing.
    * When present, each method's beginInteraction / completeInteraction /
@@ -469,8 +472,18 @@ async function buildAuthMethod(
     case 'local-password': {
       const { LocalAccountMethod } = await import('./embedded-as/methods/LocalAccountMethod.js');
       const { LocalLoginRateLimiter } = await import('./embedded-as/rateLimit.js');
+      if (!config.rateLimitStore) {
+        throw new Error(
+          'local-password method requires AuthConfig.rateLimitStore. ' +
+          'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
+        );
+      }
       const invites = await ensureInvites();
-      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      const rateLimiter = new LocalLoginRateLimiter({
+        storage,
+        store: config.rateLimitStore,
+        storeBackend: env.DOLLHOUSE_RATE_LIMIT_BACKEND,
+      });
       return new LocalAccountMethod({
         storage,
         invites,
@@ -482,6 +495,12 @@ async function buildAuthMethod(
     case 'magic-link': {
       const { MagicLinkMethod } = await import('./embedded-as/methods/MagicLinkMethod.js');
       const { NodemailerEmailSender } = await import('./embedded-as/methods/nodemailerEmailSender.js');
+      if (!config.rateLimitStore) {
+        throw new Error(
+          'magic-link method requires AuthConfig.rateLimitStore. ' +
+          'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
+        );
+      }
       if (!env.DOLLHOUSE_SMTP_HOST || !env.DOLLHOUSE_SMTP_USER
         || !env.DOLLHOUSE_SMTP_PASSWORD || !env.DOLLHOUSE_SMTP_FROM) {
         throw new Error(
@@ -509,6 +528,7 @@ async function buildAuthMethod(
         emailSender,
         verifyUrl,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        rateLimitStore: config.rateLimitStore,
       });
     }
 

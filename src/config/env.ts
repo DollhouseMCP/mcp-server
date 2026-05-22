@@ -221,6 +221,8 @@ const envSchema = z.object({
    * fails loudly instead of silently leaving the safety guard active.
    */
   DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE: envBool(false),
+  /** Auth rate-limit backend. Use postgres for multi-replica hosted deployments. */
+  DOLLHOUSE_RATE_LIMIT_BACKEND: z.enum(['memory', 'postgres']).default('memory'),
 
   /**
    * Strict-mode toggle for `dollhouse_config set <path> <value>`. When
@@ -673,6 +675,12 @@ const envSchema = z.object({
 
   /** Rate limit window in ms for permission prompt and CLI approvals (default: 60000 = 60s) */
   DOLLHOUSE_PERMISSION_RATE_WINDOW_MS: z.coerce.number().default(60_000),
+
+  /** Store raw tool input detail in CLI approval audit records. Secure default is digest-only. */
+  DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT: envBool(false),
+  /** Hex-encoded HMAC key for audit input hashes. When unset, a persisted key is generated. */
+  DOLLHOUSE_AUDIT_HMAC_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   // ============================================================================
   // Metrics Collection Configuration

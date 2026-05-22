@@ -12,6 +12,8 @@ import path from 'node:path';
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 const TEST_STATE_DIR = path.join(os.tmpdir(), 'dollhouse-test-state');
+const TEST_SESSION_ID = 'test-session';
+const CLI_RETAINED = 'cli-retained';
 
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
@@ -29,12 +31,17 @@ jest.unstable_mockModule('../../../src/security/securityMonitor.js', () => ({
 }));
 
 const mockMkdir = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+const mockReaddir = jest.fn<() => Promise<string[]>>().mockResolvedValue([]);
 jest.unstable_mockModule('fs/promises', () => ({
-  default: { mkdir: mockMkdir },
+  default: { mkdir: mockMkdir, readdir: mockReaddir },
   mkdir: mockMkdir,
+  readdir: mockReaddir,
 }));
 
 const { FileConfirmationStore } = await import('../../../src/state/FileConfirmationStore.js');
+const { StaticAuditHmacKeyResolver } = await import('../../../src/security/auditHmacKey.js');
+
+const auditResolver = new StaticAuditHmacKeyResolver('44'.repeat(32));
 
 function createMockFileOps(options?: {
   readFileResult?: string;
@@ -62,8 +69,9 @@ describe('FileConfirmationStore', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockReaddir.mockResolvedValue([]);
     mockFileOps = createMockFileOps();
-    store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+    store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
   });
 
   describe('initialize()', () => {
@@ -76,7 +84,7 @@ describe('FileConfirmationStore', () => {
     it('should restore confirmations from disk', async () => {
       const persisted = {
         version: 1,
-        sessionId: 'test-session',
+        sessionId: TEST_SESSION_ID,
         lastUpdated: '2026-04-13T00:00:00Z',
         confirmations: [
           ['create_element', {
@@ -91,7 +99,7 @@ describe('FileConfirmationStore', () => {
         permissionPromptActive: true,
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
 
       await store.initialize();
 
@@ -104,7 +112,7 @@ describe('FileConfirmationStore', () => {
       const now = Date.now();
       const persisted = {
         version: 1,
-        sessionId: 'test-session',
+        sessionId: TEST_SESSION_ID,
         lastUpdated: new Date().toISOString(),
         confirmations: [],
         cliApprovals: [
@@ -141,7 +149,7 @@ describe('FileConfirmationStore', () => {
         permissionPromptActive: false,
       };
       mockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
-      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
 
       await store.initialize();
 
@@ -153,7 +161,7 @@ describe('FileConfirmationStore', () => {
 
     it('should handle corrupt JSON gracefully', async () => {
       mockFileOps = createMockFileOps({ readFileResult: 'not-json' });
-      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, 'test-session');
+      store = new FileConfirmationStore(mockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
 
       await store.initialize();
       expect(store.getAllConfirmations()).toEqual([]);
@@ -243,6 +251,109 @@ describe('FileConfirmationStore', () => {
 
       expect(store.getCliSessionApproval('Bash')).toEqual(record);
     });
+
+    it('getRawApprovalDetail returns null when raw detail was not retained', async () => {
+      store.saveCliApproval('cli-redacted', {
+        requestId: 'cli-redacted',
+        toolName: 'Bash',
+        toolInputDigest: { command: { redacted: true } },
+        toolInputHash: 'hmac_v1:test',
+        riskLevel: 'moderate',
+        riskScore: 50,
+        irreversible: false,
+        requestedAt: new Date().toISOString(),
+        consumed: false,
+        scope: 'single' as const,
+        denyReason: 'test',
+      });
+
+      await expect(store.getRawApprovalDetail(TEST_SESSION_ID, 'cli-redacted')).resolves.toBeNull();
+    });
+
+    it('getRawApprovalDetail requires matching sessionId', async () => {
+      store.saveCliApproval(CLI_RETAINED, {
+        requestId: CLI_RETAINED,
+        toolName: 'Bash',
+        toolInputDigest: { command: { redacted: true } },
+        toolInputHash: 'hmac_v1:test',
+        toolInputDetail: { command: 'npm test' },
+        riskLevel: 'moderate',
+        riskScore: 50,
+        irreversible: false,
+        requestedAt: new Date().toISOString(),
+        consumed: false,
+        scope: 'single' as const,
+        denyReason: 'test',
+      });
+
+      await expect(store.getRawApprovalDetail('other-session', CLI_RETAINED)).resolves.toBeNull();
+      await expect(store.getRawApprovalDetail(TEST_SESSION_ID, CLI_RETAINED)).resolves.toEqual({ command: 'npm test' });
+    });
+
+    it('findApprovals returns digest-only refs and never raw detail', async () => {
+      store.saveCliApproval(CLI_RETAINED, {
+        requestId: CLI_RETAINED,
+        toolName: 'Bash',
+        toolInputDigest: { command: { redacted: true } },
+        toolInputHash: 'hmac_v1:test',
+        toolInputDetail: { command: 'npm test' },
+        riskLevel: 'moderate',
+        riskScore: 50,
+        irreversible: false,
+        requestedAt: new Date().toISOString(),
+        consumed: false,
+        scope: 'single' as const,
+        denyReason: 'test',
+      });
+
+      const refs = await store.findApprovals({});
+      expect(refs).toEqual([
+        expect.objectContaining({
+          sessionId: TEST_SESSION_ID,
+          approvalId: CLI_RETAINED,
+          digest: { command: { redacted: true } },
+        }),
+      ]);
+      expect(JSON.stringify(refs)).not.toContain('npm test');
+    });
+
+    it('findApprovals scans other session files', async () => {
+      const otherState = {
+        version: 1,
+        sessionId: 'other-session',
+        lastUpdated: new Date().toISOString(),
+        confirmations: [],
+        cliApprovals: [[
+          'cli-other',
+          {
+            requestId: 'cli-other',
+            toolName: 'Edit',
+            toolInput: { old_string: 'secret' },
+            riskLevel: 'moderate',
+            riskScore: 20,
+            irreversible: false,
+            requestedAt: new Date().toISOString(),
+            consumed: false,
+            scope: 'single',
+            denyReason: 'test',
+          },
+        ]],
+        cliSessionApprovals: [],
+        permissionPromptActive: false,
+      };
+      mockReaddir.mockResolvedValue(['confirmations-other-session.json']);
+      mockFileOps.readFile = jest.fn<() => Promise<string>>()
+        .mockResolvedValueOnce(JSON.stringify(otherState));
+
+      const refs = await store.findApprovals({});
+      expect(refs).toEqual([
+        expect.objectContaining({
+          sessionId: 'other-session',
+          approvalId: 'cli-other',
+          toolName: 'Edit',
+        }),
+      ]);
+    });
   });
 
   describe('round-trip persistence', () => {
@@ -271,16 +382,70 @@ describe('FileConfirmationStore', () => {
       await store.persist();
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const writtenContent = mockFileOps.writeFile.mock.calls[mockFileOps.writeFile.mock.calls.length - 1][1];
+      const writtenContent = mockFileOps.writeFile.mock.calls.at(-1)![1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
-      const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, 'test-session');
+      const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
       await store2.initialize();
 
       expect(store2.getConfirmation('create_element:skill')?.operation).toBe('create_element');
       expect(store2.getConfirmation('create_element:skill')?.useCount).toBe(2);
       expect(store2.getCliApproval('cli-abc')?.toolName).toBe('Bash');
       expect(store2.getPermissionPromptActive()).toBe(true);
+    });
+
+    it('read-side shim upgrades old-shape records — restored approval has digest+hash and no raw toolInput', async () => {
+      // Reviewer finding 2026-05-22: the original round-trip test asserted
+      // only that `toolName` survives, which would pass even if the shim
+      // silently dropped the audit fields. Pin the shim behavior explicitly:
+      // an old-shape record persisted (with `toolInput`) must be restored
+      // in the new shape with `toolInputDigest` and `toolInputHash`, and
+      // the raw `toolInput` must not survive to the in-memory record.
+      const oldShapeState = {
+        version: 1,
+        sessionId: TEST_SESSION_ID,
+        lastUpdated: new Date().toISOString(),
+        confirmations: [],
+        cliApprovals: [[
+          'cli-old',
+          {
+            requestId: 'cli-old',
+            toolName: 'Bash',
+            toolInput: { command: 'echo legacy' },
+            riskLevel: 'moderate',
+            riskScore: 40,
+            irreversible: false,
+            requestedAt: new Date().toISOString(),
+            consumed: false,
+            scope: 'single',
+            denyReason: 'test',
+          },
+        ]],
+        cliSessionApprovals: [],
+        permissionPromptActive: false,
+      };
+      const readMockFileOps = createMockFileOps({ readFileResult: JSON.stringify(oldShapeState) });
+      const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
+      await store2.initialize();
+
+      const restored = store2.getCliApproval('cli-old');
+      expect(restored).toBeDefined();
+      expect(restored?.toolName).toBe('Bash');
+      // Shim produced new-shape fields:
+      expect(restored?.toolInputDigest).toEqual(expect.objectContaining({
+        command: expect.objectContaining({ redacted: true }),
+      }));
+      // Pin the exact hash hex: any silent change to canonicalJSON or the
+      // HMAC ingredients would shift this value and break the test. Derived
+      // by running:
+      //   createHmac('sha256', Buffer.alloc(32, 0x44))
+      //     .update('{"command":"echo legacy"}')
+      //     .digest('hex')
+      expect(restored?.toolInputHash).toBe(
+        'static:21c11b8153f9d92547d0aaeab095c2a20f1d03e65179cd34eab6e0ab85e8a38a'
+      );
+      // Raw toolInput must NOT survive into the in-memory record:
+      expect((restored as unknown as { toolInput?: unknown }).toolInput).toBeUndefined();
     });
   });
 });

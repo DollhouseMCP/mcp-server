@@ -31,6 +31,7 @@ import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalA
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
 import { InviteTokenStore, loadOrGenerateInviteSecret } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storage/FilesystemAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
   CookieJar,
@@ -111,7 +112,7 @@ describe('Filesystem storage — AS restart durability', () => {
     const storage = new FilesystemAuthStorageLayer({ rootDir: storageDir });
     const inviteSecretFile = path.join(tmpDir, 'invite-secret.bin');
     const invites = new InviteTokenStore(loadOrGenerateInviteSecret(inviteSecretFile), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const h = await startASHarness({
       methods: [method],

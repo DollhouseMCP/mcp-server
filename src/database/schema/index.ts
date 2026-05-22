@@ -21,6 +21,9 @@ export { operatorSettings } from './operatorSettings.js';
 export { sharedCache } from './sharedCache.js';
 export { authSigningKeys } from './signingKeys.js';
 export { userOauthTokens } from './userOauthTokens.js';
+export { rateLimitState } from './rateLimitState.js';
+export { securityAuditEvents } from './securityAuditEvents.js';
+export { auditHmacKeys } from './auditHmacKeys.js';
 // Sign-in allowlist:
 export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';

@@ -10,6 +10,7 @@ import {
   createDefaultAuthMethodFactory,
 } from '../../../src/auth/embedded-as/AuthMethodFactory.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
@@ -146,6 +147,7 @@ describe('AuthProviderFactory two-level structure', () => {
         methods: ['local-password'],
         storage,
         signingKeyStore,
+        rateLimitStore: new InMemoryRateLimitStore(),
         publicBaseUrl: 'http://127.0.0.1:65530',
       });
 

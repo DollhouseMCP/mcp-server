@@ -1076,6 +1076,9 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Comma-separated list. Recognized: `github`, `magic-link`, `local-password`, `trivial-consent`. Multi-method deployments expose all configured methods at the same `/interaction` endpoint. |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived from bind)* | Public-facing base URL of this server. **Required behind a reverse proxy** so issued JWTs and `/.well-known/*` documents advertise the correct public origin. |
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. `postgres` requires `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_DATABASE_URL` to be set. |
+| `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | One of `memory`, `postgres`. Use `postgres` for multi-replica deployments so local-password and magic-link limits are shared across replicas. |
+| `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | When `true`, CLI approval audit records retain raw tool input detail. Default `false` stores only redacted digest + HMAC hash. |
+| `DOLLHOUSE_AUDIT_HMAC_SECRET` | *(auto-generated)* | Hex-encoded secret (≥32 bytes) for HMAC-SHA256 audit-input hashes. Generate via `openssl rand -hex 32`; when unset the server persists an auto-generated key. |
 | `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Required to be `true` for `BACKEND=memory` when durable methods (`local-password`, `magic-link`) are configured — otherwise refused at startup, since password hashes and pending invites would silently disappear on restart. Dev/test only. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | 64+ hex chars used to sign /interaction session cookies AND as the HMAC salt for IP/UA hashes. **Required for multi-replica HA** — without it, each replica generates its own key, so cross-replica session cookies fail to verify. Generate via `node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"`. |
 | `DOLLHOUSE_INVITE_TOKEN_SECRET` | *(per-replica random)* | Hex-encoded secret (decodes to ≥16 bytes) used to sign invite + magic-link tokens. Generate via `openssl rand -hex 32`. **Required for multi-replica HA** — without it, an invite issued by replica A can't be redeemed on replica B. |
@@ -1394,6 +1397,9 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject used for the startup convenience token printed to stderr. |
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Embedded AS only. Comma-separated: `github`, `magic-link`, `local-password`, `trivial-consent`. |
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | Embedded AS only. One of `memory`, `filesystem`, `postgres`. |
+| `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | Auth rate-limit backend. Set `postgres` for multi-replica HA. |
+| `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | Retain raw CLI approval tool inputs. Secure default stores digest/hash only. |
+| `DOLLHOUSE_AUDIT_HMAC_SECRET` | *(auto-generated)* | Hex-encoded ≥32-byte HMAC key for audit input hashes. |
 | `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE` | `false` | Embedded AS only. Required to be `true` for `BACKEND=memory` with durable methods. Dev/test only. |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived)* | Embedded AS only. Public-facing base URL. Required behind a reverse proxy. |
 | `DOLLHOUSE_COOKIE_SIGNING_SECRET` | *(per-replica random)* | Embedded AS only. 64+ hex chars. Required for multi-replica HA. |

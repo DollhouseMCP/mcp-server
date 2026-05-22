@@ -19,6 +19,7 @@ import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprova
 import { env } from '../../config/env.js';
 import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
 import { logger } from '../../utils/logger.js';
+import { redactToolInput, type AuditHmacResolver } from '../../security/toolRedaction.js';
 
 /**
  * Client information from MCP capabilities.
@@ -96,6 +97,7 @@ export class GatekeeperSession {
   private readonly maxConfirmations: number;
   private readonly maxCliApprovals: number;
   private readonly confirmationStore?: IConfirmationStore;
+  private readonly auditHmacResolver?: AuditHmacResolver;
   private lastExpirySweep = 0;
 
   constructor(
@@ -105,10 +107,12 @@ export class GatekeeperSession {
     confirmationStore?: IConfirmationStore,
     /** Issue #1947: Use caller-provided sessionId instead of generating a random one. */
     sessionId?: string,
+    auditHmacResolver?: AuditHmacResolver,
   ) {
     this.maxConfirmations = maxConfirmations;
     this.maxCliApprovals = maxCliApprovals;
     this.confirmationStore = confirmationStore;
+    this.auditHmacResolver = auditHmacResolver;
     this.state = {
       sessionId: sessionId ?? randomUUID(),
       clientInfo,
@@ -374,7 +378,7 @@ export class GatekeeperSession {
    * Create a CLI approval request.
    * Returns a unique request ID (format: cli-<UUIDv4>).
    */
-  createCliApprovalRequest(
+  async createCliApprovalRequest(
     toolName: string,
     toolInput: Record<string, unknown>,
     riskLevel: string,
@@ -383,7 +387,7 @@ export class GatekeeperSession {
     denyReason: string,
     policySource?: string,
     ttlMs?: number,
-  ): string {
+  ): Promise<string> {
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
 
@@ -396,14 +400,35 @@ export class GatekeeperSession {
     }
 
     const requestId = `cli-${randomUUID()}`;
+    if (!this.auditHmacResolver) {
+      throw new Error(
+        'GatekeeperSession.createCliApprovalRequest requires an AuditHmacResolver. ' +
+        'Inject one via the constructor (root path: SecurityServiceRegistrar registers the resolver in the DI container).',
+      );
+    }
+    let redacted: Awaited<ReturnType<typeof redactToolInput>>;
+    try {
+      redacted = await redactToolInput(toolName, toolInput, this.auditHmacResolver);
+    } catch (cause) {
+      // The resolver fails closed on missing/corrupt keys, DB unavailability,
+      // or filesystem errors. Re-wrap so the operator sees an audit-prefixed
+      // message instead of a raw Drizzle / fs error from deep in the stack.
+      throw new Error(
+        `[Audit] Failed to redact tool input for ${toolName} — approval cannot be recorded: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause: cause instanceof Error ? cause : undefined },
+      );
+    }
     // Clamp ttlMs to valid bounds (1s-24h) if provided
-    const clampedTtl = ttlMs != null
-      ? Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs))
-      : undefined;
+    const clampedTtl = ttlMs == null
+      ? undefined
+      : Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs));
     const record: CliApprovalRecord = {
       requestId,
       toolName,
-      toolInput,
+      toolInputDigest: redacted.digest,
+      toolInputHash: redacted.hash,
+      toolInputDetail: env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT ? redacted.detail : undefined,
       riskLevel,
       riskScore,
       irreversible,

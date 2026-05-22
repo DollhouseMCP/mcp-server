@@ -440,7 +440,7 @@ export class LocalAccountMethod implements IAuthMethod {
     }
 
     const sub = `${LOCAL_PROVIDER}_${username}`;
-    const check = this.options.rateLimiter.check(sub, ip);
+    const check = await this.options.rateLimiter.check(sub, ip);
     if (!check.allowed) {
       return { kind: 'denied', reason: check.reason ?? 'rate limited' };
     }

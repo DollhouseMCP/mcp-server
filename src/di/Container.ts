@@ -15,6 +15,7 @@ import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
 import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
+import type { AuditHmacResolver } from "../security/toolRedaction.js";
 import { SkillManager } from "../elements/skills/index.js";
 import { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
@@ -305,6 +306,12 @@ export class DollhouseContainer {
     // particular) so they can resolve the stores when their factories fire.
     const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
     await new StorageServiceRegistrar().bootstrapAndRegister(this);
+
+    // Post-DB security warmups. Must run AFTER DatabaseServiceRegistrar so
+    // probes can hit the real DB instead of silently falling back to file
+    // mode (which would skip the "existing audit data, retention is changing"
+    // operator warning on hosted deployments).
+    await new SecurityServiceRegistrar().runPostDbWarnings(this);
 
     // Auto-migrate legacy ~/.dollhouse/config.yml and keyfiles into the new
     // stores in DB mode on first startup. Idempotent via marker file; throws
@@ -606,7 +613,10 @@ export class DollhouseContainer {
       const cStore = this.resolve<IConfirmationStore>('ConfirmationStore');
       const gatekeeper = this.resolve<Gatekeeper>('gatekeeper');
       const stdioSess = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
-      const stdioGkSession = new GatekeeperSession(undefined, 100, undefined, cStore, stdioSess.sessionId);
+      const stdioAuditResolver = this.hasRegistration('AuditHmacResolver')
+        ? this.resolve<AuditHmacResolver>('AuditHmacResolver')
+        : undefined;
+      const stdioGkSession = new GatekeeperSession(undefined, 100, undefined, cStore, stdioSess.sessionId, stdioAuditResolver);
       await stdioGkSession.initialize(); // Restores persisted confirmations from disk
       gatekeeper.registerSession(stdioSess.sessionId, stdioGkSession);
     } catch (error) {
@@ -772,7 +782,7 @@ export class DollhouseContainer {
   private async deferredPatternEncryption(timer?: StartupTimer): Promise<void> {
     timer?.startPhase('pattern_encryption', false);
     try {
-      const patternEncryptor = this.resolve('PatternEncryptor') as PatternEncryptor;
+      const patternEncryptor = this.resolve<PatternEncryptor>('PatternEncryptor');
       await patternEncryptor.initialize();
       logger.info("Pattern encryption initialized");
     } catch (error) {
@@ -784,7 +794,7 @@ export class DollhouseContainer {
   private async deferredBackgroundValidator(timer?: StartupTimer): Promise<void> {
     timer?.startPhase('background_validator', false);
     try {
-      const backgroundValidator = this.resolve('BackgroundValidator') as any;
+      const backgroundValidator = this.resolve<{ start: () => void }>('BackgroundValidator');
       backgroundValidator.start();
       logger.info("Background validator started for memory security");
     } catch (error) {
@@ -1021,11 +1031,14 @@ export class DollhouseContainer {
     // Issue #679: allowElementPolicyOverrides wired from env (DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES)
     // Issue #1947: Gatekeeper with per-session resolution via ContextTracker
     const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+    const gatekeeperAuditResolver = this.hasRegistration('AuditHmacResolver')
+      ? this.resolve<AuditHmacResolver>('AuditHmacResolver')
+      : undefined;
     const gatekeeper = new Gatekeeper(undefined, {
       enableAuditLogging: true,
       requireDangerZoneVerification: true,
       allowElementPolicyOverrides: env.DOLLHOUSE_GATEKEEPER_ELEMENT_POLICY_OVERRIDES,
-    }, this.resolve<ContextTracker>('ContextTracker'), stdioSession.sessionId);
+    }, this.resolve<ContextTracker>('ContextTracker'), stdioSession.sessionId, gatekeeperAuditResolver);
 
     // Create MCPAQLHandler with all available handlers for full operation coverage (Issue #241)
     // Issue #301: Pass ContextTracker for request correlation metadata
@@ -1242,22 +1255,22 @@ export class DollhouseContainer {
       child.register('ActivationStore', () =>
         new DbActivation(db, httpUserId, sid));
       child.register('ConfirmationStore', () =>
-        new DbConfirmation(db, httpUserId, sid));
+        new DbConfirmation(db, httpUserId, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
         new DbChallenge(db, httpUserId, sid));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
-        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
     } else {
       child.register('ActivationStore', () =>
         new FileActivationStateStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('ConfirmationStore', () =>
-        new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid));
+        new FileConfirmationStore(this.resolve('FileOperationsService'), userStateDir, sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
       child.register('ChallengeStore', () =>
         new FileChallengeStore(this.resolve('FileOperationsService'), userStateDir, sid));
       child.register('VerificationStore', () => child.resolve('ChallengeStore'));
       child.register('GatekeeperSession', () =>
-        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid));
+        new GatekeeperSession(undefined, 100, undefined, child.resolve('ConfirmationStore'), sid, (this.hasRegistration('AuditHmacResolver') ? this.resolve<AuditHmacResolver>('AuditHmacResolver') : undefined)));
 
       child.register('AgentStateStore', () => new FileAgentStateStore({
         stateDir: path.join(userPortfolioDir, ElementType.AGENT, '.state'),
@@ -1897,15 +1910,15 @@ export class DollhouseContainer {
     try {
       const collectionCache = this.resolve<CollectionCache>('CollectionCache');
       const isCacheValid = await collectionCache.isCacheValid();
-      if (!isCacheValid) {
+      if (isCacheValid) {
+        const stats = await collectionCache.getCacheStats();
+        logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
+      } else {
         logger.info("Initializing collection cache with seed data...");
         const { CollectionSeeder } = await import("../collection/CollectionSeeder.js");
         const seedData = CollectionSeeder.getSeedData();
         await collectionCache.saveCache(seedData);
         logger.info(`Collection cache initialized with ${seedData.length} items`);
-      } else {
-        const stats = await collectionCache.getCacheStats();
-        logger.debug(`Collection cache already valid with ${stats.itemCount} items`);
       }
     } catch (error) {
       ErrorHandler.logError("DollhouseContainer.initializeCollectionCache", error);

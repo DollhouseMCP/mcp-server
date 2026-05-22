@@ -27,6 +27,7 @@ import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalA
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
   CookieJar,
@@ -78,7 +79,7 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
   beforeEach(async () => {
     storage = new InMemoryAuthStorageLayer();
     const invites = new InviteTokenStore(randomBytes(32), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     method = new LocalAccountMethod({ storage, invites, rateLimiter });
     harness = await startASHarness({ methods: [method], storage });
   });

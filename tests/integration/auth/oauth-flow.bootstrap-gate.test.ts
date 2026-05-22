@@ -25,6 +25,7 @@ import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.j
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
   startAuthorizeFlow,
@@ -45,7 +46,7 @@ async function fetchAuthServerMetadata(baseUrl: string) {
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
   const invites = new InviteTokenStore(randomBytes(32), storage);
-  const rateLimiter = new LocalLoginRateLimiter({ storage });
+  const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
   return new LocalAccountMethod({ storage, invites, rateLimiter });
 }
 

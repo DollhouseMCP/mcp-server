@@ -55,7 +55,7 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { classifyTool, evaluateCliToolPolicy, assessRisk } from './policies/ToolClassification.js';
 import type { CliApprovalScope, CliApprovalPolicy } from './GatekeeperTypes.js';
-import { RateLimiterFactory } from '../../utils/RateLimiter.js';
+import { RateLimiterFactory, type RateLimiter, type RateLimitStatus } from '../../utils/RateLimiter.js';
 import { env } from '../../config/env.js';
 import { STORAGE_LAYER_CONFIG } from '../../config/performance-constants.js';
 import type { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
@@ -356,6 +356,23 @@ const DEADLOCK_RELIEF_TIMEOUT_MS = 5 * 60 * 1000;
 const DEADLOCK_RELIEF_DIALOG_REASON =
   'Deadlock relief requested.\n\nThis will deactivate all active elements for the current session and clear persisted activation state.';
 
+/** SecurityMonitor source string for the verify dispatch path (used 7 times). */
+const VERIFY_SOURCE = 'MCPAQLHandler.dispatchGatekeeper.verify';
+
+/**
+ * Pick the final allow/deny verdict from the policy + tool-classification
+ * pair. Extracted so the call site stays a single-line ternary instead of
+ * a nested ternary.
+ */
+function resolveFinalBehavior(
+  policyBehavior: string | undefined,
+  toolBehavior: string,
+): 'deny' | 'allow' {
+  if (policyBehavior === 'deny') return 'deny';
+  if (toolBehavior === 'deny') return 'deny';
+  return 'allow';
+}
+
 /**
  * Global rate limiter for verification attempts.
  * Tracks failed attempts within a sliding window to prevent brute-force attacks.
@@ -588,15 +605,15 @@ export class MCPAQLHandler {
    */
   private readonly saveFrequencyCounters = new Map<string, { timestamps: number[]; warned: boolean; critical: boolean }>();
   /** Issue #1947: Per-session rate limiters (prevents cross-session rate limit exhaustion) */
-  private readonly permissionPromptLimiters = new Map<string, import('../../utils/RateLimiter.js').RateLimiter>();
-  private readonly cliApprovalLimiters = new Map<string, import('../../utils/RateLimiter.js').RateLimiter>();
+  private readonly permissionPromptLimiters = new Map<string, RateLimiter>();
+  private readonly cliApprovalLimiters = new Map<string, RateLimiter>();
   /**
    * Build a standardized rate-limit deny response for permission_prompt.
    */
   private buildRateLimitDeny(
     limiterName: string,
     toolName: string,
-    status: import('../../utils/RateLimiter.js').RateLimitStatus,
+    status: RateLimitStatus,
     riskLevel = 'blocked',
     reason = 'Rate limit exceeded',
   ): Record<string, unknown> {
@@ -719,14 +736,14 @@ export class MCPAQLHandler {
     return this.resolveSessionScoped(this.verificationRateLimiters, () => new VerificationRateLimiter());
   }
 
-  private resolvePermissionPromptLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
+  private resolvePermissionPromptLimiter(): RateLimiter {
     return this.resolveSessionScoped(this.permissionPromptLimiters, () =>
       RateLimiterFactory.createPermissionPromptLimiter(
         env.DOLLHOUSE_PERMISSION_PROMPT_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
       ));
   }
 
-  private resolveCliApprovalLimiter(): import('../../utils/RateLimiter.js').RateLimiter {
+  private resolveCliApprovalLimiter(): RateLimiter {
     return this.resolveSessionScoped(this.cliApprovalLimiters, () =>
       RateLimiterFactory.createCliApprovalLimiter(
         env.DOLLHOUSE_CLI_APPROVAL_RATE_LIMIT, env.DOLLHOUSE_PERMISSION_RATE_WINDOW_MS
@@ -1123,7 +1140,7 @@ export class MCPAQLHandler {
           decision.permissionLevel === PermissionLevel.AUTO_APPROVE &&
           params
         ) {
-          const inputObj = (params as Record<string, unknown>).input as Record<string, unknown> | undefined;
+          const inputObj = params.input as Record<string, unknown> | undefined;
           const hasGatekeeperField =
             inputObj?.gatekeeper !== undefined ||
             (inputObj?.metadata as Record<string, unknown> | undefined)?.gatekeeper !== undefined;
@@ -1134,9 +1151,10 @@ export class MCPAQLHandler {
               elementType,
               policySource: decision.policySource,
             });
+            const elementTypeFragment = elementType ? `, element_type: "${elementType}"` : '';
             return this.failure(
               `Editing gatekeeper policies requires explicit user confirmation and cannot be auto-approved by element policies. ` +
-              `Use confirm_operation with params { operation: "edit_element"${elementType ? `, element_type: "${elementType}"` : ''} } to approve, then retry.`,
+              `Use confirm_operation with params { operation: "edit_element"${elementTypeFragment} } to approve, then retry.`,
               startTime
             );
           }
@@ -1181,7 +1199,7 @@ export class MCPAQLHandler {
             endpoint,
             operation,
             elementType,
-            parameterKeys: params ? Object.keys(params as Record<string, unknown>) : [],
+            parameterKeys: params ? Object.keys(params) : [],
           }
         });
       }
@@ -1476,7 +1494,7 @@ export class MCPAQLHandler {
           const elementsSource = p.elements || synonyms.reduce<unknown>(
             (found, syn) => found || p[syn], undefined
           );
-          if (elementsSource && (!metadata || !metadata.elements)) {
+          if (elementsSource && !metadata?.elements) {
             metadata = { ...metadata, elements: elementsSource };
           }
         }
@@ -1496,7 +1514,7 @@ export class MCPAQLHandler {
       case 'list':
         return handler.listElements(
           elementType || (p.type as string),
-          p as Record<string, unknown>
+          p
         );
 
       case 'get':
@@ -1854,17 +1872,17 @@ export class MCPAQLHandler {
         }
         // Memory.addEntry(content, tags?, metadata?)
         // Fix #387 Option D: Contextual error message guiding toward correct parameter
-        if (params.content === undefined || params.content === null || typeof params.content !== 'string' || (params.content as string).trim() === '') {
-          const hint = params.entry !== undefined
-            ? `You passed 'entry', but an entry is the full object (content + tags + metadata + timestamp). ` +
-              `Use 'content' to provide the text portion of the entry.`
-            : `The 'content' parameter is the text portion of the memory entry.`;
+        if (params.content === undefined || params.content === null || typeof params.content !== 'string' || params.content.trim() === '') {
+          const hint = params.entry === undefined
+            ? `The 'content' parameter is the text portion of the memory entry.`
+            : `You passed 'entry', but an entry is the full object (content + tags + metadata + timestamp). ` +
+              `Use 'content' to provide the text portion of the entry.`;
           throw new Error(
             `Missing required parameter 'content'. ${hint} ` +
             `Example: { operation: "addEntry", params: { element_name: "${memoryName}", content: "your text here", tags: ["optional"] } }`
           );
         }
-        const content = params.content as string;
+        const content = params.content;
         const tags = params.tags as string[] | undefined;
         const metadata = params.metadata as Record<string, unknown> | undefined;
         // Lost-update fix: if a debounced save is already pending for this
@@ -2193,10 +2211,8 @@ export class MCPAQLHandler {
           }
 
           // Check content match (if available)
-          if (element.content && typeof element.content === 'string') {
-            if (isSearchMatch(query, element.content as string)) {
-              matchedIn.push('content');
-            }
+          if (element.content && typeof element.content === 'string' && isSearchMatch(query, element.content)) {
+            matchedIn.push('content');
           }
 
           // If any matches found, add to results
@@ -2729,8 +2745,9 @@ export class MCPAQLHandler {
         // Issue #758: Check for advisory — confirm: ['confirm_operation'] on active elements.
         // Not enforced as a gate, but surfaced to the human for awareness.
         const advisoryElements = findConfirmAdvisoryElements(activeElements);
+        const advisoryList = advisoryElements.map(e => `${e.type} "${e.name}"`).join(', ');
         const advisoryNote = advisoryElements.length > 0
-          ? ` Note: ${advisoryElements.map(e => `${e.type} "${e.name}"`).join(', ')} request additional scrutiny for confirmations.`
+          ? ` Note: ${advisoryList} request additional scrutiny for confirmations.`
           : '';
 
         // Evaluate the TARGET operation's permission level with full element policies.
@@ -2812,7 +2829,7 @@ export class MCPAQLHandler {
         SecurityMonitor.logSecurityEvent({
           type: 'VERIFICATION_ATTEMPTED',
           severity: 'MEDIUM',
-          source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+          source: VERIFY_SOURCE,
           details: `Verification attempted for challenge ${challengeId}`,
           additionalData: { challengeId },
         });
@@ -2823,7 +2840,7 @@ export class MCPAQLHandler {
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
             severity: 'HIGH',
-            source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+            source: VERIFY_SOURCE,
             details: `Verification rate-limited: too many failed attempts (challenge: ${challengeId})`,
             additionalData: { challengeId, reason: 'rate_limited' },
           });
@@ -2842,7 +2859,7 @@ export class MCPAQLHandler {
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
             severity: 'HIGH',
-            source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+            source: VERIFY_SOURCE,
             details: `Verification rejected: invalid challenge_id format (${challengeId})`,
             additionalData: { challengeId, reason: 'invalid_format' },
           });
@@ -2867,7 +2884,7 @@ export class MCPAQLHandler {
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_EXPIRED',
             severity: 'HIGH',
-            source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+            source: VERIFY_SOURCE,
             details: `Verification failed: challenge ${challengeId} not found (expired, already used, or invalid)`,
             additionalData: { challengeId, reason: 'expired_or_not_found' },
           });
@@ -2914,7 +2931,7 @@ export class MCPAQLHandler {
           SecurityMonitor.logSecurityEvent({
             type: 'VERIFICATION_FAILED',
             severity: 'HIGH',
-            source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+            source: VERIFY_SOURCE,
             details: `Verification failed for challenge ${challengeId}: incorrect code`,
             additionalData: { challengeId, reason: 'wrong_code', rateLimitExceeded },
           });
@@ -2952,7 +2969,7 @@ export class MCPAQLHandler {
             SecurityMonitor.logSecurityEvent({
               type: 'VERIFICATION_SUCCEEDED',
               severity: 'MEDIUM',
-              source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+              source: VERIFY_SOURCE,
               details: `Verification succeeded: agent '${unblockedAgent}' unblocked (challenge: ${challengeId})`,
               additionalData: { challengeId, unblockedAgent },
             });
@@ -2969,7 +2986,7 @@ export class MCPAQLHandler {
         SecurityMonitor.logSecurityEvent({
           type: 'VERIFICATION_SUCCEEDED',
           severity: 'LOW',
-          source: 'MCPAQLHandler.dispatchGatekeeper.verify',
+          source: VERIFY_SOURCE,
           details: `Verification succeeded but no blocked agent found for challenge ${challengeId}`,
           additionalData: { challengeId },
         });
@@ -3177,7 +3194,7 @@ export class MCPAQLHandler {
 
           const approvalPolicy = resolveCliApprovalPolicy(activeElements);
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
-          const requestId = this.gatekeeper.createCliApprovalRequest(
+          const requestId = await this.gatekeeper.createCliApprovalRequest(
             toolName,
             toolInput,
             classification.riskLevel,
@@ -3249,7 +3266,7 @@ export class MCPAQLHandler {
           this.resolveCliApprovalLimiter().consumeToken();
 
           const ttlMs = approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined;
-          const requestId = this.gatekeeper.createCliApprovalRequest(
+          const requestId = await this.gatekeeper.createCliApprovalRequest(
             toolName,
             toolInput,
             classification.riskLevel,
@@ -3367,8 +3384,7 @@ export class MCPAQLHandler {
               message: policyResult.message,
               policyContext: policyResult.policyContext,
             } : undefined,
-            finalBehavior: policyResult?.behavior === 'deny' ? 'deny'
-              : toolClassification.behavior === 'deny' ? 'deny' : 'allow',
+            finalBehavior: resolveFinalBehavior(policyResult?.behavior, toolClassification.behavior),
           };
         }
 
@@ -3685,9 +3701,9 @@ export class MCPAQLHandler {
       case 'submit_collection_content':
         return 'Submit a local element to the community collection';
       case 'clear':
-        return typeLabel !== 'element'
-          ? `Clear all ${typeLabel} data`
-          : 'Clear data';
+        return typeLabel === 'element'
+          ? 'Clear data'
+          : `Clear all ${typeLabel} data`;
       default: {
         // Fall back to operation description from schema, or formatted operation name
         // Include parameter keys so uncommon operations still provide useful context
@@ -3697,7 +3713,8 @@ export class MCPAQLHandler {
         if (schema?.description) {
           return `${schema.description}${paramHint}`;
         }
-        return `Perform operation: ${operation.replace(/_/g, ' ')}${paramHint}${elementType ? ` on ${elementType}` : ''}`;
+        const elementTypeNote = elementType ? ` on ${elementType}` : '';
+        return `Perform operation: ${operation.replaceAll('_', ' ')}${paramHint}${elementTypeNote}`;
       }
     }
   }
@@ -3828,10 +3845,11 @@ export class MCPAQLHandler {
 
         // Issue #447: Validate runtime maxAutonomousSteps override
         const runtimeMaxSteps = params.maxAutonomousSteps;
-        if (runtimeMaxSteps !== undefined) {
-          if (typeof runtimeMaxSteps !== 'number' || !Number.isInteger(runtimeMaxSteps) || runtimeMaxSteps < 0) {
-            throw new Error('maxAutonomousSteps must be a non-negative integer');
-          }
+        if (
+          runtimeMaxSteps !== undefined &&
+          (typeof runtimeMaxSteps !== 'number' || !Number.isInteger(runtimeMaxSteps) || runtimeMaxSteps < 0)
+        ) {
+          throw new Error('maxAutonomousSteps must be a non-negative integer');
         }
 
         // Issue #449: Track executing agent for Gatekeeper policy enforcement
@@ -3857,7 +3875,7 @@ export class MCPAQLHandler {
                 name: elementName,
                 metadata: {
                   ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
-                  ...(runtimeMaxSteps !== undefined ? { maxAutonomousSteps: runtimeMaxSteps } : {}),
+                  ...(runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps }),
                 },
                 startedAt: Date.now(),
                 continuationCount: 0,
@@ -3929,8 +3947,8 @@ export class MCPAQLHandler {
           outcome: params.outcome as 'success' | 'failure' | 'partial',
           findings: params.findings as string,
           confidence: params.confidence as number,
-          nextActionHint: nextActionHint as string | undefined,
-          riskScore: riskScore as number | undefined,
+          nextActionHint,
+          riskScore,
           maxStepsOverride,
         });
 
@@ -4071,7 +4089,7 @@ export class MCPAQLHandler {
         }
         const gatheredData = await manager.getGatheredData({
           agentName: elementName,
-          goalId: goalId as string,
+          goalId,
         });
         return { _type: 'GatheredData', ...gatheredData };
       }
@@ -4256,9 +4274,10 @@ export class MCPAQLHandler {
     if (executingAgent?.recentBlocks) {
       for (const block of executingAgent.recentBlocks) {
         if (!block.reported) {
+          const elementTypeSuffix = block.elementType ? `(${block.elementType})` : '';
           notifications.push({
             type: 'permission_pending',
-            message: `${block.operation}${block.elementType ? `(${block.elementType})` : ''} requires confirmation`,
+            message: `${block.operation}${elementTypeSuffix} requires confirmation`,
             metadata: {
               operation: block.operation,
               element_type: block.elementType,
@@ -4771,7 +4790,7 @@ function resolveCliApprovalPolicy(activeElements: ActiveElement[]): CliApprovalP
     if (envPolicy) {
       const levels = envPolicy.split(',').map(s => s.trim()).filter(s => s === 'moderate' || s === 'dangerous');
       for (const level of levels) {
-        requireApproval.add(level as 'moderate' | 'dangerous');
+        requireApproval.add(level);
       }
     }
   }
