@@ -334,6 +334,7 @@ Notes on this compose:
 - **dollhousemcp uses `expose:` not `ports:`.** Same reasoning — Caddy reaches it inside the docker network. Adding `ports:` lets clients bypass Caddy and TLS.
 - **Image pinning.** Replace `:latest` with a digest (`@sha256:…`) for production. `latest` is a moving target — pinning is how you sleep at night.
 - **`DOLLHOUSE_DATABASE_URL`** uses the `dollhouse_app` role (RLS-enforced), not `dollhouse` (superuser). The compose only creates the superuser. The first container start runs migrations as superuser (via `DOLLHOUSE_DATABASE_ADMIN_URL`), then `init-db.sql` creates the `dollhouse_app` role with `${POSTGRES_PASSWORD}`. See [A.7](#a7-bootstrap-the-database) for the bootstrap sequence.
+- **`DOLLHOUSE_DATABASE_ADMIN_URL` must point at a role with `BYPASSRLS` (or a superuser).** The audit-event, rate-limit, and audit-HMAC tables are configured with `FORCE ROW LEVEL SECURITY` and no permissive policy — they deny all reads/writes to non-bypass roles by design. System-context paths (`AuditHmacKeyResolver`, `PostgresRateLimitStore`, `DatabaseAuditSink`, the `dollhouse-audit` CLI) all route through this connection and will fail loudly if it's not privileged. The `dollhouse` superuser provisioned by `init-db.sql` satisfies this; a managed-host equivalent should use either a superuser or a role created with `WITH BYPASSRLS`.
 
 ### A.6 Register the GitHub OAuth app
 
@@ -736,6 +737,25 @@ Provider notes:
 Backups: managed providers handle this automatically (verify the retention policy + test restore). For self-hosted Postgres or in-compose Postgres, see [Ongoing operations → Backups](#ongoing-operations).
 
 ---
+
+## Audit log redaction
+
+CLI approval audit records store a redacted `toolInputDigest` and keyed `toolInputHash` by default. Raw tool parameters are not retained unless `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT=true` is set before the approval is written.
+
+Set `DOLLHOUSE_AUDIT_HMAC_SECRET=$(openssl rand -hex 32)` in hosted deployments so audit hashes remain stable across restarts and replicas. If unset, DollhouseMCP auto-generates and persists a key in the `audit_hmac_keys` table or `~/.dollhouse/secrets/audit-hmac-key`.
+
+Every stored hash is prefixed `keyId:hex`, where `keyId` is the `kid` of the `audit_hmac_keys` row that produced it (or `env` / `file` for those sources). **Never delete rows from `audit_hmac_keys`.** Rotated rows (`active = false`) are still needed to verify hashes on historical audit records — the operational cost is one indefinitely-retained 32-byte secret per rotation. Backups must cover this table for the same reason.
+
+**Rotation requires a process restart.** The audit HMAC resolver caches the resolved key material for the process lifetime, so rotating `DOLLHOUSE_AUDIT_HMAC_SECRET` or marking a new `audit_hmac_keys` row active does not take effect until the server is restarted. On startup the server logs `[Audit] Using audit HMAC key (source=db|file|env, kid=…)` once — use that line to confirm which key the running process is holding.
+
+Raw detail retrieval is CLI-only for this PR:
+
+```bash
+dollhouse-audit find <sessionId>
+dollhouse-audit show <sessionId> <approvalId>
+```
+
+`show` writes a durable `audit.raw_input_accessed` event before returning detail and a paired `audit.raw_input_access_result` event after — the second event's `metadata.found` field indicates whether data was actually returned. If raw retention was disabled for the requested record, the lookup returns `null` and `found` is `false`.
 
 ## Public endpoint allowlist
 

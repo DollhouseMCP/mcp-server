@@ -27,6 +27,7 @@ import { PatternDecryptor } from '../../security/encryption/PatternDecryptor.js'
 import { PatternExtractor } from '../../security/validation/PatternExtractor.js';
 import { BackgroundValidator } from '../../security/validation/BackgroundValidator.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { logger } from '../../utils/logger.js';
 import { SecurityTelemetry } from '../../security/telemetry/SecurityTelemetry.js';
 import { TokenManager } from '../../security/tokenManager.js';
 import type { ITokenStore } from '../../security/tokenStores/ITokenStore.js';
@@ -45,6 +46,11 @@ import { VerificationNotifier } from '../../services/VerificationNotifier.js';
 import { PortfolioManager, ElementType } from '../../portfolio/PortfolioManager.js';
 import type { MetadataService } from '../../services/MetadataService.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import path from 'node:path';
+import { AuditHmacKeyResolver } from '../../security/auditHmacKey.js';
+import type { AuditHmacResolver } from '../../security/toolRedaction.js';
+import { warnAuditRawInputDefaultIfNeeded } from '../../security/auditStartupWarning.js';
+import type { PathService } from '../../paths/PathService.js';
 
 export class SecurityServiceRegistrar {
   public register(container: DiContainerFacade): void {
@@ -126,16 +132,26 @@ export class SecurityServiceRegistrar {
 
     container.register('ConfirmationStore', () => {
       const session = container.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+      const resolver = container.hasRegistration('AuditHmacResolver')
+        ? container.resolve<AuditHmacResolver>('AuditHmacResolver')
+        : undefined;
       if (container.hasRegistration('DatabaseInstance')) {
         const db = container.resolve<DatabaseInstance>('DatabaseInstance');
         const userId = container.resolve<string>('CurrentUserId');
         const DbStore = container.resolve<typeof DatabaseConfirmationStore>('DatabaseConfirmationStoreClass');
-        return new DbStore(db, userId, session.sessionId);
+        return new DbStore(db, userId, session.sessionId, resolver);
       }
+      // Resolve state dir via PathService so the file store lands on the
+      // platform-correct path (XDG / Library / LOCALAPPDATA) instead of
+      // the legacy hardcoded ~/.dollhouse/state. PathService is registered
+      // by PathsServiceRegistrar during preparePortfolio(), which runs
+      // before any consumer resolves 'ConfirmationStore'.
+      const pathService = container.resolve<PathService>('PathService');
       return new FileConfirmationStore(
         container.resolve('FileOperationsService'),
-        undefined,
-        session.sessionId
+        pathService.resolveDataDir('state'),
+        session.sessionId,
+        resolver
       );
     });
 
@@ -158,6 +174,31 @@ export class SecurityServiceRegistrar {
     // Issue #522: Non-blocking OS dialog notifier for verification codes
     container.register('VerificationNotifier', () => new VerificationNotifier());
 
+    // Audit HMAC resolver — process-wide singleton, lazy factory.
+    // SecurityServiceRegistrar runs synchronously during the initial
+    // registerServices() pass, before preparePortfolio() bootstraps the
+    // database registrar. Constructing the resolver here would capture
+    // an undefined database and silently route DB-mode deployments
+    // through the file backend. The factory below defers the DB lookup
+    // to first resolve(); the container's default singleton behavior
+    // ensures the factory runs exactly once.
+    container.register('AuditHmacResolver', () => {
+      const pathService = container.resolve<PathService>('PathService');
+      return new AuditHmacKeyResolver({
+        database: container.hasRegistration('SystemDatabaseInstance')
+          ? container.resolve<DatabaseInstance>('SystemDatabaseInstance')
+          : undefined,
+        // File-mode key path resolved via PathService so it follows the
+        // same legacyRoot / DOLLHOUSE_STATE_DIR overrides the rest of
+        // the system honors.
+        rootDir: path.join(pathService.resolveDataDir('state'), 'secrets', 'audit-hmac-key'),
+      });
+    });
+
+    // The audit-retention startup warning probes the same DB and must
+    // also wait for the DB registration. Fired from runPostDbWarnings()
+    // which Container.preparePortfolio() invokes once the DB is up.
+
     // Eager wiring — must come AFTER all dependencies above are registered.
     // MetadataService is from CoreInfraServiceRegistrar (runs before this registrar).
     // ContextTracker and SessionActivationRegistry are registered above in this method.
@@ -168,5 +209,33 @@ export class SecurityServiceRegistrar {
     );
 
     ContentValidator.configureTelemetryResolver(() => container.resolve('SecurityTelemetry'));
+  }
+
+  /**
+   * Post-DB security warmups. Called after the database registrar has
+   * bootstrapped so `SystemDatabaseInstance` is resolvable for the audit
+   * retention probe. Safe in file-mode deployments — the probe falls
+   * back to scanning the per-session state files.
+   */
+  public async runPostDbWarnings(container: DiContainerFacade): Promise<void> {
+    try {
+      // PathService is registered by PathsServiceRegistrar earlier in
+      // preparePortfolio(), so the probe can scan the platform-correct
+      // state dir instead of falling through to the hardcoded default.
+      const pathService = container.resolve<PathService>('PathService');
+      await warnAuditRawInputDefaultIfNeeded({
+        database: container.hasRegistration('SystemDatabaseInstance')
+          ? container.resolve<DatabaseInstance>('SystemDatabaseInstance')
+          : undefined,
+        stateDir: pathService.resolveDataDir('state'),
+      });
+    } catch (err) {
+      // The warning is best-effort — a probe failure must not abort startup,
+      // but the cause is worth keeping at debug level so an operator who
+      // chases "why didn't I see the audit retention warning?" has a trail.
+      logger.debug('[SecurityServiceRegistrar] runPostDbWarnings probe failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 }

@@ -141,6 +141,27 @@
       "when": 1778970000000,
       "tag": "0019_auth_allowlist",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1778975000000,
+      "tag": "0020_rate_limit_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1778980000000,
+      "tag": "0021_security_audit_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1778985000000,
+      "tag": "0022_audit_hmac_keys",
+      "breakpoints": true
     }
   ]
 }

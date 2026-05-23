@@ -22,6 +22,7 @@ import {
 } from '../../../src/auth/embedded-as/methods/MagicLinkMethod.js';
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
   CookieJar,
@@ -113,6 +114,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       // Drop the timing floor to keep the suite fast; the timing-equivalence
       // assertion uses the production default and lives in MagicLinkMethod.test.ts.
       requestResponseFloorMs: 0,
+      rateLimitStore: new InMemoryRateLimitStore(),
     });
     harness = await startASHarness({
       methods: [method],
@@ -335,6 +337,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       storage, invites, emailSender,
       verifyUrl: `${publicBaseUrl}/auth/email/verify`,
       requestResponseFloorMs: 0,
+      rateLimitStore: new InMemoryRateLimitStore(),
     });
     harness = await startASHarness({
       methods: [method], storage, publicBaseUrl, port,

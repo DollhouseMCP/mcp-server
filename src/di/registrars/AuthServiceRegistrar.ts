@@ -37,6 +37,9 @@ export class AuthServiceRegistrar {
     const { createAuthProvider } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
     const { createSigningKeyStore } = await import('../../storage/signingKeys/createSigningKeyStore.js');
+    const { InMemoryRateLimitStore } = await import('../../auth/embedded-as/storage/InMemoryRateLimitStore.js');
+    const { PostgresRateLimitStore } = await import('../../auth/embedded-as/storage/PostgresRateLimitStore.js');
+    type IRateLimitStore = import('../../auth/embedded-as/storage/IRateLimitStore.js').IRateLimitStore;
 
     // Pull DatabaseInstance from the container if it has one. Required
     // when DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; the Postgres backend's
@@ -60,6 +63,16 @@ export class AuthServiceRegistrar {
     // surface. Registering early keeps Phase I a localized change.
     const signingKeyStore = await createSigningKeyStore({ database });
     container.register('SigningKeyStore', () => signingKeyStore);
+    let rateLimitStore: IRateLimitStore;
+    if (env.DOLLHOUSE_RATE_LIMIT_BACKEND === 'postgres') {
+      if (!database) {
+        throw new Error('DOLLHOUSE_RATE_LIMIT_BACKEND=postgres requires a DatabaseInstance');
+      }
+      rateLimitStore = new PostgresRateLimitStore(database);
+    } else {
+      rateLimitStore = new InMemoryRateLimitStore();
+    }
+    container.register('RateLimitStore', () => rateLimitStore);
 
     // Phase 4.5 / Phase J: prune rotated signing keys older than 30 days
     // every 6 hours. Without this, audit history accumulates unboundedly —
@@ -80,6 +93,13 @@ export class AuthServiceRegistrar {
           }
         },
         'signingKeyStore.pruneRotatedBefore',
+      );
+      lifecycle.registerPeriodicTask(
+        5 * 60 * 1000,
+        async () => {
+          await rateLimitStore.sweep();
+        },
+        'rateLimitStore.sweep',
       );
     }
 
@@ -107,6 +127,7 @@ export class AuthServiceRegistrar {
       // Phase 4.5: signing key store (filesystem or postgres backend
       // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
       signingKeyStore,
+      rateLimitStore,
       // PerformanceMonitor for auth-flow timing. Optional — when present,
       // each method's three IAuthMethod entry points (beginInteraction /
       // completeInteraction / findAccount) record per-call duration into

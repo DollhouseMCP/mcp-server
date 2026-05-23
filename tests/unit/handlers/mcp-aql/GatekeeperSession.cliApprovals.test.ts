@@ -4,40 +4,59 @@
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
 import { GatekeeperSession } from '../../../../src/handlers/mcp-aql/GatekeeperSession.js';
+import type { CreateCliApprovalArgs } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
+
+const TOOL_BASH = 'Bash';
+const NPM_INSTALL = { command: 'npm install' };
+
+const dangerousArgs = (
+  toolName: string,
+  toolInput: Record<string, unknown> = {},
+  denyReason = 'test',
+  ttlMs?: number,
+): CreateCliApprovalArgs => ({
+  toolName, toolInput, riskLevel: 'dangerous', riskScore: 80, irreversible: false, denyReason, ttlMs,
+});
+
+const moderateArgs = (
+  toolName: string,
+  toolInput: Record<string, unknown> = {},
+  denyReason = 'test',
+): CreateCliApprovalArgs => ({
+  toolName, toolInput, riskLevel: 'moderate', riskScore: 40, irreversible: false, denyReason,
+});
 
 describe('GatekeeperSession CLI approval store', () => {
   let session: GatekeeperSession;
+  const auditResolver = new StaticAuditHmacKeyResolver('55'.repeat(32));
 
   beforeEach(() => {
-    session = new GatekeeperSession(undefined, 100, 50);
+    session = new GatekeeperSession(undefined, 100, 50, undefined, undefined, auditResolver);
   });
 
   describe('createCliApprovalRequest', () => {
-    it('should create a request with cli- prefixed UUID', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'dangerous command'
+    it('should create a request with cli- prefixed UUID', async () => {
+      const requestId = await session.createCliApprovalRequest(
+        dangerousArgs(TOOL_BASH, NPM_INSTALL, 'dangerous command'),
       );
       expect(requestId).toMatch(/^cli-[0-9a-f-]{36}$/);
     });
 
-    it('should store the request as pending', () => {
-      session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'dangerous command'
-      );
+    it('should store the request as pending', async () => {
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL, 'dangerous command'));
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
-      expect(pending[0].toolName).toBe('Bash');
+      expect(pending[0].toolName).toBe(TOOL_BASH);
       expect(pending[0].approvedAt).toBeUndefined();
     });
 
-    it('should evict oldest when at max capacity', () => {
+    it('should evict oldest when at max capacity', async () => {
       // Create session with max 3 CLI approvals
-      const smallSession = new GatekeeperSession(undefined, 100, 3);
+      const smallSession = new GatekeeperSession(undefined, 100, 3, undefined, undefined, auditResolver);
       const ids: string[] = [];
       for (let i = 0; i < 4; i++) {
-        ids.push(smallSession.createCliApprovalRequest(
-          `Tool${i}`, {}, 'moderate', 40, false, 'test'
-        ));
+        ids.push(await smallSession.createCliApprovalRequest(moderateArgs(`Tool${i}`)));
       }
       const pending = smallSession.getPendingCliApprovals();
       expect(pending).toHaveLength(3);
@@ -47,88 +66,74 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('approveCliRequest', () => {
-    it('should set approvedAt on approval', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should set approvedAt on approval', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       const record = session.approveCliRequest(requestId, 'single');
       expect(record).toBeDefined();
       expect(record!.approvedAt).toBeDefined();
     });
 
-    it('should return undefined for nonexistent request', () => {
+    it('should return undefined for nonexistent request', async () => {
       const record = session.approveCliRequest('cli-nonexistent', 'single');
       expect(record).toBeUndefined();
     });
 
-    it('should return undefined for already approved request', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should return undefined for already approved request', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
       const secondApproval = session.approveCliRequest(requestId, 'single');
       expect(secondApproval).toBeUndefined();
     });
 
-    it('should promote to session approvals for tool_session scope', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should promote to session approvals for tool_session scope', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'tool_session');
 
       // Should be findable via checkCliApproval for same tool
-      const found = session.checkCliApproval('Bash', { command: 'different command' });
+      const found = session.checkCliApproval(TOOL_BASH, { command: 'different command' });
       expect(found).toBeDefined();
       expect(found!.scope).toBe('tool_session');
     });
   });
 
   describe('checkCliApproval', () => {
-    it('should return and consume single-scope approvals', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should return and consume single-scope approvals', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
 
       // First check returns the approval
-      const first = session.checkCliApproval('Bash', { command: 'npm install' });
+      const first = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
       expect(first).toBeDefined();
       expect(first!.consumed).toBe(true);
 
       // Second check returns nothing (consumed)
-      const second = session.checkCliApproval('Bash', { command: 'npm install' });
+      const second = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
       expect(second).toBeUndefined();
     });
 
-    it('should return but preserve tool_session-scope approvals', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should return but preserve tool_session-scope approvals', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'tool_session');
 
       // Multiple checks should all succeed
-      const first = session.checkCliApproval('Bash', { command: 'npm install' });
+      const first = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
       expect(first).toBeDefined();
 
-      const second = session.checkCliApproval('Bash', { command: 'git push --force' });
+      const second = session.checkCliApproval(TOOL_BASH, { command: 'git push --force' });
       expect(second).toBeDefined();
 
-      const third = session.checkCliApproval('Bash', {});
+      const third = session.checkCliApproval(TOOL_BASH, {});
       expect(third).toBeDefined();
     });
 
-    it('should return undefined for unapproved requests', () => {
-      session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
-      const result = session.checkCliApproval('Bash', { command: 'npm install' });
+    it('should return undefined for unapproved requests', async () => {
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      const result = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
       expect(result).toBeUndefined();
     });
 
-    it('should not match different tool names', () => {
-      const requestId = session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should not match different tool names', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
 
       const result = session.checkCliApproval('Edit', { file_path: 'foo.ts' });
@@ -137,9 +142,9 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('getPendingCliApprovals', () => {
-    it('should return only unapproved records', () => {
-      const id1 = session.createCliApprovalRequest('Bash', {}, 'dangerous', 80, false, 'test');
-      session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+    it('should return only unapproved records', async () => {
+      const id1 = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH));
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
       session.approveCliRequest(id1, 'single');
 
       const pending = session.getPendingCliApprovals();
@@ -147,16 +152,14 @@ describe('GatekeeperSession CLI approval store', () => {
       expect(pending[0].toolName).toBe('Edit');
     });
 
-    it('should return empty array when no pending', () => {
+    it('should return empty array when no pending', async () => {
       expect(session.getPendingCliApprovals()).toHaveLength(0);
     });
   });
 
   describe('expiry', () => {
-    it('should expire stale unapproved requests', () => {
-      session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+    it('should expire stale unapproved requests', async () => {
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
 
       // Manually backdate the request
       const pending = session.getPendingCliApprovals();
@@ -166,7 +169,7 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 600_000).toISOString();
 
       // Creating a new request triggers lazy expiry
-      session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       // Original should be expired, only the new one remains
@@ -174,11 +177,9 @@ describe('GatekeeperSession CLI approval store', () => {
       expect(remaining[0].toolName).toBe('Edit');
     });
 
-    it('should use per-record ttlMs when set (Issue #644)', () => {
+    it('should use per-record ttlMs when set (Issue #644)', async () => {
       // Create a record with 60s TTL
-      session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test', undefined, 60_000
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL, 'test', 60_000));
 
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
@@ -188,18 +189,16 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 70_000).toISOString();
 
       // Trigger lazy expiry
-      session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       expect(remaining).toHaveLength(1);
       expect(remaining[0].toolName).toBe('Edit');
     });
 
-    it('should use default 300s TTL when ttlMs is not set (Issue #644)', () => {
+    it('should use default 300s TTL when ttlMs is not set (Issue #644)', async () => {
       // Create a record without TTL
-      session.createCliApprovalRequest(
-        'Bash', { command: 'npm install' }, 'dangerous', 80, false, 'test'
-      );
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
 
       const pending = session.getPendingCliApprovals();
       expect(pending).toHaveLength(1);
@@ -208,7 +207,7 @@ describe('GatekeeperSession CLI approval store', () => {
       (pending[0] as any).requestedAt = new Date(Date.now() - 200_000).toISOString();
 
       // Trigger lazy expiry
-      session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const remaining = session.getPendingCliApprovals();
       // Original should NOT be expired (200s < 300s default)
@@ -217,9 +216,9 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('summary', () => {
-    it('should include cliApprovalCount in summary', () => {
-      session.createCliApprovalRequest('Bash', {}, 'dangerous', 80, false, 'test');
-      session.createCliApprovalRequest('Edit', {}, 'moderate', 40, false, 'test');
+    it('should include cliApprovalCount in summary', async () => {
+      await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH));
+      await session.createCliApprovalRequest(moderateArgs('Edit'));
 
       const summary = session.getSummary();
       expect(summary.cliApprovalCount).toBe(2);
@@ -227,12 +226,12 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('permissionPromptActive (Issue #625 Phase 4)', () => {
-    it('should default to false', () => {
+    it('should default to false', async () => {
       expect(session.isPermissionPromptActive).toBe(false);
       expect(session.getSummary().permissionPromptActive).toBe(false);
     });
 
-    it('should be true after markPermissionPromptActive()', () => {
+    it('should be true after markPermissionPromptActive()', async () => {
       session.markPermissionPromptActive();
       expect(session.isPermissionPromptActive).toBe(true);
       expect(session.getSummary().permissionPromptActive).toBe(true);

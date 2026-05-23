@@ -1,0 +1,202 @@
+import { randomBytes } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+import { eq } from 'drizzle-orm';
+
+import { env } from '../config/env.js';
+import type { DatabaseInstance } from '../database/connection.js';
+import { withSystemContext } from '../database/admin.js';
+import { isUniqueViolation } from '../database/db-utils.js';
+import { auditHmacKeys } from '../database/schema/index.js';
+import { ensureDirectory } from '../paths/ensureDirectory.js';
+import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
+import { logger } from '../utils/logger.js';
+
+/**
+ * Resolved audit HMAC key material. `keyId` is the identifier embedded
+ * in the `keyId:hex` hash prefix and used to locate the secret on
+ * verification. For DB-mode keys it is the `kid` column value, so
+ * rotated keys remain verifiable as long as their row is retained.
+ * For file and env modes it is a stable label since those sources
+ * hold one secret at a time.
+ */
+export interface AuditHmacKeyMaterial {
+  keyId: string;
+  key: Buffer;
+}
+
+const ENV_KEY_ID = 'env';
+const FILE_KEY_ID = 'file';
+
+export class AuditHmacKeyResolver {
+  /**
+   * Process-lifetime cache of the resolved key material. The resolver is
+   * a DI singleton, so all consumers share this cache. Intentionally not
+   * invalidated at runtime — rotating `DOLLHOUSE_AUDIT_HMAC_SECRET` or
+   * inserting a new `audit_hmac_keys` row requires a process restart.
+   */
+  private cached?: AuditHmacKeyMaterial;
+
+  /**
+   * In-flight resolve promise. Coalesces concurrent first-resolves onto
+   * one async chain so two parallel callers don't each enter
+   * resolveFromFile (which would each call randomBytes + writeFile and
+   * leave divergent keys on disk vs. in memory).
+   */
+  private pending?: Promise<AuditHmacKeyMaterial>;
+
+  constructor(private readonly options: { database?: DatabaseInstance; rootDir?: string } = {}) {}
+
+  async resolve(): Promise<AuditHmacKeyMaterial> {
+    if (this.cached) return this.cached;
+    if (this.pending) return this.pending;
+    this.pending = this.doResolve().finally(() => {
+      this.pending = undefined;
+    });
+    return this.pending;
+  }
+
+  private async doResolve(): Promise<AuditHmacKeyMaterial> {
+    if (env.DOLLHOUSE_AUDIT_HMAC_SECRET) {
+      this.cached = { keyId: ENV_KEY_ID, key: parseHexSecret(env.DOLLHOUSE_AUDIT_HMAC_SECRET) };
+      logger.info(`[Audit] Using audit HMAC key (source=env, kid=${ENV_KEY_ID})`);
+      return this.cached;
+    }
+    const source = this.options.database ? 'db' : 'file';
+    const material = this.options.database
+      ? await this.resolveFromDatabase(this.options.database)
+      : await this.resolveFromFile();
+    this.cached = material;
+    // One-time log so operators can confirm which key the running process
+    // is using. After this, the cache short-circuits resolve() and no
+    // further logging happens.
+    logger.info(`[Audit] Using audit HMAC key (source=${source}, kid=${material.keyId})`);
+    return material;
+  }
+
+  private async resolveFromDatabase(database: DatabaseInstance): Promise<AuditHmacKeyMaterial> {
+    const existing = await readActiveKey(database);
+    if (existing) return existing;
+
+    const kid = `audit-hmac-${Date.now()}`;
+    const key = randomBytes(32);
+    try {
+      await withSystemContext(database, (tx) =>
+        tx.insert(auditHmacKeys).values({
+          kid,
+          secret: key.toString('base64'),
+          active: true,
+          createdAt: new Date(),
+        }),
+      );
+      logger.warn(`[Audit] Auto-generated audit HMAC key persisted to audit_hmac_keys (kid=${kid}). Set DOLLHOUSE_AUDIT_HMAC_SECRET explicitly for stable rotation.`);
+      return { keyId: kid, key };
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      // Another process inserted concurrently. The partial unique index
+      // on active=TRUE serialised the race; re-read the winner.
+      const winner = await readActiveKey(database);
+      if (winner) return winner;
+      throw new Error('audit_hmac_keys: failed to acquire active key after unique-violation conflict');
+    }
+  }
+
+  private async resolveFromFile(): Promise<AuditHmacKeyMaterial> {
+    // `rootDir` here is the full path to the key FILE, not a directory.
+    // Callers (SecurityServiceRegistrar, dollhouse-audit CLI) compute it
+    // via PathService / resolveDataDirectory and pass it explicitly. The
+    // fallback uses resolveDataDirectory directly so tests and ad-hoc
+    // construction still land on the platform-correct state dir.
+    const root = this.options.rootDir ?? path.join(resolveDataDirectory('state'), 'secrets', 'audit-hmac-key');
+    try {
+      const raw = await fs.readFile(root, 'utf8');
+      // Validate file content via parseHexSecret. Empty or non-hex content
+      // would otherwise yield a zero-byte buffer that createHmac accepts
+      // silently — every audit hash would collapse into one value space.
+      return { keyId: FILE_KEY_ID, key: parseHexSecret(raw.trim(), root) };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    const key = randomBytes(32);
+    await ensureDirectory(path.dirname(root), 0o700);
+    await fs.writeFile(root, key.toString('hex'), { mode: 0o600 });
+    await fs.chmod(root, 0o600);
+    logger.warn(`[Audit] Auto-generated audit HMAC key persisted to ${root}. Set DOLLHOUSE_AUDIT_HMAC_SECRET explicitly for stable rotation.`);
+    return { keyId: FILE_KEY_ID, key };
+  }
+}
+
+async function readActiveKey(database: DatabaseInstance): Promise<AuditHmacKeyMaterial | null> {
+  const rows = await withSystemContext(database, (tx) =>
+    tx.select().from(auditHmacKeys).where(eq(auditHmacKeys.active, true)).limit(1),
+  );
+  const row = rows[0];
+  if (!row || typeof row.secret !== 'string' || typeof row.kid !== 'string') return null;
+  const key = Buffer.from(row.secret, 'base64');
+  // Same length thresholds parseHexSecret enforces on env/file paths. An
+  // operator who manually inserts a rotation row with a truncated or empty
+  // `secret` would otherwise yield a silently weak buffer that createHmac
+  // accepts — every audit hash would collapse into one value space.
+  if (key.length < MIN_KEY_BYTES) {
+    throw new Error(
+      `audit_hmac_keys row kid=${row.kid} decodes to ${key.length} bytes; ` +
+      `expected at least ${MIN_KEY_BYTES}. Rotate or re-seed the active row.`,
+    );
+  }
+  if (key.length > MAX_KEY_BYTES) {
+    throw new Error(
+      `audit_hmac_keys row kid=${row.kid} decodes to ${key.length} bytes; ` +
+      `cap is ${MAX_KEY_BYTES}. Likely misconfigured row.`,
+    );
+  }
+  return { keyId: row.kid, key };
+}
+
+export class StaticAuditHmacKeyResolver {
+  private readonly key: Buffer;
+  private readonly keyId: string;
+
+  constructor(hexSecret: string, keyId = 'static') {
+    this.key = parseHexSecret(hexSecret);
+    this.keyId = keyId;
+  }
+
+  async resolve(): Promise<AuditHmacKeyMaterial> {
+    return { keyId: this.keyId, key: this.key };
+  }
+}
+
+/**
+ * Length thresholds applied uniformly to every secret source (env, file,
+ * and DB row). Centralised here so a future caller can't bypass the
+ * minimum by reading via a different path.
+ */
+const MIN_KEY_BYTES = 32;
+const MAX_KEY_BYTES = 128;
+
+/**
+ * Validate a candidate hex-encoded HMAC secret.
+ *
+ * `source` is included in error messages so a corrupt file path or env-var
+ * misconfig surfaces clearly. Caps the key length to prevent accidentally
+ * loading a huge file as a key (which would be both wasteful and a sign
+ * the file holds something else entirely — e.g. a backup that got
+ * accidentally renamed).
+ */
+function parseHexSecret(raw: string, source = 'DOLLHOUSE_AUDIT_HMAC_SECRET'): Buffer {
+  if (raw.length === 0) {
+    throw new Error(`${source} is empty; expected hex-encoded HMAC secret of at least ${MIN_KEY_BYTES} bytes`);
+  }
+  if (!/^[0-9a-f]+$/i.test(raw) || raw.length % 2 !== 0) {
+    throw new Error(`${source} must be hex-encoded (got non-hex characters or odd-length content)`);
+  }
+  const key = Buffer.from(raw, 'hex');
+  if (key.length < MIN_KEY_BYTES) {
+    throw new Error(`${source} must decode to at least ${MIN_KEY_BYTES} bytes (got ${key.length})`);
+  }
+  if (key.length > MAX_KEY_BYTES) {
+    throw new Error(`${source} decodes to ${key.length} bytes — cap is ${MAX_KEY_BYTES}. Likely misconfigured (key file contains wrong content?)`);
+  }
+  return key;
+}

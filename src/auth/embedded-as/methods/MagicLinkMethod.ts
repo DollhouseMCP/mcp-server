@@ -40,6 +40,7 @@ import type {
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
 import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
+import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
@@ -49,18 +50,6 @@ const PROVIDER_NAME = 'magic-link' as const;
 const REQUEST_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const REQUEST_RATE_LIMIT_PER_EMAIL = 3;
 const REQUEST_RATE_LIMIT_PER_IP = 5;
-/**
- * Bound the rate-limit Maps to prevent memory-exhaustion DoS via flooding
- * with unique emails / IPs. When a Map grows past the cap we drop the
- * oldest tracked entry — the rate-limited keys (those at-or-past the
- * limit) survive eviction longer because they're touched more recently
- * by repeated incoming requests.
- *
- * 10k matches LocalLoginRateLimiter's MAX_TRACKED_* — same shape, same
- * memory budget. Phase 5 H10 migrates this state to IAuthStorageLayer
- * for multi-instance correctness; until then it's process-local.
- */
-const MAX_TRACKED_REQUEST_BUCKETS = 10_000;
 /**
  * Floor for /auth/email/request response time (must-fix #2). Total
  * handle time pads up to this floor before returning, so an observer
@@ -110,6 +99,12 @@ export interface MagicLinkMethodOptions {
    * rules.
    */
   allowlistRequired?: boolean;
+  /**
+   * Shared rate-limit state store. Required — no implicit in-memory fallback.
+   * The DI registrar threads in the same store instance used by
+   * LocalLoginRateLimiter so per-method limits share a single backend.
+   */
+  rateLimitStore: IRateLimitStore;
 }
 
 interface RequestRateBucket {
@@ -123,10 +118,10 @@ export class MagicLinkMethod implements IAuthMethod {
   readonly id = PROVIDER_NAME;
   readonly displayName = 'Email magic link';
 
-  private readonly perEmailRequests = new Map<string, RequestRateBucket>();
-  private readonly perIpRequests = new Map<string, RequestRateBucket>();
+  private readonly rateLimitStore: IRateLimitStore;
 
   constructor(private readonly options: MagicLinkMethodOptions) {
+    this.rateLimitStore = options.rateLimitStore;
     // Cycle-16 fix: enforce that requestResponseFloorMs is either 0
     // (test override only) or above a sensible production floor.
     // Without this, an operator (or misconfigured factory) could set
@@ -138,19 +133,6 @@ export class MagicLinkMethod implements IAuthMethod {
         `MagicLinkMethod.requestResponseFloorMs must be 0 (test override) ` +
         `or at least 100ms; got ${floor}. Defeating the timing floor lets an ` +
         `observer distinguish unknown emails from known emails.`,
-      );
-    }
-    // Cycle-16: surface the per-replica rate-limit caveat for magic-link
-    // at construction time. The Map-backed limiters reset on restart and
-    // don't share state across replicas; distributed limits are §8.2.
-    // Suppress when running under jest (NODE_ENV=test) so unit tests
-    // don't see a startup-warn spam pattern.
-    if (process.env.NODE_ENV !== 'test') {
-      logger.warn(
-        '[MagicLinkMethod] rate-limit state is process-local. The per-IP ' +
-        'and per-email request limits reset on restart and are per-replica ' +
-        'in multi-instance deployments. Distributed rate-limit backing is a ' +
-        '§8.2 follow-up.',
       );
     }
   }
@@ -399,9 +381,9 @@ export class MagicLinkMethod implements IAuthMethod {
    * distinguish the underlying state by latency. Floor is well above the
    * SMTP RTT variance and above the rate-limit-rejected (no-send) path.
    *
-   * Rate limit (must-fix #3): per-email and per-IP bounded buckets — see
-   * `noteRequestRate`. State is process-local; multi-instance migration
-   * to IAuthStorageLayer is Phase 5 H10.
+   * Rate limit (must-fix #3): per-email and per-IP buckets — see
+   * `noteRequestRate`. State is backed by the shared IRateLimitStore so
+   * Postgres deployments enforce limits across replicas.
    */
   private async handleRequestLink(
     form: Record<string, string>,
@@ -430,10 +412,10 @@ export class MagicLinkMethod implements IAuthMethod {
       // families. `LocalLoginRateLimiter` already does this; the gap
       // was that MagicLink used the raw IP. Now both share the helper
       // exported from rateLimit.ts.
-      const emailOk = await this.noteRequestRate(this.perEmailRequests, email, REQUEST_RATE_LIMIT_PER_EMAIL, 'email');
+      const emailOk = await this.noteRequestRate(email, REQUEST_RATE_LIMIT_PER_EMAIL, 'email');
       if (!emailOk) return generic();
       const normalizedIp = normalizeIp(ip);
-      const ipOk = await this.noteRequestRate(this.perIpRequests, normalizedIp, REQUEST_RATE_LIMIT_PER_IP, 'ip');
+      const ipOk = await this.noteRequestRate(normalizedIp, REQUEST_RATE_LIMIT_PER_IP, 'ip');
       if (!ipOk) return generic();
 
       // Issue token + send. Always issue and always attempt send so the
@@ -493,25 +475,31 @@ export class MagicLinkMethod implements IAuthMethod {
    * limiters. Mirrors the `LocalLoginRateLimiter` lock-aware bound.
    */
   private async noteRequestRate(
-    bucketMap: Map<string, RequestRateBucket>,
     key: string,
     limit: number,
     dimension: 'email' | 'ip',
   ): Promise<boolean> {
     const now = Date.now();
-    const bucket = bucketMap.get(key) ?? { count: 0, windowStart: now, alarmFired: false };
-    if (now - bucket.windowStart > REQUEST_RATE_LIMIT_WINDOW_MS) {
-      bucket.count = 0;
-      bucket.windowStart = now;
-      bucket.alarmFired = false;
+    const scope = dimension === 'email' ? 'magic_link_email' : 'magic_link_ip';
+    let update: { state: RequestRateBucket | null; result?: { event: 'limit_crossed' } };
+    try {
+      update = await this.rateLimitStore.update<RequestRateBucket, { event: 'limit_crossed' }>(
+        scope,
+        key,
+        (prev) => stepMagicLinkRequestState(prev, { now, limit }),
+        { expiresAt: now + REQUEST_RATE_LIMIT_WINDOW_MS * 2 },
+      );
+    } catch (err) {
+      logger.warn('[MagicLinkMethod] rate-limit store failed; suppressing send', {
+        scope,
+        keyHash: createHash('sha256').update(key).digest('base64url'),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
     }
-    if (bucket.count <= limit) bucket.count += 1;
-    bucketMap.set(key, bucket);
 
-    this.boundRequestMap(bucketMap, limit);
-
-    if (bucket.count > limit && !bucket.alarmFired) {
-      bucket.alarmFired = true;
+    const bucket = update.state;
+    if (bucket && update.result?.event === 'limit_crossed') {
       // Include the offending key in the audit event so an operator
       // chasing an abuse report can identify which email or IP tripped
       // the limit. The email dimension records its sha256 hash rather
@@ -532,29 +520,28 @@ export class MagicLinkMethod implements IAuthMethod {
       });
     }
 
-    return bucket.count <= limit;
+    return (bucket?.count ?? 0) <= limit;
   }
+}
 
-  /**
-   * Cap the rate-limit Map size. Pass 1 evicts entries below the limit
-   * (their lockout window has either expired or never fired). Pass 2 is
-   * a FIFO fallback only used at sustained saturation; preserving rate-
-   * limited entries is the security-meaningful invariant.
-   */
-  private boundRequestMap(bucketMap: Map<string, RequestRateBucket>, limit: number): void {
-    if (bucketMap.size <= MAX_TRACKED_REQUEST_BUCKETS) return;
-
-    for (const [key, rec] of bucketMap) {
-      if (bucketMap.size <= MAX_TRACKED_REQUEST_BUCKETS) return;
-      if (rec.count <= limit) bucketMap.delete(key);
-    }
-
-    while (bucketMap.size > MAX_TRACKED_REQUEST_BUCKETS) {
-      const oldest = bucketMap.keys().next().value;
-      if (oldest === undefined) break;
-      bucketMap.delete(oldest);
-    }
+function stepMagicLinkRequestState(
+  prev: RequestRateBucket | null,
+  ctx: { now: number; limit: number },
+): { state: RequestRateBucket; result?: { event: 'limit_crossed' } } {
+  const state = prev
+    ? { ...prev }
+    : { count: 0, windowStart: ctx.now, alarmFired: false };
+  if (ctx.now - state.windowStart > REQUEST_RATE_LIMIT_WINDOW_MS) {
+    state.count = 0;
+    state.windowStart = ctx.now;
+    state.alarmFired = false;
   }
+  if (state.count <= ctx.limit) state.count += 1;
+  if (state.count > ctx.limit && !state.alarmFired) {
+    state.alarmFired = true;
+    return { state, result: { event: 'limit_crossed' } };
+  }
+  return { state };
 }
 
 /**

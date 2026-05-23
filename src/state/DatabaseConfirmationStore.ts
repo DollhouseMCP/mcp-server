@@ -15,8 +15,14 @@
 
 import { logger } from '../utils/logger.js';
 import type { ConfirmationRecord, CliApprovalRecord } from '../handlers/mcp-aql/GatekeeperTypes.js';
+import { env } from '../config/env.js';
+import { normalizeCliApprovalRecord, type AuditHmacResolver } from '../security/toolRedaction.js';
 import type { DatabaseInstance } from '../database/connection.js';
-import type { IConfirmationStore } from './IConfirmationStore.js';
+import { withSystemContext } from '../database/admin.js';
+import { sessions } from '../database/schema/index.js';
+import { and, eq, type SQL } from 'drizzle-orm';
+import type { ApprovalRef, ApprovalSearchFilter, IConfirmationStore } from './IConfirmationStore.js';
+import { approvalMatches, toApprovalRef } from './approvalSearch.js';
 import {
   validateDbStoreParams,
   handleDbInitializeError,
@@ -29,6 +35,18 @@ import { PersistQueue } from './PersistQueue.js';
 // ── Constants ───────────────────────────────────────────────────────
 
 const STORE_NAME = 'DatabaseConfirmationStore';
+
+type PersistedCliApprovalRecord = CliApprovalRecord | (Omit<CliApprovalRecord, 'toolInputDigest' | 'toolInputHash'> & {
+  toolInput?: Record<string, unknown>;
+  toolInputDigest?: Record<string, unknown>;
+  toolInputHash?: string;
+});
+
+interface SessionApprovalRow {
+  userId: string;
+  sessionId: string;
+  cliApprovals: unknown;
+}
 
 // ── Implementation ──────────────────────────────────────────────────
 
@@ -44,11 +62,19 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
   private initialized = false;
   private readonly persistQueue: PersistQueue;
 
-  constructor(db: DatabaseInstance, userId: string, sessionId: string) {
+  private readonly auditHmacResolver?: AuditHmacResolver;
+
+  constructor(
+    db: DatabaseInstance,
+    userId: string,
+    sessionId: string,
+    auditHmacResolver?: AuditHmacResolver,
+  ) {
     validateDbStoreParams(userId, sessionId);
     this.db = db;
     this.userId = userId;
     this.sessionId = sessionId;
+    this.auditHmacResolver = auditHmacResolver;
     this.persistQueue = new PersistQueue({
       storeName: STORE_NAME,
       stateType: 'confirmation state',
@@ -72,8 +98,8 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
       this.cliSessionApprovals.clear();
 
       this.restoreConfirmations(row.confirmations as Array<[string, ConfirmationRecord]> | null);
-      this.restoreCliApprovals(row.cliApprovals as Array<[string, CliApprovalRecord]> | null);
-      this.restoreCliSessionApprovals(row.cliSessionApprovals as Array<[string, CliApprovalRecord]> | null);
+      await this.restoreCliApprovals(row.cliApprovals as Array<[string, PersistedCliApprovalRecord]> | null);
+      await this.restoreCliSessionApprovals(row.cliSessionApprovals as Array<[string, PersistedCliApprovalRecord]> | null);
 
       // Transient flag — do not restore from a previous crashed session
       this.permissionPromptActive = false;
@@ -147,6 +173,29 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
     return Array.from(this.cliSessionApprovals.values());
   }
 
+  async findApprovals(filter: ApprovalSearchFilter): Promise<ApprovalRef[]> {
+    const refs: ApprovalRef[] = [];
+    for (const row of await this.loadApprovalRows(filter)) {
+      const approvals = row.sessionId === this.sessionId
+        ? this.cliApprovals
+        : await normalizeApprovalEntries(row.cliApprovals, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver);
+      for (const [approvalId, record] of approvals) {
+        if (!approvalMatches(approvalId, record, filter)) continue;
+        refs.push(toApprovalRef(row.sessionId, approvalId, record));
+      }
+    }
+    return refs;
+  }
+
+  async getRawApprovalDetail(sessionId: string, approvalId: string): Promise<Record<string, unknown> | null> {
+    if (sessionId === this.sessionId) return this.cliApprovals.get(approvalId)?.toolInputDetail ?? null;
+    const rows = await this.loadApprovalRows({ sessionId, approvalId });
+    const row = rows.find(r => r.sessionId === sessionId);
+    if (!row) return null;
+    const approvals = await normalizeApprovalEntries(row.cliApprovals, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver);
+    return approvals.get(approvalId)?.toolInputDetail ?? null;
+  }
+
   // ── Permission Prompt Tracking ────────────────────────────────────
 
   savePermissionPromptActive(active: boolean): void {
@@ -174,7 +223,7 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
     }
   }
 
-  private restoreCliApprovals(entries: Array<[string, CliApprovalRecord]> | null): void {
+  private async restoreCliApprovals(entries: Array<[string, PersistedCliApprovalRecord]> | null): Promise<void> {
     if (!Array.isArray(entries)) return;
     const now = Date.now();
     for (const [requestId, record] of entries) {
@@ -182,15 +231,15 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
       const age = now - new Date(record.requestedAt).getTime();
       const ttl = record.ttlMs ?? 300_000;
       if (age > ttl && (!record.approvedAt || record.consumed)) continue;
-      this.cliApprovals.set(requestId, record);
+      this.cliApprovals.set(requestId, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
     }
   }
 
-  private restoreCliSessionApprovals(entries: Array<[string, CliApprovalRecord]> | null): void {
+  private async restoreCliSessionApprovals(entries: Array<[string, PersistedCliApprovalRecord]> | null): Promise<void> {
     if (!Array.isArray(entries)) return;
     for (const [toolName, record] of entries) {
       if (toolName && record) {
-        this.cliSessionApprovals.set(toolName, record);
+        this.cliSessionApprovals.set(toolName, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
       }
     }
   }
@@ -203,4 +252,67 @@ export class DatabaseConfirmationStore implements IConfirmationStore {
       permissionPromptActive: this.permissionPromptActive,
     });
   }
+
+  /**
+   * Loads candidate session rows for an approval search, applying the
+   * caller's userId/sessionId filters at the SQL layer. Time-range filters
+   * (after/before) stay in-memory because they live inside the cli_approvals
+   * JSONB blob and can't be filtered with a simple column predicate.
+   *
+   * Always bounded by APPROVAL_SEARCH_ROW_LIMIT to keep an unbounded admin
+   * call from pulling the entire sessions table across the wire. Callers
+   * hitting the cap should narrow the search; the CLI surfaces a warning.
+   */
+  private async loadApprovalRows(filter: ApprovalSearchFilter): Promise<SessionApprovalRow[]> {
+    const conditions: SQL[] = [];
+    if (filter.userId) conditions.push(eq(sessions.userId, filter.userId));
+    if (filter.sessionId) conditions.push(eq(sessions.sessionId, filter.sessionId));
+    let whereClause: SQL | undefined;
+    if (conditions.length === 1) whereClause = conditions[0];
+    else if (conditions.length > 1) whereClause = and(...conditions);
+
+    const rows = await withSystemContext(this.db, (tx) => {
+      // We only select cliApprovals (not cliSessionApprovals) because
+      // session-scoped approvals are runtime promotions tied to a live
+      // session and never survive its lifetime in audit-relevant form.
+      // The audit CLI investigates request-level approvals — the
+      // cliApprovals array is the persistent record of those.
+      const query = tx
+        .select({
+          userId: sessions.userId,
+          sessionId: sessions.sessionId,
+          cliApprovals: sessions.cliApprovals,
+        })
+        .from(sessions);
+      return (whereClause ? query.where(whereClause) : query).limit(APPROVAL_SEARCH_ROW_LIMIT);
+    });
+    return rows as SessionApprovalRow[];
+  }
 }
+
+/**
+ * Hard cap on rows pulled by an approval search. Picked to keep the admin
+ * CLI bounded even on a busy deployment without burying legitimate broad
+ * searches. Callers that hit the cap should narrow by userId or time.
+ *
+ * Exported so the CLI can detect "result count equals cap → may be
+ * truncated" and surface a warning to the operator.
+ */
+export const APPROVAL_SEARCH_ROW_LIMIT = 1000;
+
+async function normalizeApprovalEntries(
+  entries: unknown,
+  retainRaw: boolean,
+  resolver: AuditHmacResolver | undefined,
+): Promise<Map<string, CliApprovalRecord>> {
+  const approvals = new Map<string, CliApprovalRecord>();
+  if (!Array.isArray(entries)) return approvals;
+  for (const entry of entries) {
+    if (!Array.isArray(entry) || entry.length !== 2) continue;
+    const [approvalId, record] = entry as [string, PersistedCliApprovalRecord];
+    if (typeof approvalId !== 'string' || !record) continue;
+    approvals.set(approvalId, await normalizeCliApprovalRecord(record, retainRaw, resolver));
+  }
+  return approvals;
+}
+

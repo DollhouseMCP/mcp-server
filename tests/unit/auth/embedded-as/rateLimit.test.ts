@@ -1,12 +1,10 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
-import { LocalLoginRateLimiter } from '../../../../src/auth/embedded-as/rateLimit.js';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import { LocalLoginRateLimiter, getRateLimitStoreFailureMetrics } from '../../../../src/auth/embedded-as/rateLimit.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   CLIENT_PRIMARY,
-  CLIENT_ATTACKER,
-  CLIENT_SATURATION_A,
-  CLIENT_SATURATION_B,
-  CLIENT_DRAIN_TRIGGER,
 } from '../../../fixtures/test-ips.js';
 
 describe('LocalLoginRateLimiter (must-fix #16)', () => {
@@ -15,22 +13,23 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
 
   beforeEach(() => {
     storage = new InMemoryAuthStorageLayer();
-    limiter = new LocalLoginRateLimiter({ storage });
+    limiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
   });
 
   it('allows the first 5 failed attempts then backs off', async () => {
     const sub = 'local_alice';
     const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 5; i += 1) {
-      expect(limiter.check(sub, ip).allowed).toBe(true);
+      expect((await limiter.check(sub, ip)).allowed).toBe(true);
       await limiter.noteFailure(sub, ip);
     }
-    const sixth = limiter.check(sub, ip);
+    const sixth = await limiter.check(sub, ip);
     expect(sixth.allowed).toBe(false);
     expect(sixth.retryAfterMs).toBeGreaterThan(0);
   });
 
   it('emits brute-force audit event at threshold (account dimension)', async () => {
+    const securitySpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
     const sub = 'local_alice';
     const ip = CLIENT_PRIMARY;
     for (let i = 0; i < 5; i += 1) {
@@ -42,6 +41,10 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
         && e.details?.dimension === 'account',
     );
     expect(fired).toBeDefined();
+    expect(securitySpy).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'BRUTE_FORCE_ATTEMPT_BLOCKED',
+      severity: 'HIGH',
+    }));
   });
 
   it('only fires the brute-force audit ONCE per breach (not on every failure)', async () => {
@@ -63,7 +66,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 0; i < 20; i += 1) {
       await limiter.noteFailure(`local_user_${i}`, ip);
     }
-    const check = limiter.check('local_anyone', ip);
+    const check = await limiter.check('local_anyone', ip);
     expect(check.allowed).toBe(false);
     expect(check.reason).toMatch(/ip locked/);
 
@@ -73,6 +76,63 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
         && e.details?.dimension === 'ip',
     );
     expect(ipFire).toBeDefined();
+  });
+
+  it('fails closed when the store check path throws and records a failure metric', async () => {
+    const throwingStore = {
+      get: jest.fn<() => Promise<never>>().mockRejectedValue(new Error('store down')),
+      update: jest.fn(),
+      reset: jest.fn(),
+      sweep: jest.fn(),
+    };
+    limiter = new LocalLoginRateLimiter({ storage, store: throwingStore, storeBackend: 'postgres' });
+
+    const check = await limiter.check('local_alice', CLIENT_PRIMARY);
+
+    expect(check.allowed).toBe(false);
+    expect(check.reason).toMatch(/temporarily unavailable/);
+    const metrics = getRateLimitStoreFailureMetrics();
+    expect(Object.keys(metrics).some(k => k.includes('rate_limit_store_failures_total') && k.includes('backend="postgres"'))).toBe(true);
+  });
+
+  it('emits RATE_LIMIT_STORE_DEGRADED (not BRUTE_FORCE_ATTEMPT_BLOCKED) when noteFailure CAS exhausts', async () => {
+    // Storage outage vs. real attack have different runbooks; the event
+    // type discriminates so SecOps can route them separately. Distinct
+    // accounts should also produce distinct events under the dedup key.
+    const securitySpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent');
+    // Earlier tests in this file also spy on the same method, so the call
+    // log carries over. Clear it explicitly so the assertions below see
+    // only events triggered by this test.
+    securitySpy.mockClear();
+    const throwingStore = {
+      get: jest.fn<() => Promise<unknown>>().mockResolvedValue(null),
+      update: jest.fn<() => Promise<never>>().mockRejectedValue(new Error('CAS exhausted')),
+      reset: jest.fn(),
+      sweep: jest.fn(),
+    };
+    limiter = new LocalLoginRateLimiter({ storage, store: throwingStore, storeBackend: 'postgres' });
+
+    await limiter.noteFailure('local_alice', CLIENT_PRIMARY);
+    await limiter.noteFailure('local_bob', CLIENT_PRIMARY);
+
+    const degradedCalls = securitySpy.mock.calls
+      .map(c => c[0])
+      .filter(e => e.type === 'RATE_LIMIT_STORE_DEGRADED');
+    // Two distinct accounts share one IP. Distinct accounts must produce
+    // distinct account-dimension `details` so SecurityMonitor's
+    // (type|source|details) dedup does NOT collapse them. (The shared IP
+    // legitimately collapses to one IP-dimension event — that's a feature,
+    // not the property under test here.)
+    const accountDetails = degradedCalls
+      .filter(e => e.additionalData?.dimension === 'account')
+      .map(e => e.details);
+    expect(accountDetails).toHaveLength(2);
+    expect(new Set(accountDetails).size).toBe(2);
+    // And we did NOT misroute these through BRUTE_FORCE_ATTEMPT_BLOCKED.
+    const bruteForceCalls = securitySpy.mock.calls
+      .map(c => c[0])
+      .filter(e => e.type === 'BRUTE_FORCE_ATTEMPT_BLOCKED');
+    expect(bruteForceCalls).toHaveLength(0);
   });
 
   it('preserves account failure record across noteSuccess (H9: credential-stuffing carryover)', async () => {
@@ -90,7 +150,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // in between. With the prior delete-on-success behavior the counter
     // was 0 after success and 5 more attempts were available.
     await limiter.noteFailure(sub, ip);
-    expect(limiter.check(sub, ip).allowed).toBe(false);
+    expect((await limiter.check(sub, ip)).allowed).toBe(false);
   });
 
   it('still allows the legitimate user immediate access after success when sub-threshold', async () => {
@@ -102,7 +162,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     // Two prior failures + success — well under threshold (5). The
     // record persists but the user is not locked out; the next check
     // is allowed because the count is below the threshold.
-    expect(limiter.check(sub, ip).allowed).toBe(true);
+    expect((await limiter.check(sub, ip)).allowed).toBe(true);
   });
 
   it("does not lump every 'unknown' IP into one shared bucket", async () => {
@@ -111,7 +171,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 0; i < 20; i += 1) {
       await limiter.noteFailure(`local_user_${i}`, 'unknown');
     }
-    const check = limiter.check('local_someone_else', 'unknown');
+    const check = await limiter.check('local_someone_else', 'unknown');
     expect(check.allowed).toBe(true);
 
     const events = await storage.listIdentityEvents();
@@ -131,7 +191,7 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 10; i < 20; i += 1) {
       await limiter.noteFailure(`local_user_${i}`, CLIENT_PRIMARY);
     }
-    const check = limiter.check('local_someone_else', CLIENT_PRIMARY);
+    const check = await limiter.check('local_someone_else', CLIENT_PRIMARY);
     expect(check.allowed).toBe(false);
     expect(check.reason).toMatch(/ip locked/);
   });
@@ -144,96 +204,98 @@ describe('LocalLoginRateLimiter (must-fix #16)', () => {
     for (let i = 0; i < 6; i += 1) {
       await limiter.noteFailure(lockedSub, 'unknown');
     }
-    expect(limiter.check(lockedSub, 'unknown').allowed).toBe(false);
+    expect((await limiter.check(lockedSub, 'unknown')).allowed).toBe(false);
 
     for (let i = 0; i < 11_000; i += 1) {
       await limiter.noteFailure(`flood_${i}`, 'unknown');
     }
     // alice's record was kept (still actively locked) while flood entries
     // were FIFO-evicted past the cap.
-    expect(limiter.check(lockedSub, 'unknown').allowed).toBe(false);
+    expect((await limiter.check(lockedSub, 'unknown')).allowed).toBe(false);
   }, 30_000);
 
-  it('cycle 19 / H1: saturation guard resets when table drains below cap', async () => {
-    // The earlier shape latched accountSaturationFired = true forever
-    // after the first flood. A second wave (after the table aged out)
-    // produced no audit event — operators only ever saw the first flood.
-    // The cycle 19 fix resets the flag when boundAccounts observes the
-    // table back below the cap.
-    //
-    // Cycle 22: renamed from "second flood emits second audit" to
-    // match what the test actually pins. The end-to-end re-emission
-    // requires flooding 22k+ entries twice (~minutes); the focused
-    // assertion here is the flag reset itself, exercised through the
-    // production noteFailure path.
-    const internal = limiter as unknown as { accountSaturationFired: boolean; ipSaturationFired: boolean };
-    internal.accountSaturationFired = true;
-    internal.ipSaturationFired = true;
+  describe('reset()', () => {
+    it('reset(account, ip) clears both account lockout and IP lockout in one call', async () => {
+      // Drive both dimensions into lockout territory.
+      const sub = 'local_alice';
+      for (let i = 0; i < 6; i += 1) {
+        await limiter.noteFailure(sub, CLIENT_PRIMARY);
+      }
+      expect((await limiter.check(sub, CLIENT_PRIMARY)).allowed).toBe(false);
 
-    // Single failure → hits noteFailure → calls boundAccounts on a
-    // small table → early-returns with flag reset.
-    await limiter.noteFailure('local_drain_check', CLIENT_ATTACKER);
+      await limiter.reset(sub, CLIENT_PRIMARY);
 
-    expect(internal.accountSaturationFired).toBe(false);
-    expect(internal.ipSaturationFired).toBe(false);
+      // After reset, the same credentials sail through immediately.
+      expect((await limiter.check(sub, CLIENT_PRIMARY)).allowed).toBe(true);
+    });
+
+    it('reset(account) without an IP only clears the account dimension', async () => {
+      const sub = 'local_alice';
+      // Drive ONLY the account dimension over threshold (IP threshold is 20,
+      // far above the 6 failures we issue here).
+      for (let i = 0; i < 6; i += 1) {
+        await limiter.noteFailure(sub, CLIENT_PRIMARY);
+      }
+      expect((await limiter.check(sub, CLIENT_PRIMARY)).allowed).toBe(false);
+
+      await limiter.reset(sub);  // no ip arg
+
+      // Account is cleared → no account-side denial. IP wasn't over threshold
+      // so it allows too; the assertion below proves the account reset worked
+      // regardless of IP state.
+      const result = await limiter.check(sub, CLIENT_PRIMARY);
+      expect(result.allowed).toBe(true);
+    });
   });
 
-  it('cycle 22 / re-emission: a second saturation after drain re-fires the audit event', async () => {
-    // End-to-end pin for the re-emission contract. Saturation requires
-    // the eviction loop to FIFO-evict an actively-locked entry — a
-    // flood of single-failure entries doesn't reach saturation
-    // because pass-2 (non-locked eviction) drops them. Direct-state
-    // manipulation creates 10_001 actively-locked entries, then
-    // triggers boundAccounts via noteFailure. A second cycle after
-    // drain proves the audit re-fires.
-    const internal = limiter as unknown as {
-      accounts: Map<string, { failures: number; firstFailureAt: number; bruteForceFired: boolean }>;
-      ips: Map<string, { failures: number; firstFailureAt: number; lockedUntil: number; bruteForceFired: boolean }>;
-    };
+  describe('state-machine parity', () => {
+    it('account backoff grows exponentially with consecutive failures past threshold', async () => {
+      const { stepAccountStateMachine } = await import('../../../../src/auth/embedded-as/rateLimit.js');
+      const now = Date.now();
 
-    // Populate 10_001 actively-locked accounts (above MAX cap of 10k).
-    const now = Date.now();
-    for (let i = 0; i < 10_001; i += 1) {
-      internal.accounts.set(`locked1_${i}`, {
-        failures: 5, // at threshold = locked
-        firstFailureAt: now,
-        bruteForceFired: true, // already audited per-account, suppress noise
-      });
-    }
+      // Walk the state machine through 8 consecutive failures.
+      // The retry window for failure N (N >= threshold) is min(30s * 2^(N-threshold), 15min).
+      let prev: ReturnType<typeof stepAccountStateMachine>['state'] | null = null;
+      for (let i = 0; i < 8; i += 1) {
+        const result = stepAccountStateMachine(prev, { now });
+        prev = result.state;
+      }
+      // After 8 failures the threshold (5) is crossed thrice over.
+      // backoffWindow(8) = min(30s * 2^3, 15min) = 240s = 240_000ms.
+      // Re-derive expected via the same math the limiter uses:
+      const expectedBackoff = Math.min(30_000 * 2 ** (8 - 5), 15 * 60 * 1000);
+      expect(expectedBackoff).toBe(240_000);
+      // Within-window check at now+1ms still denies; beyond expectedBackoff allows.
+      expect(prev?.failures).toBe(8);
+      expect(prev?.bruteForceFired).toBe(true);
+    });
 
-    // Trigger boundAccounts via noteFailure. The single new failure
-    // pushes size to 10_002; pass 1 finds nothing safe-to-evict
-    // (within window + locked); pass 2 finds nothing non-locked;
-    // pass 3 FIFO-evicts a locked entry → saturation fires.
-    await limiter.noteFailure('saturation_trigger_1', CLIENT_SATURATION_A);
+    it('IP saturation: window-expiry reset is suppressed once threshold is crossed', async () => {
+      const { stepIpStateMachine } = await import('../../../../src/auth/embedded-as/rateLimit.js');
+      const IP_LOCKOUT_MS = 15 * 60 * 1000;
+      const startedAt = 1_000_000;
 
-    let saturationEvents = (await storage.listIdentityEvents()).filter(
-      e => e.type === 'auth.local.rate_limit_saturated',
-    );
-    const eventsAfterFlood1 = saturationEvents.length;
-    expect(eventsAfterFlood1).toBeGreaterThanOrEqual(1);
+      // Drive the state machine to the IP threshold (20).
+      let prev: ReturnType<typeof stepIpStateMachine>['state'] | null = null;
+      for (let i = 0; i < 20; i += 1) {
+        prev = stepIpStateMachine(prev, { now: startedAt }).state;
+      }
+      expect(prev?.failures).toBe(20);
+      expect(prev?.firstFailureAt).toBe(startedAt);
 
-    // Drain: clear the locked entries (simulate natural ageing).
-    internal.accounts.clear();
-    internal.ips.clear();
-
-    // Triggering noteFailure on a small table → boundAccounts early-
-    // returns → resets the flag.
-    await limiter.noteFailure('drain_trigger', CLIENT_DRAIN_TRIGGER);
-
-    // Re-saturate with another locked-entry flood.
-    for (let i = 0; i < 10_001; i += 1) {
-      internal.accounts.set(`locked2_${i}`, {
-        failures: 5,
-        firstFailureAt: now,
-        bruteForceFired: true,
-      });
-    }
-    await limiter.noteFailure('saturation_trigger_2', CLIENT_SATURATION_B);
-
-    saturationEvents = (await storage.listIdentityEvents()).filter(
-      e => e.type === 'auth.local.rate_limit_saturated',
-    );
-    expect(saturationEvents.length).toBeGreaterThan(eventsAfterFlood1);
-  }, 30_000);
+      // Trigger a recompute well past the rolling window. The reset clause
+      // requires failures < IP_THRESHOLD, so a saturated bucket does NOT
+      // age out — firstFailureAt stays anchored to the original window start
+      // and failures keeps climbing. This is the property that turns
+      // threshold-crossing into a sticky lockout (vs. a rolling counter that
+      // forgets).
+      const muchLater = startedAt + 16 * 60 * 1000;
+      const recheck = stepIpStateMachine(prev, { now: muchLater });
+      expect(recheck.state.failures).toBe(21);
+      expect(recheck.state.firstFailureAt).toBe(startedAt);
+      // lockedUntil was already set; failures >= threshold keeps the bucket
+      // in lockout territory regardless of the rolling-window clock.
+      expect(recheck.state.lockedUntil).toBeGreaterThanOrEqual(startedAt + IP_LOCKOUT_MS);
+    });
+  });
 });

@@ -32,6 +32,7 @@ import {
 import { setHttpModeActive } from '../../../src/index.js';
 import { EmbeddedAuthorizationServer } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { LocalAccountMethod } from '../../../src/auth/embedded-as/methods/LocalAccountMethod.js';
 import { LocalLoginRateLimiter } from '../../../src/auth/embedded-as/rateLimit.js';
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
@@ -165,7 +166,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
   it('multi-user pre-bootstrap → false; multi-user post-bootstrap → true', async () => {
     const storage = new InMemoryAuthStorageLayer();
     const invites = new InviteTokenStore(randomBytes(32), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
       publicBaseUrl: LOOPBACK_BASE_URL,
@@ -187,7 +188,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       return originalGet();
     };
     const invites = new InviteTokenStore(randomBytes(32), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
       publicBaseUrl: LOOPBACK_BASE_URL,
@@ -234,7 +235,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     try {
       const storage = new InMemoryAuthStorageLayer();
       const invites = new InviteTokenStore(randomBytes(32), storage);
-      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
       const method = new LocalAccountMethod({ storage, invites, rateLimiter });
       const as = new EmbeddedAuthorizationServer({
         publicBaseUrl: LOOPBACK_BASE_URL,
@@ -268,7 +269,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
     try {
       const storage = new InMemoryAuthStorageLayer();
       const invites = new InviteTokenStore(randomBytes(32), storage);
-      const rateLimiter = new LocalLoginRateLimiter({ storage });
+      const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
       const method = new LocalAccountMethod({ storage, invites, rateLimiter });
       const as = new EmbeddedAuthorizationServer({
         publicBaseUrl: LOOPBACK_BASE_URL,
@@ -295,7 +296,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
       throw new Error('simulated storage outage');
     };
     const invites = new InviteTokenStore(randomBytes(32), storage);
-    const rateLimiter = new LocalLoginRateLimiter({ storage });
+    const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });
     const as = new EmbeddedAuthorizationServer({
       publicBaseUrl: LOOPBACK_BASE_URL,

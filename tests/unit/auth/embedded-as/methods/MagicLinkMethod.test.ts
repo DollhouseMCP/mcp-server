@@ -7,6 +7,7 @@ import {
   type SendMagicLinkInput,
 } from '../../../../../src/auth/embedded-as/methods/MagicLinkMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { InviteTokenStore } from '../../../../../src/auth/embedded-as/inviteTokens.js';
 import {
   CLIENT_PRIMARY,
@@ -65,6 +66,7 @@ describe('MagicLinkMethod', () => {
       // Default suite uses 0ms floor for speed; the dedicated timing test
       // below builds its own MagicLinkMethod with the production default.
       requestResponseFloorMs: 0,
+      rateLimitStore: new InMemoryRateLimitStore(),
     });
   });
 
@@ -226,6 +228,7 @@ describe('MagicLinkMethod', () => {
         emailSender,
         verifyUrl: 'http://app/auth/email/verify', // NOSONAR — opaque test base URL
         requestResponseFloorMs: 100,
+        rateLimitStore: new InMemoryRateLimitStore(),
       });
 
       const t0 = Date.now();

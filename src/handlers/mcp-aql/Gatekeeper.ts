@@ -21,6 +21,7 @@ import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { GatekeeperSession, type ClientInfo } from './GatekeeperSession.js';
 import { GatekeeperConfig, type GatekeeperConfigOptions } from './GatekeeperConfig.js';
+import type { AuditHmacResolver } from '../../security/toolRedaction.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import {
   PermissionLevel,
@@ -30,6 +31,7 @@ import {
   type GatekeeperAuditEntry,
   type CliApprovalRecord,
   type CliApprovalScope,
+  type CreateCliApprovalArgs,
 } from './GatekeeperTypes.js';
 import {
   getDefaultPermissionLevel,
@@ -70,9 +72,11 @@ export interface EnforceInput {
 class GatekeeperSessionRegistry {
   private readonly sessions = new Map<string, GatekeeperSession>();
   private readonly defaultId: string;
+  private readonly auditHmacResolver?: AuditHmacResolver;
 
-  constructor(defaultSessionId: string) {
+  constructor(defaultSessionId: string, auditHmacResolver?: AuditHmacResolver) {
     this.defaultId = defaultSessionId;
+    this.auditHmacResolver = auditHmacResolver;
   }
 
   /** Register a pre-built GatekeeperSession for a session. */
@@ -85,7 +89,7 @@ class GatekeeperSessionRegistry {
   getOrCreate(sessionId: string, config: GatekeeperConfig, clientInfo?: ClientInfo): GatekeeperSession {
     let session = this.sessions.get(sessionId);
     if (!session) {
-      session = new GatekeeperSession(clientInfo, config.maxSessionConfirmations, undefined, undefined, sessionId);
+      session = new GatekeeperSession(clientInfo, config.maxSessionConfirmations, undefined, undefined, sessionId, this.auditHmacResolver);
       this.sessions.set(sessionId, session);
       logger.warn(
         `[GatekeeperSessionRegistry] Auto-created session '${sessionId}' without persistence store. ` +
@@ -147,11 +151,12 @@ export class Gatekeeper {
     configOptions?: GatekeeperConfigOptions,
     contextTracker?: ContextTracker,
     defaultSessionId?: string,
+    auditHmacResolver?: AuditHmacResolver,
   ) {
     this.config = new GatekeeperConfig(configOptions);
     this.contextTracker = contextTracker;
     this.defaultClientInfo = clientInfo;
-    this.sessionRegistry = new GatekeeperSessionRegistry(defaultSessionId ?? 'default');
+    this.sessionRegistry = new GatekeeperSessionRegistry(defaultSessionId ?? 'default', auditHmacResolver);
   }
 
   /**
@@ -416,27 +421,23 @@ export class Gatekeeper {
    * Create a CLI approval request.
    * Delegates to session and logs the event.
    */
-  createCliApprovalRequest(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    riskLevel: string,
-    riskScore: number,
-    irreversible: boolean,
-    denyReason: string,
-    policySource?: string,
-    ttlMs?: number,
-  ): string {
+  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
     const session = this.resolveSession();
-    const requestId = session.createCliApprovalRequest(
-      toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs
-    );
+    const requestId = await session.createCliApprovalRequest(args);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CLI_APPROVAL_REQUESTED',
       severity: 'MEDIUM',
       source: 'Gatekeeper.createCliApprovalRequest',
-      details: `CLI approval requested for ${toolName}: ${denyReason}`,
-      additionalData: { requestId, toolName, riskLevel, riskScore, irreversible, sessionId: session.sessionId },
+      details: `CLI approval requested for ${args.toolName}: ${args.denyReason}`,
+      additionalData: {
+        requestId,
+        toolName: args.toolName,
+        riskLevel: args.riskLevel,
+        riskScore: args.riskScore,
+        irreversible: args.irreversible,
+        sessionId: session.sessionId,
+      },
     });
 
     return requestId;
