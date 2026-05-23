@@ -25,18 +25,17 @@ export class PostgresRateLimitStore implements IRateLimitStore {
   constructor(private readonly db: DatabaseInstance) {}
 
   async get<TState>(scope: string, key: string): Promise<RateLimitEntry<TState> | null> {
-    // Double-cast through unknown because Drizzle's raw-SQL return type is
-    // RowList<Record<string, unknown>[]>, which isn't structurally
-    // assignable to a typed row interface. Same pattern the rest of the
-    // project uses for raw SQL results (see src/database/admin.ts).
-    const rows = await withSystemContext(this.db, (tx) =>
+    // Drizzle's raw-SQL return type is RowList<Record<string, unknown>[]>,
+    // which is structurally assignable to RateLimitRow[] because the row
+    // type itself extends Record<string, unknown>. No cast needed.
+    const rows: RateLimitRow[] = await withSystemContext(this.db, (tx) =>
       tx.execute(sql`
         SELECT state, version
         FROM rate_limit_state
         WHERE scope = ${scope} AND key = ${key}
         LIMIT 1
       `),
-    ) as RateLimitRow[];
+    );
     const row = rows[0];
     return row ? { state: row.state as TState, version: Number(row.version) } : null;
   }

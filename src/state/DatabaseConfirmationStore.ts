@@ -22,6 +22,7 @@ import { withSystemContext } from '../database/admin.js';
 import { sessions } from '../database/schema/index.js';
 import { and, eq, type SQL } from 'drizzle-orm';
 import type { ApprovalRef, ApprovalSearchFilter, IConfirmationStore } from './IConfirmationStore.js';
+import { approvalMatches, toApprovalRef } from './approvalSearch.js';
 import {
   validateDbStoreParams,
   handleDbInitializeError,
@@ -315,21 +316,3 @@ async function normalizeApprovalEntries(
   return approvals;
 }
 
-function approvalMatches(approvalId: string, record: CliApprovalRecord, filter: ApprovalSearchFilter): boolean {
-  if (filter.approvalId && filter.approvalId !== approvalId) return false;
-  const requestedAt = new Date(record.requestedAt).getTime();
-  if (filter.after !== undefined && requestedAt < filter.after) return false;
-  if (filter.before !== undefined && requestedAt > filter.before) return false;
-  return true;
-}
-
-function toApprovalRef(sessionId: string, approvalId: string, record: CliApprovalRecord): ApprovalRef {
-  return {
-    sessionId,
-    approvalId,
-    toolName: record.toolName,
-    approvedAt: record.approvedAt,
-    requestedAt: record.requestedAt,
-    digest: record.toolInputDigest ?? {},
-  };
-}
