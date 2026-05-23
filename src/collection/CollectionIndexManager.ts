@@ -490,60 +490,70 @@ export class CollectionIndexManager {
    * the dispatch.
    */
   private async loadFromDisk(): Promise<void> {
-    let cached: CollectionIndexCacheEntry | null = null;
-
-    if (this.sharedCache) {
-      try {
-        const entry = await this.sharedCache.get(CollectionIndexManager.CACHE_KEY);
-        if (entry) {
-          // Map SharedCacheEntry → CollectionIndexCacheEntry. payload is the
-          // CollectionIndex; fetchedAt becomes timestamp; HTTP-conditional
-          // fields and version/checksum are preserved verbatim.
-          cached = {
-            data: entry.payload as CollectionIndex,
-            timestamp: entry.fetchedAt,
-            etag: entry.etag,
-            lastModified: entry.lastModified,
-            version: entry.version ?? 'unknown',
-            checksum: entry.checksum ?? '',
-          };
-        }
-      } catch (error) {
-        logger.debug('Failed to load cache from shared store', { error: this.getErrorMessage(error) });
-      }
-    } else {
-      try {
-        const data = await this.fileOperations.readFile(this.CACHE_FILE, {
-          source: 'CollectionIndexManager.loadFromDisk',
-        });
-        cached = JSON.parse(data) as CollectionIndexCacheEntry;
-      } catch (error) {
-        if ((error as any).code !== 'ENOENT') {
-          logger.debug('Failed to load cache from disk', { error: this.getErrorMessage(error) });
-        }
-        return;
-      }
-    }
-
+    const cached = this.sharedCache
+      ? await this.loadFromSharedCache()
+      : await this.loadFromLegacyDisk();
     if (!cached) return;
+    if (!this.validateCacheEntry(cached)) return;
 
-    // Validate cache structure
+    this.cachedIndex = cached;
+    this.logLoadedCache(cached);
+  }
+
+  private async loadFromSharedCache(): Promise<CollectionIndexCacheEntry | null> {
+    try {
+      const entry = await this.sharedCache?.get(CollectionIndexManager.CACHE_KEY);
+      if (!entry) return null;
+
+      // Map SharedCacheEntry → CollectionIndexCacheEntry. payload is the
+      // CollectionIndex; fetchedAt becomes timestamp; HTTP-conditional
+      // fields and version/checksum are preserved verbatim.
+      return {
+        data: entry.payload as CollectionIndex,
+        timestamp: entry.fetchedAt,
+        etag: entry.etag,
+        lastModified: entry.lastModified,
+        version: entry.version ?? 'unknown',
+        checksum: entry.checksum ?? '',
+      };
+    } catch (error) {
+      logger.debug('Failed to load cache from shared store', { error: this.getErrorMessage(error) });
+      return null;
+    }
+  }
+
+  private async loadFromLegacyDisk(): Promise<CollectionIndexCacheEntry | null> {
+    try {
+      const data = await this.fileOperations.readFile(this.CACHE_FILE, {
+        source: 'CollectionIndexManager.loadFromDisk',
+      });
+      return JSON.parse(data) as CollectionIndexCacheEntry;
+    } catch (error) {
+      if ((error as any).code !== 'ENOENT') {
+        logger.debug('Failed to load cache from disk', { error: this.getErrorMessage(error) });
+      }
+      return null;
+    }
+  }
+
+  private validateCacheEntry(cached: CollectionIndexCacheEntry): boolean {
     if (!cached.data || !cached.timestamp || !cached.version) {
       logger.debug('Invalid cache structure, ignoring');
-      return;
+      return false;
     }
 
-    // Verify checksum if available
     if (cached.checksum) {
       const expectedChecksum = this.calculateChecksum(cached.data);
       if (cached.checksum !== expectedChecksum) {
         logger.debug('Cache checksum mismatch, ignoring cached data');
-        return;
+        return false;
       }
     }
 
-    this.cachedIndex = cached;
+    return true;
+  }
 
+  private logLoadedCache(cached: CollectionIndexCacheEntry): void {
     const age = Date.now() - cached.timestamp;
     const isExpired = age > this.TTL_MS;
 

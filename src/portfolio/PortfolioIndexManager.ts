@@ -85,6 +85,22 @@ export interface SearchResult {
   score: number; // For future ranking
 }
 
+interface SearchAccumulator {
+  results: SearchResult[];
+  seenPaths: Set<string>;
+  maxResults: number;
+}
+
+interface BuildStats {
+  totalFiles: number;
+  processedFiles: number;
+}
+
+interface DirectoryEntries {
+  directories: string[];
+  yamlFiles: string[];
+}
+
 export class PortfolioIndexManager {
   private readonly indexByNamespace = new Map<string, PortfolioIndex>();
   private readonly lastBuiltByNamespace = new Map<string, Date>();
@@ -218,107 +234,116 @@ export class PortfolioIndexManager {
    */
   public async search(query: string, options: SearchOptions = {}): Promise<SearchResult[]> {
     const index = await this.getIndex();
-    
-    // Normalize query for security
-    const normalizedQuery = UnicodeValidator.normalize(query);
-    if (!normalizedQuery.isValid) {
-      logger.warn('Invalid Unicode in search query', {
-        issues: normalizedQuery.detectedIssues
-      });
-      return [];
-    }
-    
-    const safeQuery = normalizedQuery.normalizedContent.toLowerCase().trim();
-    const queryTokens = safeQuery.split(/\s+/).filter(token => token.length > 0);
+    const safeQuery = this.normalizeSearchQuery(query);
+    if (!safeQuery) return [];
+
+    const queryTokens = this.tokenizeSearchQuery(safeQuery);
     
     if (queryTokens.length === 0) {
       return [];
     }
     
-    const results: SearchResult[] = [];
-    const seenPaths = new Set<string>();
-    const maxResults = options.maxResults || 20;
-    
-    // Helper to add unique results
-    const addResult = (entry: IndexEntry, matchType: SearchResult['matchType'], score: number = 1) => {
-      if (!seenPaths.has(entry.filePath) && results.length < maxResults) {
-        // Filter by element type if specified
-        if (options.elementType && entry.elementType !== options.elementType) {
-          return;
-        }
-        
-        seenPaths.add(entry.filePath);
-        results.push({ entry, matchType, score });
-      }
+    const accumulator: SearchAccumulator = {
+      results: [],
+      seenPaths: new Set<string>(),
+      maxResults: options.maxResults || 20,
     };
     
-    // 1. Search by name (highest priority)
-    for (const [name, entry] of index.byName) {
-      if (this.matchesQuery(name, queryTokens)) {
-        addResult(entry, 'name', 3);
-      }
-    }
-    
-    // 2. Search by filename
-    for (const [filename, entry] of index.byFilename) {
-      if (this.matchesQuery(filename, queryTokens)) {
-        addResult(entry, 'filename', 2.5);
-      }
-    }
-    
-    // 3. Search by keywords
-    if (options.includeKeywords !== false) {
-      for (const [keyword, entries] of index.byKeyword) {
-        if (this.matchesQuery(keyword, queryTokens)) {
-          for (const entry of entries) {
-            addResult(entry, 'keyword', 2);
-          }
-        }
-      }
-    }
-    
-    // 4. Search by tags
-    if (options.includeTags !== false) {
-      for (const [tag, entries] of index.byTag) {
-        if (this.matchesQuery(tag, queryTokens)) {
-          for (const entry of entries) {
-            addResult(entry, 'tag', 2);
-          }
-        }
-      }
-    }
-    
-    // 5. Search by triggers
-    if (options.includeTriggers !== false) {
-      for (const [trigger, entries] of index.byTrigger) {
-        if (this.matchesQuery(trigger, queryTokens)) {
-          for (const entry of entries) {
-            addResult(entry, 'trigger', 1.8);
-          }
-        }
-      }
-    }
-    
-    // 6. Search by description
-    if (options.includeDescriptions !== false) {
-      for (const [, entry] of index.byName) {
-        if (entry.metadata.description && 
-            this.matchesQuery(entry.metadata.description.toLowerCase(), queryTokens)) {
-          addResult(entry, 'description', 1.5);
-        }
-      }
-    }
+    this.searchDirectIndex(index.byName, queryTokens, accumulator, options, 'name', 3);
+    this.searchDirectIndex(index.byFilename, queryTokens, accumulator, options, 'filename', 2.5);
+    this.searchGroupedIndex(index.byKeyword, queryTokens, accumulator, options, 'keyword', 2, options.includeKeywords);
+    this.searchGroupedIndex(index.byTag, queryTokens, accumulator, options, 'tag', 2, options.includeTags);
+    this.searchGroupedIndex(index.byTrigger, queryTokens, accumulator, options, 'trigger', 1.8, options.includeTriggers);
+    this.searchDescriptions(index, queryTokens, accumulator, options);
     
     // Sort by score (descending)
-    results.sort((a, b) => b.score - a.score);
+    accumulator.results.sort((a, b) => b.score - a.score);
     
     logger.debug('Portfolio search completed', {
       query: safeQuery,
-      resultCount: results.length,
+      resultCount: accumulator.results.length,
       totalIndexed: index.byName.size
     });
     
-    return results;
+    return accumulator.results;
+  }
+
+  private normalizeSearchQuery(query: string): string | null {
+    const normalizedQuery = UnicodeValidator.normalize(query);
+    if (normalizedQuery.isValid) {
+      return normalizedQuery.normalizedContent.toLowerCase().trim();
+    }
+    logger.warn('Invalid Unicode in search query', {
+      issues: normalizedQuery.detectedIssues
+    });
+    return null;
+  }
+
+  private tokenizeSearchQuery(safeQuery: string): string[] {
+    return safeQuery.split(/\s+/).filter(token => token.length > 0);
+  }
+
+  private searchDirectIndex(
+    source: Map<string, IndexEntry>,
+    queryTokens: string[],
+    accumulator: SearchAccumulator,
+    options: SearchOptions,
+    matchType: SearchResult['matchType'],
+    score: number,
+  ): void {
+    for (const [value, entry] of source) {
+      if (this.matchesQuery(value, queryTokens)) {
+        this.addSearchResult(entry, matchType, score, accumulator, options);
+      }
+    }
+  }
+
+  private searchGroupedIndex(
+    source: Map<string, IndexEntry[]>,
+    queryTokens: string[],
+    accumulator: SearchAccumulator,
+    options: SearchOptions,
+    matchType: SearchResult['matchType'],
+    score: number,
+    include: boolean | undefined,
+  ): void {
+    if (include === false) return;
+    for (const [value, entries] of source) {
+      if (this.matchesQuery(value, queryTokens)) {
+        for (const entry of entries) {
+          this.addSearchResult(entry, matchType, score, accumulator, options);
+        }
+      }
+    }
+  }
+
+  private searchDescriptions(
+    index: PortfolioIndex,
+    queryTokens: string[],
+    accumulator: SearchAccumulator,
+    options: SearchOptions,
+  ): void {
+    if (options.includeDescriptions === false) return;
+    for (const [, entry] of index.byName) {
+      if (entry.metadata.description &&
+          this.matchesQuery(entry.metadata.description.toLowerCase(), queryTokens)) {
+        this.addSearchResult(entry, 'description', 1.5, accumulator, options);
+      }
+    }
+  }
+
+  private addSearchResult(
+    entry: IndexEntry,
+    matchType: SearchResult['matchType'],
+    score: number,
+    accumulator: SearchAccumulator,
+    options: SearchOptions,
+  ): void {
+    if (accumulator.seenPaths.has(entry.filePath) || accumulator.results.length >= accumulator.maxResults) return;
+    if (options.elementType && entry.elementType !== options.elementType) return;
+
+    accumulator.seenPaths.add(entry.filePath);
+    accumulator.results.push({ entry, matchType, score });
   }
 
   /**
@@ -416,242 +441,302 @@ export class PortfolioIndexManager {
     logger.debug('Building portfolio index...');
     
     try {
-      const portfolioManager = this.portfolioManager;
+      const newIndex = this.createEmptyIndex();
+      const stats: BuildStats = { totalFiles: 0, processedFiles: 0 };
 
-      // Initialize empty index
-      const newIndex: PortfolioIndex = {
-        byName: new Map(),
-        byFilename: new Map(),
-        byType: new Map(),
-        byKeyword: new Map(),
-        byTag: new Map(),
-        byTrigger: new Map()
-      };
-      
-      // Initialize type maps
       for (const elementType of Object.values(ElementType)) {
-        newIndex.byType.set(elementType, []);
+        this.addBuildStats(stats, await this.scanElementType(elementType, newIndex));
       }
       
-      let totalFiles = 0;
-      let processedFiles = 0;
-      
-      // Scan each element type
-      for (const elementType of Object.values(ElementType)) {
-        try {
-          const elementDir = portfolioManager.getElementDir(elementType);
-
-          // Check if directory exists
-          const dirExists = await this.fileOperations.exists(elementDir);
-          if (!dirExists) {
-            logger.debug(`Element directory doesn't exist: ${elementDir}`);
-            continue;
-          }
-
-          // FIX #1188: Special handling for memories - scan .yaml files in date folders
-          if (elementType === ElementType.MEMORY) {
-            // Memories are stored in date folders (YYYY-MM-DD) as .yaml files
-            const entryNames = await this.fileOperations.listDirectory(elementDir);
-
-            // Separate directories from files
-            const directories: string[] = [];
-            const rootYamlFiles: string[] = [];
-
-            for (const entryName of entryNames) {
-              const entryPath = path.join(elementDir, entryName);
-              try {
-                const entryStat = await this.fileOperations.stat(entryPath);
-                if (entryStat.isDirectory()) {
-                  directories.push(entryName);
-                } else if (entryName.endsWith('.yaml')) {
-                  rootYamlFiles.push(entryName);
-                }
-              } catch {
-                // Skip entries we can't stat
-                continue;
-              }
-            }
-
-            for (const file of rootYamlFiles) {
-              try {
-                const filePath = path.join(elementDir, file);
-                const entry = await this.createMemoryIndexEntry(filePath, elementType);
-
-                if (entry) {
-                  this.addToIndex(newIndex, entry);
-                  processedFiles++;
-                  totalFiles++;
-                }
-              } catch (error) {
-                logger.warn(`Failed to index root memory file`, {
-                  file,
-                  path: path.join(elementDir, file),
-                  location: 'root',
-                  error: error instanceof Error ? error.message : String(error),
-                  errorType: error instanceof Error ? error.constructor.name : typeof error
-                });
-              }
-            }
-
-            // Then process date folders
-            const dateFolders = directories.filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name));
-
-            for (const dateFolder of dateFolders) {
-              const folderPath = path.join(elementDir, dateFolder);
-              const folderEntryNames = await this.fileOperations.listDirectory(folderPath);
-
-              // Separate directories from files in date folder
-              const subDirs: string[] = [];
-              const yamlFiles: string[] = [];
-
-              for (const folderEntryName of folderEntryNames) {
-                const folderEntryPath = path.join(folderPath, folderEntryName);
-                try {
-                  const folderEntryStat = await this.fileOperations.stat(folderEntryPath);
-                  if (folderEntryStat.isDirectory()) {
-                    subDirs.push(folderEntryName);
-                  } else if (folderEntryName.endsWith('.yaml')) {
-                    yamlFiles.push(folderEntryName);
-                  }
-                } catch {
-                  // Skip entries we can't stat
-                  continue;
-                }
-              }
-
-              for (const file of yamlFiles) {
-                try {
-                  const filePath = path.join(folderPath, file);
-                  const entry = await this.createMemoryIndexEntry(filePath, elementType);
-
-                  if (entry) {
-                    this.addToIndex(newIndex, entry);
-                    processedFiles++;
-                    totalFiles++;
-                  }
-                } catch (error) {
-                  logger.warn(`Failed to index date folder memory file`, {
-                    file,
-                    path: path.join(folderPath, file),
-                    dateFolder,
-                    location: 'date-folder',
-                    error: error instanceof Error ? error.message : String(error),
-                    errorType: error instanceof Error ? error.constructor.name : typeof error
-                  });
-                }
-              }
-
-              // FIX #1188: Process subdirectories for sharded memories
-              // Large memories are stored as shards in named subdirectories
-              for (const subDir of subDirs) {
-                const subDirPath = path.join(folderPath, subDir);
-                const shardFiles = await this.fileOperations.listDirectory(subDirPath);
-                const shardYamlFiles = shardFiles.filter(file => file.endsWith('.yaml'));
-
-                // For sharded memories, look for metadata.yaml or the main file
-                // If not found, use the first shard as representative
-                let metadataFile = shardYamlFiles.find(f => f === 'metadata.yaml') ||
-                                   shardYamlFiles.find(f => f === `${subDir}.yaml`) ||
-                                   shardYamlFiles[0];
-
-                if (metadataFile) {
-                  try {
-                    const filePath = path.join(subDirPath, metadataFile);
-                    const entry = await this.createMemoryIndexEntry(filePath, elementType);
-
-                    if (entry) {
-                      // Mark as sharded memory in metadata
-                      entry.metadata.keywords = entry.metadata.keywords || [];
-                      if (!entry.metadata.keywords.includes('sharded')) {
-                        entry.metadata.keywords.push('sharded');
-                      }
-
-                      // Create properly typed sharded entry
-                      const shardedEntry: ShardedMemoryIndexEntry = {
-                        ...entry,
-                        shardInfo: {
-                          shardCount: shardYamlFiles.length,
-                          shardDir: path.join(dateFolder, subDir),
-                          metadataFile: metadataFile
-                        }
-                      };
-
-                      this.addToIndex(newIndex, shardedEntry);
-                      processedFiles++;
-                      totalFiles++;
-                    }
-                  } catch (error) {
-                    logger.warn(`Failed to index sharded memory`, {
-                      subDir,
-                      dateFolder,
-                      path: path.join(subDirPath, metadataFile),
-                      metadataFile,
-                      shardCount: shardYamlFiles.length,
-                      location: 'sharded-subdirectory',
-                      error: error instanceof Error ? error.message : String(error),
-                      errorType: error instanceof Error ? error.constructor.name : typeof error,
-                      shardFiles: shardYamlFiles.slice(0, 5) // Log first 5 shard files for context
-                    });
-                  }
-                }
-              }
-            }
-          } else {
-            // Standard handling for other element types (.md files in root)
-            const files = await this.fileOperations.listDirectory(elementDir);
-            const mdFiles = files.filter(file => file.endsWith('.md'));
-            totalFiles += mdFiles.length;
-
-            for (const file of mdFiles) {
-              try {
-                const filePath = path.join(elementDir, file);
-                const entry = await this.createIndexEntry(filePath, elementType);
-
-                if (entry) {
-                  this.addToIndex(newIndex, entry);
-                  processedFiles++;
-                }
-              } catch (error) {
-                logger.warn(`Failed to index file: ${file}`, {
-                  elementType,
-                  error: error instanceof Error ? error.message : String(error)
-                });
-              }
-            }
-          }
-        } catch (error) {
-          logger.error(`Failed to scan element type: ${elementType}`, {
-            error: error instanceof Error ? error.message : String(error)
-          });
-        }
-      }
-      
-      // Update instance state
-      this.indexByNamespace.set(namespace, newIndex);
-      this.lastBuiltByNamespace.set(namespace, new Date());
-      
-      const duration = Date.now() - startTime;
-      logger.info('Portfolio index built successfully', {
-        totalFiles,
-        processedFiles,
-        duration: `${duration}ms`,
-        uniqueNames: newIndex.byName.size,
-        uniqueKeywords: newIndex.byKeyword.size,
-        uniqueTags: newIndex.byTag.size
-      });
-      
-      // Log security event for audit trail
-      SecurityMonitor.logSecurityEvent({
-        type: 'PORTFOLIO_INITIALIZATION',
-        severity: 'LOW',
-        source: 'PortfolioIndexManager.performBuild',
-        details: `Portfolio index rebuilt with ${processedFiles} elements in ${duration}ms`
-      });
-      
+      this.updateIndexAtomically(namespace, newIndex, stats, startTime);
     } catch (error) {
       ErrorHandler.logError('PortfolioIndexManager.performBuild', error);
       throw ErrorHandler.wrapError(error, 'Failed to build portfolio index', ErrorCategory.SYSTEM_ERROR);
     }
+  }
+
+  private createEmptyIndex(): PortfolioIndex {
+    const newIndex: PortfolioIndex = {
+      byName: new Map(),
+      byFilename: new Map(),
+      byType: new Map(),
+      byKeyword: new Map(),
+      byTag: new Map(),
+      byTrigger: new Map()
+    };
+
+    for (const elementType of Object.values(ElementType)) {
+      newIndex.byType.set(elementType, []);
+    }
+
+    return newIndex;
+  }
+
+  private async scanElementType(elementType: ElementType, newIndex: PortfolioIndex): Promise<BuildStats> {
+    try {
+      const elementDir = this.portfolioManager.getElementDir(elementType);
+      const dirExists = await this.fileOperations.exists(elementDir);
+      if (!dirExists) {
+        logger.debug(`Element directory doesn't exist: ${elementDir}`);
+        return { totalFiles: 0, processedFiles: 0 };
+      }
+
+      return elementType === ElementType.MEMORY
+        ? this.scanMemoryDirectory(elementDir, newIndex)
+        : this.scanStandardElementDirectory(elementDir, elementType, newIndex);
+    } catch (error) {
+      logger.error(`Failed to scan element type: ${elementType}`, {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return { totalFiles: 0, processedFiles: 0 };
+    }
+  }
+
+  private async scanStandardElementDirectory(
+    elementDir: string,
+    elementType: ElementType,
+    newIndex: PortfolioIndex,
+  ): Promise<BuildStats> {
+    const files = await this.fileOperations.listDirectory(elementDir);
+    const mdFiles = files.filter(file => file.endsWith('.md'));
+    let processedFiles = 0;
+
+    for (const file of mdFiles) {
+      const indexed = await this.indexStandardFile(elementDir, file, elementType, newIndex);
+      if (indexed) processedFiles++;
+    }
+
+    return { totalFiles: mdFiles.length, processedFiles };
+  }
+
+  private async indexStandardFile(
+    elementDir: string,
+    file: string,
+    elementType: ElementType,
+    newIndex: PortfolioIndex,
+  ): Promise<boolean> {
+    try {
+      const filePath = path.join(elementDir, file);
+      const entry = await this.createIndexEntry(filePath, elementType);
+      if (!entry) return false;
+
+      this.addToIndex(newIndex, entry);
+      return true;
+    } catch (error) {
+      logger.warn(`Failed to index file: ${file}`, {
+        elementType,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return false;
+    }
+  }
+
+  private async scanMemoryDirectory(elementDir: string, newIndex: PortfolioIndex): Promise<BuildStats> {
+    const rootEntries = await this.listDirectoryEntries(elementDir);
+    const stats = await this.indexMemoryFiles(elementDir, rootEntries.yamlFiles, newIndex, {
+      message: 'Failed to index root memory file',
+      location: 'root',
+    });
+
+    const dateFolders = rootEntries.directories.filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name));
+    for (const dateFolder of dateFolders) {
+      this.addBuildStats(stats, await this.indexMemoryDateFolder(elementDir, dateFolder, newIndex));
+    }
+
+    return stats;
+  }
+
+  private async indexMemoryDateFolder(
+    elementDir: string,
+    dateFolder: string,
+    newIndex: PortfolioIndex,
+  ): Promise<BuildStats> {
+    const folderPath = path.join(elementDir, dateFolder);
+    const folderEntries = await this.listDirectoryEntries(folderPath);
+    const stats = await this.indexMemoryFiles(folderPath, folderEntries.yamlFiles, newIndex, {
+      message: 'Failed to index date folder memory file',
+      location: 'date-folder',
+      dateFolder,
+    });
+
+    for (const subDir of folderEntries.directories) {
+      this.addBuildStats(stats, await this.indexShardedMemory(folderPath, dateFolder, subDir, newIndex));
+    }
+
+    return stats;
+  }
+
+  private async listDirectoryEntries(dir: string): Promise<DirectoryEntries> {
+    const entryNames = await this.fileOperations.listDirectory(dir);
+    const directories: string[] = [];
+    const yamlFiles: string[] = [];
+
+    for (const entryName of entryNames) {
+      const entryPath = path.join(dir, entryName);
+      try {
+        const entryStat = await this.fileOperations.stat(entryPath);
+        if (entryStat.isDirectory()) {
+          directories.push(entryName);
+        } else if (entryName.endsWith('.yaml')) {
+          yamlFiles.push(entryName);
+        }
+      } catch {
+        // Skip entries we can't stat.
+      }
+    }
+
+    return { directories, yamlFiles };
+  }
+
+  private async indexMemoryFiles(
+    baseDir: string,
+    files: string[],
+    newIndex: PortfolioIndex,
+    context: { message: string; location: string; dateFolder?: string },
+  ): Promise<BuildStats> {
+    const stats: BuildStats = { totalFiles: 0, processedFiles: 0 };
+
+    for (const file of files) {
+      const indexed = await this.indexMemoryFile(baseDir, file, newIndex, context);
+      if (indexed) {
+        stats.processedFiles++;
+        stats.totalFiles++;
+      }
+    }
+
+    return stats;
+  }
+
+  private async indexMemoryFile(
+    baseDir: string,
+    file: string,
+    newIndex: PortfolioIndex,
+    context: { message: string; location: string; dateFolder?: string },
+  ): Promise<boolean> {
+    try {
+      const filePath = path.join(baseDir, file);
+      const entry = await this.createMemoryIndexEntry(filePath, ElementType.MEMORY);
+      if (!entry) return false;
+
+      this.addToIndex(newIndex, entry);
+      return true;
+    } catch (error) {
+      logger.warn(context.message, {
+        file,
+        path: path.join(baseDir, file),
+        ...(context.dateFolder ? { dateFolder: context.dateFolder } : {}),
+        location: context.location,
+        error: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : typeof error
+      });
+      return false;
+    }
+  }
+
+  private async indexShardedMemory(
+    folderPath: string,
+    dateFolder: string,
+    subDir: string,
+    newIndex: PortfolioIndex,
+  ): Promise<BuildStats> {
+    const subDirPath = path.join(folderPath, subDir);
+    const shardFiles = await this.fileOperations.listDirectory(subDirPath);
+    const shardYamlFiles = shardFiles.filter(file => file.endsWith('.yaml'));
+    const metadataFile = this.pickShardedMemoryMetadataFile(shardYamlFiles, subDir);
+    if (!metadataFile) return { totalFiles: 0, processedFiles: 0 };
+
+    const indexed = await this.indexShardedMemoryMetadata(
+      subDirPath,
+      dateFolder,
+      subDir,
+      metadataFile,
+      shardYamlFiles,
+      newIndex,
+    );
+    return indexed ? { totalFiles: 1, processedFiles: 1 } : { totalFiles: 0, processedFiles: 0 };
+  }
+
+  private pickShardedMemoryMetadataFile(shardYamlFiles: string[], subDir: string): string | undefined {
+    return shardYamlFiles.find(file => file === 'metadata.yaml') ||
+      shardYamlFiles.find(file => file === `${subDir}.yaml`) ||
+      shardYamlFiles[0];
+  }
+
+  private async indexShardedMemoryMetadata(
+    subDirPath: string,
+    dateFolder: string,
+    subDir: string,
+    metadataFile: string,
+    shardYamlFiles: string[],
+    newIndex: PortfolioIndex,
+  ): Promise<boolean> {
+    try {
+      const filePath = path.join(subDirPath, metadataFile);
+      const entry = await this.createMemoryIndexEntry(filePath, ElementType.MEMORY);
+      if (!entry) return false;
+
+      entry.metadata.keywords = entry.metadata.keywords || [];
+      if (!entry.metadata.keywords.includes('sharded')) {
+        entry.metadata.keywords.push('sharded');
+      }
+
+      const shardedEntry: ShardedMemoryIndexEntry = {
+        ...entry,
+        shardInfo: {
+          shardCount: shardYamlFiles.length,
+          shardDir: path.join(dateFolder, subDir),
+          metadataFile
+        }
+      };
+
+      this.addToIndex(newIndex, shardedEntry);
+      return true;
+    } catch (error) {
+      logger.warn('Failed to index sharded memory', {
+        subDir,
+        dateFolder,
+        path: path.join(subDirPath, metadataFile),
+        metadataFile,
+        shardCount: shardYamlFiles.length,
+        location: 'sharded-subdirectory',
+        error: error instanceof Error ? error.message : String(error),
+        errorType: error instanceof Error ? error.constructor.name : typeof error,
+        shardFiles: shardYamlFiles.slice(0, 5)
+      });
+      return false;
+    }
+  }
+
+  private addBuildStats(target: BuildStats, addition: BuildStats): void {
+    target.totalFiles += addition.totalFiles;
+    target.processedFiles += addition.processedFiles;
+  }
+
+  private updateIndexAtomically(
+    namespace: string,
+    newIndex: PortfolioIndex,
+    stats: BuildStats,
+    startTime: number,
+  ): void {
+    this.indexByNamespace.set(namespace, newIndex);
+    this.lastBuiltByNamespace.set(namespace, new Date());
+
+    const duration = Date.now() - startTime;
+    logger.info('Portfolio index built successfully', {
+      totalFiles: stats.totalFiles,
+      processedFiles: stats.processedFiles,
+      duration: `${duration}ms`,
+      uniqueNames: newIndex.byName.size,
+      uniqueKeywords: newIndex.byKeyword.size,
+      uniqueTags: newIndex.byTag.size
+    });
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_INITIALIZATION',
+      severity: 'LOW',
+      source: 'PortfolioIndexManager.performBuild',
+      details: `Portfolio index rebuilt with ${stats.processedFiles} elements in ${duration}ms`
+    });
   }
 
   /**
