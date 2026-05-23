@@ -59,6 +59,7 @@ describe('MCP-AQL Batch Operations', () => {
       agentManager: mockAgentManager as unknown as HandlerRegistry['agentManager'],
       templateRenderer: mockTemplateRenderer as unknown as HandlerRegistry['templateRenderer'],
       elementQueryService: mockElementQueryService as unknown as HandlerRegistry['elementQueryService'],
+      portfolioManager: {} as unknown as HandlerRegistry['portfolioManager'],
       gatekeeper,
     };
 

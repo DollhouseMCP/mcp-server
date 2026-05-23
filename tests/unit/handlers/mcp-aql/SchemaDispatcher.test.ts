@@ -64,6 +64,7 @@ describe('SchemaDispatcher', () => {
     agentManager: {} as any,
     templateRenderer: mockTemplateRenderer as any,
     elementQueryService: {} as any,
+    portfolioManager: {} as any,
     collectionHandler: mockCollectionHandler as any,
     authHandler: mockAuthHandler as any,
     enhancedIndexHandler: mockEnhancedIndexHandler as any,
@@ -656,6 +657,7 @@ describe('SchemaDispatcher', () => {
    * Tests that V2 fields passed at top level are merged into metadata
    */
   describe('dispatch() - Agent V2 field merging (Issue #134)', () => {
+    const TEST_AGENT_DESCRIPTION = 'A test agent';
     const mockElementCRUD = {
       createElement: jest.fn().mockResolvedValue({ name: 'TestAgent', type: 'agent' }),
       listElements: jest.fn().mockResolvedValue([]),
@@ -680,7 +682,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           systemPrompt: 'You are a helpful assistant.',
         },
         registryWithElementCRUD
@@ -703,7 +705,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'SnakePromptAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           system_prompt: 'You are a snake_case assistant.',
         },
         registryWithElementCRUD
@@ -731,7 +733,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           goal,
         },
         registryWithElementCRUD
@@ -759,7 +761,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           activates,
         },
         registryWithElementCRUD
@@ -787,7 +789,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           tools,
         },
         registryWithElementCRUD
@@ -815,7 +817,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           autonomy,
         },
         registryWithElementCRUD
@@ -867,7 +869,7 @@ describe('SchemaDispatcher', () => {
         {
           element_name: 'TestAgent',
           element_type: 'agent',
-          description: 'A test agent',
+          description: TEST_AGENT_DESCRIPTION,
           systemPrompt: 'Top level prompt',
           metadata: {
             systemPrompt: 'Metadata prompt',
@@ -1179,33 +1181,35 @@ describe('SchemaDispatcher', () => {
     });
 
     describe('path format validation', () => {
+      const INVALID_PATH_FORMAT_ERROR = 'Invalid property path format';
+
       it('should reject paths with special characters', () => {
-        expect(() => getNestedValue(testObj, 'input[0]')).toThrow('Invalid property path format');
-        expect(() => getNestedValue(testObj, 'input["key"]')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, 'input[0]')).toThrow(INVALID_PATH_FORMAT_ERROR);
+        expect(() => getNestedValue(testObj, 'input["key"]')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject paths with semicolons (injection attempt)', () => {
-        expect(() => getNestedValue(testObj, 'input;malicious')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, 'input;malicious')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject paths with parentheses (function call attempt)', () => {
-        expect(() => getNestedValue(testObj, 'toString()')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, 'toString()')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject paths starting with numbers', () => {
-        expect(() => getNestedValue(testObj, '0.input')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, '0.input')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject empty paths', () => {
-        expect(() => getNestedValue(testObj, '')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, '')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject paths with spaces', () => {
-        expect(() => getNestedValue(testObj, 'input value')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, 'input value')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
 
       it('should reject paths with newlines', () => {
-        expect(() => getNestedValue(testObj, 'input\nvalue')).toThrow('Invalid property path format');
+        expect(() => getNestedValue(testObj, 'input\nvalue')).toThrow(INVALID_PATH_FORMAT_ERROR);
       });
     });
 
