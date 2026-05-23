@@ -330,33 +330,75 @@ function scrubNonAbsoluteUrl(value: string): string {
     return `?${params.toString()}`;
   }
 
-  // Look for URL-like substrings of the form `[host-or-path]?key=value...`.
-  // Anchoring to a host/path-shaped prefix prevents the previous
-  // first-question-mark heuristic from misfiring on free text like
-  // "is the API key abc? maybe" (which is not a URL, but contained `?`).
-  // We accept word/dot/slash characters before the `?` and require at
-  // least one `=` in the query portion to confirm it's a query string.
-  return value
-    .replaceAll(NON_ABSOLUTE_URL_DOTTED_RE, scrubQueryReplacement)
-    .replaceAll(NON_ABSOLUTE_URL_SLASHED_RE, scrubQueryReplacement);
+  // Walk the string looking for URL-like substrings of the form
+  // `<host-or-path>?key=value...`. Linear left-to-right scan — no regex,
+  // no backtracking, O(N) in input length. Anchoring to a host/path-
+  // shaped prefix (must contain `.` or `/`) prevents the previous first-
+  // question-mark heuristic from misfiring on free text like "is the
+  // API key abc? maybe" (which has `?` but no URL shape).
+  let result = '';
+  let cursor = 0;
+  while (cursor < value.length) {
+    const q = value.indexOf('?', cursor);
+    if (q === -1) {
+      result += value.slice(cursor);
+      break;
+    }
+    // Walk backward from `q` to find the start of the URL-shaped prefix.
+    let prefixStart = q;
+    while (prefixStart > cursor && isUrlPathChar(value.codePointAt(prefixStart - 1))) {
+      prefixStart -= 1;
+    }
+    // Walk forward from q+1 to find the end of the query.
+    let queryEnd = q + 1;
+    while (queryEnd < value.length && !isQueryTerminator(value.codePointAt(queryEnd))) {
+      queryEnd += 1;
+    }
+    const prefix = value.slice(prefixStart, q);
+    const query = value.slice(q + 1, queryEnd);
+    if (prefix.length > 0 && hasDotOrSlash(prefix) && query.includes('=')) {
+      result += value.slice(cursor, prefixStart);
+      const params = new URLSearchParams(query);
+      scrubSearchParams(params);
+      result += `${prefix}?${params.toString()}`;
+      cursor = queryEnd;
+    } else {
+      // Not URL-shaped — emit the segment up to and including queryEnd
+      // unchanged and advance.
+      result += value.slice(cursor, queryEnd);
+      cursor = queryEnd;
+    }
+  }
+  return result;
 }
 
-// Two narrowly-scoped regexes for URL-shaped fragments preceding `?...`.
-// Kept as separate alternatives (instead of one big alternation regex) so
-// each one's complexity stays well under static-analysis thresholds and
-// so a future change to either form is isolated. The prefix MUST contain
-// a `.` or `/` to qualify — that's what distinguishes a URL-shaped
-// fragment from prose containing a question mark.
-//   `[\w-]+(?:\.[\w-]+)+` — dotted name (with optional `/path` tail)
-const NON_ABSOLUTE_URL_DOTTED_RE = /([\w-]+(?:\.[\w-]+)+(?:\/[\w./-]*)?)\?([^\s?]+)/g;
-//   `[\w.-]*\/[\w./-]+` — slashed path (must contain at least one `/`)
-const NON_ABSOLUTE_URL_SLASHED_RE = /([\w.-]*\/[\w./-]+)\?([^\s?]+)/g;
+/** Word characters plus `.` `-` `/` — the chars that can appear in a
+ *  URL-shaped prefix segment we're willing to scrub for query params.
+ *  `code === undefined` means out-of-bounds (callers should never reach
+ *  this, but treat as not-a-URL-char defensively). */
+function isUrlPathChar(code: number | undefined): boolean {
+  if (code === undefined) return false;
+  return (code >= 48 && code <= 57)          // 0-9
+      || (code >= 65 && code <= 90)          // A-Z
+      || (code >= 97 && code <= 122)         // a-z
+      || code === 95                          // _
+      || code === 46                          // .
+      || code === 45                          // -
+      || code === 47;                         // /
+}
 
-function scrubQueryReplacement(_match: string, prefix: string, query: string): string {
-  if (!query.includes('=')) return `${prefix}?${query}`;
-  const params = new URLSearchParams(query);
-  scrubSearchParams(params);
-  return `${prefix}?${params.toString()}`;
+/** Stop a query scan at whitespace or a second `?`. */
+function isQueryTerminator(code: number | undefined): boolean {
+  if (code === undefined) return true;
+  return code === 32 || code === 9 || code === 10 || code === 13 || code === 63;
+}
+
+function hasDotOrSlash(s: string): boolean {
+  for (let i = 0; i < s.length; i += 1) {
+    const c = s.codePointAt(i);
+    if (c === 46 || c === 47) return true;
+  }
+  return false;
 }
 
 function scrubSearchParams(params: URLSearchParams): void {

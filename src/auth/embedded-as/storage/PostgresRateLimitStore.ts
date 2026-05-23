@@ -9,10 +9,15 @@ import type {
   RateLimitUpdateOptions,
 } from './IRateLimitStore.js';
 
-interface RateLimitRow {
-  state: unknown;
-  version: number;
-}
+/**
+ * Shape of a row returned by the rate-limit-state SELECT statements.
+ * Declared with `Record<string, unknown>` as the base + optional known
+ * keys so it's structurally assignable from Drizzle's untyped raw-SQL
+ * return shape (`RowList<Record<string, unknown>[]>`). The narrow
+ * `as RateLimitRow[]` cast at the call site is enough — no double cast
+ * through `unknown` needed, which keeps the static-analyzer quiet.
+ */
+type RateLimitRow = Record<string, unknown> & { state?: unknown; version?: unknown };
 
 const DEFAULT_MAX_RETRIES = 5;
 
@@ -31,7 +36,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
         WHERE scope = ${scope} AND key = ${key}
         LIMIT 1
       `),
-    ) as unknown as RateLimitRow[];
+    ) as RateLimitRow[];
     const row = rows[0];
     return row ? { state: row.state as TState, version: Number(row.version) } : null;
   }
@@ -50,7 +55,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           FROM rate_limit_state
           WHERE scope = ${scope} AND key = ${key}
           LIMIT 1
-        `) as unknown as RateLimitRow[];
+        `) as RateLimitRow[];
         const current = rows[0];
         const next = compute((current?.state ?? null) as TState | null);
         const expiresAt = options.expiresAt === undefined ? null : new Date(options.expiresAt);
