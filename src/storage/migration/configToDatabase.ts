@@ -74,6 +74,22 @@ export interface MigrationResult {
   };
 }
 
+type MigrationPlan = MigrationResult['plan'];
+
+interface MigrationPaths {
+  configRoot: string;
+  configYamlPath: string;
+  jwksKeyPath: string;
+  cookieSecretPath: string;
+  markerPath: string;
+}
+
+interface PlannedMigration {
+  plan: MigrationPlan;
+  operatorPayload: Omit<OperatorConfig, 'updatedAt'>;
+  userPayload: Omit<UserConfig, 'updatedAt'>;
+}
+
 /**
  * Read the marker file (if present) and return its contents. Returns
  * null when the marker is absent. Used by `runMigration()` to decide
@@ -105,176 +121,211 @@ export async function readMarker(configRoot?: string): Promise<{ migratedAt: num
 export async function runConfigToDatabaseMigration(
   options: MigrationOptions,
 ): Promise<MigrationResult> {
-  const configRoot = options.legacyConfigRoot ?? path.join(os.homedir(), '.dollhouse');
-  const runRoot = options.legacyRunRoot ?? path.join(configRoot, 'run');
-  const configYamlPath = path.join(configRoot, 'config.yml');
-  const jwksKeyPath = path.join(runRoot, 'oauth-signing-key.json');
-  const cookieSecretPath = path.join(runRoot, 'cookie-signing-secret.bin');
-  const markerPath = path.join(configRoot, MARKER_FILENAME);
+  const paths = resolveMigrationPaths(options);
 
   // 1. Idempotence check
-  const existingMarker = await readMarker(configRoot);
+  const existingMarker = await readMarker(paths.configRoot);
   if (existingMarker && !options.dryRun) {
-    return buildResult({
-      status: 'skipped-already-migrated',
-      configMigrated: false,
-      jwksMigrated: false,
-      cookieSecretMigrated: false,
-      markerPath,
-      plan: {
-        configYamlPath,
-        configYamlExists: false,
-        jwksKeyPath,
-        jwksKeyExists: false,
-        cookieSecretPath,
-        cookieSecretExists: false,
-        operatorSectionsToWrite: [],
-        userSectionsToWrite: [],
-        userId: options.userId,
-      },
-    });
+    return buildSkippedResult('skipped-already-migrated', paths, options.userId);
   }
 
-  // 2. Check for any legacy state at all
-  const [configYamlExists, jwksKeyExists, cookieSecretExists] = await Promise.all([
-    fileExists(configYamlPath),
-    fileExists(jwksKeyPath),
-    fileExists(cookieSecretPath),
-  ]);
-
-  if (!configYamlExists && !jwksKeyExists && !cookieSecretExists) {
-    return buildResult({
-      status: 'skipped-no-legacy-state',
-      configMigrated: false,
-      jwksMigrated: false,
-      cookieSecretMigrated: false,
-      markerPath,
-      plan: {
-        configYamlPath, configYamlExists,
-        jwksKeyPath, jwksKeyExists,
-        cookieSecretPath, cookieSecretExists,
-        operatorSectionsToWrite: [],
-        userSectionsToWrite: [],
-        userId: options.userId,
-      },
-    });
-  }
-
-  // 3. Plan: parse config.yml + classify sections
-  let parsedConfig: Record<string, unknown> = {};
-  if (configYamlExists) {
-    const raw = await fs.readFile(configYamlPath, 'utf-8');
-    const parsed = yaml.load(raw, { schema: yaml.FAILSAFE_SCHEMA });
-    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`Legacy config at ${configYamlPath} is not a valid YAML object`);
-    }
-    parsedConfig = parsed as Record<string, unknown>;
-  }
-
-  const { operatorPayload, userPayload, operatorSections, userSections } = splitLegacyConfig(parsedConfig);
-
-  const plan = {
-    configYamlPath, configYamlExists,
-    jwksKeyPath, jwksKeyExists,
-    cookieSecretPath, cookieSecretExists,
-    operatorSectionsToWrite: operatorSections,
-    userSectionsToWrite: userSections,
-    userId: options.userId,
-  };
+  const planned = await planMigration(paths, options.userId);
+  const { plan } = planned;
+  if (!hasLegacyState(plan)) return buildSkippedResult('skipped-no-legacy-state', paths, options.userId, plan);
 
   if (options.dryRun) {
     return buildResult({
       status: 'preview',
-      configMigrated: configYamlExists,
-      jwksMigrated: jwksKeyExists,
-      cookieSecretMigrated: cookieSecretExists,
-      markerPath,
+      configMigrated: plan.configYamlExists,
+      jwksMigrated: plan.jwksKeyExists,
+      cookieSecretMigrated: plan.cookieSecretExists,
+      markerPath: paths.markerPath,
       plan,
     });
   }
 
   // 4. Execute writes — config first (idempotent upsert), keys second.
-  if (configYamlExists) {
-    await options.operatorStore.save(operatorPayload);
-    await options.userStore.save(options.userId, userPayload);
-    logger.info('[configToDatabase] migrated config.yml', {
-      operatorSections: operatorSections.length,
-      userSections: userSections.length,
-      userId: options.userId,
-    });
-  }
-
-  // 5. JWKS keyfile preservation — keep the existing kid + JWK so
-  // currently-issued tokens stay valid.
-  if (jwksKeyExists) {
-    const existingActive = await options.signingKeyStore.getActive('jwks');
-    if (existingActive) {
-      logger.info('[configToDatabase] active JWKS already in store; skipping keyfile import', {
-        existingKid: existingActive.kid,
-      });
-    } else {
-      const raw = await fs.readFile(jwksKeyPath, 'utf-8');
-      const parsed = JSON.parse(raw) as { kid?: string; privateKey?: unknown; publicKey?: unknown; generatedAt?: string };
-      if (typeof parsed.kid !== 'string' || !parsed.privateKey || !parsed.publicKey) {
-        throw new Error(`Legacy JWKS keyfile at ${jwksKeyPath} is malformed (missing kid / privateKey / publicKey)`);
-      }
-      await options.signingKeyStore.rotate({
-        kid: parsed.kid,
-        kind: 'jwks',
-        payload: parsed as unknown as Record<string, unknown>,
-      });
-      logger.info('[configToDatabase] migrated JWKS keyfile', { kid: parsed.kid });
-    }
-  }
-
-  // 6. Cookie secret preservation — generate an opaque kid for the DB
-  // row but preserve the existing secret bytes so existing cookies stay
-  // valid.
-  if (cookieSecretExists) {
-    const existingActive = await options.signingKeyStore.getActive('cookie');
-    if (existingActive) {
-      logger.info('[configToDatabase] active cookie key already in store; skipping keyfile import');
-    } else {
-      const buf = await fs.readFile(cookieSecretPath);
-      if (buf.length < 32) {
-        throw new Error(`Legacy cookie-signing-secret.bin at ${cookieSecretPath} is shorter than 32 bytes (${buf.length})`);
-      }
-      const { randomUUID } = await import('node:crypto');
-      await options.signingKeyStore.rotate({
-        kid: `cookie-migrated-${randomUUID()}`,
-        kind: 'cookie',
-        payload: { secret: buf.toString('base64'), length: buf.length },
-      });
-      logger.info('[configToDatabase] migrated cookie secret', { bytes: buf.length });
-    }
-  }
+  await migrateConfigYaml(options, planned);
+  await migrateJwksKeyfile(options.signingKeyStore, paths.jwksKeyPath, plan.jwksKeyExists);
+  await migrateCookieSecret(options.signingKeyStore, paths.cookieSecretPath, plan.cookieSecretExists);
 
   // 7. Write marker
-  const marker = {
-    migratedAt: Date.now(),
-    version: MARKER_VERSION,
-    fromConfig: configYamlExists,
-    fromJwks: jwksKeyExists,
-    fromCookieSecret: cookieSecretExists,
-  };
-  await fs.mkdir(path.dirname(markerPath), { recursive: true });
-  await fs.writeFile(markerPath, JSON.stringify(marker, null, 2), { mode: 0o600 });
+  await writeMigrationMarker(paths.markerPath, plan);
 
   logger.info('[configToDatabase] migration complete', {
-    markerPath,
-    configMigrated: configYamlExists,
-    jwksMigrated: jwksKeyExists,
-    cookieSecretMigrated: cookieSecretExists,
+    markerPath: paths.markerPath,
+    configMigrated: plan.configYamlExists,
+    jwksMigrated: plan.jwksKeyExists,
+    cookieSecretMigrated: plan.cookieSecretExists,
   });
 
   return buildResult({
     status: 'migrated',
-    configMigrated: configYamlExists,
-    jwksMigrated: jwksKeyExists,
-    cookieSecretMigrated: cookieSecretExists,
-    markerPath,
+    configMigrated: plan.configYamlExists,
+    jwksMigrated: plan.jwksKeyExists,
+    cookieSecretMigrated: plan.cookieSecretExists,
+    markerPath: paths.markerPath,
     plan,
   });
+}
+
+function resolveMigrationPaths(options: MigrationOptions): MigrationPaths {
+  const configRoot = options.legacyConfigRoot ?? path.join(os.homedir(), '.dollhouse');
+  const runRoot = options.legacyRunRoot ?? path.join(configRoot, 'run');
+  return {
+    configRoot,
+    configYamlPath: path.join(configRoot, 'config.yml'),
+    jwksKeyPath: path.join(runRoot, 'oauth-signing-key.json'),
+    cookieSecretPath: path.join(runRoot, 'cookie-signing-secret.bin'),
+    markerPath: path.join(configRoot, MARKER_FILENAME),
+  };
+}
+
+function buildSkippedResult(
+  status: 'skipped-already-migrated' | 'skipped-no-legacy-state',
+  paths: MigrationPaths,
+  userId: string,
+  plan?: MigrationPlan,
+): MigrationResult {
+  return buildResult({
+    status,
+    configMigrated: false,
+    jwksMigrated: false,
+    cookieSecretMigrated: false,
+    markerPath: paths.markerPath,
+    plan: plan ?? emptyPlan(paths, userId),
+  });
+}
+
+function emptyPlan(paths: MigrationPaths, userId: string): MigrationPlan {
+  return {
+    configYamlPath: paths.configYamlPath,
+    configYamlExists: false,
+    jwksKeyPath: paths.jwksKeyPath,
+    jwksKeyExists: false,
+    cookieSecretPath: paths.cookieSecretPath,
+    cookieSecretExists: false,
+    operatorSectionsToWrite: [],
+    userSectionsToWrite: [],
+    userId,
+  };
+}
+
+async function planMigration(paths: MigrationPaths, userId: string): Promise<PlannedMigration> {
+  const [configYamlExists, jwksKeyExists, cookieSecretExists] = await Promise.all([
+    fileExists(paths.configYamlPath),
+    fileExists(paths.jwksKeyPath),
+    fileExists(paths.cookieSecretPath),
+  ]);
+  const parsedConfig = configYamlExists ? await loadLegacyConfig(paths.configYamlPath) : {};
+  const { operatorPayload, userPayload, operatorSections, userSections } = splitLegacyConfig(parsedConfig);
+
+  return {
+    operatorPayload,
+    userPayload,
+    plan: {
+      configYamlPath: paths.configYamlPath,
+      configYamlExists,
+      jwksKeyPath: paths.jwksKeyPath,
+      jwksKeyExists,
+      cookieSecretPath: paths.cookieSecretPath,
+      cookieSecretExists,
+      operatorSectionsToWrite: operatorSections,
+      userSectionsToWrite: userSections,
+      userId,
+    },
+  };
+}
+
+function hasLegacyState(plan: MigrationPlan): boolean {
+  return plan.configYamlExists || plan.jwksKeyExists || plan.cookieSecretExists;
+}
+
+async function loadLegacyConfig(configYamlPath: string): Promise<Record<string, unknown>> {
+  const raw = await fs.readFile(configYamlPath, 'utf-8');
+  const parsed = yaml.load(raw, { schema: yaml.FAILSAFE_SCHEMA });
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`Legacy config at ${configYamlPath} is not a valid YAML object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function migrateConfigYaml(options: MigrationOptions, planned: PlannedMigration): Promise<void> {
+  if (!planned.plan.configYamlExists) return;
+
+  await options.operatorStore.save(planned.operatorPayload);
+  await options.userStore.save(options.userId, planned.userPayload);
+  logger.info('[configToDatabase] migrated config.yml', {
+    operatorSections: planned.plan.operatorSectionsToWrite.length,
+    userSections: planned.plan.userSectionsToWrite.length,
+    userId: options.userId,
+  });
+}
+
+async function migrateJwksKeyfile(
+  signingKeyStore: ISigningKeyStore,
+  jwksKeyPath: string,
+  jwksKeyExists: boolean,
+): Promise<void> {
+  if (!jwksKeyExists) return;
+
+  const existingActive = await signingKeyStore.getActive('jwks');
+  if (existingActive) {
+    logger.info('[configToDatabase] active JWKS already in store; skipping keyfile import', {
+      existingKid: existingActive.kid,
+    });
+    return;
+  }
+
+  const raw = await fs.readFile(jwksKeyPath, 'utf-8');
+  const parsed = JSON.parse(raw) as { kid?: string; privateKey?: unknown; publicKey?: unknown; generatedAt?: string };
+  if (typeof parsed.kid !== 'string' || !parsed.privateKey || !parsed.publicKey) {
+    throw new Error(`Legacy JWKS keyfile at ${jwksKeyPath} is malformed (missing kid / privateKey / publicKey)`);
+  }
+  await signingKeyStore.rotate({
+    kid: parsed.kid,
+    kind: 'jwks',
+    payload: parsed as unknown as Record<string, unknown>,
+  });
+  logger.info('[configToDatabase] migrated JWKS keyfile', { kid: parsed.kid });
+}
+
+async function migrateCookieSecret(
+  signingKeyStore: ISigningKeyStore,
+  cookieSecretPath: string,
+  cookieSecretExists: boolean,
+): Promise<void> {
+  if (!cookieSecretExists) return;
+
+  const existingActive = await signingKeyStore.getActive('cookie');
+  if (existingActive) {
+    logger.info('[configToDatabase] active cookie key already in store; skipping keyfile import');
+    return;
+  }
+
+  const buf = await fs.readFile(cookieSecretPath);
+  if (buf.length < 32) {
+    throw new Error(`Legacy cookie-signing-secret.bin at ${cookieSecretPath} is shorter than 32 bytes (${buf.length})`);
+  }
+  const { randomUUID } = await import('node:crypto');
+  await signingKeyStore.rotate({
+    kid: `cookie-migrated-${randomUUID()}`,
+    kind: 'cookie',
+    payload: { secret: buf.toString('base64'), length: buf.length },
+  });
+  logger.info('[configToDatabase] migrated cookie secret', { bytes: buf.length });
+}
+
+async function writeMigrationMarker(markerPath: string, plan: MigrationPlan): Promise<void> {
+  const marker = {
+    migratedAt: Date.now(),
+    version: MARKER_VERSION,
+    fromConfig: plan.configYamlExists,
+    fromJwks: plan.jwksKeyExists,
+    fromCookieSecret: plan.cookieSecretExists,
+  };
+  await fs.mkdir(path.dirname(markerPath), { recursive: true });
+  await fs.writeFile(markerPath, JSON.stringify(marker, null, 2), { mode: 0o600 });
 }
 
 /**

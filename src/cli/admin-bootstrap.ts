@@ -46,6 +46,11 @@ interface GithubUser {
   login: string;
 }
 
+interface BootstrapIdentity {
+  adminSub: string;
+  adminMethod: 'magic-link' | 'github';
+}
+
 /**
  * Resolve a GitHub username to its numeric ID via the public API. We
  * record the numeric ID rather than the username because GitHub allows
@@ -109,7 +114,7 @@ function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); // NOSONAR — anchored email regex; quantifiers separated by literal anchors (@ and .); CLI input bounded by operator-typed length
 }
 
-async function main(): Promise<void> {
+function parseAndValidateOptions(): BootstrapOptions {
   const program = new Command();
   program
     .name('dollhouse-admin-bootstrap')
@@ -124,44 +129,13 @@ async function main(): Promise<void> {
     .option('--email <email>', 'admin email address (for magic-link method)')
     .parse(process.argv);
 
-  const opts = program.opts<BootstrapOptions>();
+  return program.opts<BootstrapOptions>();
+}
 
-  let adminSub: string;
-  let adminMethod: 'magic-link' | 'github';
-
-  if (opts.method === 'github') {
-    adminMethod = 'github';
-    let id: number;
-    if (opts.githubId) {
-      const parsed = Number.parseInt(opts.githubId, 10);
-      if (!Number.isFinite(parsed) || parsed <= 0) {
-        process.stderr.write(`Invalid --github-id '${opts.githubId}': must be a positive integer.\n`);
-        process.exit(1);
-      }
-      id = parsed;
-    } else if (opts.githubUsername) {
-      try {
-        id = await resolveGithubUserId(opts.githubUsername);
-        process.stderr.write(`[admin bootstrap] Resolved GitHub user '${opts.githubUsername}' to id=${id}.\n`);
-      } catch (err) {
-        process.stderr.write(
-          `Failed to resolve GitHub username: ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        process.exit(2);
-      }
-    } else {
-      process.stderr.write('--method github requires either --github-username or --github-id.\n');
-      process.exit(1);
-    }
-    adminSub = `github_${id}`;
-  } else if (opts.method === 'magic-link') {
-    adminMethod = 'magic-link';
-    if (!opts.email || !isValidEmail(opts.email)) {
-      process.stderr.write(`--method magic-link requires a valid --email '<addr>'.\n`);
-      process.exit(1);
-    }
-    adminSub = magicLinkSubFromEmail(opts.email);
-  } else if (opts.method === 'local-password' || opts.method === 'local-account') {
+async function resolveBootstrapIdentity(opts: BootstrapOptions): Promise<BootstrapIdentity> {
+  if (opts.method === 'github') return bootstrapGithubAdmin(opts);
+  if (opts.method === 'magic-link') return bootstrapMagicLinkAdmin(opts);
+  if (opts.method === 'local-password' || opts.method === 'local-account') {
     process.stderr.write(
       "Local-account deployments bootstrap implicitly via 'dollhouse-create-user'. " +
       "Run that command instead — the first invite issued is automatically the admin invite.\n",
@@ -173,6 +147,54 @@ async function main(): Promise<void> {
     );
     process.exit(1);
   }
+}
+
+async function bootstrapGithubAdmin(opts: BootstrapOptions): Promise<BootstrapIdentity> {
+  const id = await resolveBootstrapGithubId(opts);
+  return { adminSub: `github_${id}`, adminMethod: 'github' };
+}
+
+async function resolveBootstrapGithubId(opts: BootstrapOptions): Promise<number> {
+  if (opts.githubId) return parseGithubId(opts.githubId);
+  if (opts.githubUsername) return resolveBootstrapGithubUsername(opts.githubUsername);
+
+  process.stderr.write('--method github requires either --github-username or --github-id.\n');
+  process.exit(1);
+}
+
+function parseGithubId(githubId: string): number {
+  const parsed = Number.parseInt(githubId, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    process.stderr.write(`Invalid --github-id '${githubId}': must be a positive integer.\n`);
+    process.exit(1);
+  }
+  return parsed;
+}
+
+async function resolveBootstrapGithubUsername(githubUsername: string): Promise<number> {
+  try {
+    const id = await resolveGithubUserId(githubUsername);
+    process.stderr.write(`[admin bootstrap] Resolved GitHub user '${githubUsername}' to id=${id}.\n`);
+    return id;
+  } catch (err) {
+    process.stderr.write(
+      `Failed to resolve GitHub username: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    process.exit(2);
+  }
+}
+
+function bootstrapMagicLinkAdmin(opts: BootstrapOptions): BootstrapIdentity {
+  if (!opts.email || !isValidEmail(opts.email)) {
+    process.stderr.write(`--method magic-link requires a valid --email '<addr>'.\n`);
+    process.exit(1);
+  }
+  return { adminSub: magicLinkSubFromEmail(opts.email), adminMethod: 'magic-link' };
+}
+
+async function main(): Promise<void> {
+  const opts = parseAndValidateOptions();
+  const { adminSub, adminMethod } = await resolveBootstrapIdentity(opts);
 
   // Round 5 post-triage HIGH-1: openCliAuthStorage handles all three
   // backends including postgres (which the previous direct
