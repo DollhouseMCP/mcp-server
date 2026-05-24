@@ -29,7 +29,12 @@ import {
 import type { CRUDEndpoint } from './OperationRouter.js';
 import type { CorrelationIdProvider, HandlerRegistry } from './MCPAQLHandler.js';
 import { normalizeMCPAQLElementType } from './types.js';
-import { type ExecutingAgentEntry, validateRequiredString } from './shared.js';
+import {
+  type ExecutingAgentEntry,
+  validateRequiredString,
+  validateChallengeIdFormat,
+  VerificationError,
+} from './shared.js';
 import {
   buildInvalidPolicyAdvisory,
   buildOperationSummary,
@@ -74,27 +79,7 @@ export interface GatekeeperHandlerDeps {
 }
 
 const VERIFY_SOURCE = 'MCPAQLHandler.dispatchGatekeeper.verify';
-const UUID_V4_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEADLOCK_RELIEF_REASON = 'Deadlock relief requested';
-
-class VerificationError extends Error {
-  constructor(
-    public readonly errorCode: GatekeeperErrorCode,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'VerificationError';
-  }
-}
-
-function validateChallengeIdFormat(challengeId: string): void {
-  if (!UUID_V4_REGEX.test(challengeId)) {
-    throw new VerificationError(
-      GatekeeperErrorCode.VERIFICATION_FAILED,
-      `Invalid challenge_id format. Expected UUID v4 (e.g., "550e8400-e29b-41d4-a716-446655440000").`
-    );
-  }
-}
 
 function challengeIsForDeadlockRelief(challenge: { reason: string } | undefined): boolean {
   return typeof challenge?.reason === 'string' && challenge.reason.startsWith(DEADLOCK_RELIEF_REASON);

@@ -1,6 +1,13 @@
 import { filterFields, isValidPreset, normalizeFieldNames } from '../../utils/FieldFilter.js';
 import { logger } from '../../utils/logger.js';
 
+type FieldPreset = 'minimal' | 'standard' | 'full';
+
+interface FieldSelectionResult {
+  fields?: string[];
+  preset?: FieldPreset;
+}
+
 export function applyFieldSelection(
   result: unknown,
   params?: Record<string, unknown>
@@ -22,10 +29,7 @@ export function applyFieldSelection(
   return filterWithArrayAwareness(result, selection.fields, selection.preset);
 }
 
-function resolveFieldSelection(fieldsParam: unknown): {
-  fields?: string[];
-  preset?: 'minimal' | 'standard' | 'full';
-} {
+function resolveFieldSelection(fieldsParam: unknown): FieldSelectionResult {
   if (typeof fieldsParam === 'string') {
     return resolveStringFieldSelection(fieldsParam);
   }
@@ -35,10 +39,7 @@ function resolveFieldSelection(fieldsParam: unknown): {
   return {};
 }
 
-function resolveStringFieldSelection(fieldsParam: string): {
-  fields?: string[];
-  preset?: 'minimal' | 'standard' | 'full';
-} {
+function resolveStringFieldSelection(fieldsParam: string): FieldSelectionResult {
   if (!isValidPreset(fieldsParam)) {
     return { fields: [fieldsParam] };
   }

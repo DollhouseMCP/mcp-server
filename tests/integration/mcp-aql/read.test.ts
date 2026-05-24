@@ -21,6 +21,11 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 
+const PERSONA_1_NAME = 'test-persona-1';
+const CODE_REVIEW_SKILL = 'code-review';
+const MEETING_NOTES_TEMPLATE = 'meeting-notes';
+const READ_TEST_ENSEMBLE_1 = 'read-test-ensemble-1';
+
 describe('MCP-AQL READ Endpoint Integration', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -52,7 +57,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
     await mcpAqlHandler.handleCreate({
       operation: 'create_element',
       params: {
-        element_name: 'test-persona-1',
+        element_name: PERSONA_1_NAME,
         element_type: 'personas',
         description: 'First test persona for read operations',
         content: '# Test Persona 1\n\nA persona for testing list and search.',
@@ -75,7 +80,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
     await mcpAqlHandler.handleCreate({
       operation: 'create_element',
       params: {
-        element_name: 'code-review',
+        element_name: CODE_REVIEW_SKILL,
         element_type: 'skills',
         description: 'Reviews code for quality and best practices',
         content: '# Code Review Skill\n\nAnalyze code patterns.',
@@ -98,7 +103,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
     await mcpAqlHandler.handleCreate({
       operation: 'create_element',
       params: {
-        element_name: 'meeting-notes',
+        element_name: MEETING_NOTES_TEMPLATE,
         element_type: 'templates',
         description: 'Template for meeting notes',
         content: '# Meeting Notes\n\nDate: {{date}}\nAttendees: {{attendees}}\n\n## Discussion\n{{discussion}}',
@@ -260,7 +265,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -273,7 +278,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         expect(Array.isArray(data.content)).toBe(true);
         expect(data.content![0].type).toBe('text');
         // Text contains element details including the name
-        expect(data.content![0].text).toContain('test-persona-1');
+        expect(data.content![0].text).toContain(PERSONA_1_NAME);
       }
     });
 
@@ -281,7 +286,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         params: {
-          element_name: 'code-review',
+          element_name: CODE_REVIEW_SKILL,
           element_type: 'skills',
         },
       });
@@ -294,7 +299,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         expect(Array.isArray(data.content)).toBe(true);
         expect(data.content![0].type).toBe('text');
         // Text contains element details including the name
-        expect(data.content![0].text).toContain('code-review');
+        expect(data.content![0].text).toContain(CODE_REVIEW_SKILL);
       }
     });
 
@@ -303,7 +308,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         operation: 'get_element',
         elementType: 'template' as any,
         params: {
-          element_name: 'meeting-notes',
+          element_name: MEETING_NOTES_TEMPLATE,
         },
       });
 
@@ -345,7 +350,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'get_element_details',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -599,7 +604,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elementType');
+        expect(result.error).toContain('element_type');
       }
     });
 
@@ -685,7 +690,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -755,7 +760,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -782,7 +787,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'validate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -802,7 +807,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'validate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
           strict: true,
         },
@@ -816,7 +821,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         operation: 'validate_element',
         elementType: 'skill' as any,
         params: {
-          element_name: 'code-review',
+          element_name: CODE_REVIEW_SKILL,
         },
       });
 
@@ -895,7 +900,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'render',
         params: {
-          element_name: 'meeting-notes',
+          element_name: MEETING_NOTES_TEMPLATE,
           variables: {
             date: '2025-12-23',
             attendees: 'Alice, Bob',
@@ -981,7 +986,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'render',
         params: {
-          element_name: 'meeting-notes',
+          element_name: MEETING_NOTES_TEMPLATE,
           variables: {
             date: '2025-12-23',
             // Missing attendees and discussion
@@ -999,7 +1004,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'export_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
           format: 'json',
         },
@@ -1016,7 +1021,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         };
         expect(data.exportVersion).toBe('1.0');
         expect(data.elementType).toBe('personas');
-        expect(data.elementName).toBe('test-persona-1');
+        expect(data.elementName).toBe(PERSONA_1_NAME);
         expect(data.format).toBe('json');
         expect(data.data).toBeDefined();
         // Verify data can be parsed as JSON
@@ -1028,7 +1033,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'export_element',
         params: {
-          element_name: 'code-review',
+          element_name: CODE_REVIEW_SKILL,
           element_type: 'skills',
           format: 'yaml',
         },
@@ -1050,7 +1055,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'export_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -1067,7 +1072,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         operation: 'export_element',
         elementType: 'template' as any,
         params: {
-          element_name: 'meeting-notes',
+          element_name: MEETING_NOTES_TEMPLATE,
           format: 'json',
         },
       });
@@ -1119,7 +1124,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'export_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           format: 'json',
         },
       });
@@ -1137,7 +1142,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -1145,7 +1150,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: {
-          element_name: 'code-review',
+          element_name: CODE_REVIEW_SKILL,
           element_type: 'skills',
         },
       });
@@ -1155,7 +1160,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -1177,7 +1182,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'code-review',
+          element_name: CODE_REVIEW_SKILL,
           element_type: 'skills',
         },
       });
@@ -1190,7 +1195,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         operation: 'deactivate_element',
         elementType: 'persona' as any,
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
         },
       });
 
@@ -1202,7 +1207,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -1211,7 +1216,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'test-persona-1',
+          element_name: PERSONA_1_NAME,
           element_type: 'personas',
         },
       });
@@ -1478,14 +1483,14 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
-          element_name: 'read-test-ensemble-1',
+          element_name: READ_TEST_ENSEMBLE_1,
           element_type: 'ensembles',
           description: 'First ensemble for read tests',
           content: '# Ensemble 1\n\nFirst test ensemble.',
           metadata: {
             activationStrategy: 'all',
             elements: [
-              { element_name: 'code-review', element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
+              { element_name: CODE_REVIEW_SKILL, element_type: 'skill', role: 'primary', priority: 80, activation: 'always' },
             ],
           },
         },
@@ -1513,14 +1518,14 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         params: {
-          element_name: 'read-test-ensemble-1',
+          element_name: READ_TEST_ENSEMBLE_1,
           element_type: 'ensembles',
         },
       });
 
       expect(result.success).toBe(true);
       const text = result.data?.content?.[0]?.text ?? '';
-      expect(text).toContain('read-test-ensemble-1');
+      expect(text).toContain(READ_TEST_ENSEMBLE_1);
     });
 
     it('should list ensembles', async () => {
@@ -1536,7 +1541,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
         const data = result.data as { items?: Array<{ name?: string; element_name?: string }> };
         expect(data.items).toBeDefined();
         const names = (data.items || []).map((i: any) => i.name || i.element_name);
-        expect(names).toContain('read-test-ensemble-1');
+        expect(names).toContain(READ_TEST_ENSEMBLE_1);
         expect(names).toContain('read-test-ensemble-2');
       }
     });
@@ -1566,7 +1571,7 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       const activateResult = await mcpAqlHandler.handleRead({
         operation: 'activate_element',
         params: {
-          element_name: 'read-test-ensemble-1',
+          element_name: READ_TEST_ENSEMBLE_1,
           element_type: 'ensembles',
         },
       });
@@ -1581,13 +1586,13 @@ describe('MCP-AQL READ Endpoint Integration', () => {
       });
       expect(activeResult.success).toBe(true);
       const activeText = activeResult.data?.content?.[0]?.text ?? '';
-      expect(activeText).toContain('read-test-ensemble-1');
+      expect(activeText).toContain(READ_TEST_ENSEMBLE_1);
 
       // Deactivate
       const deactivateResult = await mcpAqlHandler.handleRead({
         operation: 'deactivate_element',
         params: {
-          element_name: 'read-test-ensemble-1',
+          element_name: READ_TEST_ENSEMBLE_1,
           element_type: 'ensembles',
         },
       });

@@ -11,6 +11,8 @@ import {
   validateExecutionElementName,
 } from './shared.js';
 
+type StepOutcome = 'success' | 'failure' | 'partial';
+
 export class AgentExecutionHandler {
   private static readonly MAX_RECENT_BLOCKS = 50;
 
@@ -207,7 +209,7 @@ export class AgentExecutionHandler {
     const updateResult = await manager.recordAgentStep({
       agentName: elementName,
       stepDescription: params.stepDescription as string,
-      outcome: params.outcome as 'success' | 'failure' | 'partial',
+      outcome: params.outcome as StepOutcome,
       findings: params.findings as string,
       confidence: params.confidence as number,
       nextActionHint,
@@ -222,7 +224,7 @@ export class AgentExecutionHandler {
 
   private validateNextActionHint(value: unknown): string | undefined {
     if (value !== undefined && typeof value !== 'string') {
-      throw new Error('nextActionHint must be a string if provided');
+      throw new TypeError('nextActionHint must be a string if provided');
     }
     return value;
   }
@@ -231,8 +233,8 @@ export class AgentExecutionHandler {
     if (value === undefined) {
       return undefined;
     }
-    if (typeof value !== 'number' || isNaN(value)) {
-      throw new Error('riskScore must be a number if provided');
+    if (typeof value !== 'number' || Number.isNaN(value)) {
+      throw new TypeError('riskScore must be a number if provided');
     }
     if (value < 0 || value > 100) {
       throw new Error('riskScore must be between 0 and 100');
@@ -258,7 +260,7 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const completeResult = await manager.completeAgentGoal({
       agentName: elementName,
-      outcome: params.outcome as 'success' | 'failure' | 'partial',
+      outcome: params.outcome as StepOutcome,
       summary: params.summary as string,
       goalId: params.goalId as string | undefined,
     });

@@ -8,7 +8,8 @@ export class ElementCRUDDispatcher {
   constructor(private readonly handlers: HandlerRegistry) {}
 
   async dispatch(method: string, input: OperationInput): Promise<unknown> {
-    const { elementType, params } = input;
+    const elementType = input.element_type ?? input.elementType;
+    const { params } = input;
     const p = params as Record<string, unknown>;
 
     switch (method) {

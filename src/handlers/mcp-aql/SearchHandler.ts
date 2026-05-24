@@ -30,9 +30,10 @@ export class SearchHandler {
   }
 
   private async queryElements(input: OperationInput): Promise<unknown> {
-    const { elementType, params } = input;
+    const elementType = input.element_type ?? input.elementType;
+    const { params } = input;
     if (!elementType) {
-      throw new Error('elementType is required for query_elements operation');
+      throw new Error('element_type is required for query_elements operation');
     }
 
     const elements = (await this.handlers.elementCRUD.getElements(elementType)) as IElement[];
@@ -91,7 +92,8 @@ export class SearchHandler {
   private async searchElements(input: OperationInput): Promise<unknown> {
     const searchStart = performance.now();
     const memoryBefore = process.memoryUsage().heapUsed;
-    const { elementType, params } = input;
+    const elementType = input.element_type ?? input.elementType;
+    const { params } = input;
     const p = params as Record<string, unknown>;
     const query = (p.query as string)?.trim();
     this.validateQuery(query);
