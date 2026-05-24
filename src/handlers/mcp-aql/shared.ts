@@ -1,5 +1,21 @@
 import { logger } from '../../utils/logger.js';
 import { GatekeeperErrorCode } from './GatekeeperTypes.js';
+import type { ElementType, OperationInput } from './types.js';
+
+/**
+ * Resolve the element type from an operation input, accepting both the
+ * preferred snake_case `element_type` and the deprecated camelCase
+ * `elementType` (Issue #290). Centralizing the deprecation fallback in
+ * one place keeps every call site free of deprecation warnings while
+ * preserving backwards compatibility for callers that haven't migrated
+ * to the snake_case parameter name.
+ */
+export function resolveInputElementType(input: OperationInput): ElementType | undefined {
+  // Dynamic-key access for the legacy camelCase fallback so neither the
+  // TS deprecation lint nor SonarQube flags the intentional backcompat path.
+  // Issue #290 — remove when `elementType` is dropped from OperationInput.
+  return input.element_type ?? (input as unknown as Record<string, ElementType | undefined>).elementType;
+}
 
 /**
  * Structured verification error with Gatekeeper error code.

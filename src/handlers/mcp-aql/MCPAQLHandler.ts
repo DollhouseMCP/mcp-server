@@ -56,6 +56,7 @@ import {
   validateRequiredString,
   validateChallengeIdFormat,
   VerificationError,
+  resolveInputElementType,
 } from './shared.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -837,7 +838,8 @@ export class MCPAQLHandler {
         return this.invalidInputFailure(input, startTime);
       }
 
-      const { operation, elementType, params } = parsedInput;
+      const { operation, params } = parsedInput;
+      const elementType = resolveInputElementType(parsedInput);
 
       // Step 1b: In HTTP+DB mode, require identity before data operations.
       // Identity operations (set/get/clear) and gatekeeper infra are exempt.
@@ -908,9 +910,9 @@ export class MCPAQLHandler {
     startTime: number
   ): Promise<OperationFailure | null> {
     const { operation, params } = input;
-    const elementType = input.element_type ?? input.elementType;
+    const elementType = resolveInputElementType(input);
     if (!env.DOLLHOUSE_GATEKEEPER_ENABLED) {
-      Gatekeeper.validate(operation, endpoint);
+      this.gatekeeper.validateRoute(operation, endpoint);
       return null;
     }
 
@@ -1335,7 +1337,7 @@ export class MCPAQLHandler {
     method: string,
     input: OperationInput
   ): Promise<unknown> {
-    const elementType = input.element_type ?? input.elementType;
+    const elementType = resolveInputElementType(input);
     const { params } = input;
     const handler = this.handlers.elementCRUD;
     const p = params as Record<string, unknown>;
@@ -2034,7 +2036,7 @@ export class MCPAQLHandler {
   private buildMeta(startTime: number): ResponseMeta {
     return {
       requestId: this.contextTracker?.getCorrelationId() ?? 'unknown',
-      durationMs: parseFloat((performance.now() - startTime).toFixed(2)),
+      durationMs: Number.parseFloat((performance.now() - startTime).toFixed(2)),
       timestamp: new Date().toISOString(),
     };
   }

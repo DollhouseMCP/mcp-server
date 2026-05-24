@@ -510,7 +510,7 @@ export class DollhouseContainer {
 
     // Issue #706: Test hook — inject artificial delay to simulate slow deferred setup.
     // Only active when DOLLHOUSE_TEST_DEFERRED_DELAY_MS is set (integration tests).
-    const testDelay = parseInt(process.env.DOLLHOUSE_TEST_DEFERRED_DELAY_MS || '0', 10);
+    const testDelay = Number.parseInt(process.env.DOLLHOUSE_TEST_DEFERRED_DELAY_MS || '0', 10);
     if (testDelay > 0) {
       logger.info(`[Startup] Test delay injected: ${testDelay}ms`);
       await new Promise(resolve => setTimeout(resolve, testDelay));
@@ -1436,7 +1436,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext) as SessionResolver);
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-      const registry = new ToolRegistry(child.resolve<Server>('Server'));
+        const registry = new ToolRegistry(child.resolve<Server>('Server'));
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1724,13 +1724,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-      const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as Server);
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-      const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as Server);
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);

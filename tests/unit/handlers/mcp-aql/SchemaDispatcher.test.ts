@@ -976,7 +976,7 @@ describe('SchemaDispatcher', () => {
         await expect(
           SchemaDispatcher.dispatch(
             'find_similar_elements',
-            { element_name: 'test', limit: NaN },
+            { element_name: 'test', limit: Number.NaN },
             mockRegistry
           )
         ).rejects.toThrow("Parameter 'limit' for operation 'find_similar_elements' must be a number, got number");

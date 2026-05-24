@@ -2,13 +2,13 @@ import * as yaml from 'js-yaml';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import type { OperationInput } from './types.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
-import type { ExportPackage } from './shared.js';
+import { type ExportPackage, resolveInputElementType } from './shared.js';
 
 export class ElementCRUDDispatcher {
   constructor(private readonly handlers: HandlerRegistry) {}
 
   async dispatch(method: string, input: OperationInput): Promise<unknown> {
-    const elementType = input.element_type ?? input.elementType;
+    const elementType = resolveInputElementType(input);
     const { params } = input;
     const p = params as Record<string, unknown>;
 

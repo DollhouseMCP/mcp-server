@@ -6,7 +6,7 @@ import type { IElement } from '../../types/elements/IElement.js';
 import { logger } from '../../utils/logger.js';
 import type { OperationInput } from './types.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
-import { normalizePaginationParams } from './shared.js';
+import { normalizePaginationParams, resolveInputElementType } from './shared.js';
 
 interface SearchResult {
   type: string;
@@ -30,7 +30,7 @@ export class SearchHandler {
   }
 
   private async queryElements(input: OperationInput): Promise<unknown> {
-    const elementType = input.element_type ?? input.elementType;
+    const elementType = resolveInputElementType(input);
     const { params } = input;
     if (!elementType) {
       throw new Error('element_type is required for query_elements operation');
@@ -92,7 +92,7 @@ export class SearchHandler {
   private async searchElements(input: OperationInput): Promise<unknown> {
     const searchStart = performance.now();
     const memoryBefore = process.memoryUsage().heapUsed;
-    const elementType = input.element_type ?? input.elementType;
+    const elementType = resolveInputElementType(input);
     const { params } = input;
     const p = params as Record<string, unknown>;
     const query = (p.query as string)?.trim();
