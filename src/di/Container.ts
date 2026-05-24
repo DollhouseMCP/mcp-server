@@ -292,170 +292,23 @@ export class DollhouseContainer {
     // PathService is available for PortfolioManager and downstream.
     await new PathsServiceRegistrar().bootstrapAndRegister(this);
 
-    // Bootstrap database connection when storage backend is 'database'.
-    // Must happen before any manager resolution so DatabaseInstance is available.
-    // All DB-specific wiring lives in DatabaseServiceRegistrar — Container stays
-    // out of the bootstrap/registration details.
-    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
-      await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
-    }
-
-    // Storage layers for operator config, user config, and shared cache.
-    // Must run after DatabaseServiceRegistrar so DatabaseInstance is resolvable
-    // for the postgres backends; runs before consumers (ConfigManager façade in
-    // particular) so they can resolve the stores when their factories fire.
-    const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
-    await new StorageServiceRegistrar().bootstrapAndRegister(this);
-
-    // Post-DB security warmups. Must run AFTER DatabaseServiceRegistrar so
-    // probes can hit the real DB instead of silently falling back to file
-    // mode (which would skip the "existing audit data, retention is changing"
-    // operator warning on hosted deployments).
-    await new SecurityServiceRegistrar().runPostDbWarnings(this);
-
-    // Auto-migrate legacy ~/.dollhouse/config.yml and keyfiles into the new
-    // stores in DB mode on first startup. Idempotent via marker file; throws
-    // on partial-migration failure so startup halts rather than running with
-    // half-migrated state.
-    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
-      const { runConfigToDatabaseMigration } = await import('../storage/migration/configToDatabase.js');
-      const userId = this.hasRegistration('BootstrappedUserId')
-        ? this.resolve<string>('BootstrappedUserId')
-        : null;
-      if (userId) {
-        const result = await runConfigToDatabaseMigration({
-          operatorStore: this.resolve('OperatorConfigStore'),
-          userStore: this.resolve('UserConfigStore'),
-          // SigningKeyStore is registered later by AuthServiceRegistrar; resolve
-          // it lazily by constructing a dedicated one here against the same DB.
-          signingKeyStore: await (await import('../storage/signingKeys/createSigningKeyStore.js')).createSigningKeyStore({
-            database: this.hasRegistration('SystemDatabaseInstance')
-              ? this.resolve('SystemDatabaseInstance')
-              : this.resolve('DatabaseInstance'),
-          }),
-          userId,
-        });
-        if (result.status === 'migrated') {
-          logger.info('[Container] Phase 4.5 legacy config migrated to database', {
-            configMigrated: result.configMigrated,
-            jwksMigrated: result.jwksMigrated,
-            cookieSecretMigrated: result.cookieSecretMigrated,
-          });
-        }
-      }
-    }
-
-    // Unified auth (JWT) — feature-flag gated (default: off).
-    // Must run after SecurityServiceRegistrar (ContextTracker) and
-    // DatabaseServiceRegistrar (UserIdentityService).
-    const { AuthServiceRegistrar } = await import('./registrars/AuthServiceRegistrar.js');
-    await new AuthServiceRegistrar().bootstrapAndRegister(this);
-
-    // Shared pool services — feature-flag gated (default: off).
-    // Must run after PathsServiceRegistrar and DatabaseServiceRegistrar
-    // so PathService and (optionally) DatabaseInstance are available.
-    const { SharedPoolServiceRegistrar } = await import('../collection/shared-pool/SharedPoolServiceRegistrar.js');
-    await new SharedPoolServiceRegistrar().bootstrapAndRegister(this);
-
-    // Run deployment seed loader if the shared pool is enabled.
-    // Idempotent — safe on every startup. Runs after the registrar so
-    // SharedPoolInstaller and ProvenanceStore are available.
-    if (this.hasRegistration('DeploymentSeedLoader')) {
-      try {
-        const seedLoader = this.resolve<{ loadSeeds(): Promise<unknown> }>('DeploymentSeedLoader');
-        await seedLoader.loadSeeds();
-      } catch (err) {
-        logger.warn('[Container] Deployment seed loading failed (non-fatal)', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-
-    // Issue #1948: Wire Memory service refs (deferred from registerServices to avoid eager resolution)
-    try {
-      const mm = this.resolve<MemoryManager>('MemoryManager');
-      mm.setRetentionPolicyService(this.resolve('RetentionPolicyService'));
-      Memory.setRootMemoryManager(mm as { list(): Promise<import('../elements/memories/Memory.js').Memory[]>; save(memory: import('../elements/memories/Memory.js').Memory, filePath?: string): Promise<void> });
-    } catch {
-      // Not available in test containers — safe to skip
-    }
+    await this.bootstrapDatabaseIfEnabled();
+    await this.bootstrapStorageAndSecurity();
+    await this.runLegacyConfigMigrationIfEnabled();
+    await this.bootstrapAuthAndSharedPool();
+    await this.runDeploymentSeedLoaderIfEnabled();
+    this.wireMemoryServiceRefs();
 
     const timer = this.resolve<StartupTimer>('StartupTimer');
     const startTime = Date.now();
     const migrationManager = this.resolve<MigrationManager>('MigrationManager');
     const portfolioManager = this.resolve<PortfolioManager>('PortfolioManager');
 
-    // --- config_checks (critical) ---
-    timer.startPhase('config_checks', true);
-
-    // PERFORMANCE OPTIMIZATION: Run independent checks in parallel (40-60% faster startup)
-    // Use Promise.allSettled to capture all check results, even if one fails
-    const results = await Promise.allSettled([
-      migrationManager.needsMigration(),
-      portfolioManager.exists()
-    ]);
-
-    // Extract results and collect any errors
-    const checkErrors: Array<{ check: string; error: Error }> = [];
-
-    let needsMigration = false;
-    if (results[0].status === 'fulfilled') {
-      needsMigration = results[0].value;
-    } else {
-      checkErrors.push({
-        check: 'migration',
-        error: results[0].reason instanceof Error ? results[0].reason : new Error(String(results[0].reason))
-      });
-    }
-
-    let portfolioExists = false;
-    if (results[1].status === 'fulfilled') {
-      portfolioExists = results[1].value;
-    } else {
-      checkErrors.push({
-        check: 'portfolio',
-        error: results[1].reason instanceof Error ? results[1].reason : new Error(String(results[1].reason))
-      });
-    }
-
-    // If both checks failed, throw comprehensive error
-    if (checkErrors.length === 2) {
-      const errorMessages = checkErrors.map(e => `${e.check}: ${e.error.message}`).join('; ');
-      throw new Error(`Portfolio preparation failed - all checks failed: ${errorMessages}`);
-    }
-
-    // If only one check failed, log warning but continue
-    if (checkErrors.length === 1) {
-      logger.warn(`Portfolio check failed but continuing: ${checkErrors[0].check} - ${checkErrors[0].error.message}`);
-    }
-
-    timer.endPhase('config_checks');
-
-    // --- migration (critical, conditional) ---
-    if (needsMigration) {
-      timer.startPhase('migration', true);
-      logger.info("Legacy personas detected. Starting migration...");
-      const result = await migrationManager.migrate({ backup: true });
-
-      if (result.success) {
-        logger.info(`Successfully migrated ${result.migratedCount} personas`);
-        if (result.backedUp && result.backupPath) {
-          logger.info(`Backup created at: ${result.backupPath}`);
-        }
-      } else {
-        logger.error("Migration completed with errors:");
-        result.errors.forEach((err) => logger.error(`  - ${err}`));
-      }
-      timer.endPhase('migration');
-    }
-
-    // --- portfolio_init (critical, conditional) ---
-    if (!portfolioExists) {
-      timer.startPhase('portfolio_init', true);
-      logger.info("Creating portfolio directory structure...");
-      await portfolioManager.initialize();
-      timer.endPhase('portfolio_init');
-    }
+    const { needsMigration, portfolioExists } = await this.runPortfolioChecks(
+      timer, migrationManager, portfolioManager,
+    );
+    await this.runMigrationPhaseIfNeeded(timer, migrationManager, needsMigration);
+    await this.initializePortfolioIfMissing(timer, portfolioManager, portfolioExists);
 
     // PERFORMANCE OPTIMIZATION: Initialize collection cache in background (non-blocking)
     // This is safe because collection cache is not critical for startup
@@ -465,7 +318,6 @@ export class DollhouseContainer {
 
     this.personasDir = portfolioManager.getElementDir(ElementType.PERSONA);
 
-    // --- config_manager (critical) ---
     timer.startPhase('config_manager', true);
     const configManager = this.resolve<ConfigManager>('ConfigManager');
     await configManager.initialize();
@@ -473,6 +325,177 @@ export class DollhouseContainer {
 
     const elapsedTime = Date.now() - startTime;
     logger.info(`[Startup] Critical portfolio path completed in ${elapsedTime}ms (personas directory: ${this.personasDir})`);
+  }
+
+  private async bootstrapDatabaseIfEnabled(): Promise<void> {
+    // Database connection must be available before any manager resolution
+    // in 'database' mode. All DB-specific wiring lives in DatabaseServiceRegistrar.
+    if (env.DOLLHOUSE_STORAGE_BACKEND === 'database') {
+      await new DatabaseServiceRegistrar().bootstrapAndRegister(this);
+    }
+  }
+
+  private async bootstrapStorageAndSecurity(): Promise<void> {
+    // Storage layers (operator config, user config, shared cache) must run
+    // after DatabaseServiceRegistrar so DatabaseInstance is resolvable for
+    // postgres backends, and before consumers (ConfigManager) so they can
+    // resolve the stores when their factories fire.
+    const { StorageServiceRegistrar } = await import('./registrars/StorageServiceRegistrar.js');
+    await new StorageServiceRegistrar().bootstrapAndRegister(this);
+
+    // Post-DB security warmups must run AFTER DatabaseServiceRegistrar so
+    // probes can hit the real DB instead of silently falling back to file
+    // mode (which would skip the "existing audit data, retention is changing"
+    // operator warning on hosted deployments).
+    await new SecurityServiceRegistrar().runPostDbWarnings(this);
+  }
+
+  private async runLegacyConfigMigrationIfEnabled(): Promise<void> {
+    // Auto-migrate legacy ~/.dollhouse/config.yml and keyfiles into the new
+    // stores in DB mode on first startup. Idempotent via marker file; throws
+    // on partial-migration failure so startup halts rather than running with
+    // half-migrated state.
+    if (env.DOLLHOUSE_STORAGE_BACKEND !== 'database') return;
+    const userId = this.hasRegistration('BootstrappedUserId')
+      ? this.resolve<string>('BootstrappedUserId')
+      : null;
+    if (!userId) return;
+
+    const { runConfigToDatabaseMigration } = await import('../storage/migration/configToDatabase.js');
+    const result = await runConfigToDatabaseMigration({
+      operatorStore: this.resolve('OperatorConfigStore'),
+      userStore: this.resolve('UserConfigStore'),
+      // SigningKeyStore is registered later by AuthServiceRegistrar; resolve
+      // it lazily by constructing a dedicated one here against the same DB.
+      signingKeyStore: await (await import('../storage/signingKeys/createSigningKeyStore.js')).createSigningKeyStore({
+        database: this.hasRegistration('SystemDatabaseInstance')
+          ? this.resolve('SystemDatabaseInstance')
+          : this.resolve('DatabaseInstance'),
+      }),
+      userId,
+    });
+    if (result.status === 'migrated') {
+      logger.info('[Container] Phase 4.5 legacy config migrated to database', {
+        configMigrated: result.configMigrated,
+        jwksMigrated: result.jwksMigrated,
+        cookieSecretMigrated: result.cookieSecretMigrated,
+      });
+    }
+  }
+
+  private async bootstrapAuthAndSharedPool(): Promise<void> {
+    // Unified auth (JWT) — feature-flag gated (default: off). Must run after
+    // SecurityServiceRegistrar (ContextTracker) and DatabaseServiceRegistrar
+    // (UserIdentityService).
+    const { AuthServiceRegistrar } = await import('./registrars/AuthServiceRegistrar.js');
+    await new AuthServiceRegistrar().bootstrapAndRegister(this);
+
+    // Shared pool services — feature-flag gated (default: off). Must run
+    // after PathsServiceRegistrar and DatabaseServiceRegistrar so PathService
+    // and (optionally) DatabaseInstance are available.
+    const { SharedPoolServiceRegistrar } = await import('../collection/shared-pool/SharedPoolServiceRegistrar.js');
+    await new SharedPoolServiceRegistrar().bootstrapAndRegister(this);
+  }
+
+  private async runDeploymentSeedLoaderIfEnabled(): Promise<void> {
+    // Idempotent — safe on every startup. Runs after SharedPoolServiceRegistrar
+    // so SharedPoolInstaller and ProvenanceStore are available.
+    if (!this.hasRegistration('DeploymentSeedLoader')) return;
+    try {
+      const seedLoader = this.resolve<{ loadSeeds(): Promise<unknown> }>('DeploymentSeedLoader');
+      await seedLoader.loadSeeds();
+    } catch (err) {
+      logger.warn('[Container] Deployment seed loading failed (non-fatal)', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  private wireMemoryServiceRefs(): void {
+    // Issue #1948: deferred from registerServices to avoid eager resolution.
+    try {
+      const mm = this.resolve<MemoryManager>('MemoryManager');
+      mm.setRetentionPolicyService(this.resolve('RetentionPolicyService'));
+      Memory.setRootMemoryManager(mm as { list(): Promise<import('../elements/memories/Memory.js').Memory[]>; save(memory: import('../elements/memories/Memory.js').Memory, filePath?: string): Promise<void> });
+    } catch {
+      // Not available in test containers — safe to skip
+    }
+  }
+
+  private async runPortfolioChecks(
+    timer: StartupTimer,
+    migrationManager: MigrationManager,
+    portfolioManager: PortfolioManager,
+  ): Promise<{ needsMigration: boolean; portfolioExists: boolean }> {
+    timer.startPhase('config_checks', true);
+
+    // PERFORMANCE OPTIMIZATION: Run independent checks in parallel (40-60% faster startup)
+    const results = await Promise.allSettled([
+      migrationManager.needsMigration(),
+      portfolioManager.exists()
+    ]);
+
+    const checkErrors: Array<{ check: string; error: Error }> = [];
+    const needsMigration = DollhouseContainer.extractBooleanCheck(results[0], 'migration', checkErrors);
+    const portfolioExists = DollhouseContainer.extractBooleanCheck(results[1], 'portfolio', checkErrors);
+
+    if (checkErrors.length === 2) {
+      const errorMessages = checkErrors.map(e => `${e.check}: ${e.error.message}`).join('; ');
+      throw new Error(`Portfolio preparation failed - all checks failed: ${errorMessages}`);
+    }
+    if (checkErrors.length === 1) {
+      logger.warn(`Portfolio check failed but continuing: ${checkErrors[0].check} - ${checkErrors[0].error.message}`);
+    }
+
+    timer.endPhase('config_checks');
+    return { needsMigration, portfolioExists };
+  }
+
+  private static extractBooleanCheck(
+    result: PromiseSettledResult<boolean>,
+    label: string,
+    errorSink: Array<{ check: string; error: Error }>,
+  ): boolean {
+    if (result.status === 'fulfilled') return result.value;
+    errorSink.push({
+      check: label,
+      error: result.reason instanceof Error ? result.reason : new Error(String(result.reason)),
+    });
+    return false;
+  }
+
+  private async runMigrationPhaseIfNeeded(
+    timer: StartupTimer,
+    migrationManager: MigrationManager,
+    needsMigration: boolean,
+  ): Promise<void> {
+    if (!needsMigration) return;
+    timer.startPhase('migration', true);
+    logger.info("Legacy personas detected. Starting migration...");
+    const result = await migrationManager.migrate({ backup: true });
+
+    if (result.success) {
+      logger.info(`Successfully migrated ${result.migratedCount} personas`);
+      if (result.backedUp && result.backupPath) {
+        logger.info(`Backup created at: ${result.backupPath}`);
+      }
+    } else {
+      logger.error("Migration completed with errors:");
+      result.errors.forEach((err) => logger.error(`  - ${err}`));
+    }
+    timer.endPhase('migration');
+  }
+
+  private async initializePortfolioIfMissing(
+    timer: StartupTimer,
+    portfolioManager: PortfolioManager,
+    portfolioExists: boolean,
+  ): Promise<void> {
+    if (portfolioExists) return;
+    timer.startPhase('portfolio_init', true);
+    logger.info("Creating portfolio directory structure...");
+    await portfolioManager.initialize();
+    timer.endPhase('portfolio_init');
   }
 
   /**
@@ -487,7 +510,7 @@ export class DollhouseContainer {
 
     // Issue #706: Test hook — inject artificial delay to simulate slow deferred setup.
     // Only active when DOLLHOUSE_TEST_DEFERRED_DELAY_MS is set (integration tests).
-    const testDelay = parseInt(process.env.DOLLHOUSE_TEST_DEFERRED_DELAY_MS || '0', 10);
+    const testDelay = Number.parseInt(process.env.DOLLHOUSE_TEST_DEFERRED_DELAY_MS || '0', 10);
     if (testDelay > 0) {
       logger.info(`[Startup] Test delay injected: ${testDelay}ms`);
       await new Promise(resolve => setTimeout(resolve, testDelay));
@@ -1057,6 +1080,7 @@ export class DollhouseContainer {
       agentManager: this.resolve('AgentManager'),
       templateRenderer: this.resolve('TemplateRenderer'),
       elementQueryService: this.resolve('ElementQueryService'),
+      portfolioManager: this.resolve('PortfolioManager'),
       // MCP-AQL extension handlers (Issue #241)
       collectionHandler,
       portfolioHandler,
@@ -1412,7 +1436,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext) as SessionResolver);
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-      const registry = new ToolRegistry(child.resolve<Server>('Server'));
+        const registry = new ToolRegistry(child.resolve<Server>('Server'));
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1588,6 +1612,7 @@ export class DollhouseContainer {
       agentManager: this.resolve('AgentManager'),
       templateRenderer: this.resolve('TemplateRenderer'),
       elementQueryService: this.resolve('ElementQueryService'),
+      portfolioManager: this.resolve('PortfolioManager'),
       collectionHandler,
       portfolioHandler,
       authHandler: githubAuthHandler,
@@ -1699,13 +1724,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-      const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as Server);
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-      const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as Server);
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);
