@@ -344,7 +344,6 @@ export class EnhancedIndexManager {
    * Build or rebuild the index from portfolio
    */
   private async buildIndex(options: IndexOptions = {}): Promise<void> {
-    // Use file locking to prevent concurrent builds
     const config = this.config.getConfig();
     const indexPath = this.indexPath;
     const fileLock = this.getFileLock(indexPath);
@@ -362,93 +361,113 @@ export class EnhancedIndexManager {
     const startTime = Date.now();
 
     try {
-      // Get existing index for preservation of custom fields
       const existingIndex = options.preserveCustom && this.index ? this.index : null;
-
-      // Initialize new index structure
-      const newIndex: EnhancedIndex = {
-        metadata: {
-          version: '2.0.0',
-          created: existingIndex?.metadata.created || new Date().toISOString(),
-          last_updated: new Date().toISOString(),
-          total_elements: 0
-        },
-        action_triggers: {},
-        elements: {}
-      };
-
-      // Get portfolio index for element discovery
+      const newIndex = EnhancedIndexManager.createEmptyEnhancedIndex(existingIndex);
       const portfolioData = await this.portfolioIndexManager.getIndex();
-
-      // Process each element type
-      for (const [elementType, entries] of portfolioData.byType.entries()) {
-        if (!newIndex.elements[elementType]) {
-          newIndex.elements[elementType] = {};
-        }
-
-        for (const entry of entries) {
-          // Skip if not in update list (when specified)
-          // FIX: Add defensive check for entry.metadata
-          const entryName = entry.metadata?.name;
-          if (!entryName) {
-            logger.warn('Skipping entry with undefined metadata.name');
-            continue;
-          }
-
-          if (options.updateOnly && !options.updateOnly.includes(entryName)) {
-            // Preserve existing entry
-            if (existingIndex?.elements[elementType]?.[entryName]) {
-              newIndex.elements[elementType][entryName] =
-                existingIndex.elements[elementType][entryName];
-              continue;
-            }
-          }
-
-          const elementDef = this.elementDefinitionBuilder.build(entry, existingIndex);
-          newIndex.elements[elementType][entryName] = elementDef;
-          newIndex.metadata.total_elements++;
-
-          // Extract action triggers
-          this.extractActionTriggers(elementDef, entryName, newIndex.action_triggers);
-        }
-      }
-
-      // Calculate semantic relationships using NLP
+      this.populateEnhancedIndex(newIndex, portfolioData.byType, existingIndex, options);
       await this.calculateSemanticRelationships(newIndex);
-
-      // Discover additional relationship types
       await this.relationshipManager.discoverRelationships(newIndex);
-
-      // Preserve extensions from existing index
-      if (existingIndex?.extensions) {
-        newIndex.extensions = existingIndex.extensions;
-      }
-
-      // Save to file
-      await this.writeToFile(newIndex);
-
-      this.index = newIndex;
-      this.lastLoaded = new Date();
-
-      const duration = Date.now() - startTime;
-      logger.info('Enhanced index built', {
-        duration: `${duration}ms`,
-        elements: newIndex.metadata.total_elements,
-        triggers: Object.keys(newIndex.action_triggers).length
-      });
-
-      // Log security event
-      SecurityMonitor.logSecurityEvent({
-        type: 'PORTFOLIO_CACHE_INVALIDATION',
-        severity: 'LOW',
-        source: 'enhanced_index',
-        details: `Index rebuilt with ${newIndex.metadata.total_elements} elements in ${duration}ms`
-      });
+      await this.commitBuiltIndex(newIndex, existingIndex, startTime);
 
     } finally {
       this.isBuilding = false;
       await fileLock.release();
     }
+  }
+
+  private static createEmptyEnhancedIndex(existingIndex: EnhancedIndex | null): EnhancedIndex {
+    return {
+      metadata: {
+        version: '2.0.0',
+        created: existingIndex?.metadata.created || new Date().toISOString(),
+        last_updated: new Date().toISOString(),
+        total_elements: 0
+      },
+      action_triggers: {},
+      elements: {}
+    };
+  }
+
+  private populateEnhancedIndex(
+    newIndex: EnhancedIndex,
+    entriesByType: Map<string, any[]>,
+    existingIndex: EnhancedIndex | null,
+    options: IndexOptions
+  ): void {
+    for (const [elementType, entries] of entriesByType.entries()) {
+      newIndex.elements[elementType] ??= {};
+      for (const entry of entries) {
+        this.addEnhancedIndexEntry(newIndex, elementType, entry, existingIndex, options);
+      }
+    }
+  }
+
+  private addEnhancedIndexEntry(
+    newIndex: EnhancedIndex,
+    elementType: string,
+    entry: any,
+    existingIndex: EnhancedIndex | null,
+    options: IndexOptions
+  ): void {
+    const entryName = entry.metadata?.name;
+    if (!entryName) {
+      logger.warn('Skipping entry with undefined metadata.name');
+      return;
+    }
+    if (this.preserveExistingEnhancedEntry(newIndex, elementType, entryName, existingIndex, options)) {
+      return;
+    }
+
+    const elementDef = this.elementDefinitionBuilder.build(entry, existingIndex);
+    newIndex.elements[elementType][entryName] = elementDef;
+    newIndex.metadata.total_elements++;
+    this.extractActionTriggers(elementDef, entryName, newIndex.action_triggers);
+  }
+
+  private preserveExistingEnhancedEntry(
+    newIndex: EnhancedIndex,
+    elementType: string,
+    entryName: string,
+    existingIndex: EnhancedIndex | null,
+    options: IndexOptions
+  ): boolean {
+    if (!options.updateOnly || options.updateOnly.includes(entryName)) {
+      return false;
+    }
+    const existingEntry = existingIndex?.elements[elementType]?.[entryName];
+    if (!existingEntry) {
+      return false;
+    }
+    newIndex.elements[elementType][entryName] = existingEntry;
+    return true;
+  }
+
+  private async commitBuiltIndex(
+    newIndex: EnhancedIndex,
+    existingIndex: EnhancedIndex | null,
+    startTime: number
+  ): Promise<void> {
+    if (existingIndex?.extensions) {
+      newIndex.extensions = existingIndex.extensions;
+    }
+    await this.writeToFile(newIndex);
+    this.index = newIndex;
+    this.lastLoaded = new Date();
+    EnhancedIndexManager.logBuiltIndex(newIndex, Date.now() - startTime);
+  }
+
+  private static logBuiltIndex(newIndex: EnhancedIndex, duration: number): void {
+    logger.info('Enhanced index built', {
+      duration: `${duration}ms`,
+      elements: newIndex.metadata.total_elements,
+      triggers: Object.keys(newIndex.action_triggers).length
+    });
+    SecurityMonitor.logSecurityEvent({
+      type: 'PORTFOLIO_CACHE_INVALIDATION',
+      severity: 'LOW',
+      source: 'enhanced_index',
+      details: `Index rebuilt with ${newIndex.metadata.total_elements} elements in ${duration}ms`
+    });
   }
 
   // Configuration for verb extraction (will be overridden by ConfigManager)
@@ -591,81 +610,94 @@ export class EnhancedIndexManager {
     try {
       const configManager = this.configManager;
       const config = configManager.getConfig();
-
-      // Update limits from config
-      if (config.elements?.enhanced_index) {
-        const enhancedConfig = config.elements.enhanced_index;
-
-        // Update limits
-        if (enhancedConfig.limits) {
-          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits = {
-            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
-            ...enhancedConfig.limits
-          };
-        }
-
-        // Update telemetry settings
-        if (enhancedConfig.telemetry) {
-          EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry = {
-            ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry,
-            ...enhancedConfig.telemetry
-          };
-        }
-
-        // Add custom verb patterns if provided
-        if (enhancedConfig.verbPatterns) {
-          const patterns = enhancedConfig.verbPatterns;
-
-          // Add custom prefixes
-          if (patterns.customPrefixes && patterns.customPrefixes.length > 0) {
-            const allPrefixes = [
-              ...Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes).flat(),
-              ...patterns.customPrefixes
-            ];
-            EnhancedIndexManager.VERB_PREFIX_PATTERN = this.compileAndValidateRegex(
-              `^(${allPrefixes.join('|')})`,
-              'verb prefix'
-            );
-          }
-
-          // Add custom suffixes
-          if (patterns.customSuffixes && patterns.customSuffixes.length > 0) {
-            const allSuffixes = [
-              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes,
-              ...patterns.customSuffixes
-            ];
-            EnhancedIndexManager.VERB_SUFFIX_PATTERN = this.compileAndValidateRegex(
-              `(${allSuffixes.join('|')})$`,
-              'verb suffix'
-            );
-          }
-
-          // Add excluded nouns
-          if (patterns.excludedNouns && patterns.excludedNouns.length > 0) {
-            const allNouns = [
-              ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes,
-              ...patterns.excludedNouns
-            ];
-            EnhancedIndexManager.NOUN_SUFFIX_PATTERN = this.compileAndValidateRegex(
-              `(${allNouns.join('|')})$`,
-              'noun suffix'
-            );
-          }
-        }
-
-        // Validate all regex patterns at startup
-        this.validateRegexPatterns();
-
-        logger.info('Loaded enhanced index configuration', {
-          limits: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
-          telemetryEnabled: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled
-        });
+      const enhancedConfig = config.elements?.enhanced_index;
+      if (!enhancedConfig) {
+        return;
       }
+
+      this.applyEnhancedIndexLimits(enhancedConfig);
+      this.applyEnhancedIndexTelemetry(enhancedConfig);
+      this.applyEnhancedIndexVerbPatterns(enhancedConfig);
+      this.validateRegexPatterns();
+      logger.info('Loaded enhanced index configuration', {
+        limits: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+        telemetryEnabled: EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry.enabled
+      });
     } catch (error) {
       logger.warn('Failed to load enhanced index configuration, using defaults', {
         error: error instanceof Error ? error.message : String(error)
       });
     }
+  }
+
+  private applyEnhancedIndexLimits(enhancedConfig: any): void {
+    if (enhancedConfig.limits) {
+      EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits = {
+        ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.limits,
+        ...enhancedConfig.limits
+      };
+    }
+  }
+
+  private applyEnhancedIndexTelemetry(enhancedConfig: any): void {
+    if (enhancedConfig.telemetry) {
+      EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry = {
+        ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.telemetry,
+        ...enhancedConfig.telemetry
+      };
+    }
+  }
+
+  private applyEnhancedIndexVerbPatterns(enhancedConfig: any): void {
+    const patterns = enhancedConfig.verbPatterns;
+    if (!patterns) {
+      return;
+    }
+    this.applyCustomVerbPrefixes(patterns);
+    this.applyCustomVerbSuffixes(patterns);
+    this.applyExcludedNouns(patterns);
+  }
+
+  private applyCustomVerbPrefixes(patterns: any): void {
+    if (!patterns.customPrefixes || patterns.customPrefixes.length === 0) {
+      return;
+    }
+    const allPrefixes = [
+      ...Object.values(EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbPrefixes).flat(),
+      ...patterns.customPrefixes
+    ];
+    EnhancedIndexManager.VERB_PREFIX_PATTERN = this.compileAndValidateRegex(
+      `^(${allPrefixes.join('|')})`,
+      'verb prefix'
+    );
+  }
+
+  private applyCustomVerbSuffixes(patterns: any): void {
+    if (!patterns.customSuffixes || patterns.customSuffixes.length === 0) {
+      return;
+    }
+    const allSuffixes = [
+      ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.verbSuffixes,
+      ...patterns.customSuffixes
+    ];
+    EnhancedIndexManager.VERB_SUFFIX_PATTERN = this.compileAndValidateRegex(
+      `(${allSuffixes.join('|')})$`,
+      'verb suffix'
+    );
+  }
+
+  private applyExcludedNouns(patterns: any): void {
+    if (!patterns.excludedNouns || patterns.excludedNouns.length === 0) {
+      return;
+    }
+    const allNouns = [
+      ...EnhancedIndexManager.VERB_EXTRACTION_CONFIG.nounSuffixes,
+      ...patterns.excludedNouns
+    ];
+    EnhancedIndexManager.NOUN_SUFFIX_PATTERN = this.compileAndValidateRegex(
+      `(${allNouns.join('|')})$`,
+      'noun suffix'
+    );
   }
 
   /**
@@ -1104,55 +1136,63 @@ export class EnhancedIndexManager {
     const metrics = index.metadata.trigger_metrics;
     const results: any[] = [];
 
-    // Calculate metrics for each trigger
     for (const trigger in metrics.usage_count) {
-      // Calculate daily average
-      let totalDailyUsage = 0;
-      let daysWithUsage = 0;
-      const recentUsage: number[] = [];
-
-      // Get last 7 days of usage for trend analysis
-      const today = new Date();
-      for (let i = 0; i < 7; i++) {
-        const date = new Date(today);
-        date.setDate(date.getDate() - i);
-        const dateStr = date.toISOString().split('T')[0];
-
-        if (metrics.daily_usage[dateStr] && metrics.daily_usage[dateStr][trigger]) {
-          recentUsage.push(metrics.daily_usage[dateStr][trigger]);
-        } else {
-          recentUsage.push(0);
-        }
-      }
-
-      // Calculate trend (simple comparison of first and last 3 days)
-      const firstHalf = recentUsage.slice(4, 7).reduce((a, b) => a + b, 0);
-      const secondHalf = recentUsage.slice(0, 3).reduce((a, b) => a + b, 0);
-      let trend: 'increasing' | 'stable' | 'decreasing' = 'stable';
-
-      if (secondHalf > firstHalf * 1.2) trend = 'increasing';
-      else if (secondHalf < firstHalf * 0.8) trend = 'decreasing';
-
-      // Calculate overall daily average
-      for (const date in metrics.daily_usage) {
-        if (metrics.daily_usage[date][trigger]) {
-          totalDailyUsage += metrics.daily_usage[date][trigger];
-          daysWithUsage++;
-        }
-      }
-
-      results.push({
-        trigger,
-        usage_count: metrics.usage_count[trigger],
-        last_used: metrics.last_used[trigger],
-        first_used: metrics.first_used[trigger],
-        daily_average: daysWithUsage > 0 ? totalDailyUsage / daysWithUsage : 0,
-        trend
-      });
+      results.push(EnhancedIndexManager.buildTriggerMetric(trigger, metrics));
     }
 
-    // Sort by usage count (descending)
     return results.sort((a, b) => b.usage_count - a.usage_count);
+  }
+
+  private static buildTriggerMetric(trigger: string, metrics: any): {
+    trigger: string;
+    usage_count: number;
+    last_used: string;
+    first_used: string;
+    daily_average: number;
+    trend: 'increasing' | 'stable' | 'decreasing';
+  } {
+    const recentUsage = EnhancedIndexManager.getRecentTriggerUsage(trigger, metrics.daily_usage);
+    const average = EnhancedIndexManager.calculateDailyAverage(trigger, metrics.daily_usage);
+    return {
+      trigger,
+      usage_count: metrics.usage_count[trigger],
+      last_used: metrics.last_used[trigger],
+      first_used: metrics.first_used[trigger],
+      daily_average: average,
+      trend: EnhancedIndexManager.calculateUsageTrend(recentUsage)
+    };
+  }
+
+  private static getRecentTriggerUsage(trigger: string, dailyUsage: any): number[] {
+    const recentUsage: number[] = [];
+    const today = new Date();
+    for (let i = 0; i < 7; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      recentUsage.push(dailyUsage[dateStr]?.[trigger] ?? 0);
+    }
+    return recentUsage;
+  }
+
+  private static calculateUsageTrend(recentUsage: number[]): 'increasing' | 'stable' | 'decreasing' {
+    const firstHalf = recentUsage.slice(4, 7).reduce((a, b) => a + b, 0);
+    const secondHalf = recentUsage.slice(0, 3).reduce((a, b) => a + b, 0);
+    if (secondHalf > firstHalf * 1.2) return 'increasing';
+    if (secondHalf < firstHalf * 0.8) return 'decreasing';
+    return 'stable';
+  }
+
+  private static calculateDailyAverage(trigger: string, dailyUsage: any): number {
+    let totalDailyUsage = 0;
+    let daysWithUsage = 0;
+    for (const date in dailyUsage) {
+      if (dailyUsage[date][trigger]) {
+        totalDailyUsage += dailyUsage[date][trigger];
+        daysWithUsage++;
+      }
+    }
+    return daysWithUsage > 0 ? totalDailyUsage / daysWithUsage : 0;
   }
 
   /**
@@ -1236,38 +1276,59 @@ export class EnhancedIndexManager {
     const results: ElementDefinition[] = [];
 
     for (const [type, elements] of Object.entries(index.elements)) {
-      // Filter by type if specified
-      if (criteria.type && type !== criteria.type) continue;
-
       for (const [, element] of Object.entries(elements)) {
-        let matches = true;
-
-        // Check verb matches
-        if (criteria.verbs && element.actions) {
-          const elementVerbs = Object.values(element.actions).map(a => a.verb);
-          matches = criteria.verbs.some(v => elementVerbs.includes(v));
-        }
-
-        // Check keyword matches
-        if (matches && criteria.keywords && element.search?.keywords) {
-          matches = criteria.keywords.some(k =>
-            element.search!.keywords!.includes(k)
-          );
-        }
-
-        // Check relationship requirement
-        if (matches && criteria.hasRelationships) {
-          matches = !!element.relationships &&
-                   Object.keys(element.relationships).length > 0;
-        }
-
-        if (matches) {
+        if (this.matchesEnhancedSearchCriteria(type, element, criteria)) {
           results.push(element);
         }
       }
     }
 
     return results;
+  }
+
+  private matchesEnhancedSearchCriteria(
+    type: string,
+    element: ElementDefinition,
+    criteria: {
+      verbs?: string[];
+      keywords?: string[];
+      type?: string;
+      hasRelationships?: boolean;
+    }
+  ): boolean {
+    return this.matchesCriteriaType(type, criteria) &&
+      EnhancedIndexManager.matchesCriteriaVerbs(element, criteria.verbs) &&
+      EnhancedIndexManager.matchesCriteriaKeywords(element, criteria.keywords) &&
+      EnhancedIndexManager.matchesCriteriaRelationships(element, criteria.hasRelationships);
+  }
+
+  private matchesCriteriaType(type: string, criteria: { type?: string }): boolean {
+    return !criteria.type || type === criteria.type;
+  }
+
+  private static matchesCriteriaVerbs(element: ElementDefinition, verbs?: string[]): boolean {
+    if (!verbs || !element.actions) {
+      return true;
+    }
+    const elementVerbs = Object.values(element.actions).map(a => a.verb);
+    return verbs.some(v => elementVerbs.includes(v));
+  }
+
+  private static matchesCriteriaKeywords(element: ElementDefinition, keywords?: string[]): boolean {
+    if (!keywords) {
+      return true;
+    }
+    return keywords.some(k => element.search?.keywords?.includes(k));
+  }
+
+  private static matchesCriteriaRelationships(
+    element: ElementDefinition,
+    hasRelationships?: boolean
+  ): boolean {
+    if (!hasRelationships) {
+      return true;
+    }
+    return !!element.relationships && Object.keys(element.relationships).length > 0;
   }
 
   private async calculateSemanticRelationships(index: EnhancedIndex): Promise<void> {

@@ -22,13 +22,11 @@
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
-import { jwtVerify, importJWK, SignJWT, errors as joseErrors, type JWK } from 'jose';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type {
-  AuthClaims,
   AuthResult,
   IAuthProvider,
   IssueOptions,
@@ -67,18 +65,20 @@ import {
   type RotationRequestContext,
 } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
-import { assertHasRole } from '../assertHasRole.js';
-import { createUnifiedAuthMiddleware } from '../authMiddleware.js';
-
-const ALGORITHM = 'ES256';
-const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600; // 1 hour
-const DEFAULT_REFRESH_TOKEN_TTL_SECONDS = 30 * 24 * 3600; // 30 days
-const DEFAULT_AUTH_CODE_TTL_SECONDS = 5 * 60; // 5 minutes
-// Interaction TTL must stay aligned with InteractionRouter's CSRF_TTL_SECONDS;
-// the CSRF token's lifetime can't exceed the interaction's.
-const DEFAULT_INTERACTION_TTL_SECONDS = 10 * 60; // 10 minutes
-const DEFAULT_SESSION_TTL_SECONDS = 14 * 24 * 3600; // 14 days
-const DEFAULT_CLIENT_ID = 'dollhouse-claude-connector';
+import { EmbeddedASBootstrap } from './EmbeddedASBootstrap.js';
+import { EmbeddedASAdmin } from './EmbeddedASAdmin.js';
+import { EmbeddedASOidcAccount } from './EmbeddedASOidcAccount.js';
+import {
+  ALGORITHM,
+  DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
+  DEFAULT_REFRESH_TOKEN_TTL_SECONDS,
+  DEFAULT_AUTH_CODE_TTL_SECONDS,
+  DEFAULT_INTERACTION_TTL_SECONDS,
+  DEFAULT_SESSION_TTL_SECONDS,
+  DEFAULT_CLIENT_ID,
+  EmbeddedASTokens,
+  importSigningKeys,
+} from './EmbeddedASTokens.js';
 
 /**
  * Cycle-8 fix (B1): predicate that decides whether oidc-provider's
@@ -224,6 +224,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly cookieSecretEnvOverride: string | undefined;
   private readonly openDCR: boolean;
   private readonly signingKeyStore: ISigningKeyStore | null;
+  private readonly bootstrap: EmbeddedASBootstrap;
+  private readonly admin: EmbeddedASAdmin;
+  private readonly tokens: EmbeddedASTokens;
+  private readonly oidcAccount: EmbeddedASOidcAccount;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -258,6 +262,23 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
     this.signingKeyStore = options.signingKeyStore ?? null;
+    this.bootstrap = new EmbeddedASBootstrap(
+      this.methods,
+      this.storage,
+      () => this.bootstrapReadyLatch,
+      (ready) => { this.bootstrapReadyLatch = ready; },
+    );
+    this.admin = new EmbeddedASAdmin(
+      this,
+      this.storage,
+      () => this.getProtectedResourceMetadataUrl(),
+    );
+    this.tokens = new EmbeddedASTokens(
+      () => this.ensureInitialized(),
+      () => this.issuer,
+      () => this.resource,
+    );
+    this.oidcAccount = new EmbeddedASOidcAccount(this.methods, this.storage);
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -277,11 +298,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   private isHttpsPublicBaseUrl(): boolean {
-    try {
-      return new URL(this.publicBaseUrl).protocol === 'https:';
-    } catch {
-      return false;
-    }
+    return this.bootstrap.isHttpsPublicBaseUrl(this.publicBaseUrl);
   }
 
   getAuthorizationServerMetadataUrl(): string {
@@ -302,19 +319,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    *     header rather than silently ignoring it.
    */
   async validate(token: string): Promise<AuthResult> {
-    const { publicSigningKey, keyset } = await this.ensureInitialized();
-    try {
-      const { payload, protectedHeader } = await jwtVerify(token, publicSigningKey, {
-        issuer: this.issuer,
-        audience: this.resource,
-        algorithms: [ALGORITHM],
-        typ: 'at+jwt',
-        crit: {},
-      });
-      return buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid);
-    } catch (error) {
-      return { ok: false, reason: mapEmbeddedAsVerifyError(error) };
-    }
+    return await this.tokens.validate(token);
   }
 
   /**
@@ -329,22 +334,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * production code paths must use the OAuth flow.
    */
   async issue(sub: string, options?: IssueOptions): Promise<string> {
-    const { keyset, privateSigningKey } = await this.ensureInitialized();
-    const ttl = options?.ttlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
-    const scope = options?.scopes?.join(' ') || 'mcp';
-
-    return new SignJWT({
-      azp: DEFAULT_CLIENT_ID,
-      scope,
-      name: options?.displayName ?? sub,
-    })
-      .setProtectedHeader({ alg: ALGORITHM, kid: keyset.kid, typ: 'at+jwt' })
-      .setIssuer(this.issuer)
-      .setAudience(this.resource)
-      .setSubject(sub)
-      .setIssuedAt()
-      .setExpirationTime(`${ttl}s`)
-      .sign(privateSigningKey);
+    return await this.tokens.issue(sub, options);
   }
 
   /**
@@ -486,11 +476,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
               ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
               uaHash: hashRotationAttribute(pickHeaderValue(req.headers['user-agent']), salt),
             };
-            withRotationRequestContext(context, () => {
-              state.provider.callback()(req, res);
-            });
+            // Await the oidc-provider callback so async rejections (e.g.
+            // adapter/DB hiccups during token issuance) reach the outer
+            // try/catch and flow to Express's error middleware via next().
+            // Without the await, the returned Promise is discarded and
+            // any async rejection becomes an unhandledRejection.
+            await withRotationRequestContext(context, () => state.provider.callback()(req, res));
           } else {
-            state.provider.callback()(req, res);
+            await state.provider.callback()(req, res);
           }
         } catch (err) {
           next(err);
@@ -499,39 +492,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     });
 
     return router;
-  }
-
-  /**
-   * Multi-user methods (must-fix #22). When ANY of these is configured,
-   * the bootstrap gate is active until the admin-bootstrap CLI runs.
-   * Single-user / external-IdP modes (trivial-consent, oidc-bridge) do
-   * not need a bootstrap step and skip the gate entirely.
-   */
-  private static readonly MULTI_USER_METHODS: ReadonlySet<string> = new Set([
-    'local-password',
-    'magic-link',
-    'github',
-  ]);
-
-  /**
-   * Paths that bypass the bootstrap gate. Discovery + key-distribution
-   * endpoints MUST stay reachable even when the AS is closed so that
-   * clients can find the AS and verify any tokens already in their
-   * possession. Each entry is matched as `path === entry.path` for
-   * exact entries, or `path.startsWith(entry.path)` for prefix entries.
-   * Cycle-16 fix: `/jwks` was previously matched via `startsWith` which
-   * silently allows future `/jwks*` routes (`/jwks-rotate`, etc.) to
-   * bypass the gate — that's the wrong default for a security-relevant
-   * allowlist. Use exact match for /jwks; prefix match only for the
-   * /.well-known/ tree which is genuinely a directory.
-   */
-  private static readonly GATE_BYPASS_RULES: ReadonlyArray<{ path: string; mode: 'exact' | 'prefix' }> = [
-    { path: '/.well-known/', mode: 'prefix' },
-    { path: '/jwks', mode: 'exact' },
-  ];
-
-  private isMultiUserMode(): boolean {
-    return this.methods.some((m) => EmbeddedAuthorizationServer.MULTI_USER_METHODS.has(m.id));
   }
 
   /**
@@ -570,56 +530,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * storage (we want to see the moment it flips).
    */
   async isReadyForTraffic(): Promise<boolean> {
-    if (!this.isMultiUserMode()) return true;
-    if (this.bootstrapReadyLatch) return true;
-    try {
-      const state = await this.storage.getBootstrapState();
-      if (state.completed === true) {
-        this.bootstrapReadyLatch = true;
-        return true;
-      }
-      return false;
-    } catch (err) {
-      logger.warn('[EmbeddedAuthorizationServer] isReadyForTraffic storage read failed; reporting not-ready', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Render a method-specific actionable hint for the 503 body. The
-   * operator should be able to copy-paste the suggested command and
-   * have it Just Work.
-   */
-  private bootstrapHint(): string {
-    // Round 5 post-triage MEDIUM-2: hint strings name the actual
-    // registered binaries from package.json `bin` (which uses
-    // single-token hyphenated names like `dollhouse-create-user`),
-    // not a `dollhousemcp <subcommand>` form that does NOT exist.
-    // Operators copy-pasting the earlier wording got "command not
-    // found" and the bootstrap path looked broken.
-    const ids = this.methods.map((m) => m.id);
-    const lines: string[] = [];
-    if (ids.includes('local-password')) {
-      lines.push(
-        "Run 'dollhouse-create-user --username <name> --email <addr>' " +
-        "to issue the first invite (this also marks bootstrap complete).",
-      );
-    }
-    if (ids.includes('magic-link')) {
-      lines.push(
-        "Run 'dollhouse-admin-bootstrap --method magic-link --email <admin@example.com>' " +
-        "to claim the admin identity.",
-      );
-    }
-    if (ids.includes('github')) {
-      lines.push(
-        "Run 'dollhouse-admin-bootstrap --method github --github-username <gh-username>' " +
-        "to claim the admin identity.",
-      );
-    }
-    return lines.join(' OR ');
+    return await this.bootstrap.isReadyForTraffic();
   }
 
   /**
@@ -628,58 +539,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * (b) the cache flag below is per-middleware-instance.
    */
   private createBootstrapGate(): RequestHandler {
-    if (!this.isMultiUserMode()) {
-      // Trivial-consent / oidc-bridge: gate is unconditionally open.
-      return (_req, _res, next) => next();
-    }
-    const bypassRules = EmbeddedAuthorizationServer.GATE_BYPASS_RULES;
-    return async (req, res, next) => {
-      // Cycle-16 fix: share `bootstrapReadyLatch` with isReadyForTraffic
-      // so /readyz and the gate observe the same monotonic flag.
-      // Previously each had its own latch, so a /readyz hit and an
-      // /authorize hit each fired a separate storage read.
-      if (this.bootstrapReadyLatch) {
-        next();
-        return;
-      }
-      // Mount-relative path: `req.path` is path within this router's
-      // scope, regardless of where the router is mounted in the host app.
-      for (const rule of bypassRules) {
-        const matched = rule.mode === 'exact'
-          ? req.path === rule.path
-          : (req.path === rule.path || req.path.startsWith(rule.path));
-        if (matched) {
-          next();
-          return;
-        }
-      }
-      try {
-        const state = await this.storage.getBootstrapState();
-        if (state.completed) {
-          this.bootstrapReadyLatch = true;
-          next();
-          return;
-        }
-        res.status(503).json({
-          error: 'bootstrap_required',
-          error_description:
-            'This authorization server has not been bootstrapped. ' +
-            'An operator must claim the first admin identity before any ' +
-            'authentication flow is accepted.',
-          next_step: this.bootstrapHint(),
-        });
-      } catch (err) {
-        logger.error('[EmbeddedAuthorizationServer] bootstrap-gate storage read failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        // Fail closed: if the gate can't read the state, refuse traffic
-        // rather than open the AS to potential pre-bootstrap auth flow.
-        res.status(503).json({
-          error: 'bootstrap_check_unavailable',
-          error_description: 'Unable to verify bootstrap state. Try again shortly.',
-        });
-      }
-    };
+    return this.bootstrap.createBootstrapGate();
   }
 
   /**
@@ -693,76 +553,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * "yes, I'm authenticated as the admin".
    */
   private createAdminMeHandler(): RequestHandler[] {
-    // Compose the same middleware the rest of the codebase uses for
-    // Bearer validation. `EmbeddedAuthorizationServer` IS an
-    // `IAuthProvider` (`this`), so the unified middleware can validate
-    // tokens against it. This way the admin route's 401 body shape,
-    // WWW-Authenticate header, and SecurityMonitor audit events match
-    // every other authenticated route in the codebase. The earlier
-    // shape duplicated the validate-and-set-locals logic inline,
-    // which would silently drift if the unified middleware changed.
-    const validateBearer = createUnifiedAuthMiddleware({
-      provider: this,
-      protectedResourceMetadataUrl: this.getProtectedResourceMetadataUrl(),
-    });
-
-    const adminGuard = assertHasRole('admin');
-
-    const handler: RequestHandler = (req, res, next) => {
-      void (async () => {
-        try {
-          const claims = res.locals.authClaims;
-          if (!claims) {
-            // Defensive: validateBearer + adminGuard should both have
-            // populated/required claims by here, but if this somehow
-            // runs without claims that's a 500 not a 401.
-            next(new Error('admin/me handler reached without authClaims'));
-            return;
-          }
-          const bootstrap = await this.storage.getBootstrapState();
-          const account = await this.storage.getAccount(claims.sub);
-
-          // Round 6 review fixup: when the caller's account row no
-          // longer exists in storage (admin was deleted post-bootstrap;
-          // GDPR delete; manual operator action), refuse to echo a
-          // stub. The token still validates cryptographically, but
-          // the AS has no account-level claims to authoritatively
-          // surface. 410 Gone is the honest answer: the resource
-          // (the account behind this sub) has been deliberately
-          // removed. Operators investigating "why does my admin token
-          // fail?" get a clear signal vs. a 200 with nulls.
-          if (!account) {
-            res.status(410).json({
-              error: 'admin account no longer exists',
-              sub: claims.sub,
-            });
-            return;
-          }
-
-          // Round 5 / MED-6: only echo the bootstrap admin's sub when
-          // the caller IS the bootstrap admin. Other roles=['admin']
-          // accounts (added in the future when role assignment is
-          // wired) get the bootstrap method but not the bootstrap
-          // admin's identifier — avoids cross-admin disclosure.
-          const callerIsBootstrapAdmin = bootstrap.adminSub === claims.sub;
-          res.json({
-            sub: claims.sub,
-            roles: claims.roles ?? [],
-            email: account.email,
-            displayName: account.displayName,
-            bootstrap: {
-              adminMethod: bootstrap.adminMethod,
-              completedAt: bootstrap.completedAt,
-              ...(callerIsBootstrapAdmin ? { adminSub: bootstrap.adminSub } : {}),
-            },
-          });
-        } catch (err) {
-          next(err);
-        }
-      })();
-    };
-
-    return [validateBearer, adminGuard, handler];
+    return this.admin.createAdminMeHandler();
   }
 
   private async handleAuthorizationServerMetadata(_req: Request, res: Response): Promise<void> {
@@ -949,7 +740,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       refreshRotationGraceMs: this.refreshRotationGraceMs,
       refreshRotationCheckIpUa: this.refreshRotationCheckIpUa,
     });
-    const methods = this.methods;
 
     const config: Configuration = {
       // adapter: oidc-provider's TypeScript type expects a function-shape
@@ -1066,31 +856,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // config was a misconfiguration — `acr` is the OIDC Authentication
       // Context Class Reference scope, not a vehicle for the auth_time
       // claim — and produced no auth_time on issued tokens.
-      extraTokenClaims: async (_ctx, token) => {
-        const accountId = (token as { accountId?: string }).accountId;
-        if (!accountId) return undefined;
-        const account = await this.storage.getAccount(accountId);
-        if (!account) return undefined;
-        // Defense in depth: refuse to emit role/auth_time claims if the
-        // row's sub doesn't match the token's accountId. A bug elsewhere
-        // that lets a token carry a foreign accountId would otherwise
-        // propagate someone else's claims onto it. Today this is
-        // unreachable (oidc-provider sets accountId from the Grant we
-        // minted) but making it a no-op rather than trusting the lookup
-        // keeps the claim honest if the surrounding code ever changes shape.
-        if (account.sub !== accountId) return undefined;
-        const extras: Record<string, unknown> = {};
-        if (account.lastAuthAt) {
-          extras.auth_time = Math.floor(account.lastAuthAt / 1000);
-        }
-        if (account.roles && account.roles.length > 0) {
-          // Roles are sourced from the durable account record set by the
-          // admin-bootstrap CLI (must-fix #22). Emitted on every token
-          // issued for this sub, so the role survives refresh-rotation.
-          extras.roles = account.roles;
-        }
-        return Object.keys(extras).length > 0 ? extras : undefined;
-      },
+      extraTokenClaims: (_ctx, token) => this.oidcAccount.extraTokenClaims(_ctx, token),
       // oidc-provider validates DCR-time AND authorize-time `scope` values
       // against THIS list (not against the published `scopes_supported` in
       // the well-known metadata — those are independent). Cycle 24: the
@@ -1139,28 +905,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       interactions: {
         url: (_ctx, interaction) => `/interaction/${interaction.uid}`,
       },
-      async findAccount(_ctx, sub) {
-        // Each method returns null for subs it doesn't own; iterate in the
-        // configured order and take the first non-null match. This is how
-        // multi-method deployments dispatch token-issue findAccount lookups
-        // without an explicit method ID on the sub.
-        for (const m of methods) {
-          const identity = await m.findAccount(sub);
-          if (!identity) continue;
-          return {
-            accountId: identity.sub,
-            async claims() {
-              return {
-                sub: identity.sub,
-                name: identity.displayName,
-                email: identity.email,
-                email_verified: identity.emailVerified,
-              };
-            },
-          };
-        }
-        return undefined;
-      },
+      findAccount: (_ctx, sub) => this.oidcAccount.findAccount(_ctx, sub),
       // Cookie signing + transport defaults. The signing keys come from a
       // dedicated secret file (see cookieSecret.ts) — earlier code reused
       // the JWKS kid here, which made every cookie forgeable by anyone
@@ -1221,9 +966,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // half. The earlier shape called this `publicJwk`, which was
     // misleading — anyone reading the private-import line couldn't tell
     // it was the full private JWK. The names now match what each value is.
-    const privateJwk = keyset.jwks.keys[0];
-    const publicSigningKey = (await importJWK(stripPrivate(privateJwk), ALGORITHM)) as CryptoKey;
-    const privateSigningKey = (await importJWK(privateJwk, ALGORITHM)) as CryptoKey;
+    const { publicSigningKey, privateSigningKey } = await importSigningKeys(keyset);
 
     logger.info('[EmbeddedAuthorizationServer] initialized', {
       issuer: this.issuer,
@@ -1252,113 +995,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 }
 
 
-function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
-  return {
-    sub: String(payload.sub),
-    displayName: typeof payload.name === 'string' ? payload.name : undefined,
-    email: typeof payload.email === 'string' ? payload.email : undefined,
-    tenantId: typeof payload.tenant_id === 'string' ? payload.tenant_id : null,
-    scopes: typeof payload.scope === 'string' ? payload.scope.split(/\s+/).filter(Boolean) : undefined,
-    roles: Array.isArray(payload.roles)
-      ? payload.roles.filter((r): r is string => typeof r === 'string')
-      : undefined,
-    exp: typeof payload.exp === 'number' ? payload.exp : undefined,
-  };
-}
-
-/**
- * Build an AuthResult from a successfully-verified embedded-AS JWT.
- * Enforces kid presence, kid match against the active keyset (so a
- * token signed with a rotated-out key can't validate), sub presence,
- * and the `mcp` scope (defence-in-depth: H6 — tokens we issue always
- * carry it, but a key-rotation bug or a future code path that
- * accidentally minted a token without scope would otherwise pass
- * everything else here). Extracted from validate() to keep its
- * cognitive complexity ≤15 (S3776).
- */
-function buildEmbeddedAsAuthResult(
-  payload: Record<string, unknown>,
-  protectedHeader: { kid?: string },
-  activeKid: string,
-): AuthResult {
-  if (!protectedHeader.kid) {
-    return { ok: false, reason: 'token missing kid header' };
-  }
-  if (protectedHeader.kid !== activeKid) {
-    return { ok: false, reason: 'unknown key id' };
-  }
-  if (!payload.sub) {
-    return { ok: false, reason: 'token missing sub claim' };
-  }
-  const scopeClaim = typeof payload.scope === 'string' ? payload.scope : '';
-  const scopes = new Set(scopeClaim.split(/\s+/).filter(Boolean));
-  if (!scopes.has('mcp')) {
-    return { ok: false, reason: 'token missing mcp scope' };
-  }
-  return { ok: true, claims: claimsFromPayload(payload) };
-}
-
-/**
- * Map a jose JWT-verification error to a stable reason string. Uses
- * jose's typed errors instead of substring-matching .message —
- * substrings like 'iss' or 'typ' collide with unrelated error text
- * ('issuer', 'unexpected', 'cryptographic', 'type'). Cycle-11 (M11-1)
- * added the JWSSignatureVerificationFailed branch for parity with the
- * other two providers; cycle-13 added JOSEAlgNotAllowed. Reason
- * strings are aligned across all three providers so operator log-grep
- * sees consistent text regardless of which provider is mounted.
- * Extracted from validate() for the cognitive-complexity refactor.
- */
-function mapEmbeddedAsVerifyError(error: unknown): string {
-  if (error instanceof joseErrors.JWTExpired) {
-    return 'token expired';
-  }
-  if (error instanceof joseErrors.JWSSignatureVerificationFailed) {
-    return 'invalid signature';
-  }
-  if (error instanceof joseErrors.JOSEAlgNotAllowed) {
-    return 'algorithm not allowed';
-  }
-  if (error instanceof joseErrors.JWTClaimValidationFailed) {
-    const claim = error.claim;
-    if (claim === 'aud') return 'invalid audience';
-    if (claim === 'iss') return 'invalid issuer';
-    if (claim === 'typ') return 'wrong token type';
-    return `claim validation failed: ${claim ?? 'unknown'}`;
-  }
-  return 'token validation failed';
-}
-
-/**
- * Cycle-16 fix: explicit denylist of private JWK fields. The earlier
- * destructure-and-discard pattern silently passed through any new
- * private field name (e.g., a future OKP `oth`) — a regression that
- * lets `d` survive into the published key would expose the signing
- * material. A denylist is self-documenting and fails closed: if a new
- * private field is added to the JWK type, it slips through and gets
- * caught by review or by an explicit test (rather than passing through
- * unstripped). Track these against RFC 7517/7518 (RSA + EC private
- * material) and RFC 8037 (OKP private material).
- */
-const PRIVATE_JWK_FIELDS: ReadonlySet<string> = new Set([
-  'd',  // RSA + EC + OKP private exponent / scalar
-  'p', 'q', 'dp', 'dq', 'qi', // RSA CRT params
-  'k',  // symmetric key material
-  'oth', // RSA "other primes" (multi-prime)
-]);
-
-function stripPrivate(jwk: JWK): JWK {
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(jwk as JWK & Record<string, unknown>)) {
-    if (!PRIVATE_JWK_FIELDS.has(key)) {
-      result[key] = value;
-    }
-  }
-  return result as JWK;
-}
-
 function normalizePath(rawPath: string): string {
   if (!rawPath || rawPath === '/') return '/mcp';
   return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
 }
-
