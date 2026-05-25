@@ -87,54 +87,50 @@ export class GitHubPortfolioIndexer {
   public async getIndex(force = false): Promise<GitHubPortfolioIndex> {
     try {
       const userKey = this.currentUserKey();
-      // Check if we need fresh data
       if (force || this.shouldFetchFresh(userKey)) {
         return await this.fetchFresh();
       }
 
       const cachedIndex = this.cacheByUser.get(userKey);
       const lastFetch = this.lastFetchByUser.get(userKey) ?? null;
-      
-      // Return cached data if available and valid
+
       if (cachedIndex && this.isCacheValid(userKey)) {
-        logger.debug('Returning cached GitHub portfolio index', {
+        GitHubPortfolioIndexer.logCachedIndex(cachedIndex, lastFetch);
+        return cachedIndex;
+      }
+
+      return await this.fetchFreshWithFallback(cachedIndex, lastFetch);
+    } catch (error) {
+      ErrorHandler.logError('GitHubPortfolioIndexer.getIndex', error);
+      return this.cacheByUser.get(this.currentUserKey()) ?? this.createEmptyIndex();
+    }
+  }
+
+  private static logCachedIndex(cachedIndex: GitHubPortfolioIndex, lastFetch: Date | null): void {
+    logger.debug('Returning cached GitHub portfolio index', {
+      username: cachedIndex.username,
+      totalElements: cachedIndex.totalElements,
+      age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
+    });
+  }
+
+  private async fetchFreshWithFallback(
+    cachedIndex: GitHubPortfolioIndex | undefined,
+    lastFetch: Date | null
+  ): Promise<GitHubPortfolioIndex> {
+    try {
+      return await this.fetchFresh();
+    } catch (error) {
+      logger.warn('Failed to fetch fresh GitHub portfolio index, checking for stale cache', {
+        error: error instanceof Error ? error.message : String(error)
+      });
+      if (cachedIndex) {
+        logger.info('Returning stale GitHub portfolio cache as fallback', {
           username: cachedIndex.username,
-          totalElements: cachedIndex.totalElements,
           age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
         });
         return cachedIndex;
       }
-      
-      // Try to fetch fresh, fall back to stale cache on failure
-      try {
-        return await this.fetchFresh();
-      } catch (error) {
-        logger.warn('Failed to fetch fresh GitHub portfolio index, checking for stale cache', {
-          error: error instanceof Error ? error.message : String(error)
-        });
-        
-        // Return stale cache if available
-        if (cachedIndex) {
-          logger.info('Returning stale GitHub portfolio cache as fallback', {
-            username: cachedIndex.username,
-            age: lastFetch ? Date.now() - lastFetch.getTime() : 'unknown'
-          });
-          return cachedIndex;
-        }
-        
-        // Return empty index as last resort
-        return this.createEmptyIndex();
-      }
-      
-    } catch (error) {
-      ErrorHandler.logError('GitHubPortfolioIndexer.getIndex', error);
-      
-      // Return stale cache or empty index
-      const cachedIndex = this.cacheByUser.get(this.currentUserKey());
-      if (cachedIndex) {
-        return cachedIndex;
-      }
-      
       return this.createEmptyIndex();
     }
   }
@@ -402,60 +398,63 @@ export class GitHubPortfolioIndexer {
     elementType: ElementType
   ): Promise<GitHubIndexEntry[]> {
     try {
-      // Get directory listing using PortfolioRepoManager
       const contents = await this.portfolioRepoManager.githubRequest(
         `/repos/${repoPath}/contents/${elementType}`
       );
-      
       if (!Array.isArray(contents)) {
         return [];
       }
-      
-      const entries: GitHubIndexEntry[] = [];
-      const maxConcurrent = 5; // Limit concurrent requests
-      
-      // Process files in batches to avoid rate limiting
-      for (let i = 0; i < contents.length; i += maxConcurrent) {
-        const batch = contents.slice(i, i + maxConcurrent);
-        const batchPromises = batch
-          .filter(item => item.type === 'file' && item.name.endsWith('.md'))
-          .map(item => this.createGitHubIndexEntry(elementType, item));
-        
-        const batchResults = await Promise.allSettled(batchPromises);
-        
-        for (const result of batchResults) {
-          if (result.status === 'fulfilled' && result.value) {
-            entries.push(result.value);
-          }
-        }
-        
-        // Add delay between batches to respect rate limits
-        if (i + maxConcurrent < contents.length) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-      }
-      
-      return entries;
-      
+
+      return await this.createEntriesFromDirectoryContents(elementType, contents);
     } catch (error) {
-      // Directory might not exist - check for 404 errors
-      // PortfolioRepoManager will throw standard GitHub API errors
+      if (this.isGitHubNotFoundError(error)) {
+        logger.debug(`Directory ${elementType} not found in GitHub repository (this is normal if not yet created)`);
+        return [];
+      }
       if (error instanceof Error) {
-        // Check for 404 Not Found errors from GitHub API
-        if (error.message.includes('404') || 
-            error.message.includes('Not Found')) {
-          logger.debug(`Directory ${elementType} not found in GitHub repository (this is normal if not yet created)`);
-          return [];
-        }
-        
-        // Log the actual error for debugging
         logger.debug(`Error fetching ${elementType}: ${error.message}`);
       }
-      
-      // Re-throw other errors
       logger.warn(`Unexpected error fetching ${elementType}:`, error);
       throw error;
     }
+  }
+
+  private async createEntriesFromDirectoryContents(
+    elementType: ElementType,
+    contents: any[]
+  ): Promise<GitHubIndexEntry[]> {
+    const entries: GitHubIndexEntry[] = [];
+    const maxConcurrent = 5;
+    for (let i = 0; i < contents.length; i += maxConcurrent) {
+      const batchResults = await this.createIndexEntriesBatch(
+        elementType,
+        contents.slice(i, i + maxConcurrent)
+      );
+      entries.push(...batchResults);
+      if (i + maxConcurrent < contents.length) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    return entries;
+  }
+
+  private async createIndexEntriesBatch(
+    elementType: ElementType,
+    batch: any[]
+  ): Promise<GitHubIndexEntry[]> {
+    const batchPromises = batch
+      .filter(item => item.type === 'file' && item.name.endsWith('.md'))
+      .map(item => this.createGitHubIndexEntry(elementType, item));
+    const batchResults = await Promise.allSettled(batchPromises);
+    return batchResults
+      .filter((result): result is PromiseFulfilledResult<GitHubIndexEntry | null> => result.status === 'fulfilled')
+      .map(result => result.value)
+      .filter((entry): entry is GitHubIndexEntry => entry !== null);
+  }
+
+  private isGitHubNotFoundError(error: unknown): boolean {
+    return error instanceof Error &&
+      (error.message.includes('404') || error.message.includes('Not Found'));
   }
 
   /**
@@ -481,31 +480,8 @@ export class GitHubPortfolioIndexer {
         lastModified: new Date(), // GitHub API doesn't provide file modification time directly
         size: fileInfo.size || 0
       };
-      
-      // Optionally fetch content to extract metadata
-      // This is expensive, so only do it for small files or when specifically needed
-      if (fileInfo.size && fileInfo.size < 10000) { // Only for files < 10KB
-        try {
-          // For download URLs, we need to fetch directly, not through API
-          const response = await fetch(fileInfo.download_url);
-          const content = await response.text();
-          const metadata = this.parseMetadataFromContent(content);
-          
-          if (metadata.name) entry.name = metadata.name;
-          if (metadata.description) entry.description = metadata.description;
-          if (metadata.version) entry.version = metadata.version;
-          if (metadata.author) entry.author = metadata.author;
-        } catch (metadataError) {
-          // Non-critical error, continue without metadata
-          logger.debug('Failed to fetch metadata for file', {
-            path: fileInfo.path,
-            error: metadataError instanceof Error ? metadataError.message : String(metadataError)
-          });
-        }
-      }
-      
+      await this.hydrateSmallFileMetadata(entry, fileInfo);
       return entry;
-      
     } catch (error) {
       logger.debug('Failed to create GitHub index entry', {
         path: fileInfo.path,
@@ -513,6 +489,33 @@ export class GitHubPortfolioIndexer {
       });
       return null;
     }
+  }
+
+  private async hydrateSmallFileMetadata(entry: GitHubIndexEntry, fileInfo: any): Promise<void> {
+    if (!fileInfo.size || fileInfo.size >= 10000) {
+      return;
+    }
+    try {
+      const response = await fetch(fileInfo.download_url);
+      const content = await response.text();
+      const metadata = this.parseMetadataFromContent(content);
+      GitHubPortfolioIndexer.applyParsedMetadata(entry, metadata);
+    } catch (metadataError) {
+      logger.debug('Failed to fetch metadata for file', {
+        path: fileInfo.path,
+        error: metadataError instanceof Error ? metadataError.message : String(metadataError)
+      });
+    }
+  }
+
+  private static applyParsedMetadata(
+    entry: GitHubIndexEntry,
+    metadata: { name?: string; description?: string; version?: string; author?: string }
+  ): void {
+    if (metadata.name) entry.name = metadata.name;
+    if (metadata.description) entry.description = metadata.description;
+    if (metadata.version) entry.version = metadata.version;
+    if (metadata.author) entry.author = metadata.author;
   }
 
   /**
@@ -531,16 +534,21 @@ export class GitHubPortfolioIndexer {
     if (frontmatterMatch) {
       const frontmatter = frontmatterMatch[1];
       
-      const nameMatch = frontmatter.match(/^name:\s*(.+)$/m);
+      // Match values with a single optional space and a value that
+      // explicitly excludes line breaks. Avoids the `\s* … .+` overlap
+      // that regexp/no-super-linear-backtracking flags as polynomial
+      // ReDoS — `?` is a bounded 0-or-1 quantifier with no character
+      // exchange against `[^\r\n]+`.
+      const nameMatch = /^name:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (nameMatch) metadata.name = nameMatch[1].trim();
-      
-      const descMatch = frontmatter.match(/^description:\s*(.+)$/m);
+
+      const descMatch = /^description:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (descMatch) metadata.description = descMatch[1].trim();
-      
-      const versionMatch = frontmatter.match(/^version:\s*(.+)$/m);
+
+      const versionMatch = /^version:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (versionMatch) metadata.version = versionMatch[1].trim();
-      
-      const authorMatch = frontmatter.match(/^author:\s*(.+)$/m);
+
+      const authorMatch = /^author:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (authorMatch) metadata.author = authorMatch[1].trim();
     }
     

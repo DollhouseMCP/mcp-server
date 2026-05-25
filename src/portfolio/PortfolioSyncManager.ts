@@ -131,84 +131,12 @@ export class PortfolioSyncManager {
    */
   public async handleSyncOperation(params: SyncOperation): Promise<SyncResult> {
     try {
-      // Check if sync is enabled in config
       const config = this.configManager.getConfig();
-      if (!config.sync.enabled && params.operation !== 'list-remote') {
-        return {
-          success: false,
-          message: 'Sync is disabled. Enable it with: dollhouse_config --action update --setting sync.enabled --value true'
-        };
+      const configFailure = this.validateSyncOperationConfig(params, config);
+      if (configFailure) {
+        return configFailure;
       }
-      
-      // Check bulk permissions
-      if (params.bulk) {
-        const bulkAllowed = this.isBulkOperationAllowed(params.operation, config);
-        if (!bulkAllowed.allowed) {
-          return {
-            success: false,
-            message: bulkAllowed.message
-          };
-        }
-      }
-      
-      // Handle operations
-      switch (params.operation) {
-        case 'list-remote':
-          return await this.listRemoteElements(params.element_type);
-          
-        case 'download':
-          if (params.bulk) {
-            return await this.bulkDownload(params.element_type, params.confirm);
-          } else if (params.element_name) {
-            return await this.downloadElement(
-              params.element_name,
-              params.element_type!,
-              params.version,
-              params.force
-            );
-          } else {
-            return {
-              success: false,
-              message: 'Element name required for individual download'
-            };
-          }
-          
-        case 'upload':
-          if (params.bulk) {
-            return await this.bulkUpload(params.element_type, params.confirm);
-          } else if (params.element_name) {
-            return await this.uploadElement(
-              params.element_name,
-              params.element_type!,
-              params.confirm
-            );
-          } else {
-            return {
-              success: false,
-              message: 'Element name required for individual upload'
-            };
-          }
-          
-        case 'compare':
-          if (params.element_name && params.element_type) {
-            return await this.compareVersions(
-              params.element_name,
-              params.element_type,
-              params.show_diff
-            );
-          } else {
-            return {
-              success: false,
-              message: 'Element name and type required for comparison'
-            };
-          }
-          
-        default:
-          return {
-            success: false,
-            message: `Unknown operation: ${params.operation}`
-          };
-      }
+      return await this.dispatchSyncOperation(params);
     } catch (error) {
       logger.error('Sync operation failed', {
         operation: params.operation,
@@ -220,6 +148,74 @@ export class PortfolioSyncManager {
         message: `Sync operation failed: ${error instanceof Error ? error.message : String(error)}`
       };
     }
+  }
+
+  private validateSyncOperationConfig(
+    params: SyncOperation,
+    config: DollhouseConfig
+  ): SyncResult | null {
+    if (!config.sync.enabled && params.operation !== 'list-remote') {
+      return {
+        success: false,
+        message: 'Sync is disabled. Enable it with: dollhouse_config --action update --setting sync.enabled --value true'
+      };
+    }
+
+    if (!params.bulk) {
+      return null;
+    }
+    const bulkAllowed = this.isBulkOperationAllowed(params.operation, config);
+    return bulkAllowed.allowed ? null : { success: false, message: bulkAllowed.message };
+  }
+
+  private async dispatchSyncOperation(params: SyncOperation): Promise<SyncResult> {
+    switch (params.operation) {
+      case 'list-remote':
+        return await this.listRemoteElements(params.element_type);
+      case 'download':
+        return await this.handleDownloadOperation(params);
+      case 'upload':
+        return await this.handleUploadOperation(params);
+      case 'compare':
+        return await this.handleCompareOperation(params);
+      default:
+        return {
+          success: false,
+          message: `Unknown operation: ${params.operation}`
+        };
+    }
+  }
+
+  private async handleDownloadOperation(params: SyncOperation): Promise<SyncResult> {
+    if (params.bulk) {
+      return await this.bulkDownload(params.element_type, params.confirm);
+    }
+    if (!params.element_name) {
+      return { success: false, message: 'Element name required for individual download' };
+    }
+    return await this.downloadElement(
+      params.element_name,
+      params.element_type!,
+      params.version,
+      params.force
+    );
+  }
+
+  private async handleUploadOperation(params: SyncOperation): Promise<SyncResult> {
+    if (params.bulk) {
+      return await this.bulkUpload(params.element_type, params.confirm);
+    }
+    if (!params.element_name) {
+      return { success: false, message: 'Element name required for individual upload' };
+    }
+    return await this.uploadElement(params.element_name, params.element_type!, params.confirm);
+  }
+
+  private async handleCompareOperation(params: SyncOperation): Promise<SyncResult> {
+    if (!params.element_name || !params.element_type) {
+      return { success: false, message: 'Element name and type required for comparison' };
+    }
+    return await this.compareVersions(params.element_name, params.element_type, params.show_diff);
   }
   
   /**
@@ -315,158 +311,52 @@ export class PortfolioSyncManager {
   ): Promise<SyncResult> {
     try {
       const config = this.configManager.getConfig();
-      
-      // Validate element name
-      const validation = UnicodeValidator.normalize(elementName);
-      if (!validation.isValid) {
-        return {
-          success: false,
-          message: `Invalid element name: ${validation.detectedIssues?.[0] || 'unknown error'}`
-        };
+      const validationFailure = this.validateDownloadElementName(elementName);
+      if (validationFailure) {
+        return validationFailure;
       }
-      
-      // Get token and set it
-      const token = await this.tokenManager.getGitHubTokenAsync();
+
+      const token = await this.requireGitHubToken();
       if (!token) {
-        return {
-          success: false,
-          message: 'GitHub authentication required'
-        };
+        return { success: false, message: 'GitHub authentication required' };
       }
-      
       this.repoManager.setToken(token);
-      
-      // Get GitHub index
+
       const index = await this.indexer.getIndex();
-      
-      // Find the element - first try exact match, then fuzzy match
       const entries = index.elements.get(elementType) || [];
-      let entry = entries.find(e => e.name === elementName);
-      
-      // If exact match not found, try fuzzy matching
+      const entry = this.findRemoteElementEntry(elementName, entries);
       if (!entry) {
-        // Try case-insensitive exact match first
-        entry = entries.find(e => e.name.toLowerCase() === elementName.toLowerCase());
-        
-        // If still not found, try fuzzy matching
-        if (!entry) {
-          const fuzzyMatch = this.findFuzzyMatch(elementName, entries);
-          if (fuzzyMatch) {
-            logger.info(`Fuzzy match found: '${elementName}' matched to '${fuzzyMatch.name}'`);
-            entry = fuzzyMatch;
-          }
-        }
+        return this.buildRemoteElementNotFoundResult(elementName, elementType, entries);
       }
-      
-      if (!entry) {
-        // Generate helpful suggestions
-        const suggestions = this.getSuggestions(elementName, entries);
-        const suggestionText = suggestions.length > 0 
-          ? `\n\nDid you mean one of these?\n${suggestions.map(s => `  • ${s.name}`).join('\n')}`
-          : '';
-        
-        return {
-          success: false,
-          message: `Element '${elementName}' (${elementType}) not found in GitHub portfolio${suggestionText}`
-        };
-      }
-      
-      // Check for local conflicts
+
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
-      let hasLocalVersion = false;
-      let localContent: string | null = null;
-      
-      try {
-        localContent = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.downloadElement' });
-        hasLocalVersion = true;
-      } catch {
-        // No local version exists
+      const localContent = await this.readLocalElementContent(localPath, 'PortfolioSyncManager.downloadElement');
+      const remoteContent = await this.fetchRemoteElementContent(entry.downloadUrl, token);
+      const securityFailure = this.validateRemoteContent(remoteContent);
+      if (securityFailure) {
+        return securityFailure;
       }
-      
-      // Download the element
-      const response = await fetch(entry.downloadUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Accept': 'application/vnd.github.v3.raw'
-        }
-      });
-      
-      if (!response.ok) {
-        throw new Error(`Failed to download: ${response.statusText}`);
-      }
-      
-      const remoteContent = await response.text();
-      
-      // Validate content security
-      const validationResult = ContentValidator.validateAndSanitize(remoteContent);
-      if (!validationResult.isValid && validationResult.severity === 'critical') {
-        return {
-          success: false,
-          message: `Security issue detected in remote content: ${validationResult.detectedPatterns?.join(', ')}`
-        };
-      }
-      
-      // Check if content is different
-      if (hasLocalVersion && localContent) {
-        const localHash = createHash('sha256').update(localContent).digest('hex');
-        const remoteHash = createHash('sha256').update(remoteContent).digest('hex');
-        
-        if (localHash === remoteHash) {
-          return {
-            success: true,
-            message: `Element '${elementName}' is already up to date`
-          };
-        }
-        
-        // Show confirmation for overwrite unless force flag is set
-        if (config.sync.individual.require_confirmation && !force) {
-          const diff = await this.generateDiff(localContent, remoteContent);
-          const conflictInfo = await this.buildConflictInfo(
-            elementName,
-            elementType,
-            localPath,
-            localContent,
-            entry
-          );
 
-          logger.warn('Sync conflict detected', {
-            element: elementName,
-            type: elementType,
-            conflict: conflictInfo
-          });
-
-          return {
-            success: false,
-            message: `Local version exists. Please confirm download will overwrite:\n\n${diff}\n\nTo proceed, use --force flag`,
-            data: { requiresConfirmation: true },
-            conflicts: [conflictInfo]
-          };
-        }
-      }
-      
-      // Phase 4.5 follow-up: when a storage-layer factory is wired AND it
-      // produces a writable layer for this element type, persist through it
-      // instead of writing to filesystem. Without this, DB-mode sync
-      // downloads land on the per-user portfolio dir (typically tmpfs in
-      // containers) and vanish on every restart. Filesystem-mode falls
-      // through to the legacy writeFile path.
-      const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
-      const elementDir = path.dirname(localPath);
-      const persistedViaStorageLayer = await persistElementViaFactory(
-        this.storageLayerFactory,
-        elementType,
+      const conflictResult = await this.resolveDownloadConflict({
         elementName,
+        elementType,
+        localPath,
+        localContent,
         remoteContent,
-        { elementDir, fileExtension: path.extname(localPath) || '.md', scanCooldownMs: 0 },
-        { exclusive: false },
-      );
-
-      if (!persistedViaStorageLayer) {
-        // Save the element to filesystem (legacy path, used when no factory
-        // or when the factory produces a non-writable filesystem layer).
-        await this.fileOperations.createDirectory(elementDir);
-        await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
+        entry,
+        config,
+        force,
+      });
+      if (conflictResult) {
+        return conflictResult;
       }
+
+      const persistedViaStorageLayer = await this.persistDownloadedElement(
+        elementName,
+        elementType,
+        localPath,
+        remoteContent
+      );
 
       logger.info('Element downloaded from GitHub', {
         element: elementName,
@@ -487,6 +377,146 @@ export class PortfolioSyncManager {
       };
     }
   }
+
+  private validateDownloadElementName(elementName: string): SyncResult | null {
+    const validation = UnicodeValidator.normalize(elementName);
+    return validation.isValid
+      ? null
+      : {
+          success: false,
+          message: `Invalid element name: ${validation.detectedIssues?.[0] || 'unknown error'}`
+        };
+  }
+
+  private async requireGitHubToken(): Promise<string | null> {
+    return await this.tokenManager.getGitHubTokenAsync();
+  }
+
+  private findRemoteElementEntry(
+    elementName: string,
+    entries: GitHubIndexEntry[]
+  ): GitHubIndexEntry | undefined {
+    const exactMatch = entries.find(e => e.name === elementName);
+    if (exactMatch) {
+      return exactMatch;
+    }
+
+    const caseInsensitiveMatch = entries.find(e => e.name.toLowerCase() === elementName.toLowerCase());
+    if (caseInsensitiveMatch) {
+      return caseInsensitiveMatch;
+    }
+
+    const fuzzyMatch = this.findFuzzyMatch(elementName, entries);
+    if (fuzzyMatch) {
+      logger.info(`Fuzzy match found: '${elementName}' matched to '${fuzzyMatch.name}'`);
+    }
+    return fuzzyMatch ?? undefined;
+  }
+
+  private buildRemoteElementNotFoundResult(
+    elementName: string,
+    elementType: ElementType,
+    entries: GitHubIndexEntry[]
+  ): SyncResult {
+    const suggestions = this.getSuggestions(elementName, entries);
+    const suggestionText = suggestions.length > 0
+      ? `\n\nDid you mean one of these?\n${suggestions.map(s => `  • ${s.name}`).join('\n')}`
+      : '';
+    return {
+      success: false,
+      message: `Element '${elementName}' (${elementType}) not found in GitHub portfolio${suggestionText}`
+    };
+  }
+
+  private async readLocalElementContent(localPath: string, source: string): Promise<string | null> {
+    try {
+      return await this.fileOperations.readFile(localPath, { source });
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchRemoteElementContent(downloadUrl: string, token: string): Promise<string> {
+    const response = await fetch(downloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3.raw'
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to download: ${response.statusText}`);
+    }
+    return await response.text();
+  }
+
+  private validateRemoteContent(remoteContent: string): SyncResult | null {
+    const validationResult = ContentValidator.validateAndSanitize(remoteContent);
+    if (validationResult.isValid || validationResult.severity !== 'critical') {
+      return null;
+    }
+    return {
+      success: false,
+      message: `Security issue detected in remote content: ${validationResult.detectedPatterns?.join(', ')}`
+    };
+  }
+
+  private async resolveDownloadConflict(args: {
+    elementName: string;
+    elementType: ElementType;
+    localPath: string;
+    localContent: string | null;
+    remoteContent: string;
+    entry: GitHubIndexEntry;
+    config: DollhouseConfig;
+    force?: boolean;
+  }): Promise<SyncResult | null> {
+    const { elementName, elementType, localPath, localContent, remoteContent, entry, config, force } = args;
+    if (!localContent) {
+      return null;
+    }
+    const localHash = createHash('sha256').update(localContent).digest('hex');
+    const remoteHash = createHash('sha256').update(remoteContent).digest('hex');
+    if (localHash === remoteHash) {
+      return { success: true, message: `Element '${elementName}' is already up to date` };
+    }
+    if (!config.sync.individual.require_confirmation || force) {
+      return null;
+    }
+
+    const diff = await this.generateDiff(localContent, remoteContent);
+    const conflictInfo = await this.buildConflictInfo(elementName, elementType, localPath, localContent, entry);
+    logger.warn('Sync conflict detected', { element: elementName, type: elementType, conflict: conflictInfo });
+    return {
+      success: false,
+      message: `Local version exists. Please confirm download will overwrite:\n\n${diff}\n\nTo proceed, use --force flag`,
+      data: { requiresConfirmation: true },
+      conflicts: [conflictInfo]
+    };
+  }
+
+  private async persistDownloadedElement(
+    elementName: string,
+    elementType: ElementType,
+    localPath: string,
+    remoteContent: string
+  ): Promise<boolean> {
+    const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+    const elementDir = path.dirname(localPath);
+    const persistedViaStorageLayer = await persistElementViaFactory(
+      this.storageLayerFactory,
+      elementType,
+      elementName,
+      remoteContent,
+      { elementDir, fileExtension: path.extname(localPath) || '.md', scanCooldownMs: 0 },
+      { exclusive: false },
+    );
+
+    if (!persistedViaStorageLayer) {
+      await this.fileOperations.createDirectory(elementDir);
+      await this.fileOperations.writeFile(localPath, remoteContent, { source: 'PortfolioSyncManager.downloadElement' });
+    }
+    return persistedViaStorageLayer;
+  }
   
   /**
    * Upload a specific element to GitHub
@@ -498,66 +528,23 @@ export class PortfolioSyncManager {
   ): Promise<SyncResult> {
     try {
       const config = this.configManager.getConfig();
-      
-      // Check for local element
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
-      
-      let content: string;
-      try {
-        content = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.uploadElement' });
-      } catch {
-        return {
-          success: false,
-          message: `Element '${elementName}' (${elementType}) not found locally`
-        };
+      const content = await this.readUploadContent(elementName, elementType, localPath);
+      if (typeof content !== 'string') {
+        return content;
       }
-      
-      // Check privacy metadata
+
       const parsed = SecureYamlParser.parse(content, {
         maxYamlSize: 64 * 1024,
         validateContent: false,
         validateFields: false
       });
-      
-      if (parsed.data?.privacy?.local_only === true) {
-        return {
-          success: false,
-          message: `Element '${elementName}' is marked as local-only and cannot be uploaded`
-        };
+
+      const uploadValidationFailure = this.validateUploadContent(elementName, content, parsed.data, config);
+      if (uploadValidationFailure) {
+        return uploadValidationFailure;
       }
-      
-      // Validate content security
-      const validationResult = ContentValidator.validateAndSanitize(content);
-      if (!validationResult.isValid && validationResult.severity === 'critical') {
-        return {
-          success: false,
-          message: `Security issue detected: ${validationResult.detectedPatterns?.join(', ')}`
-        };
-      }
-      
-      // Scan for sensitive content if configured
-      if (config.sync.privacy.scan_for_secrets) {
-        logger.debug('Scanning for secrets before upload');
-        // Implement actual secret scanning
-        const secretPatterns = [
-          /api[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi,
-          /secret\s*[:=]\s*['"][^'"]+['"]/gi,
-          /password\s*[:=]\s*['"][^'"]+['"]/gi,
-          /token\s*[:=]\s*['"][^'"]+['"]/gi,
-          /private[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi
-        ];
-        
-        for (const pattern of secretPatterns) {
-          if (pattern.test(content)) {
-            return {
-              success: false,
-              message: `Potential secret detected in content. Please review and remove sensitive information before uploading.`
-            };
-          }
-        }
-      }
-      
-      // Get confirmation if required (unless already confirmed)
+
       if (config.sync.individual.require_confirmation && !confirm) {
         return {
           success: false,
@@ -565,9 +552,8 @@ export class PortfolioSyncManager {
           data: { requiresConfirmation: true }
         };
       }
-      
-      // Get token and validate
-      const token = await this.tokenManager.getGitHubTokenAsync();
+
+      const token = await this.requireGitHubToken();
       if (!token) {
         return {
           success: false,
@@ -591,52 +577,108 @@ export class PortfolioSyncManager {
         content: content
       };
       
-      // Use PortfolioElementAdapter to properly implement IElement interface
       const adapter = new PortfolioElementAdapter(portfolioElement);
-      
-      // Use PortfolioRepoManager to upload
       this.repoManager.setToken(token);
-      
-      // DEBUG: Log upload attempt
-      logger.debug('[BULK_SYNC_DEBUG] Upload element attempt', {
-        elementName,
-        elementType,
-        hasToken: !!token,
-        tokenPrefix: token ? token.substring(0, 10) + '...' : 'none',
-        adapterHasMetadata: !!(adapter && adapter.metadata),
-        timestamp: new Date().toISOString()
-      });
-      
-      try {
-        const url = await this.repoManager.saveElement(adapter, true); // consent is true since we've already checked
-        
-        logger.info('Element uploaded to GitHub', {
-          element: elementName,
-          type: elementType,
-          url
-        });
-        
-        return {
-          success: true,
-          message: `Successfully uploaded '${elementName}' (${elementType}) to GitHub portfolio`,
-          data: { url }
-        };
-      } catch (uploadError) {
-        // Handle specific errors
-        if (uploadError instanceof Error && uploadError.message.includes('repository does not exist')) {
-          return {
-            success: false,
-            message: `GitHub portfolio repository not found. Please initialize it first using init_portfolio tool.`
-          };
-        }
-        throw uploadError;
-      }
+      return await this.saveElementToGitHub(adapter, elementName, elementType, token);
       
     } catch (error) {
       return {
         success: false,
         message: `Failed to upload element: ${error instanceof Error ? error.message : String(error)}`
       };
+    }
+  }
+
+  private async readUploadContent(
+    elementName: string,
+    elementType: ElementType,
+    localPath: string
+  ): Promise<string | SyncResult> {
+    try {
+      return await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.uploadElement' });
+    } catch {
+      return {
+        success: false,
+        message: `Element '${elementName}' (${elementType}) not found locally`
+      };
+    }
+  }
+
+  private validateUploadContent(
+    elementName: string,
+    content: string,
+    parsedData: any,
+    config: DollhouseConfig
+  ): SyncResult | null {
+    if (parsedData?.privacy?.local_only === true) {
+      return {
+        success: false,
+        message: `Element '${elementName}' is marked as local-only and cannot be uploaded`
+      };
+    }
+
+    const validationResult = ContentValidator.validateAndSanitize(content);
+    if (!validationResult.isValid && validationResult.severity === 'critical') {
+      return {
+        success: false,
+        message: `Security issue detected: ${validationResult.detectedPatterns?.join(', ')}`
+      };
+    }
+
+    return config.sync.privacy.scan_for_secrets
+      ? this.validateNoUploadSecrets(content)
+      : null;
+  }
+
+  private validateNoUploadSecrets(content: string): SyncResult | null {
+    logger.debug('Scanning for secrets before upload');
+    const secretPatterns = [
+      /api[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi,
+      /secret\s*[:=]\s*['"][^'"]+['"]/gi,
+      /password\s*[:=]\s*['"][^'"]+['"]/gi,
+      /token\s*[:=]\s*['"][^'"]+['"]/gi,
+      /private[_-]?key\s*[:=]\s*['"][^'"]+['"]/gi
+    ];
+
+    return secretPatterns.some(pattern => pattern.test(content))
+      ? {
+          success: false,
+          message: 'Potential secret detected in content. Please review and remove sensitive information before uploading.'
+        }
+      : null;
+  }
+
+  private async saveElementToGitHub(
+    adapter: PortfolioElementAdapter,
+    elementName: string,
+    elementType: ElementType,
+    token: string
+  ): Promise<SyncResult> {
+    logger.debug('[BULK_SYNC_DEBUG] Upload element attempt', {
+      elementName,
+      elementType,
+      hasToken: !!token,
+      tokenPrefix: token.substring(0, 10) + '...',
+      adapterHasMetadata: !!adapter.metadata,
+      timestamp: new Date().toISOString()
+    });
+
+    try {
+      const url = await this.repoManager.saveElement(adapter, true);
+      logger.info('Element uploaded to GitHub', { element: elementName, type: elementType, url });
+      return {
+        success: true,
+        message: `Successfully uploaded '${elementName}' (${elementType}) to GitHub portfolio`,
+        data: { url }
+      };
+    } catch (uploadError) {
+      if (uploadError instanceof Error && uploadError.message.includes('repository does not exist')) {
+        return {
+          success: false,
+          message: 'GitHub portfolio repository not found. Please initialize it first using init_portfolio tool.'
+        };
+      }
+      throw uploadError;
     }
   }
   
@@ -649,90 +691,25 @@ export class PortfolioSyncManager {
     showDiff?: boolean
   ): Promise<SyncResult> {
     try {
-      // Get local version
       const localPath = this.portfolioManager.getElementPath(elementType, `${elementName}.md`);
-      let localContent: string | null = null;
-      let localVersion: VersionInfo | null = null;
-      
-      try {
-        localContent = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.compareVersions' });
-        const parsed = SecureYamlParser.parse(localContent, {
-          maxYamlSize: 64 * 1024,
-          validateContent: false,
-          validateFields: false
-        });
-
-        localVersion = {
-          version: parsed.data?.version || '1.0.0',
-          timestamp: new Date(parsed.data?.updated || parsed.data?.created || Date.now()),
-          author: parsed.data?.author || 'unknown',
-          hash: createHash('sha256').update(localContent).digest('hex'),
-          size: Buffer.byteLength(localContent),
-          source: 'local'
-        };
-      } catch {
-        // No local version
-      }
-      
-      // Get remote version
-      const token = await this.tokenManager.getGitHubTokenAsync();
+      const local = await this.loadLocalVersion(localPath);
+      const token = await this.requireGitHubToken();
       if (!token) {
-        return {
-          success: false,
-          message: 'GitHub authentication required'
-        };
+        return { success: false, message: 'GitHub authentication required' };
       }
-      
+
       const index = await this.indexer.getIndex();
       const entries = index.elements.get(elementType) || [];
       const entry = entries.find(e => e.name === elementName);
-      
-      let remoteVersion: VersionInfo | null = null;
-      let remoteContent: string | null = null;
-      
-      if (entry) {
-        const response = await fetch(entry.downloadUrl, {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Accept': 'application/vnd.github.v3.raw'
-          }
-        });
-        
-        if (response.ok) {
-          remoteContent = await response.text();
-          remoteVersion = {
-            version: entry.version || '1.0.0',
-            timestamp: entry.lastModified,
-            author: entry.author || 'unknown',
-            hash: createHash('sha256').update(remoteContent).digest('hex'),
-            size: entry.size,
-            source: 'remote'
-          };
-        }
-      }
-      
-      // Build comparison result
-      const result: any = {
-        element: elementName,
-        type: elementType,
-        local: localVersion,
-        remote: remoteVersion
-      };
-      
-      if (localVersion && remoteVersion) {
-        result.status = localVersion.hash === remoteVersion.hash ? 'identical' : 'different';
-        
-        if (showDiff && localContent && remoteContent && result.status === 'different') {
-          result.diff = await this.generateDiff(localContent, remoteContent);
-        }
-      } else if (localVersion && !remoteVersion) {
-        result.status = 'local-only';
-      } else if (!localVersion && remoteVersion) {
-        result.status = 'remote-only';
-      } else {
-        result.status = 'not-found';
-      }
-      
+      const remote = entry ? await this.loadRemoteVersion(entry, token) : { version: null, content: null };
+      const result = await this.buildVersionComparisonResult(
+        elementName,
+        elementType,
+        local,
+        remote,
+        showDiff
+      );
+
       return {
         success: true,
         message: `Version comparison for '${elementName}' (${elementType})`,
@@ -746,13 +723,100 @@ export class PortfolioSyncManager {
       };
     }
   }
+
+  private async loadLocalVersion(
+    localPath: string
+  ): Promise<{ version: VersionInfo | null; content: string | null }> {
+    try {
+      const content = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.compareVersions' });
+      const parsed = SecureYamlParser.parse(content, {
+        maxYamlSize: 64 * 1024,
+        validateContent: false,
+        validateFields: false
+      });
+      return {
+        content,
+        version: {
+          version: parsed.data?.version || '1.0.0',
+          timestamp: new Date(parsed.data?.updated || parsed.data?.created || Date.now()),
+          author: parsed.data?.author || 'unknown',
+          hash: createHash('sha256').update(content).digest('hex'),
+          size: Buffer.byteLength(content),
+          source: 'local'
+        }
+      };
+    } catch {
+      return { version: null, content: null };
+    }
+  }
+
+  private async loadRemoteVersion(
+    entry: GitHubIndexEntry,
+    token: string
+  ): Promise<{ version: VersionInfo | null; content: string | null }> {
+    const response = await fetch(entry.downloadUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github.v3.raw'
+      }
+    });
+    if (!response.ok) {
+      return { version: null, content: null };
+    }
+
+    const content = await response.text();
+    return {
+      content,
+      version: {
+        version: entry.version || '1.0.0',
+        timestamp: entry.lastModified,
+        author: entry.author || 'unknown',
+        hash: createHash('sha256').update(content).digest('hex'),
+        size: entry.size,
+        source: 'remote'
+      }
+    };
+  }
+
+  private async buildVersionComparisonResult(
+    elementName: string,
+    elementType: ElementType,
+    local: { version: VersionInfo | null; content: string | null },
+    remote: { version: VersionInfo | null; content: string | null },
+    showDiff?: boolean
+  ): Promise<any> {
+    const result: any = {
+      element: elementName,
+      type: elementType,
+      local: local.version,
+      remote: remote.version
+    };
+
+    result.status = this.getVersionComparisonStatus(local.version, remote.version);
+    if (showDiff && local.content && remote.content && result.status === 'different') {
+      result.diff = await this.generateDiff(local.content, remote.content);
+    }
+    return result;
+  }
+
+  private getVersionComparisonStatus(
+    localVersion: VersionInfo | null,
+    remoteVersion: VersionInfo | null
+  ): 'identical' | 'different' | 'local-only' | 'remote-only' | 'not-found' {
+    if (localVersion && remoteVersion) {
+      return localVersion.hash === remoteVersion.hash ? 'identical' : 'different';
+    }
+    if (localVersion) return 'local-only';
+    if (remoteVersion) return 'remote-only';
+    return 'not-found';
+  }
   
   /**
    * Bulk download elements
    */
   private async bulkDownload(elementType?: ElementType, confirm?: boolean): Promise<SyncResult> {
     const config = this.configManager.getConfig();
-    
+
     if (!config.sync.bulk.download_enabled) {
       return {
         success: false,
@@ -779,57 +843,72 @@ export class PortfolioSyncManager {
         elements: []
       };
     }
-    
-    // Show preview if required (unless already confirmed)
+
     if (config.sync.bulk.require_preview && !confirm) {
-      return {
-        success: false,
-        message: `Bulk download preview:\n\n${elementsToDownload.length} elements will be downloaded:\n${elementsToDownload.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
-        data: { requiresConfirmation: true },
-        elements: elementsToDownload
-      };
+      return this.buildBulkDownloadPreview(elementsToDownload);
     }
-    
-    // Perform actual bulk download
-    const results = {
-      downloaded: [] as string[],
-      skipped: [] as string[],
-      failed: [] as { name: string; error: string }[]
-    };
-    
+
+    const results = PortfolioSyncManager.createBulkDownloadResults();
     for (const element of elementsToDownload) {
-      try {
-        const result = await this.downloadElement(element.name, element.type, undefined, true); // force=true to skip individual confirmations
-        if (result.success) {
-          results.downloaded.push(element.name);
-        } else if (result.message?.includes('already up to date')) {
-          results.skipped.push(element.name);
-        } else {
-          results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
-        }
-      } catch (error) {
-        results.failed.push({ 
-          name: element.name, 
-          error: error instanceof Error ? error.message : String(error) 
-        });
-      }
+      await this.downloadBulkElement(element, results);
     }
-    
-    // Build summary message
+
+    return {
+      success: results.failed.length === 0,
+      message: PortfolioSyncManager.buildBulkDownloadSummary(results),
+      data: results
+    };
+  }
+
+  private buildBulkDownloadPreview(elementsToDownload: SyncElementInfo[]): SyncResult {
+    return {
+      success: false,
+      message: `Bulk download preview:\n\n${elementsToDownload.length} elements will be downloaded:\n${elementsToDownload.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
+      data: { requiresConfirmation: true },
+      elements: elementsToDownload
+    };
+  }
+
+  private static createBulkDownloadResults(): {
+    downloaded: string[];
+    skipped: string[];
+    failed: Array<{ name: string; error: string }>;
+  } {
+    return { downloaded: [], skipped: [], failed: [] };
+  }
+
+  private async downloadBulkElement(
+    element: SyncElementInfo,
+    results: ReturnType<typeof PortfolioSyncManager.createBulkDownloadResults>
+  ): Promise<void> {
+    try {
+      const result = await this.downloadElement(element.name, element.type, undefined, true);
+      if (result.success) {
+        results.downloaded.push(element.name);
+      } else if (result.message?.includes('already up to date')) {
+        results.skipped.push(element.name);
+      } else {
+        results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
+      }
+    } catch (error) {
+      results.failed.push({
+        name: element.name,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  private static buildBulkDownloadSummary(
+    results: ReturnType<typeof PortfolioSyncManager.createBulkDownloadResults>
+  ): string {
     let message = `Bulk download complete:\n`;
     message += `- Downloaded: ${results.downloaded.length} elements\n`;
     message += `- Skipped (up to date): ${results.skipped.length} elements\n`;
     message += `- Failed: ${results.failed.length} elements`;
-    
     if (results.failed.length > 0) {
       message += `\n\nFailed downloads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
     }
-    
-    return {
-      success: results.failed.length === 0,
-      message,
-      data: results
-    };
+    return message;
   }
   
   /**
@@ -845,36 +924,7 @@ export class PortfolioSyncManager {
       };
     }
     
-    // Get list of local elements
-    const types = elementType ? [elementType] : [
-      ElementType.PERSONA,
-      ElementType.SKILL,
-      ElementType.TEMPLATE,
-      ElementType.AGENT,
-      ElementType.MEMORY,
-      ElementType.ENSEMBLE
-    ];
-    
-    const localElements: { name: string; type: ElementType; path: string }[] = [];
-    
-    for (const type of types) {
-      const dir = this.portfolioManager.getElementDir(type);
-      try {
-        const files = await this.fileOperations.listDirectory(dir);
-        for (const file of files) {
-          if (file.endsWith('.md')) {
-            localElements.push({
-              name: file.replace('.md', ''),
-              type,
-              path: path.join(dir, file)
-            });
-          }
-        }
-      } catch {
-        // Directory may not exist yet
-        logger.debug(`Directory for ${type} does not exist yet`);
-      }
-    }
+    const localElements = await this.listLocalElementsForUpload(elementType);
     
     if (localElements.length === 0) {
       return {
@@ -884,64 +934,114 @@ export class PortfolioSyncManager {
       };
     }
     
-    // Show preview if required (unless already confirmed)
     if (config.sync.bulk.require_preview && !confirm) {
-      // Convert to SyncElementInfo format for preview
-      const previewElements: SyncElementInfo[] = localElements.map(e => ({
-        name: e.name,
-        type: e.type,
-        status: 'local-only' as const,
-        action: 'upload' as const
-      }));
-      
-      return {
-        success: false,
-        message: `Bulk upload preview:\n\n${localElements.length} elements will be uploaded:\n${localElements.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
-        data: { requiresConfirmation: true },
-        elements: previewElements
-      };
+      return this.buildBulkUploadPreview(localElements);
     }
-    
-    // Perform actual bulk upload
-    const results = {
-      uploaded: [] as string[],
-      skipped: [] as string[],
-      failed: [] as { name: string; error: string }[]
-    };
-    
+
+    const results = PortfolioSyncManager.createBulkUploadResults();
     for (const element of localElements) {
-      try {
-        const result = await this.uploadElement(element.name, element.type, true); // confirm=true to skip individual confirmations
-        if (result.success) {
-          results.uploaded.push(element.name);
-        } else if (result.message?.includes('local-only')) {
-          results.skipped.push(element.name);
-        } else {
-          results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
-        }
-      } catch (error) {
-        results.failed.push({ 
-          name: element.name, 
-          error: error instanceof Error ? error.message : String(error) 
-        });
-      }
+      await this.uploadBulkElement(element, results);
     }
-    
-    // Build summary message
+
+    return {
+      success: results.failed.length === 0,
+      message: PortfolioSyncManager.buildBulkUploadSummary(results),
+      data: results
+    };
+  }
+
+  private async listLocalElementsForUpload(
+    elementType?: ElementType
+  ): Promise<Array<{ name: string; type: ElementType; path: string }>> {
+    const types = elementType ? [elementType] : [
+      ElementType.PERSONA,
+      ElementType.SKILL,
+      ElementType.TEMPLATE,
+      ElementType.AGENT,
+      ElementType.MEMORY,
+      ElementType.ENSEMBLE
+    ];
+    const localElements: Array<{ name: string; type: ElementType; path: string }> = [];
+    for (const type of types) {
+      await this.collectLocalElementsOfType(type, localElements);
+    }
+    return localElements;
+  }
+
+  private async collectLocalElementsOfType(
+    type: ElementType,
+    localElements: Array<{ name: string; type: ElementType; path: string }>
+  ): Promise<void> {
+    const dir = this.portfolioManager.getElementDir(type);
+    try {
+      const files = await this.fileOperations.listDirectory(dir);
+      for (const file of files) {
+        if (file.endsWith('.md')) {
+          localElements.push({ name: file.replace('.md', ''), type, path: path.join(dir, file) });
+        }
+      }
+    } catch {
+      logger.debug(`Directory for ${type} does not exist yet`);
+    }
+  }
+
+  private buildBulkUploadPreview(
+    localElements: Array<{ name: string; type: ElementType; path: string }>
+  ): SyncResult {
+    const previewElements: SyncElementInfo[] = localElements.map(e => ({
+      name: e.name,
+      type: e.type,
+      status: 'local-only' as const,
+      action: 'upload' as const
+    }));
+    return {
+      success: false,
+      message: `Bulk upload preview:\n\n${localElements.length} elements will be uploaded:\n${localElements.map(e => `- ${e.name} (${e.type})`).join('\n')}\n\nTo proceed, use --confirm flag`,
+      data: { requiresConfirmation: true },
+      elements: previewElements
+    };
+  }
+
+  private static createBulkUploadResults(): {
+    uploaded: string[];
+    skipped: string[];
+    failed: Array<{ name: string; error: string }>;
+  } {
+    return { uploaded: [], skipped: [], failed: [] };
+  }
+
+  private async uploadBulkElement(
+    element: { name: string; type: ElementType },
+    results: ReturnType<typeof PortfolioSyncManager.createBulkUploadResults>
+  ): Promise<void> {
+    try {
+      const result = await this.uploadElement(element.name, element.type, true);
+      if (result.success) {
+        results.uploaded.push(element.name);
+      } else if (result.message?.includes('local-only')) {
+        results.skipped.push(element.name);
+      } else {
+        results.failed.push({ name: element.name, error: result.message || 'Unknown error' });
+      }
+    } catch (error) {
+      results.failed.push({
+        name: element.name,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  private static buildBulkUploadSummary(
+    results: ReturnType<typeof PortfolioSyncManager.createBulkUploadResults>
+  ): string {
     let message = `Bulk upload complete:\n`;
     message += `- Uploaded: ${results.uploaded.length} elements\n`;
     message += `- Skipped (local-only): ${results.skipped.length} elements\n`;
     message += `- Failed: ${results.failed.length} elements`;
-    
     if (results.failed.length > 0) {
       message += `\n\nFailed uploads:\n${results.failed.map(f => `- ${f.name}: ${f.error}`).join('\n')}`;
     }
-    
-    return {
-      success: results.failed.length === 0,
-      message,
-      data: results
-    };
+    return message;
   }
   
   /**
@@ -1074,16 +1174,23 @@ export class PortfolioSyncManager {
    * Returns a score between 0 and 1
    */
   private calculateSimilarity(a: string, b: string): number {
-    // Exact match
     if (a === b) return 1.0;
-    
-    // One contains the other
     if (a.includes(b) || b.includes(a)) return 0.8;
-    
-    // Calculate word overlap
+
     const wordsA = a.split(/[^a-z0-9]+/);
     const wordsB = b.split(/[^a-z0-9]+/);
-    
+    return this.calculateWordSimilarity(wordsA, wordsB);
+  }
+
+  private calculateWordSimilarity(wordsA: string[], wordsB: string[]): number {
+    const overlapScore = PortfolioSyncManager.calculateWordOverlapScore(wordsA, wordsB);
+    if (overlapScore > 0) {
+      return overlapScore;
+    }
+    return PortfolioSyncManager.hasPartialWordMatch(wordsA, wordsB) ? 0.5 : 0;
+  }
+
+  private static calculateWordOverlapScore(wordsA: string[], wordsB: string[]): number {
     let matches = 0;
     for (const wordA of wordsA) {
       if (wordA && wordsB.some(wordB => wordB === wordA)) {
@@ -1095,19 +1202,21 @@ export class PortfolioSyncManager {
       const overlap = (matches * 2) / (wordsA.length + wordsB.length);
       return Math.max(0.6, overlap); // At least 0.6 for any word match
     }
-    
-    // Check for partial matches
+    return 0;
+  }
+
+  private static hasPartialWordMatch(wordsA: string[], wordsB: string[]): boolean {
     for (const wordA of wordsA) {
       for (const wordB of wordsB) {
-        if (wordA.length > 3 && wordB.length > 3) {
-          if (wordA.includes(wordB) || wordB.includes(wordA)) {
-            return 0.5;
-          }
+        if (
+          wordA.length > 3 &&
+          wordB.length > 3 &&
+          (wordA.includes(wordB) || wordB.includes(wordA))
+        ) {
+          return true;
         }
       }
     }
-    
-    // No significant similarity
-    return 0;
+    return false;
   }
 }

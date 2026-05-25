@@ -1056,42 +1056,55 @@ export class UnifiedIndexManager {
     try {
       const githubIndex = await this.githubIndexer.getIndex();
       const results: UnifiedSearchResult[] = [];
-      
-      const queryLower = query.toLowerCase();
-      const queryTokens = queryLower.split(/\s+/).filter(token => token.length > 0);
-      
-      if (queryTokens.length === 0 && query.trim() !== '') {
+      const queryTokens = UnifiedIndexManager.tokenizeQuery(query);
+
+      if (UnifiedIndexManager.shouldReturnNoQueryResults(query, queryTokens)) {
         return results;
       }
-      
-      // Search across all GitHub elements
+
       for (const [elementType, entries] of githubIndex.elements) {
-        // Filter by element type if specified
-        if (options.elementType && elementType !== options.elementType) {
-          continue;
-        }
-        
-        for (const entry of entries) {
-          const score = this.calculateGitHubMatchScore(entry, queryTokens, query);
-          if (score > 0 || query.trim() === '') {
-            results.push({
-              source: 'github' as const,
-              entry: this.convertGitHubEntry(entry),
-              matchType: this.determineMatchType(entry, queryTokens),
-              score: query.trim() === '' ? 1 : score, // Default score for empty query
-              version: entry.version
-            });
-          }
-        }
+        this.addGitHubSearchResults(results, elementType, entries, query, queryTokens, options);
       }
-      
+
       return results.sort((a, b) => b.score - a.score);
-      
     } catch (error) {
       logger.debug('GitHub search failed', {
         error: error instanceof Error ? error.message : String(error)
       });
       throw error; // Re-throw to trigger fallback
+    }
+  }
+
+  private static tokenizeQuery(query: string): string[] {
+    return query.toLowerCase().split(/\s+/).filter(token => token.length > 0);
+  }
+
+  private static shouldReturnNoQueryResults(query: string, queryTokens: string[]): boolean {
+    return queryTokens.length === 0 && query.trim() !== '';
+  }
+
+  private addGitHubSearchResults(
+    results: UnifiedSearchResult[],
+    elementType: ElementType,
+    entries: GitHubIndexEntry[],
+    query: string,
+    queryTokens: string[],
+    options: UnifiedSearchOptions
+  ): void {
+    if (options.elementType && elementType !== options.elementType) {
+      return;
+    }
+    for (const entry of entries) {
+      const score = this.calculateGitHubMatchScore(entry, queryTokens, query);
+      if (score > 0 || query.trim() === '') {
+        results.push({
+          source: 'github' as const,
+          entry: this.convertGitHubEntry(entry),
+          matchType: this.determineMatchType(entry, queryTokens),
+          score: query.trim() === '' ? 1 : score,
+          version: entry.version
+        });
+      }
     }
   }
   
@@ -1125,42 +1138,47 @@ export class UnifiedIndexManager {
     try {
       const collectionIndex = await this.collectionIndexCache.getIndex();
       const results: UnifiedSearchResult[] = [];
-      
-      const queryLower = query.toLowerCase();
-      const queryTokens = queryLower.split(/\s+/).filter(token => token.length > 0);
-      
-      if (queryTokens.length === 0 && query.trim() !== '') {
+      const queryTokens = UnifiedIndexManager.tokenizeQuery(query);
+
+      if (UnifiedIndexManager.shouldReturnNoQueryResults(query, queryTokens)) {
         return results;
       }
-      
-      // Search across all collection elements
+
       for (const [elementType, entries] of Object.entries(collectionIndex.index)) {
-        // Filter by element type if specified
-        if (options.elementType && elementType !== options.elementType.toString()) {
-          continue;
-        }
-        
-        for (const entry of entries) {
-          const score = this.calculateCollectionMatchScore(entry, queryTokens, query);
-          if (score > 0 || query.trim() === '') {
-            results.push({
-              source: 'collection' as const,
-              entry: this.convertCollectionEntry(entry, elementType),
-              matchType: this.determineCollectionMatchType(entry, queryTokens),
-              score: query.trim() === '' ? 1 : score, // Default score for empty query
-              version: entry.version
-            });
-          }
-        }
+        this.addCollectionSearchResults(results, elementType, entries, query, queryTokens, options);
       }
-      
+
       return results.sort((a, b) => b.score - a.score);
-      
     } catch (error) {
       logger.debug('Collection search failed', {
         error: error instanceof Error ? error.message : String(error)
       });
       throw error; // Re-throw to trigger fallback
+    }
+  }
+
+  private addCollectionSearchResults(
+    results: UnifiedSearchResult[],
+    elementType: string,
+    entries: CollectionIndexEntry[],
+    query: string,
+    queryTokens: string[],
+    options: UnifiedSearchOptions
+  ): void {
+    if (options.elementType && elementType !== options.elementType.toString()) {
+      return;
+    }
+    for (const entry of entries) {
+      const score = this.calculateCollectionMatchScore(entry, queryTokens, query);
+      if (score > 0 || query.trim() === '') {
+        results.push({
+          source: 'collection' as const,
+          entry: this.convertCollectionEntry(entry, elementType),
+          matchType: this.determineCollectionMatchType(entry, queryTokens),
+          score: query.trim() === '' ? 1 : score,
+          version: entry.version
+        });
+      }
     }
   }
   
@@ -1320,32 +1338,15 @@ export class UnifiedIndexManager {
    */
   private calculateGitHubMatchScore(entry: GitHubIndexEntry, queryTokens: string[], query: string): number {
     if (queryTokens.length === 0) return 1; // Default score for empty query
-    
-    let score = 0;
-    
-    const name = entry.name.toLowerCase();
-    const description = (entry.description || '').toLowerCase();
-    const path = (entry.path || '').toLowerCase();
-    
-    // Check name matches
-    for (const token of queryTokens) {
-      if (name.includes(token)) {
-        score += name === token ? 10 : (name.startsWith(token) ? 5 : 2);
+    return UnifiedIndexManager.calculateSearchFieldScore(
+      queryTokens,
+      query,
+      {
+        name: entry.name,
+        description: entry.description || '',
+        path: entry.path || '',
       }
-      if (description.includes(token)) {
-        score += 3;
-      }
-      if (path.includes(token)) {
-        score += 1;
-      }
-    }
-    
-    // Exact query match bonus
-    if (name.includes(query.toLowerCase())) {
-      score += query.length > 3 ? 15 : 10;
-    }
-    
-    return score;
+    );
   }
   
   /**
@@ -1353,36 +1354,59 @@ export class UnifiedIndexManager {
    */
   private calculateCollectionMatchScore(entry: CollectionIndexEntry, queryTokens: string[], query: string): number {
     if (queryTokens.length === 0) return 1; // Default score for empty query
-    
+    return UnifiedIndexManager.calculateSearchFieldScore(
+      queryTokens,
+      query,
+      {
+        name: entry.name,
+        description: entry.description || '',
+        path: entry.path || '',
+        tags: entry.tags.join(' '),
+      }
+    );
+  }
+
+  private static calculateSearchFieldScore(
+    queryTokens: string[],
+    query: string,
+    fields: { name: string; description: string; path: string; tags?: string }
+  ): number {
+    const normalized = {
+      name: fields.name.toLowerCase(),
+      description: fields.description.toLowerCase(),
+      path: fields.path.toLowerCase(),
+      tags: fields.tags?.toLowerCase() ?? '',
+    };
+    const score = queryTokens.reduce(
+      (total, token) => total + UnifiedIndexManager.calculateTokenScore(token, normalized),
+      0
+    );
+    return score + UnifiedIndexManager.calculateExactQueryBonus(normalized.name, query);
+  }
+
+  private static calculateTokenScore(
+    token: string,
+    fields: { name: string; description: string; path: string; tags: string }
+  ): number {
     let score = 0;
-    
-    const name = entry.name.toLowerCase();
-    const description = (entry.description || '').toLowerCase();
-    const path = (entry.path || '').toLowerCase();
-    const tags = entry.tags.map(tag => tag.toLowerCase()).join(' ');
-    
-    // Check matches across all fields
-    for (const token of queryTokens) {
-      if (name.includes(token)) {
-        score += name === token ? 10 : (name.startsWith(token) ? 5 : 2);
-      }
-      if (description.includes(token)) {
-        score += 3;
-      }
-      if (path.includes(token)) {
-        score += 1;
-      }
-      if (tags.includes(token)) {
-        score += 4;
-      }
+    if (fields.name.includes(token)) {
+      score += UnifiedIndexManager.scoreNameTokenMatch(fields.name, token);
     }
-    
-    // Exact query match bonus
-    if (name.includes(query.toLowerCase())) {
-      score += query.length > 3 ? 15 : 10;
-    }
-    
+    if (fields.description.includes(token)) score += 3;
+    if (fields.path.includes(token)) score += 1;
+    if (fields.tags.includes(token)) score += 4;
     return score;
+  }
+
+  private static scoreNameTokenMatch(name: string, token: string): number {
+    if (name === token) return 10;
+    if (name.startsWith(token)) return 5;
+    return 2;
+  }
+
+  private static calculateExactQueryBonus(name: string, query: string): number {
+    if (!name.includes(query.toLowerCase())) return 0;
+    return query.length > 3 ? 15 : 10;
   }
 
   /**
@@ -1527,69 +1551,75 @@ export class UnifiedIndexManager {
    * Identifies elements that exist in multiple sources (local, GitHub, collection)
    */
   private async calculateDuplicatesCount(): Promise<number> {
-    // Track duplicates using a map of element names to sources
     const elementSources = new Map<string, Set<string>>();
 
     try {
-      // Check local index
-      const localIndex = await this.localIndexManager.getIndex();
-      if (localIndex?.byName) {
-        for (const [name] of localIndex.byName) {
-          if (name) {
-            if (!elementSources.has(name)) {
-              elementSources.set(name, new Set());
-            }
-            elementSources.get(name)!.add('local');
-          }
-        }
-      }
-
-      // Check GitHub index
-      const githubIndex = await this.githubIndexer.getIndex();
-      if (githubIndex?.elements) {
-        for (const [, entries] of githubIndex.elements) {
-          for (const entry of entries) {
-            const name = entry.name;
-            if (name) {
-              if (!elementSources.has(name)) {
-                elementSources.set(name, new Set());
-              }
-              elementSources.get(name)!.add('github');
-            }
-          }
-        }
-      }
-
-      // Check collection index
-      const collectionIndex = await this.collectionIndexCache.getIndex();
-      if (collectionIndex?.index) {
-        for (const elementType in collectionIndex.index) {
-          const entries = collectionIndex.index[elementType];
-          for (const entry of entries) {
-            const name = entry.name;
-            if (name) {
-              if (!elementSources.has(name)) {
-                elementSources.set(name, new Set());
-              }
-              elementSources.get(name)!.add('collection');
-            }
-          }
-        }
-      }
+      await this.addLocalDuplicateSources(elementSources);
+      await this.addGitHubDuplicateSources(elementSources);
+      await this.addCollectionDuplicateSources(elementSources);
     } catch (error) {
-      // Log error but don't fail
       logger.debug('Error calculating duplicates count', error);
       return 0;
     }
 
-    // Count elements that appear in more than one source
+    return UnifiedIndexManager.countMultiSourceElements(elementSources);
+  }
+
+  private async addLocalDuplicateSources(elementSources: Map<string, Set<string>>): Promise<void> {
+    const localIndex = await this.localIndexManager.getIndex();
+    if (!localIndex?.byName) {
+      return;
+    }
+    for (const [name] of localIndex.byName) {
+      UnifiedIndexManager.addElementSource(elementSources, name, 'local');
+    }
+  }
+
+  private async addGitHubDuplicateSources(elementSources: Map<string, Set<string>>): Promise<void> {
+    const githubIndex = await this.githubIndexer.getIndex();
+    if (!githubIndex?.elements) {
+      return;
+    }
+    for (const [, entries] of githubIndex.elements) {
+      for (const entry of entries) {
+        UnifiedIndexManager.addElementSource(elementSources, entry.name, 'github');
+      }
+    }
+  }
+
+  private async addCollectionDuplicateSources(elementSources: Map<string, Set<string>>): Promise<void> {
+    const collectionIndex = await this.collectionIndexCache.getIndex();
+    if (!collectionIndex?.index) {
+      return;
+    }
+    for (const elementType in collectionIndex.index) {
+      const entries = collectionIndex.index[elementType];
+      for (const entry of entries) {
+        UnifiedIndexManager.addElementSource(elementSources, entry.name, 'collection');
+      }
+    }
+  }
+
+  private static addElementSource(
+    elementSources: Map<string, Set<string>>,
+    name: string | undefined,
+    source: string
+  ): void {
+    if (!name) {
+      return;
+    }
+    const sources = elementSources.get(name) ?? new Set<string>();
+    sources.add(source);
+    elementSources.set(name, sources);
+  }
+
+  private static countMultiSourceElements(elementSources: Map<string, Set<string>>): number {
     let duplicateCount = 0;
     for (const sources of elementSources.values()) {
       if (sources.size > 1) {
         duplicateCount++;
       }
     }
-
     return duplicateCount;
   }
 
