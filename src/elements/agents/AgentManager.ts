@@ -337,9 +337,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       ...metadataWithoutContent
     };
     if (metadata?.goal !== undefined) {
-      normalizedMetadata.goal = this.normalizeGoalInput(
-        metadata.goal as string | Partial<AgentGoalConfig>
-      );
+      normalizedMetadata.goal = this.normalizeGoalInput(metadata.goal);
     }
     return { referenceContent, normalizedMetadata };
   }
@@ -1157,32 +1155,37 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadata: AgentMetadataV2,
     executionContext: ExecutionContext
   ): Promise<ActivationResult> {
-    const result: ActivationResult = { activeElements: {}, activationWarnings: [] };
     if (!metadata.activates) {
-      return result;
+      return { activeElements: {}, activationWarnings: [] };
     }
 
+    const activeElements: ActivationResult['activeElements'] = {};
+    const activationWarnings: ActivationResult['activationWarnings'] = [];
+
     for (const [elementType, elementNames] of Object.entries(metadata.activates)) {
-      await this.activateElementGroup(agentName, elementType, elementNames, executionContext, result);
+      if (!elementNames || elementNames.length === 0) continue;
+      const group = await this.activateElementGroup(agentName, elementType, elementNames, executionContext);
+      activeElements[elementType] = group.items;
+      activationWarnings.push(...group.warnings);
     }
-    return result;
+    return { activeElements, activationWarnings };
   }
 
   private async activateElementGroup(
     agentName: string,
     elementType: string,
-    elementNames: string[] | undefined,
+    elementNames: string[],
     executionContext: ExecutionContext,
-    result: ActivationResult
-  ): Promise<void> {
-    if (!elementNames || elementNames.length === 0) {
-      return;
-    }
+  ): Promise<{ items: ActivationResult['activeElements'][string]; warnings: ActivationResult['activationWarnings'] }> {
+    const items: ActivationResult['activeElements'][string] = [];
+    const warnings: ActivationResult['activationWarnings'] = [];
 
-    result.activeElements[elementType] = [];
     for (const elementName of elementNames) {
-      await this.activateSingleElement(agentName, elementType, elementName, executionContext, result);
+      const outcome = await this.activateSingleElement(agentName, elementType, elementName, executionContext);
+      if (outcome.item) items.push(outcome.item);
+      if (outcome.warning) warnings.push(outcome.warning);
     }
+    return { items, warnings };
   }
 
   private async activateSingleElement(
@@ -1190,18 +1193,17 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementType: string,
     elementName: string,
     executionContext: ExecutionContext,
-    result: ActivationResult
-  ): Promise<void> {
+  ): Promise<{ item?: ActivationResult['activeElements'][string][number]; warning?: ActivationResult['activationWarnings'][number] }> {
     try {
       const elementContent = await this.getElementContent(elementType, elementName, executionContext);
-      result.activeElements[elementType].push({ name: elementName, content: elementContent });
+      return { item: { name: elementName, content: elementContent } };
     } catch (error) {
       if (error instanceof Error && error.message.includes('Circular agent activation detected')) {
         throw error;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
-      result.activationWarnings.push({ elementType, elementName, error: errorMessage });
       logger.warn(`Agent '${agentName}': failed to activate ${elementType} '${elementName}' — ${errorMessage}`);
+      return { warning: { elementType, elementName, error: errorMessage } };
     }
   }
 
@@ -2239,7 +2241,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentName: string
   ): void {
     if (record[key] !== undefined && !isOneOf(record[key], allowedValues)) {
-      logger.warn(`[parseMetadata] Agent '${agentName}': ${label} '${record[key]}' is invalid, stripping`);
+      logger.warn(`[parseMetadata] Agent '${agentName}': ${label} ${JSON.stringify(record[key])} is invalid, stripping`);
       delete record[key];
     }
   }
@@ -2520,7 +2522,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     errors: string[]
   ): void {
     if (record[key] !== undefined && !isOneOf(record[key], allowedValues)) {
-      errors.push(`${label} must be one of: ${allowedValues.join(', ')} (got '${record[key]}')`);
+      errors.push(`${label} must be one of: ${allowedValues.join(', ')} (got ${JSON.stringify(record[key])})`);
     }
   }
 

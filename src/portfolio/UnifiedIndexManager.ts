@@ -1390,7 +1390,7 @@ export class UnifiedIndexManager {
   ): number {
     let score = 0;
     if (fields.name.includes(token)) {
-      score += fields.name === token ? 10 : (fields.name.startsWith(token) ? 5 : 2);
+      score += UnifiedIndexManager.scoreNameTokenMatch(fields.name, token);
     }
     if (fields.description.includes(token)) score += 3;
     if (fields.path.includes(token)) score += 1;
@@ -1398,8 +1398,15 @@ export class UnifiedIndexManager {
     return score;
   }
 
+  private static scoreNameTokenMatch(name: string, token: string): number {
+    if (name === token) return 10;
+    if (name.startsWith(token)) return 5;
+    return 2;
+  }
+
   private static calculateExactQueryBonus(name: string, query: string): number {
-    return name.includes(query.toLowerCase()) ? (query.length > 3 ? 15 : 10) : 0;
+    if (!name.includes(query.toLowerCase())) return 0;
+    return query.length > 3 ? 15 : 10;
   }
 
   /**

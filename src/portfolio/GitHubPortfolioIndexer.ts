@@ -539,16 +539,16 @@ export class GitHubPortfolioIndexer {
       // that regexp/no-super-linear-backtracking flags as polynomial
       // ReDoS — `?` is a bounded 0-or-1 quantifier with no character
       // exchange against `[^\r\n]+`.
-      const nameMatch = frontmatter.match(/^name:[ \t]?([^\r\n]+)$/m);
+      const nameMatch = /^name:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (nameMatch) metadata.name = nameMatch[1].trim();
 
-      const descMatch = frontmatter.match(/^description:[ \t]?([^\r\n]+)$/m);
+      const descMatch = /^description:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (descMatch) metadata.description = descMatch[1].trim();
 
-      const versionMatch = frontmatter.match(/^version:[ \t]?([^\r\n]+)$/m);
+      const versionMatch = /^version:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (versionMatch) metadata.version = versionMatch[1].trim();
 
-      const authorMatch = frontmatter.match(/^author:[ \t]?([^\r\n]+)$/m);
+      const authorMatch = /^author:[ \t]?([^\r\n]+)$/m.exec(frontmatter);
       if (authorMatch) metadata.author = authorMatch[1].trim();
     }
     

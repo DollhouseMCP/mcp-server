@@ -79,6 +79,8 @@ export type {
   ElementPath
 };
 
+type TriggerUsageTrend = 'increasing' | 'stable' | 'decreasing';
+
 
 export class EnhancedIndexManager {
   private readonly indexByNamespace = new Map<string, EnhancedIndex>();
@@ -1125,7 +1127,7 @@ export class EnhancedIndexManager {
     last_used: string;
     first_used: string;
     daily_average: number;
-    trend: 'increasing' | 'stable' | 'decreasing';
+    trend: TriggerUsageTrend;
   }[]> {
     const index = await this.getIndex();
 

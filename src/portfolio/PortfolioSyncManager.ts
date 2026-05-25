@@ -337,7 +337,7 @@ export class PortfolioSyncManager {
         return securityFailure;
       }
 
-      const conflictResult = await this.resolveDownloadConflict(
+      const conflictResult = await this.resolveDownloadConflict({
         elementName,
         elementType,
         localPath,
@@ -345,8 +345,8 @@ export class PortfolioSyncManager {
         remoteContent,
         entry,
         config,
-        force
-      );
+        force,
+      });
       if (conflictResult) {
         return conflictResult;
       }
@@ -460,16 +460,17 @@ export class PortfolioSyncManager {
     };
   }
 
-  private async resolveDownloadConflict(
-    elementName: string,
-    elementType: ElementType,
-    localPath: string,
-    localContent: string | null,
-    remoteContent: string,
-    entry: GitHubIndexEntry,
-    config: DollhouseConfig,
-    force?: boolean
-  ): Promise<SyncResult | null> {
+  private async resolveDownloadConflict(args: {
+    elementName: string;
+    elementType: ElementType;
+    localPath: string;
+    localContent: string | null;
+    remoteContent: string;
+    entry: GitHubIndexEntry;
+    config: DollhouseConfig;
+    force?: boolean;
+  }): Promise<SyncResult | null> {
+    const { elementName, elementType, localPath, localContent, remoteContent, entry, config, force } = args;
     if (!localContent) {
       return null;
     }
