@@ -1,0 +1,524 @@
+import { describe, expect, it, jest } from '@jest/globals';
+import express from 'express';
+import request from 'supertest';
+
+import {
+  assembleSecuredConsoleRouter,
+  ConsoleAuthenticationDependencyUnavailableError,
+  ConsoleModuleRegistry,
+  HmacConsoleOpaqueValueService,
+  InMemoryConsoleIdentityResolver,
+  InMemoryConsoleSessionStore,
+  requireConsoleAuthentication,
+  type ConsoleModuleDescriptor,
+} from '../../../../src/web-console/index.js';
+import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
+
+const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const AUTH_SUB = 'github_user-7';
+const SESSION_VALUE = 'opaque-browser-session';
+const CSRF_VALUE = 'opaque-csrf-token';
+const ORIGIN = 'https://console.example.test';
+const NOW = new Date('2026-05-26T12:00:00.000Z');
+const IDLE_EXPIRY = new Date('2026-05-26T13:00:00.000Z');
+const ABSOLUTE_EXPIRY = new Date('2026-05-27T12:00:00.000Z');
+const OPAQUE_VALUES = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 7));
+const SELF_CAPABILITY = 'console:self' as const;
+const AUDIT_CAPABILITY = 'console:admin:audit' as const;
+const CONTEXT_PATH = '/api/v1/me/context';
+const CHANGE_PATH = '/api/v1/me/change';
+const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
+const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
+const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
+const ELEVATED_EXPIRES = new Date('2026-05-26T12:30:00.000Z');
+const RECENT_AUTH_TIME = new Date('2026-05-26T11:55:00.000Z');
+const SESSION_CREATED = new Date('2026-05-26T10:00:00.000Z');
+const CSRF_HEADER = 'X-CSRF-Token';
+const CONSOLE_REQUEST_HEADER = 'X-Console-Request';
+
+function fixtureModules(): readonly ConsoleModuleDescriptor[] {
+  return [{
+    id: 'me_fixture',
+    apiVersion: 'v1',
+    capabilities: [SELF_CAPABILITY],
+    routes: [{
+      method: 'GET',
+      path: CONTEXT_PATH,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      handler: (req, res) => {
+        const authentication = requireConsoleAuthentication(req);
+        res.json({
+          userId: authentication.userId,
+          authSub: authentication.authSub,
+          capabilities: authentication.grantedCapabilities,
+          hasRawSession: 'rawSession' in authentication,
+          hasCsrfHash: 'csrfTokenHash' in authentication,
+        });
+      },
+    }, {
+      method: 'POST',
+      path: CHANGE_PATH,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      handler: (_req, res) => {
+        res.json({ changed: true });
+      },
+    }],
+  }, {
+    id: 'admin_fixture',
+    apiVersion: 'v1',
+    capabilities: [AUDIT_CAPABILITY],
+    auditOperations: [{ id: 'admin.audit.read' }, { id: 'admin.audit.export' }],
+    routes: [{
+      method: 'GET',
+      path: ADMIN_AUDIT_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      auditOperation: 'admin.audit.read',
+      privacyProjector: value => value,
+      handler: (_req, res) => {
+        res.json({ audit: true });
+      },
+    }, {
+      method: 'GET',
+      path: ADMIN_EXPORT_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_5m',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      auditOperation: 'admin.audit.export',
+      privacyProjector: value => value,
+      handler: (_req, res) => {
+        res.json({ exported: true });
+      },
+    }],
+  }];
+}
+
+function record(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSessionRecord {
+  return {
+    idHash: OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE),
+    userId: USER_ID,
+    authSub: AUTH_SUB,
+    csrfTokenHash: OPAQUE_VALUES.hashOpaqueValue(CSRF_VALUE),
+    grantedCapabilities: [SELF_CAPABILITY],
+    elevation: null,
+    createdAt: NOW,
+    lastUsedAt: NOW,
+    idleExpiresAt: IDLE_EXPIRY,
+    absoluteExpiresAt: ABSOLUTE_EXPIRY,
+    revokedAt: null,
+    lastIp: null,
+    userAgent: null,
+    ...overrides,
+  };
+}
+
+async function buildApp(
+  session: ConsoleSessionRecord | null = record(),
+  resolver = new InMemoryConsoleIdentityResolver([{
+    sub: AUTH_SUB,
+    userId: USER_ID,
+    disabledAt: null,
+    authzVersion: 2,
+  }]),
+) {
+  const sessionStore = new InMemoryConsoleSessionStore();
+  if (session) await sessionStore.create(session);
+  const registry = new ConsoleModuleRegistry();
+  fixtureModules().forEach(module => registry.register(module));
+  const app = express();
+  app.use(assembleSecuredConsoleRouter(registry, {
+    sessionStore,
+    identityResolver: resolver,
+    opaqueValues: OPAQUE_VALUES,
+    consoleOrigin: ORIGIN,
+    idleTimeoutMs: 60 * 60 * 1000,
+    now: () => NOW,
+  }));
+  return { app, sessionStore };
+}
+
+function sessionCookie(): string {
+  return `dh_session=${SESSION_VALUE}`;
+}
+
+function csrfCookies(): string[] {
+  return [sessionCookie(), `dh_csrf=${CSRF_VALUE}`];
+}
+
+describe('secured console router authentication', () => {
+  it('resolves an opaque session to canonical user context and sets security headers', async () => {
+    const { app, sessionStore } = await buildApp();
+    const touch = jest.spyOn(sessionStore, 'touch');
+    const lookup = jest.spyOn(sessionStore, 'findActiveByIdHash');
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      userId: USER_ID,
+      authSub: AUTH_SUB,
+      capabilities: [SELF_CAPABILITY],
+      hasRawSession: false,
+      hasCsrfHash: false,
+    });
+    expect(lookup.mock.calls[0][0]).toEqual(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE));
+    expect(lookup.mock.calls[0][0]).not.toEqual(SESSION_VALUE);
+    expect(touch).toHaveBeenCalledTimes(1);
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(response.headers['strict-transport-security']).toBe('max-age=31536000; includeSubDomains');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
+  });
+
+  it.each([
+    ['missing cookie', null, undefined],
+    ['unknown cookie', null, 'dh_session=not-known'],
+    ['revoked session', record({ revokedAt: NOW }), sessionCookie()],
+    ['expired idle session', record({ idleExpiresAt: NOW }), sessionCookie()],
+    ['absolute-expired session', record({
+      createdAt: new Date('2026-05-25T10:00:00.000Z'),
+      lastUsedAt: new Date('2026-05-25T11:00:00.000Z'),
+      idleExpiresAt: NOW,
+      absoluteExpiresAt: NOW,
+    }), sessionCookie()],
+  ])('returns unauthenticated for %s', async (_label, session, cookie) => {
+    const { app } = await buildApp(session);
+    const call = request(app).get(CONTEXT_PATH);
+    const response = cookie ? await call.set('Cookie', cookie) : await call;
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+  });
+
+  it('applies all security headers to authentication error responses', async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).get(CONTEXT_PATH);
+
+    expect(response.status).toBe(401);
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(response.headers['strict-transport-security']).toBe('max-age=31536000; includeSubDomains');
+    expect(response.headers['x-content-type-options']).toBe('nosniff');
+    expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
+    expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
+  });
+
+  it('fails closed when the login subject maps to a disabled principal', async () => {
+    const resolver = new InMemoryConsoleIdentityResolver([{
+      sub: AUTH_SUB,
+      userId: USER_ID,
+      disabledAt: NOW,
+      authzVersion: 3,
+    }]);
+    const { app } = await buildApp(record(), resolver);
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+  });
+
+  it.each([
+    ['unmapped principal', new InMemoryConsoleIdentityResolver()],
+    ['different canonical principal', new InMemoryConsoleIdentityResolver([{
+      sub: AUTH_SUB,
+      userId: '4a2ba146-14e5-427c-a279-7c15661254df',
+      disabledAt: null,
+      authzVersion: 2,
+    }])],
+  ])('fails closed for %s without touching the session', async (_label, resolver) => {
+    const { app, sessionStore } = await buildApp(record(), resolver);
+    const touch = jest.spyOn(sessionStore, 'touch');
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(touch).not.toHaveBeenCalled();
+  });
+
+  it('returns service unavailable only for an explicitly classified authentication dependency failure', async () => {
+    const { app, sessionStore } = await buildApp();
+    jest.spyOn(sessionStore, 'findActiveByIdHash').mockRejectedValue(
+      new ConsoleAuthenticationDependencyUnavailableError('database unavailable'),
+    );
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(503);
+    expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(response.body.code).toBe('service_unavailable');
+    expect(response.body.instance).toBe(response.headers['x-correlation-id']);
+  });
+
+  it('routes unexpected authentication exceptions through the internal problem handler', async () => {
+    const { app, sessionStore } = await buildApp();
+    jest.spyOn(sessionStore, 'findActiveByIdHash').mockRejectedValue(new Error('broken invariant'));
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('internal_error');
+  });
+
+  it('fails closed if a session becomes inactive before its request touch completes', async () => {
+    const { app, sessionStore } = await buildApp();
+    jest.spyOn(sessionStore, 'touch').mockResolvedValue(false);
+    jest.spyOn(sessionStore, 'findActiveByIdHash')
+      .mockResolvedValueOnce(record())
+      .mockResolvedValueOnce(null);
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+  });
+
+  it('accepts a rejected stale touch when the session remains active after revalidation', async () => {
+    const { app, sessionStore } = await buildApp();
+    jest.spyOn(sessionStore, 'touch').mockResolvedValue(false);
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+  });
+});
+
+describe('secured console router browser protections', () => {
+  it('accepts a protected mutation with CSRF binding, origin, and custom header', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ changed: true });
+  });
+
+  it.each([
+    ['missing CSRF header', undefined, ORIGIN, '1', csrfCookies()],
+    ['wrong CSRF value', 'wrong', ORIGIN, '1', csrfCookies()],
+    ['unbound CSRF value', 'wrong', ORIGIN, '1', [sessionCookie(), 'dh_csrf=wrong']],
+    ['wrong origin', CSRF_VALUE, 'https://evil.example', '1', csrfCookies()],
+    ['missing custom header', CSRF_VALUE, ORIGIN, undefined, csrfCookies()],
+    ['incorrect custom header', CSRF_VALUE, ORIGIN, 'true', csrfCookies()],
+    ['duplicate CSRF cookie', CSRF_VALUE, ORIGIN, '1', [...csrfCookies(), `dh_csrf=${CSRF_VALUE}`]],
+  ])('rejects %s', async (_label, csrf, origin, customHeader, cookies) => {
+    const { app } = await buildApp();
+    let call = request(app).post(CHANGE_PATH).set('Cookie', cookies);
+    if (csrf) call = call.set(CSRF_HEADER, csrf);
+    if (origin) call = call.set('Origin', origin);
+    if (customHeader) call = call.set(CONSOLE_REQUEST_HEADER, customHeader);
+    const response = await call;
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('accepts the same-origin fetch fallback only when Origin is absent', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Sec-Fetch-Site', 'same-origin')
+      .set(CONSOLE_REQUEST_HEADER, '1');
+
+    expect(response.status).toBe(200);
+  });
+
+  it('fails closed when both Origin and same-origin fetch metadata are absent', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set(CONSOLE_REQUEST_HEADER, '1');
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('rejects folded multiple Origin header values', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', [ORIGIN, ORIGIN])
+      .set(CONSOLE_REQUEST_HEADER, '1');
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('does not require CSRF mutation headers for authenticated GET requests', async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+  });
+
+  it('rejects duplicate session cookie values during authentication', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).get(CONTEXT_PATH)
+      .set('Cookie', [sessionCookie(), sessionCookie()]);
+
+    expect(response.status).toBe(401);
+  });
+});
+
+describe('secured console router elevation', () => {
+  it('returns step-up instructions when an admin route has no elevation', async () => {
+    const { app } = await buildApp();
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body).toMatchObject({
+      code: 'step_up_required',
+      required_capability: AUDIT_CAPABILITY,
+      required_acr: ADMIN_ACR,
+      max_auth_age_seconds: 1800,
+    });
+  });
+
+  it('permits an active AS-issued TOTP-backed administrative elevation', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ audit: true });
+  });
+
+  it('requires new step-up when elevation authentication is stale', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: new Date('2026-05-26T11:00:00.000Z'),
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('step_up_required');
+  });
+
+  it.each([
+    ['wrong ACR', {
+      capabilities: [AUDIT_CAPABILITY],
+      expiresAt: ELEVATED_EXPIRES,
+      acr: 'urn:dollhouse:acr:ordinary',
+      amr: ['otp'],
+      authTime: RECENT_AUTH_TIME,
+    }],
+    ['expired elevation', {
+      capabilities: [AUDIT_CAPABILITY],
+      expiresAt: NOW,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: RECENT_AUTH_TIME,
+    }],
+  ])('requires step-up for %s evidence', async (_label, elevation) => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation,
+    }));
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('step_up_required');
+  });
+
+  it('requires step-up when an elevation does not cover the routed capability', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY, 'console:admin:security'],
+      elevation: {
+        capabilities: ['console:admin:security'],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('step_up_required');
+  });
+
+  it('fails closed if upstream session state provides elevation without OTP evidence', async () => {
+    const { app, sessionStore } = await buildApp();
+    jest.spyOn(sessionStore, 'findActiveByIdHash').mockResolvedValue(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: [],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
+    jest.spyOn(sessionStore, 'touch').mockResolvedValue(true);
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('step_up_required');
+  });
+
+  it('enforces the five-minute elevation freshness policy for sensitive reads', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: new Date('2026-05-26T11:54:00.000Z'),
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_EXPORT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.max_auth_age_seconds).toBe(300);
+  });
+});

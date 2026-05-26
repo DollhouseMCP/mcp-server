@@ -47,8 +47,24 @@ export interface ConsoleRequestContext {
   readonly receivedAt: Date;
 }
 
+export interface ConsoleAuthenticatedContext {
+  readonly sessionIdHash: Buffer;
+  readonly userId: string;
+  readonly authSub: string;
+  readonly authzVersion: number;
+  readonly grantedCapabilities: readonly ConsoleCapability[];
+  readonly elevation: {
+    readonly capabilities: readonly ConsoleCapability[];
+    readonly expiresAt: Date;
+    readonly acr: string;
+    readonly amr: readonly string[];
+    readonly authTime: Date;
+  } | null;
+}
+
 export interface ConsoleRequest extends Request {
   consoleContext?: ConsoleRequestContext;
+  consoleAuthentication?: ConsoleAuthenticatedContext;
 }
 
 export type ConsoleHandler = (
