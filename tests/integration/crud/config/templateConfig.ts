@@ -163,11 +163,11 @@ export const TEMPLATE_CONFIG: ElementTypeTestConfig = {
       required: true,
       validValues: [
         'Updated template description',
-        'A completely different description'
+        'A completely different description',
+        'Long-form template description. '.repeat(40)
       ],
       invalidValues: [
-        { value: '', expectedError: 'required|empty' },
-        { value: 'A'.repeat(501), expectedError: 'length|size' }
+        { value: '', expectedError: 'required|empty' }
       ]
     },
     {

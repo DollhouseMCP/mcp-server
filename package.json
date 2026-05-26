@@ -214,7 +214,6 @@
     "posthog-node": "^5.24.17",
     "qrcode": "^1.5.4",
     "smol-toml": "^1.6.1",
-    "uuid": "^11.1.1",
     "zod": "^4.3.6"
   },
   "devDependencies": {
@@ -234,7 +233,6 @@
     "@types/qrcode": "^1.5.6",
     "@types/semver": "^7.7.1",
     "@types/supertest": "^7.2.0",
-    "@types/uuid": "^10.0.0",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "@typescript-eslint/parser": "^8.48.1",
     "archiver": "^7.0.1",
@@ -263,7 +261,20 @@
     "@istanbuljs/load-nyc-config": {
       "js-yaml": "3.14.2"
     },
-    "hono": "4.12.14",
-    "@hono/node-server": "1.19.13"
+    "hono": "4.12.18",
+    "@hono/node-server": "1.19.13",
+    "fast-uri": "3.1.2",
+    "ip-address": "10.1.1",
+    "lodash": "4.18.1",
+    "picomatch@<2.3.2": "2.3.2",
+    "picomatch@>=4.0.0 <4.0.4": "4.0.4",
+    "brace-expansion@<1.1.13": "1.1.13",
+    "brace-expansion@>=2.0.0 <2.0.3": "2.0.3",
+    "express": {
+      "path-to-regexp": "8.4.2"
+    },
+    "giget": {
+      "tar": "7.5.15"
+    }
   }
 }

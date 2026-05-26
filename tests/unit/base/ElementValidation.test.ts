@@ -35,6 +35,13 @@ describe('ElementValidation', () => {
     expect(ElementValidation.validateDescription('  description ')).toBe('description');
   });
 
+  it('validateDescription should preserve substantive descriptions over 500 characters', () => {
+    const description = 'Long-form element description. '.repeat(40);
+
+    expect(ElementValidation.validateDescription(description)).toBe(description.trim());
+    expect(ElementValidation.validateDescription(description)!.length).toBeGreaterThan(500);
+  });
+
   it('validateTags should filter falsey values and sanitize entries', () => {
     const tags = ElementValidation.validateTags(['Tag One', '', null, 'two', undefined, 'three!']);
     expect(tags).toEqual(['Tag One', 'two', 'three']);

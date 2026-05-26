@@ -96,7 +96,7 @@ Triggers are keywords that help AI assistants discover and activate elements bas
 | Field | Max Length | Required | Description |
 |-------|------------|----------|-------------|
 | `name` | 100 | Yes | Display name for the element |
-| `description` | 500 | No | Brief explanation of purpose |
+| `description` | No arbitrary 500-character cap | No | Explanation of purpose; bounded by YAML/frontmatter and file safety limits |
 | `author` | 100 | No | Creator or maintainer |
 | `version` | 20 | No | Semantic version (e.g., `1.0.0`) |
 | `category` | 50 | No | Grouping category |

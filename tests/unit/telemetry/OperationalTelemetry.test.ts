@@ -13,11 +13,9 @@ import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals
 import * as path from 'node:path';
 import * as os from 'node:os';
 
-// Mock dependencies BEFORE imports using ESM approach
-jest.unstable_mockModule('uuid', () => ({
-  v4: jest.fn(() => 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee')
-}));
+const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Mock dependencies BEFORE imports using ESM approach
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
     debug: jest.fn(),
@@ -209,7 +207,7 @@ describe('OperationalTelemetry', () => {
       // Should write UUID to file
       expect(mockFileOperations.writeFile).toHaveBeenCalledWith(
         expectedPath,
-        testUUID,
+        expect.stringMatching(uuidRegex),
         expect.objectContaining({ source: 'OperationalTelemetry.ensureUUID' })
       );
     });
@@ -228,8 +226,6 @@ describe('OperationalTelemetry', () => {
       expect(uuidCall).toBeDefined();
       const uuid = uuidCall![1];
 
-      // Validate UUID v4 format
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       expect(uuid).toMatch(uuidRegex);
     });
   });
@@ -324,7 +320,7 @@ describe('OperationalTelemetry', () => {
         call => (call[0] as string).includes('.telemetry-id')
       );
       expect(uuidWriteCall).toBeDefined();
-      expect(uuidWriteCall![1]).toBe(testUUID);
+      expect(uuidWriteCall![1]).toMatch(uuidRegex);
     });
 
     it('should reuse cached UUID on second initialize() call', async () => {
@@ -390,10 +386,13 @@ describe('OperationalTelemetry', () => {
 
       const eventLine = logCall![1] as string;
       const event = JSON.parse(eventLine.replace(/\n$/, ''));
+      const uuidWriteCall = mockFileOperations.writeFile.mock.calls.find(
+        call => (call[0] as string).includes('.telemetry-id')
+      );
 
       expect(event).toMatchObject({
         event: 'install',
-        install_id: testUUID,
+        install_id: uuidWriteCall?.[1],
         version: testVersion,
         os: expect.any(String),
         node_version: expect.any(String),

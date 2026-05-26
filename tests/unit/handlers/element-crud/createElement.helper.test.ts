@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 
 const { createElement } = await import('../../../../src/handlers/element-crud/createElement.js');
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
+const { SECURITY_LIMITS } = await import('../../../../src/security/constants.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 
 describe('createElement helper', () => {
@@ -147,6 +148,32 @@ describe('createElement helper', () => {
 
       const call = (mockContext.skillManager.create as jest.Mock).mock.calls[0][0];
       expect(call.description).not.toContain('<script>');
+    });
+
+    it('should preserve long descriptions when creating elements', async () => {
+      const longDescription = 'Long-form skill description. '.repeat(80);
+
+      await createElement(mockContext, {
+        name: 'test',
+        type: ElementType.SKILL,
+        description: longDescription,
+      });
+
+      const call = (mockContext.skillManager.create as jest.Mock).mock.calls[0][0];
+      expect(call.description).toBe(longDescription.trim());
+      expect(call.description.length).toBeGreaterThan(500);
+    });
+
+    it('should reject descriptions that exceed the YAML frontmatter safety limit', async () => {
+      const result = await createElement(mockContext, {
+        name: 'test',
+        type: ElementType.SKILL,
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1),
+      });
+
+      expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('input.description');
+      expect(mockContext.skillManager.create).not.toHaveBeenCalled();
     });
 
     it('should sanitize metadata to remove dangerous properties', async () => {

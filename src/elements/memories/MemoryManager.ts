@@ -2007,7 +2007,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     let sanitizedDescription = '';
     if (metadataSource.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadataSource.description, {
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
