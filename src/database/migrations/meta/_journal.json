@@ -162,6 +162,13 @@
       "when": 1778985000000,
       "tag": "0022_audit_hmac_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1778990000000,
+      "tag": "0023_web_console_platform_foundations",
+      "breakpoints": true
     }
   ]
 }

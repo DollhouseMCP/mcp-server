@@ -8,7 +8,7 @@
  * @since v2.2.0 — Phase 4, Step 4.1
  */
 
-import { pgTable, uuid, varchar, timestamp, jsonb, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, jsonb, bigint, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -17,10 +17,14 @@ export const users = pgTable('users', {
   username: varchar('username', { length: 255 }).notNull(),
   email: varchar('email', { length: 255 }),
   displayName: varchar('display_name', { length: 255 }),
+  disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  authzVersion: bigint('authz_version', { mode: 'number' }).notNull().default(1),
+  accountCorrelationId: uuid('account_correlation_id').notNull().defaultRandom(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
   uniqueIndex('idx_users_username').on(table.username),
+  uniqueIndex('idx_users_account_correlation_id').on(table.accountCorrelationId),
 ]);
 
 // Identity fields (username, email, displayName) live exclusively in the

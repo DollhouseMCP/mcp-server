@@ -27,3 +27,10 @@ export { auditHmacKeys } from './auditHmacKeys.js';
 // Sign-in allowlist:
 export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';
+export {
+  userAdminRoles,
+  consoleSessions,
+  consoleLoginTransactions,
+  idempotencyRecords,
+} from './webConsole.js';
+export type { ConsoleAdminRole, ConsoleLoginFlowKind } from './webConsole.js';
