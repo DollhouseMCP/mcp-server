@@ -427,8 +427,14 @@ export class GenericElementValidator implements ElementValidator {
       return ValidatorHelpers.fail(["Description must be a string"]);
     }
 
+    if (description.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+      return ValidatorHelpers.fail([
+        `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+      ]);
+    }
+
     const result = this.validationService.validateAndSanitizeInput(description, {
-      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+      maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
       allowSpaces: true,
       fieldType: 'description'
     });

@@ -376,7 +376,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     );
     return {
       name: sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100),
-      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, 500),
+      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH),
       instructions: contentValidation.sanitizedContent || '',
     };
   }
@@ -2038,7 +2038,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
@@ -2586,7 +2586,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
         const validated: AgentGoalParameter = { name, type, required };
         if (typeof p.description === 'string' && p.description.length > 0) {
-          validated.description = sanitizeInput(p.description, 500);
+          validated.description = sanitizeInput(p.description, SECURITY_LIMITS.MAX_YAML_LENGTH);
         }
         if (p.default !== undefined) {
           // Sanitize string defaults to prevent injection when used in goal rendering

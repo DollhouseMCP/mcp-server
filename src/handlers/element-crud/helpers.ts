@@ -9,6 +9,7 @@ import { slugify } from '../../utils/filesystem.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import {
   ELEMENT_TYPE_MAP,
   ALL_ELEMENT_TYPES,
@@ -83,6 +84,47 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
   }
 
   return sanitized;
+}
+
+/**
+ * Find description fields that would exceed the YAML/frontmatter parser limit.
+ *
+ * Element descriptions are metadata and are serialized into YAML frontmatter, so
+ * the real upper bound is the YAML safety limit rather than the content body
+ * limit. This walks nested metadata too because templates, agents, and skills
+ * all have description-like nested fields.
+ */
+export function findOversizedDescriptionFields(
+  value: unknown,
+  path = 'input',
+  maxLength = SECURITY_LIMITS.MAX_YAML_LENGTH,
+  seen = new WeakSet<object>()
+): string[] {
+  if (!value || typeof value !== 'object') {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const errors: string[] = [];
+  const entries = Array.isArray(value)
+    ? value.map((item, index) => [String(index), item] as const)
+    : Object.entries(value);
+
+  for (const [key, child] of entries) {
+    const childPath = Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`;
+    if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
+      errors.push(`${childPath} exceeds maximum YAML/frontmatter length of ${maxLength} characters`);
+      continue;
+    }
+
+    errors.push(...findOversizedDescriptionFields(child, childPath, maxLength, seen));
+  }
+
+  return errors;
 }
 
 function asMetadataRecord(value: unknown): Record<string, unknown> | undefined {

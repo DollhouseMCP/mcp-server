@@ -1,9 +1,10 @@
 /**
  * Regression: ContentValidator.validateMetadata must apply per-field
- * length limits. Identity fields (name, description, category, author,
- * version, tags) keep the strict 1KB cap; long-form fields
- * (instructions, content) get the higher MAX_CONTENT_LENGTH limit so
- * non-trivial collection personas actually install.
+ * length limits. Identity fields (name, category, author, version,
+ * tags) keep the strict 1KB cap; long-form fields (instructions,
+ * content, description) get a higher limit so non-trivial collection
+ * personas actually install. Description uses the YAML/frontmatter
+ * limit because it carries substantive LLM-authored text.
  *
  * Caught during Phase 4.5 PoC verification on 2026-05-12 — installing
  * `dollhouse-expert` from the public collection failed because the
@@ -18,7 +19,7 @@ import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('ContentValidator.validateMetadata per-field length limits', () => {
   describe('identity-shaped fields (1KB cap)', () => {
-    it.each(['name', 'description', 'category', 'author', 'version'])(
+    it.each(['name', 'category', 'author', 'version'])(
       'rejects %s when over MAX_METADATA_FIELD_LENGTH (1024 chars)',
       (fieldName) => {
         const metadata = { [fieldName]: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 10) };
@@ -29,7 +30,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       },
     );
 
-    it.each(['name', 'description', 'category', 'author', 'version'])(
+    it.each(['name', 'category', 'author', 'version'])(
       'accepts %s when at MAX_METADATA_FIELD_LENGTH',
       (fieldName) => {
         const metadata = { [fieldName]: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH) };
@@ -79,6 +80,31 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       expect(
         result.detectedPatterns?.find(p => p.startsWith('content:') && p.includes('exceeds maximum length')),
       ).toBeUndefined();
+    });
+
+    it('accepts description well over the short metadata limit', () => {
+      const metadata = {
+        name: 'realistic-persona',
+        // 5KB of description text — far over the 1KB metadata cap but
+        // well under MAX_YAML_LENGTH. LLM-authored descriptions need this.
+        description: 'a'.repeat(5_000),
+      };
+      const result = ContentValidator.validateMetadata(metadata);
+      expect(
+        result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes('exceeds maximum length')),
+      ).toBeUndefined();
+    });
+
+    it('rejects description only when over MAX_YAML_LENGTH', () => {
+      const metadata = {
+        name: 'huge-description-persona',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 10),
+      };
+      const result = ContentValidator.validateMetadata(metadata);
+      expect(result.isValid).toBe(false);
+      const lenError = result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes('exceeds maximum length'));
+      expect(lenError).toBeDefined();
+      expect(lenError).toContain(String(SECURITY_LIMITS.MAX_YAML_LENGTH));
     });
   });
 
