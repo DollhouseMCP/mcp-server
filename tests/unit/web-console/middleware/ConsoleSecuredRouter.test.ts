@@ -8,6 +8,7 @@ import {
   ConsoleModuleRegistry,
   HmacConsoleOpaqueValueService,
   InMemoryConsoleIdentityResolver,
+  InMemoryAdminAuditWriter,
   InMemoryConsoleSessionStore,
   requireConsoleAuthentication,
   type ConsoleModuleDescriptor,
@@ -29,6 +30,7 @@ const CONTEXT_PATH = '/api/v1/me/context';
 const CHANGE_PATH = '/api/v1/me/change';
 const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
+const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
 const ELEVATED_EXPIRES = new Date('2026-05-26T12:30:00.000Z');
 const RECENT_AUTH_TIME = new Date('2026-05-26T11:55:00.000Z');
@@ -50,15 +52,18 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
-      handler: (req, res) => {
+      handler: req => {
         const authentication = requireConsoleAuthentication(req);
-        res.json({
-          userId: authentication.userId,
-          authSub: authentication.authSub,
-          capabilities: authentication.grantedCapabilities,
-          hasRawSession: 'rawSession' in authentication,
-          hasCsrfHash: 'csrfTokenHash' in authentication,
-        });
+        return {
+          status: 200,
+          body: {
+            userId: authentication.userId,
+            authSub: authentication.authSub,
+            capabilities: authentication.grantedCapabilities,
+            hasRawSession: 'rawSession' in authentication,
+            hasCsrfHash: 'csrfTokenHash' in authentication,
+          },
+        };
       },
     }, {
       method: 'POST',
@@ -69,15 +74,17 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'required',
-      handler: (_req, res) => {
-        res.json({ changed: true });
-      },
+      handler: () => ({ status: 200, body: { changed: true } }),
     }],
   }, {
     id: 'admin_fixture',
     apiVersion: 'v1',
     capabilities: [AUDIT_CAPABILITY],
-    auditOperations: [{ id: 'admin.audit.read' }, { id: 'admin.audit.export' }],
+    auditOperations: [
+      { id: 'admin.audit.read' },
+      { id: 'admin.audit.export' },
+      { id: 'admin.audit.failure' },
+    ],
     routes: [{
       method: 'GET',
       path: ADMIN_AUDIT_PATH,
@@ -87,10 +94,8 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       privacyClass: 'admin_audit',
       idempotency: 'not_applicable',
       auditOperation: 'admin.audit.read',
-      privacyProjector: value => value,
-      handler: (_req, res) => {
-        res.json({ audit: true });
-      },
+      privacyProjector: value => ({ audit: (value as { audit: boolean }).audit }),
+      handler: () => ({ status: 200, body: { audit: true, rawPrivateDetail: 'never disclose' } }),
     }, {
       method: 'GET',
       path: ADMIN_EXPORT_PATH,
@@ -101,8 +106,19 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       idempotency: 'not_applicable',
       auditOperation: 'admin.audit.export',
       privacyProjector: value => value,
-      handler: (_req, res) => {
-        res.json({ exported: true });
+      handler: () => ({ status: 200, body: { exported: true } }),
+    }, {
+      method: 'GET',
+      path: ADMIN_FAILURE_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      auditOperation: 'admin.audit.failure',
+      privacyProjector: value => value,
+      handler: () => {
+        throw new Error('fixture admin execution failure');
       },
     }],
   }];
@@ -135,21 +151,25 @@ async function buildApp(
     disabledAt: null,
     authzVersion: 2,
   }]),
+  reportInternalError?: (error: unknown, correlationId: string) => void,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   if (session) await sessionStore.create(session);
   const registry = new ConsoleModuleRegistry();
   fixtureModules().forEach(module => registry.register(module));
+  const adminAuditWriter = new InMemoryAdminAuditWriter();
   const app = express();
   app.use(assembleSecuredConsoleRouter(registry, {
     sessionStore,
     identityResolver: resolver,
     opaqueValues: OPAQUE_VALUES,
     consoleOrigin: ORIGIN,
+    adminAuditWriter,
     idleTimeoutMs: 60 * 60 * 1000,
     now: () => NOW,
+    reportInternalError,
   }));
-  return { app, sessionStore };
+  return { app, sessionStore, adminAuditWriter };
 }
 
 function sessionCookie(): string {
@@ -162,7 +182,7 @@ function csrfCookies(): string[] {
 
 describe('secured console router authentication', () => {
   it('resolves an opaque session to canonical user context and sets security headers', async () => {
-    const { app, sessionStore } = await buildApp();
+    const { app, sessionStore, adminAuditWriter } = await buildApp();
     const touch = jest.spyOn(sessionStore, 'touch');
     const lookup = jest.spyOn(sessionStore, 'findActiveByIdHash');
 
@@ -184,6 +204,7 @@ describe('secured console router authentication', () => {
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
+    expect(adminAuditWriter.getEvents()).toEqual([]);
   });
 
   it.each([
@@ -397,8 +418,8 @@ describe('secured console router elevation', () => {
     });
   });
 
-  it('permits an active AS-issued TOTP-backed administrative elevation', async () => {
-    const { app } = await buildApp(record({
+  it('projects and audit-writes an authorized administrative response', async () => {
+    const { app, adminAuditWriter } = await buildApp(record({
       createdAt: SESSION_CREATED,
       grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
       elevation: {
@@ -414,6 +435,22 @@ describe('secured console router elevation', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ audit: true });
+    expect(response.body.rawPrivateDetail).toBeUndefined();
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      actorUserId: USER_ID,
+      actorSub: AUTH_SUB,
+      capability: AUDIT_CAPABILITY,
+      elevationAcr: ADMIN_ACR,
+      elevationAmr: ['otp'],
+      elevationAuthTime: RECENT_AUTH_TIME,
+      endpoint: `GET ${ADMIN_AUDIT_PATH}`,
+      operation: 'admin.audit.read',
+      argsRedacted: {},
+      result: 'approved',
+      errorCode: null,
+    })]);
+    expect(adminAuditWriter.getEvents()[0]?.actorConsoleSessionHash)
+      .toEqual(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE));
   });
 
   it('requires new step-up when elevation authentication is stale', async () => {
@@ -520,5 +557,77 @@ describe('secured console router elevation', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.max_auth_age_seconds).toBe(300);
+  });
+
+  it('audit-writes an authorized administrative handler failure without private output', async () => {
+    const { app, adminAuditWriter } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_FAILURE_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('internal_error');
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: 'admin.audit.failure',
+      argsRedacted: {},
+      result: 'failed',
+      errorCode: 'internal_error',
+    })]);
+  });
+
+  it('does not return administrative success when its required audit write fails', async () => {
+    const { app, adminAuditWriter } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
+    jest.spyOn(adminAuditWriter, 'write').mockRejectedValue(new Error('audit persistence unavailable'));
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('internal_error');
+  });
+
+  it('reports both the handler error and audit error when failure auditing also fails', async () => {
+    const auditError = new Error('audit persistence unavailable');
+    const reportInternalError = jest.fn();
+    const { app, adminAuditWriter } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }), undefined, reportInternalError);
+    jest.spyOn(adminAuditWriter, 'write').mockRejectedValue(auditError);
+
+    const response = await request(app).get(ADMIN_FAILURE_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(500);
+    const reported = reportInternalError.mock.calls[0]?.[0];
+    expect(reported).toBeInstanceOf(AggregateError);
+    expect((reported as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: 'fixture admin execution failure' }),
+      auditError,
+    ]);
   });
 });

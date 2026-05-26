@@ -1,5 +1,4 @@
 import { describe, expect, it } from '@jest/globals';
-import type { Response } from 'express';
 import {
   ConsoleModuleRegistry,
   ConsoleModuleRegistrationError,
@@ -20,9 +19,7 @@ function selfRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRout
     elevation: 'none',
     privacyClass: 'self_private',
     idempotency: 'not_applicable',
-    handler: (_req, res: Response) => {
-      res.json({ ok: true });
-    },
+    handler: () => ({ status: 200, body: { ok: true } }),
     ...overrides,
   };
 }
@@ -53,9 +50,7 @@ function adminModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): Cons
       idempotency: 'not_applicable',
       auditOperation: ADMIN_AUDIT_OPERATION,
       privacyProjector: value => value,
-      handler: (_req, res) => {
-        res.json({ status: 'ok' });
-      },
+      handler: () => ({ status: 200, body: { status: 'ok' } }),
       ...routeOverrides,
     }],
   };

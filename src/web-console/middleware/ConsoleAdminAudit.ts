@@ -1,0 +1,51 @@
+import type { ConsoleRouteDefinition, ConsoleRequest } from '../platform/ConsolePlatformTypes.js';
+import { requireConsoleRequestContext } from '../platform/ConsoleRequestContext.js';
+import type {
+  ConsoleAdminAuditEvent,
+  ConsoleAdminAuditResult,
+  IAdminAuditWriter,
+} from '../audit/IAdminAuditWriter.js';
+import { requireConsoleAuthentication } from './ConsoleAuthentication.js';
+
+export async function writeConsoleAdminAudit(
+  writer: IAdminAuditWriter,
+  route: ConsoleRouteDefinition,
+  req: ConsoleRequest,
+  result: ConsoleAdminAuditResult,
+  errorCode: string | null,
+  occurredAt: Date,
+): Promise<void> {
+  if (route.audience !== 'admin') return;
+  if (!route.auditOperation) {
+    throw new Error('Validated administrative route is missing its audit operation');
+  }
+  await writer.write(buildEvent(route, route.auditOperation, req, result, errorCode, occurredAt));
+}
+
+function buildEvent(
+  route: ConsoleRouteDefinition,
+  auditOperation: string,
+  req: ConsoleRequest,
+  result: ConsoleAdminAuditResult,
+  errorCode: string | null,
+  occurredAt: Date,
+): ConsoleAdminAuditEvent {
+  const authentication = requireConsoleAuthentication(req);
+  const elevation = authentication.elevation;
+  return {
+    occurredAt,
+    actorUserId: authentication.userId,
+    actorSub: authentication.authSub,
+    actorConsoleSessionHash: Buffer.from(authentication.sessionIdHash),
+    capability: route.requiredCapability,
+    elevationAcr: elevation?.acr ?? null,
+    elevationAmr: elevation ? [...elevation.amr] : [],
+    elevationAuthTime: elevation ? new Date(elevation.authTime.getTime()) : null,
+    correlationId: requireConsoleRequestContext(req).correlationId,
+    endpoint: `${route.method} ${route.path}`,
+    operation: auditOperation,
+    argsRedacted: {},
+    result,
+    errorCode,
+  };
+}

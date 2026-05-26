@@ -4,6 +4,7 @@ import request from 'supertest';
 import {
   assembleConsoleRouter,
   ConsoleModuleRegistry,
+  createConsoleRequestContextMiddleware,
   createProblemDetails,
   requireConsoleRequestContext,
   sendProblemResponse,
@@ -31,29 +32,15 @@ function contextFixtureModule(): ConsoleModuleDescriptor {
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
-      handler: (req, res) => {
+      handler: req => {
         const context = requireConsoleRequestContext(req);
-        res.json({
-          correlationId: context.correlationId,
-          hasReceivedAt: context.receivedAt instanceof Date,
-        });
-      },
-    }, {
-      method: 'GET',
-      path: '/api/v1/me/problem',
-      audience: 'self',
-      requiredCapability: SELF_CAPABILITY,
-      ownership: 'authenticated_user',
-      elevation: 'none',
-      privacyClass: 'self_private',
-      idempotency: 'not_applicable',
-      handler: (req, res) => {
-        sendProblemResponse(res, {
-          status: 404,
-          code: 'not_found',
-          title: 'Not found',
-          detail: 'The requested item is not available.',
-        }, requireConsoleRequestContext(req).correlationId);
+        return {
+          status: 200,
+          body: {
+            correlationId: context.correlationId,
+            hasReceivedAt: context.receivedAt instanceof Date,
+          },
+        };
       },
     }],
   };
@@ -197,9 +184,7 @@ describe('console platform HTTP foundations', () => {
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
-        handler: (_req, res) => {
-          res.json({ route: 'settings' });
-        },
+        handler: () => ({ status: 200, body: { route: 'settings' } }),
       }],
     });
     const app = express();
@@ -209,11 +194,21 @@ describe('console platform HTTP foundations', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ route: 'settings' });
-    expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'profile', 'settings']);
+    expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'settings']);
   });
 
   it('sends RFC 9457 responses with the problem media type and request instance', async () => {
-    const response = await request(buildApp())
+    const app = express();
+    app.use(createConsoleRequestContextMiddleware());
+    app.get('/api/v1/me/problem', (req, res) => {
+      sendProblemResponse(res, {
+        status: 404,
+        code: 'not_found',
+        title: 'Not found',
+        detail: 'The requested item is not available.',
+      }, requireConsoleRequestContext(req).correlationId);
+    });
+    const response = await request(app)
       .get('/api/v1/me/problem')
       .set(CORRELATION_REQUEST_HEADER, CLIENT_CORRELATION_ID);
 

@@ -1,4 +1,4 @@
-import type { NextFunction, Request, Response } from 'express';
+import type { Request } from 'express';
 
 export const CONSOLE_API_PREFIX = '/api/v1' as const;
 
@@ -67,11 +67,23 @@ export interface ConsoleRequest extends Request {
   consoleAuthentication?: ConsoleAuthenticatedContext;
 }
 
+export interface ConsoleHandlerResult {
+  /**
+   * Models ordinary JSON or bodyless module responses. BFF authentication
+   * cookie issuance/clearing requires a later platform-owned response type;
+   * modules must not receive unrestricted Set-Cookie control.
+   */
+  readonly status: number;
+  readonly body?: unknown;
+}
+
+/**
+ * Console handlers return application results. The kernel owns serialization
+ * so route privacy projections cannot be bypassed by writing to Express.
+ */
 export type ConsoleHandler = (
   req: ConsoleRequest,
-  res: Response,
-  next: NextFunction,
-) => void | Promise<void>;
+) => ConsoleHandlerResult | Promise<ConsoleHandlerResult>;
 
 /**
  * A projection is required for administrative routes so raw domain values are

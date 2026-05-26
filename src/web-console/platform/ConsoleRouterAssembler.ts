@@ -1,11 +1,16 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
 import { createConsoleRequestContextMiddleware } from './ConsoleRequestContext.js';
-import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
+import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
+import type { ConsoleHttpMethod, ConsoleRequest, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 
 function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
-  const handler = route.handler as RequestHandler;
+  const handler: RequestHandler = (request, response, next): void => {
+    void executeConsoleRoute(route, request as ConsoleRequest)
+      .then(result => sendConsoleHandlerResult(response, result))
+      .catch(next);
+  };
   const method: ConsoleHttpMethod = route.method;
 
   switch (method) {
