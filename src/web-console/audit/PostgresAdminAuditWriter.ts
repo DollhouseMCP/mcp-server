@@ -4,6 +4,7 @@ import { sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { DrizzleTx } from '../../database/db-utils.js';
 import type { AuditHmacKeyMaterial } from '../../security/auditHmacKey.js';
 import {
   stringifyBoundedAdminAuditJson,
@@ -35,32 +36,40 @@ export class PostgresAdminAuditWriter implements IAdminAuditWriter {
   ) {}
 
   async write(event: ConsoleAdminAuditEvent): Promise<void> {
-    validateConsoleAdminAuditEvent(event);
-    const keyMaterial = await this.hmacKeyResolver.resolve();
-    const argsRedactedJson = stringifyBoundedAdminAuditJson(event.argsRedacted, 'argsRedacted');
-    const resultDetailRedactedJson = event.resultDetailRedacted
-      ? stringifyBoundedAdminAuditJson(event.resultDetailRedacted, 'resultDetailRedacted')
-      : null;
+    await withSystemContext(this.db, tx => appendConsoleAdminAuditEventWithTx(tx, event, this.hmacKeyResolver));
+  }
+}
 
-    await withSystemContext(this.db, async (tx) => {
-      await tx.execute(sql`
+export async function appendConsoleAdminAuditEventWithTx(
+  tx: DrizzleTx,
+  event: ConsoleAdminAuditEvent,
+  hmacKeyResolver: AdminAuditHmacKeyResolver,
+): Promise<void> {
+  validateConsoleAdminAuditEvent(event);
+  const keyMaterial = await hmacKeyResolver.resolve();
+  const argsRedactedJson = stringifyBoundedAdminAuditJson(event.argsRedacted, 'argsRedacted');
+  const resultDetailRedactedJson = event.resultDetailRedacted
+    ? stringifyBoundedAdminAuditJson(event.resultDetailRedacted, 'resultDetailRedacted')
+    : null;
+
+  await tx.execute(sql`
         INSERT INTO admin_audit_chain_heads (stream_id)
         VALUES (${ADMIN_AUDIT_STREAM_ID})
         ON CONFLICT (stream_id) DO NOTHING
       `);
-      const headRows = await tx.execute(sql`
+  const headRows = await tx.execute(sql`
         SELECT last_sequence_id, last_chain_hmac
         FROM admin_audit_chain_heads
         WHERE stream_id = ${ADMIN_AUDIT_STREAM_ID}
         FOR UPDATE
       `) as unknown as ChainHeadRow[];
-      const head = headRows.at(0);
-      if (!head) {
-        throw new Error('admin audit chain head is unavailable');
-      }
-      const chainPrev = head.last_chain_hmac ? Buffer.from(head.last_chain_hmac) : null;
-      const chainHmac = computeChainHmac(event, keyMaterial.key, chainPrev);
-      const rows = await tx.execute(sql`
+  const head = headRows.at(0);
+  if (!head) {
+    throw new Error('admin audit chain head is unavailable');
+  }
+  const chainPrev = head.last_chain_hmac ? Buffer.from(head.last_chain_hmac) : null;
+  const chainHmac = computeChainHmac(event, keyMaterial.key, chainPrev);
+  const rows = await tx.execute(sql`
         INSERT INTO admin_audit_events (
           occurred_at,
           actor_user_id,
@@ -117,19 +126,17 @@ export class PostgresAdminAuditWriter implements IAdminAuditWriter {
         )
         RETURNING sequence_id, chain_hmac
       `) as unknown as InsertedAuditRow[];
-      const inserted = rows.at(0);
-      if (!inserted) {
-        throw new Error('admin audit append did not return a row');
-      }
-      await tx.execute(sql`
+  const inserted = rows.at(0);
+  if (!inserted) {
+    throw new Error('admin audit append did not return a row');
+  }
+  await tx.execute(sql`
         UPDATE admin_audit_chain_heads
         SET last_sequence_id = ${Number(inserted.sequence_id)},
             last_chain_hmac = ${inserted.chain_hmac},
             updated_at = NOW()
         WHERE stream_id = ${ADMIN_AUDIT_STREAM_ID}
       `);
-    });
-  }
 }
 
 function computeChainHmac(event: ConsoleAdminAuditEvent, key: Buffer, chainPrev: Buffer | null): Buffer {

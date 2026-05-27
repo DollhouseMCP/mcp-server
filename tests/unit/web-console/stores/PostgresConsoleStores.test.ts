@@ -41,6 +41,9 @@ const { PostgresConsoleSecurityInvalidationStore } = await import(
 const { PostgresAdminAuditWriter } = await import(
   '../../../../src/web-console/audit/PostgresAdminAuditWriter.js'
 );
+const { PostgresAccountAdminMutationTransactionRunner } = await import(
+  '../../../../src/web-console/modules/account-admin/AccountAdminMutationTransaction.js'
+);
 const { PostgresConsoleIdentityResolver } = await import(
   '../../../../src/web-console/identity/PostgresConsoleIdentityResolver.js'
 );
@@ -985,6 +988,134 @@ describe('PostgresAdminAuditWriter', () => {
 
     await expect(writer.write(adminAuditEvent(overrides))).rejects.toThrow(message);
     expect(transaction.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostgresAccountAdminMutationTransactionRunner', () => {
+  it('composes account mutation, invalidation append, and audit append in one system transaction', async () => {
+    const auditEvent = adminAuditEvent();
+    const key = Buffer.alloc(32, 9);
+    const returnedChainHmac = Buffer.alloc(32, 5);
+    const invalidationRow = {
+      sequenceId: 7,
+      eventId: 'e6174fd8-f6ef-4286-8bd2-3f3eb30194c1',
+      kind: 'principal_disabled' as const,
+      urgency: 'acknowledged' as const,
+      userId: USER_ID,
+      consoleSessionIdHash: null,
+      authzVersion: 2,
+      reason: 'admin_disabled',
+      payload: { revokedSessions: 1 },
+      createdAt: FIVE_MINUTES,
+      createdByUserId: SECOND_USER_ID,
+    };
+    const runner = new PostgresAccountAdminMutationTransactionRunner({
+      db: {} as DatabaseInstance,
+      hmacKeyResolver: {
+        resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key }),
+      },
+    });
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([{ userId: USER_ID, authzVersion: '2', disabledAt: FIVE_MINUTES }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ last_sequence_id: null, last_chain_hmac: null }])
+      .mockResolvedValueOnce([{ sequence_id: '1', chain_hmac: returnedChainHmac }])
+      .mockResolvedValueOnce([]);
+    transaction.insert = jest.fn(() => insertChain([invalidationRow]));
+
+    const result = await runner.run(async tx => {
+      const stateChange = await tx.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES });
+      const invalidation = await tx.appendSecurityInvalidationEvent({
+        kind: 'principal_disabled',
+        urgency: 'acknowledged',
+        userId: USER_ID,
+        authzVersion: stateChange?.authzVersion ?? null,
+        reason: 'admin_disabled',
+        payload: { revokedSessions: 1 },
+        createdAt: FIVE_MINUTES,
+        createdByUserId: SECOND_USER_ID,
+      });
+      await tx.writeAdminAuditEvent(auditEvent);
+      return { stateChange, invalidation };
+    });
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(result.stateChange).toEqual({
+      userId: USER_ID,
+      authzVersion: 2,
+      disabledAt: FIVE_MINUTES,
+      changedAt: FIVE_MINUTES,
+    });
+    expect(result.invalidation).toMatchObject({ sequenceId: 7, eventId: invalidationRow.eventId });
+    expect(transaction.execute).toHaveBeenCalledTimes(5);
+    expect(transaction.insert).toHaveBeenCalledTimes(1);
+    expect(sqlText(0)).toContain('UPDATE users');
+    expect(sqlText(1)).toContain('INSERT INTO admin_audit_chain_heads');
+    expect(sqlText(3)).toContain('INSERT INTO admin_audit_events');
+  });
+
+  it('propagates audit append failures so the transaction can roll back the mutation', async () => {
+    const runner = new PostgresAccountAdminMutationTransactionRunner({
+      db: {} as DatabaseInstance,
+      hmacKeyResolver: {
+        resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+      },
+    });
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([{ userId: USER_ID, authzVersion: '2', disabledAt: FIVE_MINUTES }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await expect(runner.run(async tx => {
+      await tx.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES });
+      await tx.writeAdminAuditEvent(adminAuditEvent());
+    })).rejects.toThrow('admin audit chain head is unavailable');
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.execute).toHaveBeenCalledTimes(3);
+    expect(sqlText(0)).toContain('UPDATE users');
+    expect(sqlText(1)).toContain('INSERT INTO admin_audit_chain_heads');
+    expect(sqlText(2)).toContain('FOR UPDATE');
+  });
+
+  it('propagates operation callback failures through the transaction boundary', async () => {
+    const runner = new PostgresAccountAdminMutationTransactionRunner({
+      db: {} as DatabaseInstance,
+      hmacKeyResolver: {
+        resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+      },
+    });
+
+    await expect(runner.run(async () => {
+      await Promise.resolve();
+      throw new Error('abort');
+    })).rejects.toThrow('abort');
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('maps duplicate role grants to a typed conflict through the transaction runner path', async () => {
+    const unique = Object.assign(new Error('duplicate'), { code: '23505' });
+    const runner = new PostgresAccountAdminMutationTransactionRunner({
+      db: {} as DatabaseInstance,
+      hmacKeyResolver: {
+        resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+      },
+    });
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => ({
+        returning: jest.fn(() => Promise.reject(unique)),
+      })),
+    }));
+
+    await expect(runner.run(tx => tx.grantRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      grantedByUserId: SECOND_USER_ID,
+      grantedAt: FIVE_MINUTES,
+    }))).rejects.toThrow(ConsoleStoreConflictError);
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
   });
 });
 

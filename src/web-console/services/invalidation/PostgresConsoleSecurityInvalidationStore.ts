@@ -3,6 +3,7 @@ import { eq, gt, sql } from 'drizzle-orm';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import {
   securityInvalidationAcks,
   securityInvalidationEvents,
@@ -28,21 +29,7 @@ export class PostgresConsoleSecurityInvalidationStore implements IConsoleSecurit
   constructor(private readonly db: DatabaseInstance) {}
 
   async appendEvent(input: SecurityInvalidationEventInput): Promise<SecurityInvalidationEvent> {
-    validateSecurityInvalidationEventInput(input);
-    const rows = await withSystemContext(this.db, tx =>
-      tx.insert(securityInvalidationEvents).values({
-        kind: input.kind,
-        urgency: input.urgency,
-        userId: input.userId,
-        consoleSessionIdHash: input.consoleSessionIdHash ?? null,
-        authzVersion: input.authzVersion ?? null,
-        reason: input.reason,
-        payload: { ...(input.payload ?? {}) },
-        createdAt: input.createdAt,
-        createdByUserId: input.createdByUserId ?? null,
-      }).returning(),
-    );
-    return fromEventRow(rows[0]);
+    return withSystemContext(this.db, tx => appendSecurityInvalidationEventWithTx(tx, input));
   }
 
   async listEventsAfter(sequenceId: number, limit = 100): Promise<SecurityInvalidationEvent[]> {
@@ -137,6 +124,25 @@ export class PostgresConsoleSecurityInvalidationStore implements IConsoleSecurit
     );
     return rows.map(row => row.replicaId);
   }
+}
+
+export async function appendSecurityInvalidationEventWithTx(
+  tx: DrizzleTx,
+  input: SecurityInvalidationEventInput,
+): Promise<SecurityInvalidationEvent> {
+  validateSecurityInvalidationEventInput(input);
+  const rows = await tx.insert(securityInvalidationEvents).values({
+    kind: input.kind,
+    urgency: input.urgency,
+    userId: input.userId,
+    consoleSessionIdHash: input.consoleSessionIdHash ?? null,
+    authzVersion: input.authzVersion ?? null,
+    reason: input.reason,
+    payload: { ...(input.payload ?? {}) },
+    createdAt: input.createdAt,
+    createdByUserId: input.createdByUserId ?? null,
+  }).returning();
+  return fromEventRow(rows[0]);
 }
 
 function fromEventRow(row: typeof securityInvalidationEvents.$inferSelect): SecurityInvalidationEvent {
