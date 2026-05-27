@@ -129,6 +129,9 @@ describe('ConsoleModuleRegistry', () => {
     ['an invalid idempotency decision', selfModule({
       routes: [selfRoute({ idempotency: 'sometimes' as never })],
     }), /invalid idempotency decision/],
+    ['a non-mutating route requiring idempotency', selfModule({
+      routes: [selfRoute({ idempotency: 'required' })],
+    }), /cannot require idempotency/],
     ['a private self-service route without ownership', selfModule({
       routes: [selfRoute({ ownership: undefined })],
     }), /missing an ownership policy/],

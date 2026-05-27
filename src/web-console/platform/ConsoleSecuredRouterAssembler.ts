@@ -8,10 +8,12 @@ import {
   createConsoleAuthorizationMiddleware,
   createConsoleCsrfProtectionMiddleware,
   createConsoleSecurityHeadersMiddleware,
+  executeWithConsoleIdempotency,
   writeConsoleAdminAudit,
 } from '../middleware/index.js';
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
+import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
@@ -25,6 +27,7 @@ export interface SecuredConsoleRouterOptions {
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly consoleOrigin: string;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly idempotencyStore: IIdempotencyStore;
   readonly idleTimeoutMs: number;
   readonly now?: () => Date;
   readonly reportInternalError?: (error: unknown, correlationId: string) => void;
@@ -85,30 +88,62 @@ function createSecuredHandler(
     const req = request as ConsoleRequest;
     const occurredAt = options.now?.() ?? new Date();
     void (async (): Promise<void> => {
-      let result;
       try {
-        result = await executeConsoleRoute(route, req);
-      } catch (error) {
-        try {
-          await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'failed', 'internal_error', occurredAt);
-        } catch (auditError) {
-          next(new AggregateError(
-            [error, auditError],
-            'Console route execution and required administrative audit write both failed',
-          ));
+        const execution = await executeWithConsoleIdempotency(
+          route,
+          req,
+          options.idempotencyStore,
+          () => executeAuditedConsoleRoute(route, req, options, occurredAt),
+          occurredAt,
+        );
+        if (execution.interceptedAuditResult) {
+          await writeConsoleAdminAudit(
+            options.adminAuditWriter,
+            route,
+            req,
+            execution.interceptedAuditResult,
+            execution.kind === 'problem' ? execution.problem.code : null,
+            occurredAt,
+          );
+        }
+        if (execution.kind === 'problem') {
+          sendProblemResponse(
+            response,
+            execution.problem,
+            requireConsoleRequestContext(req).correlationId,
+          );
           return;
         }
-        next(error);
-        return;
-      }
-      try {
-        await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
-        sendConsoleHandlerResult(response, result);
+        sendConsoleHandlerResult(response, execution.result);
       } catch (error) {
         next(error);
       }
     })();
   };
+}
+
+async function executeAuditedConsoleRoute(
+  route: ConsoleRouteDefinition,
+  req: ConsoleRequest,
+  options: SecuredConsoleRouterOptions,
+  occurredAt: Date,
+) {
+  let result;
+  try {
+    result = await executeConsoleRoute(route, req);
+  } catch (error) {
+    try {
+      await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'failed', 'internal_error', occurredAt);
+    } catch (auditError) {
+      throw new AggregateError(
+        [error, auditError],
+        'Console route execution and required administrative audit write both failed',
+      );
+    }
+    throw error;
+  }
+  await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
+  return result;
 }
 
 function registerSecuredRoute(

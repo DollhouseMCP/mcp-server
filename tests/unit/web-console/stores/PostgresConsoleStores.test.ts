@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, jest } from '@jest/globals';
 import type { DatabaseInstance } from '../../../../src/database/connection.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
-import type { IdempotencyRecord } from '../../../../src/web-console/stores/IIdempotencyStore.js';
+import type {
+  IdempotencyClaim,
+  IdempotencyRecord,
+  IdempotencyRequestIdentity,
+} from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 let transaction: Record<string, jest.Mock>;
 const withSystemContextMock = jest.fn(async (
@@ -86,17 +90,32 @@ function loginTransaction(): ConsoleLoginTransaction {
   };
 }
 
-function idempotencyRecord(): IdempotencyRecord {
+function idempotencyIdentity(): IdempotencyRequestIdentity {
   return {
     consoleSessionIdHash: hash(1),
     idempotencyKey: 'a51d7564-c85e-4e11-b319-dbc156d26f70',
     httpMethod: 'POST',
     canonicalTarget: '/api/v1/me/sessions/revoke',
     requestFingerprint: hash(7),
-    responseStatus: 204,
-    responseBody: null,
     createdAt: NOW,
     expiresAt: ONE_HOUR,
+  };
+}
+
+function idempotencyClaim(): IdempotencyClaim {
+  return {
+    ...idempotencyIdentity(),
+    claimId: 'bbe7c4c5-b59e-4bd0-9f8d-c892577ba944',
+  };
+}
+
+function idempotencyRecord(): IdempotencyRecord {
+  return {
+    ...idempotencyClaim(),
+    state: 'completed',
+    responseStatus: 204,
+    responseBodyPresent: false,
+    responseBody: null,
   };
 }
 
@@ -219,6 +238,34 @@ describe('PostgresLoginTransactionStore', () => {
 });
 
 describe('PostgresIdempotencyStore', () => {
+  it('returns ownership of a newly inserted pending claim', async () => {
+    const deleting = { where: jest.fn(() => Promise.resolve([])) };
+    const pendingInsert = {
+      onConflictDoNothing: jest.fn(() => ({
+        returning: jest.fn(() => Promise.resolve([{}])),
+      })),
+    };
+    const inserting = { values: jest.fn(() => pendingInsert) };
+    transaction.delete = jest.fn(() => deleting);
+    transaction.insert = jest.fn(() => inserting);
+    const store = new PostgresIdempotencyStore({} as DatabaseInstance);
+
+    const result = await store.claim(idempotencyIdentity());
+
+    expect(result).toMatchObject({
+      kind: 'claimed',
+      claim: idempotencyIdentity(),
+    });
+    expect(result.kind === 'claimed' && result.claim.claimId)
+      .toMatch(/^[0-9a-f-]{36}$/);
+    expect(inserting.values).toHaveBeenCalledWith(expect.objectContaining({
+      state: 'pending',
+      responseStatus: null,
+      responseBodyPresent: null,
+      responseBody: null,
+    }));
+  });
+
   it('reports a typed conflict if the winning record is no longer visible after insert conflict', async () => {
     const deleting = { where: jest.fn(() => Promise.resolve([])) };
     const inserting = {
@@ -233,11 +280,16 @@ describe('PostgresIdempotencyStore', () => {
     transaction.select = jest.fn(() => selectingChain([]));
     const store = new PostgresIdempotencyStore({} as DatabaseInstance);
 
-    await expect(store.saveCompleted(idempotencyRecord())).rejects.toThrow(ConsoleStoreConflictError);
+    await expect(store.claim(idempotencyIdentity())).rejects.toThrow(ConsoleStoreConflictError);
   });
 
   it('clones retained response state returned from PostgreSQL', async () => {
-    const row = { ...idempotencyRecord(), responseBody: { ok: true } };
+    const row = {
+      ...idempotencyRecord(),
+      responseStatus: 200,
+      responseBodyPresent: true,
+      responseBody: { ok: true },
+    };
     transaction.select = jest.fn(() => selectingChain([row]));
     const store = new PostgresIdempotencyStore({} as DatabaseInstance);
 
@@ -260,6 +312,40 @@ describe('PostgresIdempotencyStore', () => {
 
     transaction.delete = jest.fn(() => returningChain([{ idempotencyKey: idempotencyRecord().idempotencyKey }]));
     await expect(store.sweepExpired(ONE_HOUR)).resolves.toBe(1);
+  });
+
+  it('completes only the active pending claim token', async () => {
+    const completed = idempotencyRecord();
+    transaction.update = jest.fn(() => returningChain([completed]));
+    const store = new PostgresIdempotencyStore({} as DatabaseInstance);
+
+    await expect(store.complete(idempotencyClaim(), {
+      responseStatus: 204,
+      responseBodyPresent: false,
+      responseBody: null,
+    })).resolves.toMatchObject({ state: 'completed', responseStatus: 204 });
+  });
+
+  it('rejects corrupt pending rows read during an insert conflict', async () => {
+    transaction.delete = jest.fn(() => ({ where: jest.fn(() => Promise.resolve([])) }));
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => ({
+        onConflictDoNothing: jest.fn(() => ({
+          returning: jest.fn(() => Promise.resolve([])),
+        })),
+      })),
+    }));
+    transaction.select = jest.fn(() => selectingChain([{
+      ...idempotencyClaim(),
+      state: 'pending',
+      httpMethod: 'GET',
+      responseStatus: null,
+      responseBodyPresent: null,
+      responseBody: null,
+    }]));
+    const store = new PostgresIdempotencyStore({} as DatabaseInstance);
+
+    await expect(store.claim(idempotencyIdentity())).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 

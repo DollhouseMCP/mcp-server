@@ -280,6 +280,9 @@ export class ConsoleModuleRegistry {
     if (MUTATING_METHODS.has(route.method) && !route.idempotency) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" mutating route ${routeKey(route)} is missing an idempotency decision`);
     }
+    if (!MUTATING_METHODS.has(route.method) && route.idempotency === 'required') {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" non-mutating route ${routeKey(route)} cannot require idempotency`);
+    }
     if (route.ownership && !OWNERSHIP_POLICIES.has(route.ownership)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid ownership policy`);
     }

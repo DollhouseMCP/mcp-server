@@ -9,7 +9,10 @@ import {
 import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/index.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
-import type { IdempotencyRecord } from '../../../../src/web-console/stores/IIdempotencyStore.js';
+import type {
+  IdempotencyCompletion,
+  IdempotencyRequestIdentity,
+} from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const NOW = new Date('2026-05-26T12:00:00.000Z');
@@ -62,20 +65,26 @@ function loginTransaction(
   };
 }
 
-function idempotencyRecord(overrides: Partial<IdempotencyRecord> = {}): IdempotencyRecord {
+function idempotencyIdentity(
+  overrides: Partial<IdempotencyRequestIdentity> = {},
+): IdempotencyRequestIdentity {
   return {
     consoleSessionIdHash: hash(1),
     idempotencyKey: 'a51d7564-c85e-4e11-b319-dbc156d26f70',
     httpMethod: 'POST',
     canonicalTarget: '/api/v1/me/sessions/revoke',
     requestFingerprint: hash(9),
-    responseStatus: 204,
-    responseBody: null,
     createdAt: NOW,
     expiresAt: ONE_HOUR,
     ...overrides,
   };
 }
+
+const BODYLESS_COMPLETION: IdempotencyCompletion = {
+  responseStatus: 204,
+  responseBodyPresent: false,
+  responseBody: null,
+};
 
 describe('InMemoryConsoleSessionStore', () => {
   it('creates an isolated active self-service session and revokes it immediately', async () => {
@@ -212,46 +221,79 @@ describe('InMemoryLoginTransactionStore', () => {
 });
 
 describe('InMemoryIdempotencyStore', () => {
-  it('returns stored response for identical retry and rejects mismatched retry identity', async () => {
+  it('claims once, blocks concurrent execution, replays completion, and rejects mismatch', async () => {
     const store = new InMemoryIdempotencyStore();
 
-    expect((await store.saveCompleted(idempotencyRecord())).kind).toBe('created');
-    expect((await store.saveCompleted(idempotencyRecord())).kind).toBe('replay');
-    expect((await store.saveCompleted(idempotencyRecord({
+    const first = await store.claim(idempotencyIdentity());
+    expect(first.kind).toBe('claimed');
+    expect((await store.claim(idempotencyIdentity())).kind).toBe('in_progress');
+    if (first.kind !== 'claimed') throw new Error('fixture claim not acquired');
+    await store.complete(first.claim, BODYLESS_COMPLETION);
+    expect((await store.claim(idempotencyIdentity())).kind).toBe('replay');
+    expect((await store.claim(idempotencyIdentity({
       requestFingerprint: hash(10),
-    }))).kind).toBe('mismatch');
+    })))).toEqual({ kind: 'mismatch', mismatchField: 'request_body_fingerprint' });
+    expect((await store.claim(idempotencyIdentity({
+      httpMethod: 'DELETE',
+    })))).toEqual({ kind: 'mismatch', mismatchField: 'http_method' });
+    expect((await store.claim(idempotencyIdentity({
+      canonicalTarget: '/api/v1/me/sessions/revoke/other',
+    })))).toEqual({ kind: 'mismatch', mismatchField: 'canonical_request_target' });
   });
 
-  it('permits reuse of a key once its retained response has expired', async () => {
+  it('permits reuse of either pending or completed keys only after retention expiration', async () => {
     const store = new InMemoryIdempotencyStore();
-    await store.saveCompleted(idempotencyRecord({ expiresAt: FIVE_MINUTES }));
+    await store.claim(idempotencyIdentity({ expiresAt: FIVE_MINUTES }));
 
-    const replacement = idempotencyRecord({
+    const replacement = idempotencyIdentity({
       requestFingerprint: hash(10),
       createdAt: THIRTY_MINUTES,
       expiresAt: ONE_HOUR,
     });
-    expect((await store.saveCompleted(replacement)).kind).toBe('created');
+    expect((await store.claim(replacement)).kind).toBe('claimed');
   });
 
   it('accepts only mutating v1 requests retained for at most 24 hours', async () => {
     const store = new InMemoryIdempotencyStore();
-    await expect(store.saveCompleted(idempotencyRecord({ httpMethod: 'GET' })))
+    await expect(store.claim(idempotencyIdentity({ httpMethod: 'GET' })))
       .rejects.toThrow('mutating routes');
-    await expect(store.saveCompleted(idempotencyRecord({ canonicalTarget: '/legacy/revoke' })))
+    await expect(store.claim(idempotencyIdentity({ canonicalTarget: '/legacy/revoke' })))
       .rejects.toThrow('/api/v1');
-    await expect(store.saveCompleted(idempotencyRecord({ requestFingerprint: Buffer.alloc(0) })))
+    await expect(store.claim(idempotencyIdentity({ requestFingerprint: Buffer.alloc(0) })))
       .rejects.toThrow('32-byte digest');
   });
 
   it('finds retained records and deletes expired responses', async () => {
     const store = new InMemoryIdempotencyStore();
-    await store.saveCompleted(idempotencyRecord());
+    const claimed = await store.claim(idempotencyIdentity());
+    if (claimed.kind !== 'claimed') throw new Error('fixture claim not acquired');
+    await store.complete(claimed.claim, BODYLESS_COMPLETION);
 
-    expect(await store.find(hash(1), idempotencyRecord().idempotencyKey, FIVE_MINUTES))
+    expect(await store.find(hash(1), idempotencyIdentity().idempotencyKey, FIVE_MINUTES))
       .toMatchObject({ responseStatus: 204 });
     expect(await store.sweepExpired(ONE_HOUR)).toBe(1);
-    expect(await store.find(hash(1), idempotencyRecord().idempotencyKey, ONE_HOUR)).toBeNull();
+    expect(await store.find(hash(1), idempotencyIdentity().idempotencyKey, ONE_HOUR)).toBeNull();
+  });
+
+  it('rejects completion by a stale or foreign claim token', async () => {
+    const store = new InMemoryIdempotencyStore();
+    const claimed = await store.claim(idempotencyIdentity());
+    if (claimed.kind !== 'claimed') throw new Error('fixture claim not acquired');
+
+    await expect(store.complete({
+      ...claimed.claim,
+      claimId: 'bbe7c4c5-b59e-4bd0-9f8d-c892577ba944',
+    }, BODYLESS_COMPLETION)).rejects.toThrow('not active');
+  });
+
+  it('isolates equal keys by browser session and sweeps pending claims', async () => {
+    const store = new InMemoryIdempotencyStore();
+
+    expect((await store.claim(idempotencyIdentity())).kind).toBe('claimed');
+    expect((await store.claim(idempotencyIdentity({
+      consoleSessionIdHash: hash(8),
+    }))).kind).toBe('claimed');
+    expect(await store.sweepExpired(ONE_HOUR)).toBe(2);
   });
 });
 

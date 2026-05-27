@@ -10,6 +10,7 @@ import {
   InMemoryConsoleIdentityResolver,
   InMemoryAdminAuditWriter,
   InMemoryConsoleSessionStore,
+  InMemoryIdempotencyStore,
   requireConsoleAuthentication,
   type ConsoleModuleDescriptor,
 } from '../../../../src/web-console/index.js';
@@ -31,14 +32,17 @@ const CHANGE_PATH = '/api/v1/me/change';
 const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
+const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
 const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
 const ELEVATED_EXPIRES = new Date('2026-05-26T12:30:00.000Z');
 const RECENT_AUTH_TIME = new Date('2026-05-26T11:55:00.000Z');
 const SESSION_CREATED = new Date('2026-05-26T10:00:00.000Z');
 const CSRF_HEADER = 'X-CSRF-Token';
 const CONSOLE_REQUEST_HEADER = 'X-Console-Request';
+const IDEMPOTENCY_HEADER = 'Idempotency-Key';
+const IDEMPOTENCY_KEY = 'a51d7564-c85e-4e11-b319-dbc156d26f70';
 
-function fixtureModules(): readonly ConsoleModuleDescriptor[] {
+function fixtureModules(onChange?: () => void, onAdminMutation?: () => void): readonly ConsoleModuleDescriptor[] {
   return [{
     id: 'me_fixture',
     apiVersion: 'v1',
@@ -74,7 +78,10 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'required',
-      handler: () => ({ status: 200, body: { changed: true } }),
+      handler: () => {
+        onChange?.();
+        return { status: 200, body: { changed: true } };
+      },
     }],
   }, {
     id: 'admin_fixture',
@@ -84,6 +91,7 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       { id: 'admin.audit.read' },
       { id: 'admin.audit.export' },
       { id: 'admin.audit.failure' },
+      { id: 'admin.audit.mutate' },
     ],
     routes: [{
       method: 'GET',
@@ -120,6 +128,20 @@ function fixtureModules(): readonly ConsoleModuleDescriptor[] {
       handler: () => {
         throw new Error('fixture admin execution failure');
       },
+    }, {
+      method: 'POST',
+      path: ADMIN_MUTATION_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'admin_audit',
+      idempotency: 'required',
+      auditOperation: 'admin.audit.mutate',
+      privacyProjector: value => value,
+      handler: () => {
+        onAdminMutation?.();
+        return { status: 200, body: { changed: true } };
+      },
     }],
   }];
 }
@@ -154,22 +176,27 @@ async function buildApp(
   reportInternalError?: (error: unknown, correlationId: string) => void,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
+  const idempotencyStore = new InMemoryIdempotencyStore();
+  const onChange = jest.fn();
+  const onAdminMutation = jest.fn();
   if (session) await sessionStore.create(session);
   const registry = new ConsoleModuleRegistry();
-  fixtureModules().forEach(module => registry.register(module));
+  fixtureModules(onChange, onAdminMutation).forEach(module => registry.register(module));
   const adminAuditWriter = new InMemoryAdminAuditWriter();
   const app = express();
+  app.use(express.json());
   app.use(assembleSecuredConsoleRouter(registry, {
     sessionStore,
     identityResolver: resolver,
     opaqueValues: OPAQUE_VALUES,
     consoleOrigin: ORIGIN,
     adminAuditWriter,
+    idempotencyStore,
     idleTimeoutMs: 60 * 60 * 1000,
     now: () => NOW,
     reportInternalError,
   }));
-  return { app, sessionStore, adminAuditWriter };
+  return { app, sessionStore, adminAuditWriter, idempotencyStore, onChange, onAdminMutation };
 }
 
 function sessionCookie(): string {
@@ -178,6 +205,29 @@ function sessionCookie(): string {
 
 function csrfCookies(): string[] {
   return [sessionCookie(), `dh_csrf=${CSRF_VALUE}`];
+}
+
+function elevatedAuditSession(): ConsoleSessionRecord {
+  return record({
+    createdAt: SESSION_CREATED,
+    grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+    elevation: {
+      capabilities: [AUDIT_CAPABILITY],
+      expiresAt: ELEVATED_EXPIRES,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: RECENT_AUTH_TIME,
+    },
+  });
+}
+
+function adminMutationRequest(app: express.Express, key: string = IDEMPOTENCY_KEY) {
+  return request(app).post(ADMIN_MUTATION_PATH)
+    .set('Cookie', csrfCookies())
+    .set(CSRF_HEADER, CSRF_VALUE)
+    .set('Origin', ORIGIN)
+    .set(CONSOLE_REQUEST_HEADER, '1')
+    .set(IDEMPOTENCY_HEADER, key);
 }
 
 describe('secured console router authentication', () => {
@@ -322,15 +372,17 @@ describe('secured console router authentication', () => {
 
 describe('secured console router browser protections', () => {
   it('accepts a protected mutation with CSRF binding, origin, and custom header', async () => {
-    const { app } = await buildApp();
+    const { app, onChange } = await buildApp();
     const response = await request(app).post(CHANGE_PATH)
       .set('Cookie', csrfCookies())
       .set(CSRF_HEADER, CSRF_VALUE)
       .set('Origin', ORIGIN)
-      .set(CONSOLE_REQUEST_HEADER, '1');
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY);
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ changed: true });
+    expect(onChange).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -359,7 +411,8 @@ describe('secured console router browser protections', () => {
       .set('Cookie', csrfCookies())
       .set(CSRF_HEADER, CSRF_VALUE)
       .set('Sec-Fetch-Site', 'same-origin')
-      .set(CONSOLE_REQUEST_HEADER, '1');
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY);
 
     expect(response.status).toBe(200);
   });
@@ -402,6 +455,88 @@ describe('secured console router browser protections', () => {
 
     expect(response.status).toBe(401);
   });
+
+  it('requires one valid idempotency key on routes declaring required enforcement', async () => {
+    const { app, onChange } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1');
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('validation_failed');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed idempotency key without invoking its handler', async () => {
+    const { app, onChange } = await buildApp();
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, 'not-a-uuid');
+
+    expect(response.status).toBe(422);
+    expect(response.body.code).toBe('validation_failed');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('rejects an identical retry while its original idempotency claim remains in progress', async () => {
+    const { app, idempotencyStore, onChange } = await buildApp();
+    jest.spyOn(idempotencyStore, 'claim').mockResolvedValue({ kind: 'in_progress' });
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY);
+
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('conflict');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('replays a completed canonical-equivalent mutation without invoking its handler twice', async () => {
+    const { app, onChange } = await buildApp();
+    const headers = {
+      Cookie: csrfCookies(),
+      [CSRF_HEADER]: CSRF_VALUE,
+      Origin: ORIGIN,
+      [CONSOLE_REQUEST_HEADER]: '1',
+      [IDEMPOTENCY_HEADER]: IDEMPOTENCY_KEY,
+    };
+
+    const first = await request(app).post(`${CHANGE_PATH}?b=2&a=2&a=1`).set(headers).send({ b: 2, a: 1 });
+    const replay = await request(app).post(`${CHANGE_PATH}?a=1&a=2&b=2`).set(headers).send({ a: 1, b: 2 });
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual({ changed: true });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects reused idempotency keys with a different body fingerprint', async () => {
+    const { app, onChange } = await buildApp();
+    const call = (body: unknown) => request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY)
+      .send(body);
+
+    expect((await call({ value: 1 })).status).toBe(200);
+    const mismatched = await call({ value: 2 });
+
+    expect(mismatched.status).toBe(422);
+    expect(mismatched.body).toMatchObject({
+      code: 'idempotency_key_mismatch',
+      mismatch_field: 'request_body_fingerprint',
+    });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('secured console router elevation', () => {
@@ -419,17 +554,7 @@ describe('secured console router elevation', () => {
   });
 
   it('projects and audit-writes an authorized administrative response', async () => {
-    const { app, adminAuditWriter } = await buildApp(record({
-      createdAt: SESSION_CREATED,
-      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
-      elevation: {
-        capabilities: [AUDIT_CAPABILITY],
-        expiresAt: ELEVATED_EXPIRES,
-        acr: ADMIN_ACR,
-        amr: ['otp'],
-        authTime: RECENT_AUTH_TIME,
-      },
-    }));
+    const { app, adminAuditWriter } = await buildApp(elevatedAuditSession());
 
     const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
 
@@ -451,6 +576,34 @@ describe('secured console router elevation', () => {
     })]);
     expect(adminAuditWriter.getEvents()[0]?.actorConsoleSessionHash)
       .toEqual(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE));
+  });
+
+  it('audit-writes an administrative idempotency replay without executing twice', async () => {
+    const { app, adminAuditWriter, onAdminMutation } = await buildApp(elevatedAuditSession());
+
+    expect((await adminMutationRequest(app).send({ request: true })).status).toBe(200);
+    expect((await adminMutationRequest(app).send({ request: true })).status).toBe(200);
+
+    expect(onAdminMutation).toHaveBeenCalledTimes(1);
+    expect(adminAuditWriter.getEvents().map(event => event.result)).toEqual(['approved', 'replayed']);
+  });
+
+  it('audit-writes rejected and in-progress administrative idempotency attempts', async () => {
+    const first = await buildApp(elevatedAuditSession());
+    expect((await adminMutationRequest(first.app).send({ request: true })).status).toBe(200);
+    expect((await adminMutationRequest(first.app).send({ request: false })).status).toBe(422);
+    expect(first.adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({ result: 'approved', errorCode: null }),
+      expect.objectContaining({ result: 'rejected', errorCode: 'idempotency_key_mismatch' }),
+    ]);
+
+    const pending = await buildApp(elevatedAuditSession());
+    jest.spyOn(pending.idempotencyStore, 'claim').mockResolvedValue({ kind: 'in_progress' });
+    expect((await adminMutationRequest(pending.app).send({ request: true })).status).toBe(409);
+    expect(pending.onAdminMutation).not.toHaveBeenCalled();
+    expect(pending.adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({ result: 'conflict', errorCode: 'conflict' }),
+    ]);
   });
 
   it('requires new step-up when elevation authentication is stale', async () => {

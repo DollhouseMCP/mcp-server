@@ -142,10 +142,13 @@ ALTER TABLE "console_login_transactions" FORCE ROW LEVEL SECURITY;
 CREATE TABLE IF NOT EXISTS "idempotency_records" (
   "console_session_id_hash" BYTEA NOT NULL,
   "idempotency_key" UUID NOT NULL,
+  "claim_id" UUID NOT NULL,
+  "state" TEXT NOT NULL,
   "http_method" TEXT NOT NULL,
   "canonical_target" TEXT NOT NULL,
   "request_fingerprint" BYTEA NOT NULL,
-  "response_status" INTEGER NOT NULL,
+  "response_status" INTEGER,
+  "response_body_present" BOOLEAN,
   "response_body" JSONB,
   "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "expires_at" TIMESTAMPTZ NOT NULL,
@@ -153,8 +156,16 @@ CREATE TABLE IF NOT EXISTS "idempotency_records" (
     CHECK (octet_length("console_session_id_hash") = 32 AND octet_length("request_fingerprint") = 32),
   CONSTRAINT "idempotency_records_method_target_check"
     CHECK ("http_method" IN ('POST', 'PUT', 'PATCH', 'DELETE')
-      AND "canonical_target" LIKE '/api/v1/%'
-      AND "response_status" BETWEEN 100 AND 599),
+      AND "canonical_target" LIKE '/api/v1/%'),
+  CONSTRAINT "idempotency_records_completion_state_check"
+    CHECK (("state" = 'pending'
+        AND "response_status" IS NULL
+        AND "response_body_present" IS NULL
+        AND "response_body" IS NULL)
+      OR ("state" = 'completed'
+        AND "response_status" BETWEEN 100 AND 599
+        AND "response_body_present" IS NOT NULL
+        AND ("response_body_present" OR "response_body" IS NULL))),
   CONSTRAINT "idempotency_records_retention_check"
     CHECK ("expires_at" > "created_at"
       AND "expires_at" <= "created_at" + INTERVAL '24 hours')

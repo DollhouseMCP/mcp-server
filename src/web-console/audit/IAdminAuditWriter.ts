@@ -1,6 +1,11 @@
 import type { ConsoleCapability } from '../platform/ConsolePlatformTypes.js';
 
-export type ConsoleAdminAuditResult = 'approved' | 'failed';
+export type ConsoleAdminAuditResult =
+  | 'approved'
+  | 'failed'
+  | 'replayed'
+  | 'rejected'
+  | 'conflict';
 
 /**
  * Phase 2 audit input contains only centrally selected security metadata.
