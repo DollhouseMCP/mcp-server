@@ -71,6 +71,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
       elevation: 'admin_5m',
       privacyClass: 'account_metadata',
       idempotency: 'not_applicable',
+      rateLimit: 'protected_correlation_resolution',
       auditOperation: ACCOUNT_ADMIN_AUDIT.correlationResolve,
       privacyProjector: projectAccountPrincipal,
       handler: req => resolveCorrelation(req, service),

@@ -99,6 +99,7 @@ describe('AccountAdminModule', () => {
         elevation: 'admin_5m',
         privacyClass: 'account_metadata',
         idempotency: 'not_applicable',
+        rateLimit: 'protected_correlation_resolution',
         auditOperation: 'accounts.correlation.resolve',
       },
     ]);

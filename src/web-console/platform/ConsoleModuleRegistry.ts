@@ -3,11 +3,13 @@ import {
   CONSOLE_ELEVATION_POLICIES,
   CONSOLE_HTTP_METHODS,
   CONSOLE_PRIVACY_CLASSES,
+  CONSOLE_RATE_LIMIT_POLICIES,
   type ConsoleElevationPolicy,
   type ConsoleHttpMethod,
   type ConsoleIdempotencyPolicy,
   type ConsoleModuleDescriptor,
   type ConsolePrivacyClass,
+  type ConsoleRateLimitPolicy,
   type ConsoleRouteDefinition,
   type ConsoleRouteManifest,
   type ConsoleRouteManifestEntry,
@@ -17,6 +19,7 @@ const CAPABILITIES = new Set<string>(CONSOLE_CAPABILITIES);
 const PRIVACY_CLASSES = new Set<string>(CONSOLE_PRIVACY_CLASSES);
 const ELEVATION_POLICIES = new Set<string>(CONSOLE_ELEVATION_POLICIES);
 const HTTP_METHODS = new Set<string>(CONSOLE_HTTP_METHODS);
+const RATE_LIMIT_POLICIES = new Set<string>(CONSOLE_RATE_LIMIT_POLICIES);
 const IDEMPOTENCY_POLICIES = new Set<string>(['not_applicable', 'required']);
 const OWNERSHIP_POLICIES = new Set<string>(['none', 'flow_transaction', 'authenticated_user', 'owned_session']);
 const MUTATING_METHODS = new Set<ConsoleHttpMethod>(['POST', 'PUT', 'PATCH', 'DELETE']);
@@ -28,6 +31,7 @@ type ValidatedConsoleRouteDefinition = ConsoleRouteDefinition & {
   readonly elevation: ConsoleElevationPolicy;
   readonly privacyClass: ConsolePrivacyClass;
   readonly idempotency: ConsoleIdempotencyPolicy;
+  readonly rateLimit: ConsoleRateLimitPolicy;
 };
 
 type RegisteredConsoleModuleDescriptor = Omit<ConsoleModuleDescriptor, 'routes'> & {
@@ -59,7 +63,7 @@ function manifestEntry(
   moduleId: string,
   route: ValidatedConsoleRouteDefinition,
 ): ConsoleRouteManifestEntry {
-  return {
+  const entry = {
     moduleId,
     method: route.method,
     path: route.path,
@@ -71,6 +75,7 @@ function manifestEntry(
     idempotency: route.idempotency,
     ...(route.auditOperation ? { auditOperation: route.auditOperation } : {}),
   };
+  return route.rateLimit === 'none' ? entry : { ...entry, rateLimit: route.rateLimit };
 }
 
 function freezeDescriptor(
@@ -251,6 +256,7 @@ export class ConsoleModuleRegistry {
       elevation,
       privacyClass,
       idempotency: route.idempotency ?? 'not_applicable',
+      rateLimit: route.rateLimit ?? 'none',
     };
   }
 
@@ -274,6 +280,9 @@ export class ConsoleModuleRegistry {
     }
     if (route.idempotency && !IDEMPOTENCY_POLICIES.has(route.idempotency)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid idempotency decision`);
+    }
+    if (route.rateLimit && !RATE_LIMIT_POLICIES.has(route.rateLimit)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid rate-limit policy`);
     }
     if (MUTATING_METHODS.has(route.method) && !route.idempotency) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" mutating route ${routeKey(route)} is missing an idempotency decision`);

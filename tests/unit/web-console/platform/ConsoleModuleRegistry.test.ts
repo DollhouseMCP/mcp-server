@@ -169,6 +169,9 @@ describe('ConsoleModuleRegistry', () => {
     ['an invalid idempotency decision', selfModule({
       routes: [selfRoute({ idempotency: 'sometimes' as never })],
     }), /invalid idempotency decision/],
+    ['an invalid rate-limit policy', selfModule({
+      routes: [selfRoute({ rateLimit: 'sometimes' as never })],
+    }), /invalid rate-limit policy/],
     ['a non-mutating route requiring idempotency', selfModule({
       routes: [selfRoute({ idempotency: 'required' })],
     }), /cannot require idempotency/],

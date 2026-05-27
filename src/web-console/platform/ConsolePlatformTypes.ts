@@ -35,11 +35,17 @@ export const CONSOLE_HTTP_METHODS = [
   'DELETE',
 ] as const;
 
+export const CONSOLE_RATE_LIMIT_POLICIES = [
+  'none',
+  'protected_correlation_resolution',
+] as const;
+
 export type ConsoleCapability = typeof CONSOLE_CAPABILITIES[number];
 export type ConsoleRouteCapability = ConsoleCapability | 'none';
 export type ConsolePrivacyClass = typeof CONSOLE_PRIVACY_CLASSES[number];
 export type ConsoleElevationPolicy = typeof CONSOLE_ELEVATION_POLICIES[number];
 export type ConsoleHttpMethod = typeof CONSOLE_HTTP_METHODS[number];
+export type ConsoleRateLimitPolicy = typeof CONSOLE_RATE_LIMIT_POLICIES[number];
 export type ConsoleAudience = 'public' | 'self' | 'admin';
 export type ConsoleOwnershipPolicy = 'none' | 'flow_transaction' | 'authenticated_user' | 'owned_session';
 export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
@@ -105,6 +111,11 @@ export interface ConsoleRouteDefinition {
   readonly elevation?: ConsoleElevationPolicy;
   readonly privacyClass?: ConsolePrivacyClass;
   readonly idempotency?: ConsoleIdempotencyPolicy;
+  /**
+   * Declarative route policy only. Enforcement is wired by the secured router
+   * when the matching rate-limit middleware is installed.
+   */
+  readonly rateLimit?: ConsoleRateLimitPolicy;
   readonly auditOperation?: string;
   readonly privacyProjector?: ConsolePrivacyProjector;
   readonly handler: ConsoleHandler;
@@ -152,6 +163,7 @@ export interface ConsoleRouteManifestEntry {
   readonly elevation: ConsoleElevationPolicy;
   readonly privacyClass: ConsolePrivacyClass;
   readonly idempotency: ConsoleIdempotencyPolicy;
+  readonly rateLimit?: ConsoleRateLimitPolicy;
   readonly auditOperation?: string;
 }
 
