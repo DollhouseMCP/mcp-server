@@ -27,6 +27,15 @@ export function createConsoleAuthorizationMiddleware(
       sendStepUpRequired(req, response, route);
       return;
     }
+    if (route.requiredCapability === 'none') {
+      sendProblemResponse(response, {
+        status: 500,
+        code: 'internal_error',
+        title: 'Internal error',
+        detail: 'Public routes must not use the authenticated authorization middleware.',
+      }, requireConsoleRequestContext(req).correlationId);
+      return;
+    }
     if (!authentication.grantedCapabilities.includes(route.requiredCapability)) {
       sendProblemResponse(response, {
         status: 403,
@@ -45,6 +54,7 @@ function hasValidElevation(
   route: ConsoleRouteDefinition,
   now: Date,
 ): boolean {
+  if (route.requiredCapability === 'none') return false;
   const elevation = authentication.elevation;
   const freshnessSeconds = elevationPolicySeconds(route.elevation);
   return !!elevation

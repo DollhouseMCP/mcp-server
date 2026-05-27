@@ -156,6 +156,24 @@ describe('console route policy execution', () => {
     })).toThrow('non-empty value');
     expect(response.append).not.toHaveBeenCalled();
   });
+
+  it('rejects invalid redirect targets before writing response headers', () => {
+    const response = {
+      location: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      end: jest.fn(),
+    } as unknown as Response;
+
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 302,
+      redirectTo: '/safe\r\nSet-Cookie: injected=1',
+    })).toThrow('invalid redirect target');
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 200,
+      redirectTo: '/not-a-redirect',
+    })).toThrow('non-redirect status');
+    expect(response.location).not.toHaveBeenCalled();
+  });
 });
 
 describe('console cookie directives', () => {

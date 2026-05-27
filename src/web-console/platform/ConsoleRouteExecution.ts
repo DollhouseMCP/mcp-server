@@ -28,6 +28,9 @@ export function sendConsoleHandlerResult(response: Response, result: ConsoleHand
   for (const cookie of result.cookies ?? []) {
     response.append('Set-Cookie', serializeConsoleCookie(cookie));
   }
+  if (result.redirectTo) {
+    response.location(result.redirectTo);
+  }
   if (result.body === undefined) {
     response.status(result.status).end();
     return;
@@ -43,4 +46,15 @@ function validateResult(result: ConsoleHandlerResult): void {
     throw new Error('Console route handler returned invalid cookie directives');
   }
   validateConsoleCookieDirectives(result.cookies);
+  if (result.redirectTo !== undefined) {
+    if (typeof result.redirectTo !== 'string' || result.redirectTo.trim() === '') {
+      throw new Error('Console route handler returned an invalid redirect target');
+    }
+    if (/[\r\n]/.test(result.redirectTo)) {
+      throw new Error('Console route handler returned an invalid redirect target');
+    }
+    if (result.status < 300 || result.status > 399) {
+      throw new Error('Console route handler returned a redirect target with a non-redirect status');
+    }
+  }
 }

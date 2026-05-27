@@ -45,12 +45,16 @@ export function assembleSecuredConsoleRouter(
 
   for (const module of registry.getModules()) {
     for (const route of module.routes) {
-      registerSecuredRoute(router, route, [
-        authenticate,
-        csrf,
-        createConsoleAuthorizationMiddleware(route, options),
-        createSecuredHandler(route, options),
-      ]);
+      if (route.audience === 'public') {
+        registerSecuredRoute(router, route, [createSecuredHandler(route, options)]);
+      } else {
+        registerSecuredRoute(router, route, [
+          authenticate,
+          csrf,
+          createConsoleAuthorizationMiddleware(route, options),
+          createSecuredHandler(route, options),
+        ]);
+      }
     }
   }
   const sendInternalProblem: ErrorRequestHandler = (error, request, response, next): void => {
@@ -132,6 +136,7 @@ async function executeAuditedConsoleRoute(
   try {
     result = await executeConsoleRoute(route, req);
   } catch (error) {
+    if (route.audience !== 'admin') throw error;
     try {
       await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'failed', 'internal_error', occurredAt);
     } catch (auditError) {
@@ -142,7 +147,9 @@ async function executeAuditedConsoleRoute(
     }
     throw error;
   }
-  await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
+  if (route.audience === 'admin') {
+    await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
+  }
   return result;
 }
 

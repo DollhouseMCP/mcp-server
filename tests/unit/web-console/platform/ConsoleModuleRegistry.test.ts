@@ -8,13 +8,14 @@ import {
 
 const ADMIN_AUDIT_OPERATION = 'operations.health.read';
 const PROFILE_UPDATED_EVENT = 'profile.updated.v1';
+const SELF_CAPABILITY = 'console:self';
 
 function selfRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
   return {
     method: 'GET',
     path: '/api/v1/me/example',
     audience: 'self',
-    requiredCapability: 'console:self',
+    requiredCapability: SELF_CAPABILITY,
     ownership: 'authenticated_user',
     elevation: 'none',
     privacyClass: 'self_private',
@@ -28,9 +29,33 @@ function selfModule(overrides: Partial<ConsoleModuleDescriptor> = {}): ConsoleMo
   return {
     id: 'example',
     apiVersion: 'v1',
-    capabilities: ['console:self'],
+    capabilities: [SELF_CAPABILITY],
     routes: [selfRoute()],
     ...overrides,
+  };
+}
+
+function publicAuthRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
+  return {
+    method: 'GET',
+    path: '/api/v1/auth/login',
+    audience: 'public',
+    requiredCapability: 'none',
+    ownership: 'flow_transaction',
+    elevation: 'none',
+    privacyClass: 'self_security',
+    idempotency: 'not_applicable',
+    handler: () => ({ status: 302, redirectTo: 'https://as.example.test/authorize' }),
+    ...overrides,
+  };
+}
+
+function publicAuthModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'auth',
+    apiVersion: 'v1',
+    capabilities: [SELF_CAPABILITY],
+    routes: [publicAuthRoute(routeOverrides)],
   };
 }
 
@@ -69,7 +94,7 @@ describe('ConsoleModuleRegistry', () => {
         method: 'GET',
         path: '/api/v1/me/example',
         audience: 'self',
-        requiredCapability: 'console:self',
+        requiredCapability: SELF_CAPABILITY,
         ownership: 'authenticated_user',
         elevation: 'none',
         privacyClass: 'self_private',
@@ -89,6 +114,21 @@ describe('ConsoleModuleRegistry', () => {
       elevation: 'admin_30m',
       privacyClass: 'operational_allowlist',
       auditOperation: ADMIN_AUDIT_OPERATION,
+    }));
+  });
+
+  it('registers a transaction-bound public auth route', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(publicAuthModule());
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      moduleId: 'auth',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'flow_transaction',
+      elevation: 'none',
+      privacyClass: 'self_security',
     }));
   });
 
@@ -144,6 +184,12 @@ describe('ConsoleModuleRegistry', () => {
     ['a self-service route outside me or auth', selfModule({
       routes: [selfRoute({ path: '/api/v1/profile' })],
     }), /inconsistent self-service policy/],
+    ['a public route outside auth', publicAuthModule({
+      path: '/api/v1/me/public-login',
+    }), /inconsistent public auth policy/],
+    ['a public auth route with a capability', publicAuthModule({
+      requiredCapability: SELF_CAPABILITY,
+    }), /inconsistent public auth policy/],
   ])('rejects %s', (_label, descriptor, expected) => {
     const registry = new ConsoleModuleRegistry();
 

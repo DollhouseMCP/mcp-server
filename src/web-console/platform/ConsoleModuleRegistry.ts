@@ -18,10 +18,11 @@ const PRIVACY_CLASSES = new Set<string>(CONSOLE_PRIVACY_CLASSES);
 const ELEVATION_POLICIES = new Set<string>(CONSOLE_ELEVATION_POLICIES);
 const HTTP_METHODS = new Set<string>(CONSOLE_HTTP_METHODS);
 const IDEMPOTENCY_POLICIES = new Set<string>(['not_applicable', 'required']);
-const OWNERSHIP_POLICIES = new Set<string>(['none', 'authenticated_user', 'owned_session']);
+const OWNERSHIP_POLICIES = new Set<string>(['none', 'flow_transaction', 'authenticated_user', 'owned_session']);
 const MUTATING_METHODS = new Set<ConsoleHttpMethod>(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SELF_PRIVACY_CLASSES = new Set<ConsolePrivacyClass>(['self_private', 'self_security']);
 const SELF_PATH_PATTERN = /^\/api\/v1\/(me|auth)(\/|$)/;
+const PUBLIC_AUTH_PATH_PATTERN = /^\/api\/v1\/auth(\/|$)/;
 
 type ValidatedConsoleRouteDefinition = ConsoleRouteDefinition & {
   readonly elevation: ConsoleElevationPolicy;
@@ -226,7 +227,9 @@ export class ConsoleModuleRegistry {
     auditOperations: ReadonlySet<string>,
   ): ValidatedConsoleRouteDefinition {
     this.validateCommonRoutePolicy(module, route, declaredCapabilities);
-    if (this.isAdministrativeRoute(route)) {
+    if (route.audience === 'public') {
+      this.validatePublicRoutePolicy(module, route);
+    } else if (this.isAdministrativeRoute(route)) {
       this.validateAdminRoutePolicy(module, route, auditOperations);
     } else {
       this.validateSelfRoutePolicy(module, route);
@@ -262,12 +265,7 @@ export class ConsoleModuleRegistry {
     if (!route.path.startsWith('/api/v1/')) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} must be under /api/v1`);
     }
-    if (!CAPABILITIES.has(route.requiredCapability)) {
-      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} requires unknown capability "${route.requiredCapability}"`);
-    }
-    if (!declaredCapabilities.has(route.requiredCapability)) {
-      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} uses undeclared capability "${route.requiredCapability}"`);
-    }
+    this.validateRouteCapability(module, route, declaredCapabilities);
     if (!route.privacyClass || !PRIVACY_CLASSES.has(route.privacyClass)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} is missing a valid privacy class`);
     }
@@ -288,9 +286,36 @@ export class ConsoleModuleRegistry {
     }
   }
 
+  private validateRouteCapability(
+    module: ConsoleModuleDescriptor,
+    route: ConsoleRouteDefinition,
+    declaredCapabilities: ReadonlySet<string>,
+  ): void {
+    if (route.requiredCapability === 'none') return;
+    if (!CAPABILITIES.has(route.requiredCapability)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} requires unknown capability "${route.requiredCapability}"`);
+    }
+    if (!declaredCapabilities.has(route.requiredCapability)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} uses undeclared capability "${route.requiredCapability}"`);
+    }
+  }
+
   private isAdministrativeRoute(route: ConsoleRouteDefinition): boolean {
     return route.audience === 'admin' || route.path.startsWith('/api/v1/admin/') ||
       isAdminCapability(route.requiredCapability);
+  }
+
+  private validatePublicRoutePolicy(
+    module: ConsoleModuleDescriptor,
+    route: ConsoleRouteDefinition,
+  ): void {
+    if (!PUBLIC_AUTH_PATH_PATTERN.test(route.path) ||
+        route.requiredCapability !== 'none' ||
+        route.elevation !== 'none' ||
+        route.ownership !== 'flow_transaction' ||
+        route.privacyClass !== 'self_security') {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has inconsistent public auth policy`);
+    }
   }
 
   private validateAdminRoutePolicy(

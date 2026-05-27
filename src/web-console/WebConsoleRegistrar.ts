@@ -6,6 +6,8 @@ import { ConsoleStoreCleanupScheduler } from './lifecycle/ConsoleStoreCleanupSch
 import type { ConsoleStoreCleanupError } from './lifecycle/ConsoleStoreCleanupScheduler.js';
 import type { IConsoleOpaqueValueService } from './security/ConsoleOpaqueValues.js';
 import { HmacConsoleOpaqueValueService } from './security/ConsoleOpaqueValues.js';
+import type { AeadSecretKey, ISecretEncryptionService } from './security/SecretEncryption.js';
+import { AeadSecretEncryptionService } from './security/SecretEncryption.js';
 import type { IAdminAuditWriter } from './audit/IAdminAuditWriter.js';
 import type { IConsoleIdentityResolver } from './identity/IConsoleIdentityResolver.js';
 import { ConsoleModuleRegistry } from './platform/ConsoleModuleRegistry.js';
@@ -24,6 +26,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   idempotencyStore: 'WebConsoleIdempotencyStore',
   identityResolver: 'WebConsoleIdentityResolver',
   opaqueValues: 'WebConsoleOpaqueValueService',
+  secretEncryption: 'WebConsoleSecretEncryptionService',
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -34,6 +37,8 @@ export interface WebConsoleRegistrarOptions {
   readonly cleanupIntervalMs?: number;
   readonly now?: () => Date;
   readonly reportCleanupError?: (error: ConsoleStoreCleanupError) => void;
+  readonly secretEncryptionKey?: AeadSecretKey;
+  readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
 }
 
 export interface WebConsoleComposition {
@@ -43,6 +48,7 @@ export interface WebConsoleComposition {
   readonly idempotencyStore: IIdempotencyStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
+  readonly secretEncryption: ISecretEncryptionService | null;
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -58,11 +64,13 @@ export class WebConsoleRegistrar {
     const registry = new ConsoleModuleRegistry();
     const adminAuditWriter = new InMemoryAdminAuditWriter();
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
+    const secretEncryption = resolveSecretEncryption(container, this.options);
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
       registry,
       ...stores,
       opaqueValues,
+      secretEncryption,
       adminAuditWriter,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -76,6 +84,9 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
     container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
+    if (secretEncryption) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => secretEncryption);
+    }
     container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
@@ -161,4 +172,16 @@ function resolveOpaqueValueHmacKey(
     return Buffer.from(container.resolve<Buffer>('WebConsoleOpaqueValueHmacKey'));
   }
   throw new Error('Web console composition requires a WebConsoleOpaqueValueHmacKey registration or opaqueValueHmacKey option');
+}
+
+function resolveSecretEncryption(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ISecretEncryptionService | null {
+  const key = options.secretEncryptionKey ??
+    (container.hasRegistration('WebConsoleSecretEncryptionKey')
+      ? container.resolve<AeadSecretKey>('WebConsoleSecretEncryptionKey')
+      : null);
+  if (!key) return null;
+  return new AeadSecretEncryptionService(key, options.retainedSecretEncryptionKeys ?? []);
 }

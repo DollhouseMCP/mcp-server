@@ -36,11 +36,12 @@ export const CONSOLE_HTTP_METHODS = [
 ] as const;
 
 export type ConsoleCapability = typeof CONSOLE_CAPABILITIES[number];
+export type ConsoleRouteCapability = ConsoleCapability | 'none';
 export type ConsolePrivacyClass = typeof CONSOLE_PRIVACY_CLASSES[number];
 export type ConsoleElevationPolicy = typeof CONSOLE_ELEVATION_POLICIES[number];
 export type ConsoleHttpMethod = typeof CONSOLE_HTTP_METHODS[number];
-export type ConsoleAudience = 'self' | 'admin';
-export type ConsoleOwnershipPolicy = 'none' | 'authenticated_user' | 'owned_session';
+export type ConsoleAudience = 'public' | 'self' | 'admin';
+export type ConsoleOwnershipPolicy = 'none' | 'flow_transaction' | 'authenticated_user' | 'owned_session';
 export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
 
 export interface ConsoleRequestContext {
@@ -78,6 +79,7 @@ export interface ConsoleHandlerResult {
   readonly status: number;
   readonly body?: unknown;
   readonly cookies?: readonly ConsoleCookieDirective[];
+  readonly redirectTo?: string;
 }
 
 /**
@@ -98,7 +100,7 @@ export interface ConsoleRouteDefinition {
   readonly method: ConsoleHttpMethod;
   readonly path: string;
   readonly audience: ConsoleAudience;
-  readonly requiredCapability: ConsoleCapability;
+  readonly requiredCapability: ConsoleRouteCapability;
   readonly ownership?: ConsoleOwnershipPolicy;
   readonly elevation?: ConsoleElevationPolicy;
   readonly privacyClass?: ConsolePrivacyClass;
@@ -145,7 +147,7 @@ export interface ConsoleRouteManifestEntry {
   readonly method: ConsoleHttpMethod;
   readonly path: string;
   readonly audience: ConsoleAudience;
-  readonly requiredCapability: ConsoleCapability;
+  readonly requiredCapability: ConsoleRouteCapability;
   readonly ownership: ConsoleOwnershipPolicy;
   readonly elevation: ConsoleElevationPolicy;
   readonly privacyClass: ConsolePrivacyClass;

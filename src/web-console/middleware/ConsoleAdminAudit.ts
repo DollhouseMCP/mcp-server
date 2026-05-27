@@ -32,6 +32,9 @@ function buildEvent(
 ): ConsoleAdminAuditEvent {
   const authentication = requireConsoleAuthentication(req);
   const elevation = authentication.elevation;
+  if (route.requiredCapability === 'none') {
+    throw new Error('Validated administrative route is missing its required capability');
+  }
   return {
     occurredAt,
     actorUserId: authentication.userId,
