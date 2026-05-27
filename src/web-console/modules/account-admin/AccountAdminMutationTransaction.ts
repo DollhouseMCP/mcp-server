@@ -23,10 +23,13 @@ import type {
 import {
   appendSecurityInvalidationEventWithTx,
 } from '../../services/invalidation/PostgresConsoleSecurityInvalidationStore.js';
+import type { IAdminAuditWriter } from '../../audit/IAdminAuditWriter.js';
 import type {
+  IConsoleSecurityInvalidationStore,
   SecurityInvalidationEvent,
   SecurityInvalidationEventInput,
 } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
+import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 
 export interface MutationTransactionBaseContext {
   appendSecurityInvalidationEvent(input: SecurityInvalidationEventInput): Promise<SecurityInvalidationEvent>;
@@ -61,17 +64,55 @@ implements IAccountAdminMutationTransactionRunner {
   constructor(private readonly options: PostgresAccountAdminMutationTransactionRunnerOptions) {}
 
   async run<T>(operation: (tx: AccountAdminMutationTransactionContext) => Promise<T>): Promise<T> {
-    return withSystemContext(this.options.db, async tx => operation(this.contextFor(tx)));
+    return withSystemContext(this.options.db, async tx => {
+      const auditState = { writes: 0 };
+      const result = await operation(this.contextFor(tx, () => {
+        auditState.writes += 1;
+      }));
+      if (auditState.writes === 0) throw new Error('account-admin mutation transaction completed without admin audit');
+      return result;
+    });
   }
 
-  private contextFor(tx: DrizzleTx): AccountAdminMutationTransactionContext {
+  private contextFor(tx: DrizzleTx, markAuditWritten: () => void): AccountAdminMutationTransactionContext {
     return {
       grantRole: input => grantConsoleAdminRoleWithTx(tx, input),
       revokeRole: input => revokeConsoleAdminRoleWithTx(tx, input),
       disablePrincipal: input => disableConsolePrincipalWithTx(tx, input),
       enablePrincipal: input => enableConsolePrincipalWithTx(tx, input),
       appendSecurityInvalidationEvent: input => appendSecurityInvalidationEventWithTx(tx, input),
-      writeAdminAuditEvent: event => appendConsoleAdminAuditEventWithTx(tx, event, this.options.hmacKeyResolver),
+      writeAdminAuditEvent: async event => {
+        await appendConsoleAdminAuditEventWithTx(tx, event, this.options.hmacKeyResolver);
+        markAuditWritten();
+      },
     };
+  }
+}
+
+export interface InMemoryAccountAdminMutationTransactionRunnerOptions {
+  readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
+  readonly adminAuditWriter: IAdminAuditWriter;
+}
+
+export class InMemoryAccountAdminMutationTransactionRunner
+implements IAccountAdminMutationTransactionRunner {
+  constructor(private readonly options: InMemoryAccountAdminMutationTransactionRunnerOptions) {}
+
+  async run<T>(operation: (tx: AccountAdminMutationTransactionContext) => Promise<T>): Promise<T> {
+    const auditState = { writes: 0 };
+    const result = await operation({
+      grantRole: input => this.options.accountAdminStore.grantRole(input),
+      revokeRole: input => this.options.accountAdminStore.revokeRole(input),
+      disablePrincipal: input => this.options.accountAdminStore.disablePrincipal(input),
+      enablePrincipal: input => this.options.accountAdminStore.enablePrincipal(input),
+      appendSecurityInvalidationEvent: input => this.options.securityInvalidationStore.appendEvent(input),
+      writeAdminAuditEvent: async event => {
+        await this.options.adminAuditWriter.write(event);
+        auditState.writes += 1;
+      },
+    });
+    if (auditState.writes === 0) throw new Error('account-admin mutation transaction completed without admin audit');
+    return result;
   }
 }

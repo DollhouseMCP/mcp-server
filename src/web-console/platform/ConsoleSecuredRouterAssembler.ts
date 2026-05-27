@@ -164,7 +164,7 @@ async function executeAuditedConsoleRoute(
     }
     throw error;
   }
-  if (route.audience === 'admin') {
+  if (route.audience === 'admin' && route.auditExecution !== 'handler_transaction') {
     await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
   }
   return result;

@@ -1,6 +1,7 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { InMemoryAdminAuditWriter } from './audit/InMemoryAdminAuditWriter.js';
+import { PostgresAdminAuditWriter, type AdminAuditHmacKeyResolver } from './audit/PostgresAdminAuditWriter.js';
 import { InMemoryConsoleIdentityResolver } from './identity/InMemoryConsoleIdentityResolver.js';
 import { ConsoleStoreCleanupScheduler } from './lifecycle/ConsoleStoreCleanupScheduler.js';
 import type { ConsoleStoreCleanupError } from './lifecycle/ConsoleStoreCleanupScheduler.js';
@@ -23,6 +24,11 @@ import type { IConsoleSecurityInvalidationStore } from './services/invalidation/
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import {
+  InMemoryAccountAdminMutationTransactionRunner,
+  PostgresAccountAdminMutationTransactionRunner,
+  type IAccountAdminMutationTransactionRunner,
+} from './modules/account-admin/AccountAdminMutationTransaction.js';
 import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStore.js';
 import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 
@@ -39,6 +45,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
+  accountAdminMutationTransactionRunner: 'WebConsoleAccountAdminMutationTransactionRunner',
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -66,6 +73,7 @@ export interface WebConsoleComposition {
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -78,9 +86,20 @@ export class WebConsoleRegistrar {
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
     const database = resolveConsoleDatabase(container);
     const stores = await createConsoleStores(database);
+    const adminAuditWriter = resolveAdminAuditWriter(database, container);
+    const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
+      database,
+      container,
+      accountAdminStore: stores.accountAdminStore,
+      securityInvalidationStore: stores.securityInvalidationStore,
+      adminAuditWriter,
+    });
     const registry = new ConsoleModuleRegistry();
-    registry.register(createAccountAdminModule({ accountAdminStore: stores.accountAdminStore }));
-    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    registry.register(createAccountAdminModule({
+      accountAdminStore: stores.accountAdminStore,
+      roleMutationTransactionRunner: accountAdminMutationTransactionRunner,
+      now: this.options.now,
+    }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
@@ -91,6 +110,7 @@ export class WebConsoleRegistrar {
       opaqueValues,
       secretEncryption,
       adminAuditWriter,
+      accountAdminMutationTransactionRunner,
       protectedCorrelationRateLimiter,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -111,6 +131,10 @@ export class WebConsoleRegistrar {
       container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => secretEncryption);
     }
     container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
+    container.register(
+      WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
+      () => accountAdminMutationTransactionRunner,
+    );
     if (protectedCorrelationRateLimiter) {
       container.register(
         WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter,
@@ -206,6 +230,40 @@ function resolveConsoleDatabase(container: DiContainerFacade): DatabaseInstance 
     return container.resolve<DatabaseInstance>('DatabaseInstance');
   }
   return undefined;
+}
+
+function resolveAdminAuditWriter(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+): IAdminAuditWriter {
+  if (!database) return new InMemoryAdminAuditWriter();
+  if (!container.hasRegistration('AuditHmacResolver')) {
+    throw new Error('Web console PostgreSQL admin audit requires AuditHmacResolver');
+  }
+  return new PostgresAdminAuditWriter(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'));
+}
+
+function resolveAccountAdminMutationTransactionRunner(options: {
+  readonly database: DatabaseInstance | undefined;
+  readonly container: DiContainerFacade;
+  readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
+  readonly adminAuditWriter: IAdminAuditWriter;
+}): IAccountAdminMutationTransactionRunner {
+  if (options.database) {
+    if (!options.container.hasRegistration('AuditHmacResolver')) {
+      throw new Error('Web console PostgreSQL account-admin mutation transactions require AuditHmacResolver');
+    }
+    return new PostgresAccountAdminMutationTransactionRunner({
+      db: options.database,
+      hmacKeyResolver: options.container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
+    });
+  }
+  return new InMemoryAccountAdminMutationTransactionRunner({
+    accountAdminStore: options.accountAdminStore,
+    securityInvalidationStore: options.securityInvalidationStore,
+    adminAuditWriter: options.adminAuditWriter,
+  });
 }
 
 function resolveOpaqueValueHmacKey(

@@ -302,7 +302,17 @@ async function revokeConsoleAdminRoleRowsWithTx(
         WHERE user_id = ${input.userId}
           AND role = ${input.role}
           AND revoked_at IS NULL
-          AND (SELECT COUNT(*) FROM live_account_admins) > 1
+          AND (
+            (SELECT COUNT(*) FROM live_account_admins) > 1
+            OR EXISTS (
+              SELECT 1
+              FROM user_admin_roles sibling
+              WHERE sibling.user_id = ${input.userId}
+                AND sibling.revoked_at IS NULL
+                AND sibling.role IN ('admin', 'account_admin')
+                AND sibling.role <> ${input.role}
+            )
+          )
         RETURNING id, user_id, role, granted_at, granted_by_user_id, revoked_at, revoked_by_user_id
       )
       UPDATE users

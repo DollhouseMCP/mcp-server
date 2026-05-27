@@ -208,6 +208,7 @@ describe('WebConsoleRegistrar', () => {
     const container = new TestContainer();
     const database = {};
     container.seed('SystemDatabaseInstance', database);
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
@@ -228,5 +229,17 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.factorStore.constructor.name).toBe('PostgresConsoleFactorStore');
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
+  });
+
+  it('fails clearly when PostgreSQL storage lacks durable admin audit HMAC resolution', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 16),
+      reportCleanupError: jest.fn(),
+    }).bootstrapAndRegister(container)).rejects.toThrow('AuditHmacResolver');
   });
 });

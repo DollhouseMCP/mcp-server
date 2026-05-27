@@ -4,7 +4,9 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
+import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
+import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
 import {
   projectAccountPrincipal,
   projectAccountPrincipalList,
@@ -15,17 +17,68 @@ const ACCOUNT_ADMIN_AUDIT = {
   usersList: 'accounts.users.list',
   usersShow: 'accounts.users.show',
   rolesList: 'accounts.roles.list',
+  rolesReplace: 'accounts.roles.replace',
+  rolesGrant: 'accounts.roles.grant',
+  rolesRevoke: 'accounts.roles.revoke',
   correlationResolve: 'accounts.correlation.resolve',
 } as const;
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
+const USER_ID_PARAM = 'user_id';
+const USER_ID_REQUIRED_DETAIL = 'user_id path parameter is required.';
 
 export interface AccountAdminModuleOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly roleMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly now?: () => Date;
 }
 
 export function createAccountAdminModule(options: AccountAdminModuleOptions): ConsoleModuleDescriptor {
   const { accountAdminStore } = options;
   const service = new AccountAdminReadService(accountAdminStore);
+  const roleMutationService = new AccountAdminRoleMutationService({
+    accountAdminStore,
+    transactionRunner: options.roleMutationTransactionRunner,
+    now: options.now,
+  });
+  const replaceRolesRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'PUT',
+    path: '/api/v1/admin/accounts/users/:user_id/roles',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.rolesReplace,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountRoleList,
+    handler: req => replaceRoles(req, roleMutationService, replaceRolesRoute),
+  };
+  const grantRoleRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/roles/grant',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.rolesGrant,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountRoleList,
+    handler: req => grantRole(req, roleMutationService, grantRoleRoute),
+  };
+  const revokeRoleRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/roles/revoke',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.rolesRevoke,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountRoleList,
+    handler: req => revokeRole(req, roleMutationService, revokeRoleRoute),
+  };
   const routes: ConsoleModuleDescriptor['routes'] = [
     {
       method: 'GET',
@@ -63,6 +116,9 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
       privacyProjector: projectAccountRoleList,
       handler: req => listRoles(req, service),
     },
+    replaceRolesRoute,
+    grantRoleRoute,
+    revokeRoleRoute,
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
@@ -93,17 +149,47 @@ function listUsers(req: ConsoleRequest, service: AccountAdminReadService): Promi
 }
 
 async function getUser(req: ConsoleRequest, service: AccountAdminReadService): Promise<ConsoleHandlerResult> {
-  const userId = stringParam(req, 'user_id');
-  if (!userId) return problem(400, 'invalid_request', 'user_id path parameter is required.');
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   const body = await service.getUser(userId);
   return body ? { status: 200, body } : problem(404, 'not_found', 'User principal was not found.');
 }
 
 async function listRoles(req: ConsoleRequest, service: AccountAdminReadService): Promise<ConsoleHandlerResult> {
-  const userId = stringParam(req, 'user_id');
-  if (!userId) return problem(400, 'invalid_request', 'user_id path parameter is required.');
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   const body = await service.listRoles(userId);
   return { status: 200, body };
+}
+
+async function replaceRoles(
+  req: ConsoleRequest,
+  service: AccountAdminRoleMutationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.replaceRoles(req, route, userId);
+}
+
+async function grantRole(
+  req: ConsoleRequest,
+  service: AccountAdminRoleMutationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.grantRole(req, route, userId);
+}
+
+async function revokeRole(
+  req: ConsoleRequest,
+  service: AccountAdminRoleMutationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.revokeRole(req, route, userId);
 }
 
 async function resolveCorrelation(

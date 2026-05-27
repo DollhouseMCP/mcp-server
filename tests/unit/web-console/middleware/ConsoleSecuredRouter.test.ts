@@ -37,6 +37,7 @@ const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
+const ADMIN_TRANSACTION_MUTATION_PATH = '/api/v1/admin/audit/transaction-retry';
 const ADMIN_CORRELATION_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
 const ADMIN_CORRELATION_PATH = `/api/v1/admin/audit/correlations/${ADMIN_CORRELATION_ID}`;
 const INVALID_REQUEST_PATH = '/api/v1/me/invalid-request';
@@ -120,6 +121,7 @@ function fixtureModules(
       { id: 'admin.audit.export' },
       { id: 'admin.audit.failure' },
       { id: 'admin.audit.mutate' },
+      { id: 'admin.audit.transaction_mutate' },
       { id: 'admin.audit.correlation' },
     ],
     routes: [{
@@ -166,6 +168,21 @@ function fixtureModules(
       privacyClass: 'admin_audit',
       idempotency: 'required',
       auditOperation: 'admin.audit.mutate',
+      privacyProjector: value => value,
+      handler: () => {
+        onAdminMutation?.();
+        return { status: 200, body: { changed: true } };
+      },
+    }, {
+      method: 'POST',
+      path: ADMIN_TRANSACTION_MUTATION_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'admin_audit',
+      idempotency: 'required',
+      auditOperation: 'admin.audit.transaction_mutate',
+      auditExecution: 'handler_transaction',
       privacyProjector: value => value,
       handler: () => {
         onAdminMutation?.();
@@ -300,6 +317,15 @@ function protectedCorrelationLimiter(): ConsoleProtectedCorrelationRateLimiter {
 
 function adminMutationRequest(app: express.Express, key: string = IDEMPOTENCY_KEY) {
   return request(app).post(ADMIN_MUTATION_PATH)
+    .set('Cookie', csrfCookies())
+    .set(CSRF_HEADER, CSRF_VALUE)
+    .set('Origin', ORIGIN)
+    .set(CONSOLE_REQUEST_HEADER, '1')
+    .set(IDEMPOTENCY_HEADER, key);
+}
+
+function adminTransactionMutationRequest(app: express.Express, key: string = IDEMPOTENCY_KEY) {
+  return request(app).post(ADMIN_TRANSACTION_MUTATION_PATH)
     .set('Cookie', csrfCookies())
     .set(CSRF_HEADER, CSRF_VALUE)
     .set('Origin', ORIGIN)
@@ -678,6 +704,22 @@ describe('secured console router elevation', () => {
 
     expect(onAdminMutation).toHaveBeenCalledTimes(1);
     expect(adminAuditWriter.getEvents().map(event => event.result)).toEqual(['approved', 'replayed']);
+  });
+
+  it('leaves approved handler-transaction audit to the handler but audits idempotency replay', async () => {
+    const { app, adminAuditWriter, onAdminMutation } = await buildApp(elevatedAuditSession());
+
+    expect((await adminTransactionMutationRequest(app).send({ request: true })).status).toBe(200);
+    expect(adminAuditWriter.getEvents()).toEqual([]);
+    expect((await adminTransactionMutationRequest(app).send({ request: true })).status).toBe(200);
+
+    expect(onAdminMutation).toHaveBeenCalledTimes(1);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: 'admin.audit.transaction_mutate',
+        result: 'replayed',
+      }),
+    ]);
   });
 
   it('audit-writes rejected and in-progress administrative idempotency attempts', async () => {

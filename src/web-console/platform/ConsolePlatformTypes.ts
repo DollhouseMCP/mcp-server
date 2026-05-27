@@ -49,6 +49,7 @@ export type ConsoleRateLimitPolicy = typeof CONSOLE_RATE_LIMIT_POLICIES[number];
 export type ConsoleAudience = 'public' | 'self' | 'admin';
 export type ConsoleOwnershipPolicy = 'none' | 'flow_transaction' | 'authenticated_user' | 'owned_session';
 export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
+export type ConsoleAuditExecutionPolicy = 'kernel' | 'handler_transaction';
 
 export interface ConsoleRequestContext {
   readonly correlationId: string;
@@ -117,6 +118,7 @@ export interface ConsoleRouteDefinition {
    */
   readonly rateLimit?: ConsoleRateLimitPolicy;
   readonly auditOperation?: string;
+  readonly auditExecution?: ConsoleAuditExecutionPolicy;
   readonly privacyProjector?: ConsolePrivacyProjector;
   readonly handler: ConsoleHandler;
 }

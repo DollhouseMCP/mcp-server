@@ -183,8 +183,14 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
   private wouldOrphanAccountsAdmin(userId: string, role: ConsoleAdminRole): boolean {
     if (role !== 'admin' && role !== 'account_admin') return false;
     const principal = this.principals.get(userId);
-    return !!principal && !principal.disabledAt && this.hasAccountsAdminRole(userId)
+    return !!principal && !principal.disabledAt && this.hasOnlyAccountsAdminRole(userId, role)
       && this.countEnabledAccountsAdminsSync() <= 1;
+  }
+
+  private hasOnlyAccountsAdminRole(userId: string, role: ConsoleAdminRole): boolean {
+    const roles = this.activeRolesFor(userId);
+    if (!roles.includes(role)) return false;
+    return !roles.some(candidate => candidate !== role && (candidate === 'admin' || candidate === 'account_admin'));
   }
 
   private countEnabledAccountsAdminsSync(): number {

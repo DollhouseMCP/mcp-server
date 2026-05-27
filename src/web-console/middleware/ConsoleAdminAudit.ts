@@ -20,16 +20,20 @@ export async function writeConsoleAdminAudit(
   if (!route.auditOperation) {
     throw new Error('Validated administrative route is missing its audit operation');
   }
-  await writer.write(buildEvent(route, route.auditOperation, req, result, errorCode, occurredAt));
+  await writer.write(buildConsoleAdminAuditEvent(route, route.auditOperation, req, result, errorCode, occurredAt));
 }
 
-function buildEvent(
+export function buildConsoleAdminAuditEvent(
   route: ConsoleRouteDefinition,
   auditOperation: string,
   req: ConsoleRequest,
   result: ConsoleAdminAuditResult,
   errorCode: string | null,
   occurredAt: Date,
+  overrides: Partial<Pick<
+    ConsoleAdminAuditEvent,
+    'resourceKind' | 'resourceId' | 'targetUserId' | 'argsRedacted' | 'resultDetailRedacted'
+  >> = {},
 ): ConsoleAdminAuditEvent {
   const authentication = requireConsoleAuthentication(req);
   const elevation = authentication.elevation;
@@ -50,13 +54,13 @@ function buildEvent(
     correlationId: requireConsoleRequestContext(req).correlationId,
     endpoint: `${route.method} ${route.path}`,
     operation: auditOperation,
-    resourceKind: null,
-    resourceId: null,
-    targetUserId: null,
-    argsRedacted: {},
+    resourceKind: overrides.resourceKind ?? null,
+    resourceId: overrides.resourceId ?? null,
+    targetUserId: overrides.targetUserId ?? null,
+    argsRedacted: overrides.argsRedacted ?? {},
     result,
     errorCode,
-    resultDetailRedacted: null,
+    resultDetailRedacted: overrides.resultDetailRedacted ?? null,
     clientIp: req.ip ?? null,
     userAgent: req.get('user-agent') ?? null,
   };
