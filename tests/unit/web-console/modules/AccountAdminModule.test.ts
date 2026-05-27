@@ -4,6 +4,7 @@ import {
   ConsoleModuleRegistry,
   InMemoryAccountAdminMutationTransactionRunner,
   InMemoryAdminAuditWriter,
+  InMemoryConsoleAccountAllowlistStore,
   InMemoryConsoleAccountAdminStore,
   InMemoryConsoleSessionStore,
   InMemoryConsoleSecurityInvalidationStore,
@@ -26,6 +27,8 @@ const ACCOUNT_ROLES_PATH = '/api/v1/admin/accounts/users/:user_id/roles';
 const ACCOUNT_ROLE_GRANT_PATH = '/api/v1/admin/accounts/users/:user_id/roles/grant';
 const ACCOUNT_ROLE_REVOKE_PATH = '/api/v1/admin/accounts/users/:user_id/roles/revoke';
 const ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH = '/api/v1/admin/accounts/users/:user_id/credentials/revoke-all';
+const ACCOUNT_ALLOWLIST_PATH = '/api/v1/admin/accounts/allowlist';
+const ACCOUNT_ALLOWLIST_ITEM_PATH = '/api/v1/admin/accounts/allowlist/:id';
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const ACCOUNT_METADATA_PRIVACY = 'account_metadata';
 const ADMIN_5M_ELEVATION = 'admin_5m';
@@ -34,6 +37,7 @@ const IDEMPOTENCY_NOT_APPLICABLE = 'not_applicable';
 const AUDIT_USERS_DISABLE = 'accounts.users.disable';
 const AUDIT_USERS_ENABLE = 'accounts.users.enable';
 const AUDIT_USERS_CREDENTIALS_REVOKE_ALL = 'accounts.users.credentials.revoke_all';
+const AUDIT_ALLOWLIST_ADD = 'accounts.allowlist.add';
 const AUDIT_ROLES_GRANT = 'accounts.roles.grant';
 const NOW = new Date('2026-05-27T14:00:00.000Z');
 const LAST_LOGIN = new Date('2026-05-27T13:00:00.000Z');
@@ -77,12 +81,16 @@ function mutationFixture(
   const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
   const adminAuditWriter = new InMemoryAdminAuditWriter();
   const sessionStore = new InMemoryConsoleSessionStore();
+  const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
   const module = createAccountAdminModule({
     accountAdminStore: principals,
+    accountAllowlistStore,
     sessionStore,
     oauthGrantRevocationService: oauthGrantRevocationService(),
-    roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+    enableAccountAllowlistRoutes: true,
+    accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
       accountAdminStore: principals,
+      accountAllowlistStore,
       securityInvalidationStore: invalidationStore,
       adminAuditWriter,
     }),
@@ -289,6 +297,66 @@ describe('AccountAdminModule', () => {
       {
         moduleId: 'accountAdmin',
         method: 'GET',
+        path: ACCOUNT_ALLOWLIST_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: 'admin_30m',
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_NOT_APPLICABLE,
+        auditOperation: 'accounts.allowlist.list',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'GET',
+        path: ACCOUNT_ALLOWLIST_ITEM_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: 'admin_30m',
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_NOT_APPLICABLE,
+        auditOperation: 'accounts.allowlist.show',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'POST',
+        path: ACCOUNT_ALLOWLIST_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: ADMIN_5M_ELEVATION,
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_REQUIRED,
+        auditOperation: AUDIT_ALLOWLIST_ADD,
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'PATCH',
+        path: ACCOUNT_ALLOWLIST_ITEM_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: ADMIN_5M_ELEVATION,
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_REQUIRED,
+        auditOperation: 'accounts.allowlist.update',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'DELETE',
+        path: ACCOUNT_ALLOWLIST_ITEM_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: ADMIN_5M_ELEVATION,
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_REQUIRED,
+        auditOperation: 'accounts.allowlist.remove',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'GET',
         path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
         audience: 'admin',
         requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
@@ -359,6 +427,114 @@ describe('AccountAdminModule', () => {
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
+  it('manages account allowlist entries with mutation audit and privacy projection', async () => {
+    const { module, adminAuditWriter } = mutationFixture();
+    const add = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'POST');
+    const list = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'GET');
+    const get = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'GET');
+    const update = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'PATCH');
+    const remove = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'DELETE');
+
+    const created = await add.handler(consoleRequest({
+      body: { kind: 'email', value: ' Alice@Example.Test ', note: 'break-glass admin' },
+    }));
+    const entryId = (created.body as { id: string }).id;
+
+    expect(created).toMatchObject({
+      status: 201,
+      body: {
+        id: expect.any(String),
+        kind: 'email',
+        value: 'Alice@Example.Test',
+        note: 'break-glass admin',
+        created_by_user_id: USER_ID,
+        created_at: NOW.toISOString(),
+      },
+    });
+    expect(add.privacyProjector?.({
+      ...(created.body as Record<string, unknown>),
+      normalized_value: 'alice@example.test',
+      revoked_at: NOW.toISOString(),
+      raw_secret: 'nope',
+    })).toEqual(created.body);
+    await expect(list.handler(consoleRequest())).resolves.toMatchObject({
+      status: 200,
+      body: { entries: [created.body] },
+    });
+    await expect(get.handler(consoleRequest({ params: { id: entryId } }))).resolves.toEqual({
+      status: 200,
+      body: created.body,
+    });
+
+    await expect(update.handler(consoleRequest({
+      params: { id: entryId },
+      body: { note: null },
+    }))).resolves.toMatchObject({
+      status: 200,
+      body: { id: entryId, note: null },
+    });
+    await expect(remove.handler(consoleRequest({ params: { id: entryId } }))).resolves.toEqual({
+      status: 204,
+      body: null,
+    });
+    await expect(get.handler(consoleRequest({ params: { id: entryId } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+    await expect(add.handler(consoleRequest({ body: { kind: 'email', value: 'alice@example.test' } })))
+      .resolves.toMatchObject({ status: 201 });
+
+    expect(adminAuditWriter.getEvents().map(event => [event.operation, event.result, event.errorCode])).toEqual([
+      [AUDIT_ALLOWLIST_ADD, 'approved', null],
+      ['accounts.allowlist.update', 'approved', null],
+      ['accounts.allowlist.remove', 'approved', null],
+      [AUDIT_ALLOWLIST_ADD, 'approved', null],
+    ]);
+    expect(adminAuditWriter.getEvents()[0]).toMatchObject({
+      targetUserId: null,
+      resourceKind: 'account_allowlist_entry',
+      resourceId: entryId,
+      argsRedacted: { operation: 'allowlist_add', kind: 'email' },
+    });
+  });
+
+  it('audits allowlist validation, duplicate, and not-found outcomes', async () => {
+    const { module, adminAuditWriter } = mutationFixture();
+    const add = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'POST');
+    const update = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'PATCH');
+    const remove = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'DELETE');
+
+    await expect(add.handler(consoleRequest({ body: { kind: 'email', value: '' } })))
+      .resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(add.handler(consoleRequest({ body: { kind: 'email', value: 'not-an-email' } })))
+      .resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(add.handler(consoleRequest({ body: { kind: 'github_id', value: 'abc def' } })))
+      .resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(add.handler(consoleRequest({ body: { kind: 'github_username', value: 'Alice' } })))
+      .resolves.toMatchObject({ status: 201 });
+    await expect(add.handler(consoleRequest({ body: { kind: 'github_username', value: 'alice' } })))
+      .resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+    await expect(update.handler(consoleRequest({
+      params: { id: UNKNOWN_USER_ID },
+      body: { note: 'missing' },
+    }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+    await expect(remove.handler(consoleRequest({ params: { id: UNKNOWN_USER_ID } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+
+    expect(adminAuditWriter.getEvents().map(event => [
+      event.operation,
+      event.result,
+      event.errorCode,
+      event.argsRedacted,
+    ])).toEqual([
+      [AUDIT_ALLOWLIST_ADD, 'rejected', 'invalid_request', { operation: 'allowlist_add', invalid_body: true }],
+      [AUDIT_ALLOWLIST_ADD, 'rejected', 'invalid_request', { operation: 'allowlist_add', invalid_body: true }],
+      [AUDIT_ALLOWLIST_ADD, 'rejected', 'invalid_request', { operation: 'allowlist_add', invalid_body: true }],
+      [AUDIT_ALLOWLIST_ADD, 'approved', null, { operation: 'allowlist_add', kind: 'github_username' }],
+      [AUDIT_ALLOWLIST_ADD, 'conflict', 'conflict', { operation: 'allowlist_add', kind: 'github_username' }],
+      ['accounts.allowlist.update', 'failed', 'not_found', { operation: 'allowlist_update' }],
+      ['accounts.allowlist.remove', 'failed', 'not_found', { operation: 'allowlist_remove' }],
+    ]);
+  });
+
   it('rejects malformed list query parameters before hitting the store', async () => {
     const { module } = mutationFixture();
     const route = findRoute(module.routes, '/api/v1/admin/accounts/users');
@@ -375,11 +551,14 @@ describe('AccountAdminModule', () => {
     const { module } = mutationFixture();
     const getUser = findRoute(module.routes, '/api/v1/admin/accounts/users/:user_id');
     const correlation = findRoute(module.routes, '/api/v1/admin/accounts/correlations/:account_correlation_id');
+    const allowlist = findRoute(module.routes, ACCOUNT_ALLOWLIST_ITEM_PATH, 'GET');
 
     await expect(getUser.handler(consoleRequest({ params: { user_id: 'alice' } })))
       .rejects.toThrow('userId must be a UUID');
     await expect(correlation.handler(consoleRequest({ params: { account_correlation_id: 'alice' } })))
       .rejects.toThrow('accountCorrelationId must be a UUID');
+    await expect(allowlist.handler(consoleRequest({ params: { id: 'alice' } })))
+      .rejects.toThrow('id must be a UUID');
   });
 
   it('grants a role with transaction audit, invalidation, and privacy projection', async () => {
@@ -726,16 +905,20 @@ describe('AccountAdminModule', () => {
     const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
     const adminAuditWriter = new InMemoryAdminAuditWriter();
     const sessionStore = new InMemoryConsoleSessionStore();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
     const module = createAccountAdminModule({
       accountAdminStore,
+      accountAllowlistStore,
       sessionStore,
       oauthGrantRevocationService: oauthGrantRevocationService({
         grantsRevoked: 2,
         grantsDiscovered: 3,
         subjectsProcessed: 2,
       }),
-      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
         accountAdminStore,
+        accountAllowlistStore,
         securityInvalidationStore: invalidationStore,
         adminAuditWriter,
       }),
@@ -819,12 +1002,16 @@ describe('AccountAdminModule', () => {
     const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
     const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
     const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
     const module = createAccountAdminModule({
       accountAdminStore,
+      accountAllowlistStore,
       sessionStore: new InMemoryConsoleSessionStore(),
       oauthGrantRevocationService: null,
-      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
         accountAdminStore,
+        accountAllowlistStore,
         securityInvalidationStore: invalidationStore,
         adminAuditWriter,
       }),
@@ -903,12 +1090,16 @@ describe('AccountAdminModule', () => {
     const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
     const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
     const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
     const module = createAccountAdminModule({
       accountAdminStore,
+      accountAllowlistStore,
       sessionStore: new FailingSessionStore(),
       oauthGrantRevocationService: oauthGrantRevocationService(),
-      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
         accountAdminStore,
+        accountAllowlistStore,
         securityInvalidationStore: invalidationStore,
         adminAuditWriter,
       }),
@@ -943,12 +1134,16 @@ describe('AccountAdminModule', () => {
     const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
     const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
     const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
     const module = createAccountAdminModule({
       accountAdminStore,
+      accountAllowlistStore,
       sessionStore: new InMemoryConsoleSessionStore(),
       oauthGrantRevocationService: oauthGrantRevocationService({ fail: true }),
-      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
         accountAdminStore,
+        accountAllowlistStore,
         securityInvalidationStore: invalidationStore,
         adminAuditWriter,
       }),
@@ -982,6 +1177,7 @@ describe('AccountAdminModule', () => {
   it('requires transaction callbacks to write admin audit before reporting success', async () => {
     const runner = new InMemoryAccountAdminMutationTransactionRunner({
       accountAdminStore: store(),
+      accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
       securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
       adminAuditWriter: new InMemoryAdminAuditWriter(),
     });

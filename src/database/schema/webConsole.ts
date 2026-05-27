@@ -50,6 +50,42 @@ export const userAdminRoles = pgTable('user_admin_roles', {
     .where(sql`${table.revokedAt} IS NULL`),
 ]);
 
+/**
+ * History-preserving account allowlist replacement surface.
+ *
+ * This relation is not authoritative for sign-in until the AS gate is cut over
+ * from `auth_allowlist`; account allowlist routes stay feature-gated off by
+ * default so operators cannot mistake this table for the live sign-in gate.
+ */
+export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  kind: text('kind').$type<'email' | 'github_username' | 'github_id'>().notNull(),
+  normalizedValue: text('normalized_value').notNull(),
+  displayValue: text('display_value').notNull(),
+  note: text('note'),
+  createdByUserId: uuid('created_by_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, (table) => [
+  check('account_allowlist_entries_kind_check', sql`${table.kind} IN ('email', 'github_username', 'github_id')`),
+  check('account_allowlist_entries_shape_check', sql`
+    btrim(${table.normalizedValue}) <> ''
+    AND btrim(${table.displayValue}) <> ''
+    AND char_length(${table.normalizedValue}) <= 320
+    AND char_length(${table.displayValue}) <= 320
+    AND (${table.note} IS NULL OR char_length(${table.note}) <= 500)
+    AND (
+      (${table.revokedAt} IS NULL AND ${table.revokedByUserId} IS NULL)
+      OR (${table.revokedAt} IS NOT NULL AND ${table.revokedByUserId} IS NOT NULL)
+    )
+  `),
+  uniqueIndex('idx_account_allowlist_entries_active_unique')
+    .on(table.kind, table.normalizedValue)
+    .where(sql`${table.revokedAt} IS NULL`),
+  index('idx_account_allowlist_entries_created').on(table.createdAt),
+]);
+
 export const consoleSessions = pgTable('console_sessions', {
   idHash: bytea('id_hash').primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

@@ -13,6 +13,11 @@ import {
   bumpConsolePrincipalAuthzVersionWithTx,
   revokeConsoleAdminRoleWithTx,
 } from '../../stores/PostgresConsoleAccountAdminStore.js';
+import {
+  addAccountAllowlistEntryWithTx,
+  removeAccountAllowlistEntryWithTx,
+  updateAccountAllowlistEntryWithTx,
+} from '../../stores/PostgresConsoleAccountAllowlistStore.js';
 import type {
   ConsoleRoleAssignment,
   PrincipalAuthzVersionBumpInput,
@@ -22,6 +27,13 @@ import type {
   RoleGrantInput,
   RoleRevokeInput,
 } from '../../stores/IConsoleAccountAdminStore.js';
+import type {
+  AllowlistAddInput,
+  AllowlistRemoveInput,
+  AllowlistUpdateInput,
+  ConsoleAccountAllowlistEntry,
+  IConsoleAccountAllowlistStore,
+} from '../../stores/IConsoleAccountAllowlistStore.js';
 import {
   appendSecurityInvalidationEventWithTx,
 } from '../../services/invalidation/PostgresConsoleSecurityInvalidationStore.js';
@@ -44,6 +56,9 @@ export interface AccountAdminMutationTransactionContext extends MutationTransact
   disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null>;
   enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null>;
   bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null>;
+  addAllowlistEntry(input: AllowlistAddInput): Promise<ConsoleAccountAllowlistEntry>;
+  updateAllowlistEntry(input: AllowlistUpdateInput): Promise<ConsoleAccountAllowlistEntry | null>;
+  removeAllowlistEntry(input: AllowlistRemoveInput): Promise<ConsoleAccountAllowlistEntry | null>;
 }
 
 export interface IAccountAdminMutationTransactionRunner {
@@ -84,6 +99,9 @@ implements IAccountAdminMutationTransactionRunner {
       disablePrincipal: input => disableConsolePrincipalWithTx(tx, input),
       enablePrincipal: input => enableConsolePrincipalWithTx(tx, input),
       bumpPrincipalAuthzVersion: input => bumpConsolePrincipalAuthzVersionWithTx(tx, input),
+      addAllowlistEntry: input => addAccountAllowlistEntryWithTx(tx, input),
+      updateAllowlistEntry: input => updateAccountAllowlistEntryWithTx(tx, input),
+      removeAllowlistEntry: input => removeAccountAllowlistEntryWithTx(tx, input),
       appendSecurityInvalidationEvent: input => appendSecurityInvalidationEventWithTx(tx, input),
       writeAdminAuditEvent: async event => {
         await appendConsoleAdminAuditEventWithTx(tx, event, this.options.hmacKeyResolver);
@@ -95,6 +113,7 @@ implements IAccountAdminMutationTransactionRunner {
 
 export interface InMemoryAccountAdminMutationTransactionRunnerOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: IAdminAuditWriter;
 }
@@ -111,6 +130,9 @@ implements IAccountAdminMutationTransactionRunner {
       disablePrincipal: input => this.options.accountAdminStore.disablePrincipal(input),
       enablePrincipal: input => this.options.accountAdminStore.enablePrincipal(input),
       bumpPrincipalAuthzVersion: input => this.options.accountAdminStore.bumpPrincipalAuthzVersion(input),
+      addAllowlistEntry: input => this.options.accountAllowlistStore.add(input),
+      updateAllowlistEntry: input => this.options.accountAllowlistStore.update(input),
+      removeAllowlistEntry: input => this.options.accountAllowlistStore.remove(input),
       appendSecurityInvalidationEvent: input => this.options.securityInvalidationStore.appendEvent(input),
       writeAdminAuditEvent: async event => {
         await this.options.adminAuditWriter.write(event);

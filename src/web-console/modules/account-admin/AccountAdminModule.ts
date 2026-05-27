@@ -4,15 +4,19 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
+import type { IConsoleAccountAllowlistStore } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
 import { AccountAdminCredentialRevocationService } from './AccountAdminCredentialRevocationService.js';
 import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
 import {
   projectAccountPrincipal,
+  projectAccountAllowlistEntry,
+  projectAccountAllowlistList,
   projectAccountPrincipalLifecycle,
   projectAccountPrincipalList,
   projectAccountRoleList,
@@ -29,6 +33,11 @@ const ACCOUNT_ADMIN_AUDIT = {
   rolesGrant: 'accounts.roles.grant',
   rolesRevoke: 'accounts.roles.revoke',
   correlationResolve: 'accounts.correlation.resolve',
+  allowlistList: 'accounts.allowlist.list',
+  allowlistShow: 'accounts.allowlist.show',
+  allowlistAdd: 'accounts.allowlist.add',
+  allowlistUpdate: 'accounts.allowlist.update',
+  allowlistRemove: 'accounts.allowlist.remove',
 } as const;
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const USER_ID_PARAM = 'user_id';
@@ -36,30 +45,38 @@ const USER_ID_REQUIRED_DETAIL = 'user_id path parameter is required.';
 
 export interface AccountAdminModuleOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly sessionStore: IConsoleSessionStore;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
-  readonly roleMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly enableAccountAllowlistRoutes?: boolean;
   readonly now?: () => Date;
 }
 
 export function createAccountAdminModule(options: AccountAdminModuleOptions): ConsoleModuleDescriptor {
   const { accountAdminStore } = options;
   const service = new AccountAdminReadService(accountAdminStore);
+  const transactionRunner = options.accountAdminMutationTransactionRunner;
   const roleMutationService = new AccountAdminRoleMutationService({
     accountAdminStore,
-    transactionRunner: options.roleMutationTransactionRunner,
+    transactionRunner,
     now: options.now,
   });
   const lifecycleMutationService = new AccountAdminLifecycleMutationService({
     accountAdminStore,
-    transactionRunner: options.roleMutationTransactionRunner,
+    transactionRunner,
     now: options.now,
   });
   const credentialRevocationService = new AccountAdminCredentialRevocationService({
     accountAdminStore,
     sessionStore: options.sessionStore,
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
-    transactionRunner: options.roleMutationTransactionRunner,
+    transactionRunner,
+    now: options.now,
+  });
+  const allowlistService = new AccountAdminAllowlistService({
+    allowlistStore: options.accountAllowlistStore,
+    transactionRunner,
     now: options.now,
   });
   const disableUserRoute: ConsoleModuleDescriptor['routes'][number] = {
@@ -140,6 +157,45 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     privacyProjector: projectAccountPrincipalLifecycle,
     handler: req => revokeAllCredentials(req, credentialRevocationService, revokeAllCredentialsRoute),
   };
+  const addAllowlistRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/allowlist',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.allowlistAdd,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountAllowlistEntry,
+    handler: req => allowlistService.add(req, addAllowlistRoute),
+  };
+  const updateAllowlistRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'PATCH',
+    path: '/api/v1/admin/accounts/allowlist/:id',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.allowlistUpdate,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountAllowlistEntry,
+    handler: req => updateAllowlist(req, allowlistService, updateAllowlistRoute),
+  };
+  const removeAllowlistRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'DELETE',
+    path: '/api/v1/admin/accounts/allowlist/:id',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.allowlistRemove,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountAllowlistEntry,
+    handler: req => removeAllowlist(req, allowlistService, removeAllowlistRoute),
+  };
   const routes: ConsoleModuleDescriptor['routes'] = [
     {
       method: 'GET',
@@ -183,6 +239,35 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     grantRoleRoute,
     revokeRoleRoute,
     revokeAllCredentialsRoute,
+    ...(options.enableAccountAllowlistRoutes === true ? [
+      {
+        method: 'GET',
+        path: '/api/v1/admin/accounts/allowlist',
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'account_metadata',
+        idempotency: 'not_applicable',
+        auditOperation: ACCOUNT_ADMIN_AUDIT.allowlistList,
+        privacyProjector: projectAccountAllowlistList,
+        handler: () => allowlistService.list(),
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/admin/accounts/allowlist/:id',
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'account_metadata',
+        idempotency: 'not_applicable',
+        auditOperation: ACCOUNT_ADMIN_AUDIT.allowlistShow,
+        privacyProjector: projectAccountAllowlistEntry,
+        handler: req => getAllowlist(req, allowlistService),
+      },
+      addAllowlistRoute,
+      updateAllowlistRoute,
+      removeAllowlistRoute,
+    ] satisfies ConsoleModuleDescriptor['routes'] : []),
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
@@ -284,6 +369,35 @@ async function revokeAllCredentials(
   const userId = stringParam(req, USER_ID_PARAM);
   if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   return service.revokeAllCredentials(req, route, userId);
+}
+
+async function getAllowlist(
+  req: ConsoleRequest,
+  service: AccountAdminAllowlistService,
+): Promise<ConsoleHandlerResult> {
+  const id = stringParam(req, 'id');
+  if (!id) return problem(400, 'invalid_request', 'id path parameter is required.');
+  return service.get(id);
+}
+
+async function updateAllowlist(
+  req: ConsoleRequest,
+  service: AccountAdminAllowlistService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const id = stringParam(req, 'id');
+  if (!id) return problem(400, 'invalid_request', 'id path parameter is required.');
+  return service.update(req, route, id);
+}
+
+async function removeAllowlist(
+  req: ConsoleRequest,
+  service: AccountAdminAllowlistService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const id = stringParam(req, 'id');
+  if (!id) return problem(400, 'invalid_request', 'id path parameter is required.');
+  return service.remove(req, route, id);
 }
 
 async function resolveCorrelation(

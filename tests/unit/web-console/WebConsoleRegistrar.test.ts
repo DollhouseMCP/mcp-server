@@ -22,6 +22,14 @@ jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleFactorS
     constructor(readonly database: unknown) {}
   },
 }));
+jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleAccountAllowlistStore.js', () => ({
+  addAccountAllowlistEntryWithTx: jest.fn(),
+  updateAccountAllowlistEntryWithTx: jest.fn(),
+  removeAccountAllowlistEntryWithTx: jest.fn(),
+  PostgresConsoleAccountAllowlistStore: class PostgresConsoleAccountAllowlistStore {
+    constructor(readonly database: unknown) {}
+  },
+}));
 jest.unstable_mockModule('../../../src/web-console/identity/PostgresConsoleIdentityResolver.js', () => ({
   PostgresConsoleIdentityResolver: class PostgresConsoleIdentityResolver {
     constructor(readonly database: unknown) {}
@@ -68,6 +76,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryConsoleIdentityResolver,
       InMemoryConsoleSessionStore,
       InMemoryConsoleFactorStore,
+      InMemoryConsoleAccountAllowlistStore,
       InMemoryConsoleAccountAdminStore,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
@@ -92,11 +101,18 @@ describe('WebConsoleRegistrar', () => {
         requiredCapability: 'console:admin:accounts',
       }),
     ]));
+    expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        moduleId: 'accountAdmin',
+        path: '/api/v1/admin/accounts/allowlist',
+      }),
+    ]));
     expect(composition.sessionStore).toBeInstanceOf(InMemoryConsoleSessionStore);
     expect(composition.loginTransactionStore).toBeInstanceOf(InMemoryLoginTransactionStore);
     expect(composition.idempotencyStore).toBeInstanceOf(InMemoryIdempotencyStore);
     expect(composition.factorStore).toBeInstanceOf(InMemoryConsoleFactorStore);
     expect(composition.accountAdminStore).toBeInstanceOf(InMemoryConsoleAccountAdminStore);
+    expect(composition.accountAllowlistStore).toBeInstanceOf(InMemoryConsoleAccountAllowlistStore);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
     expect(composition.adminAuditWriter).toBeInstanceOf(InMemoryAdminAuditWriter);
@@ -110,6 +126,7 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionStore)).toBe(composition.sessionStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.factorStore)).toBe(composition.factorStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore)).toBe(composition.accountAdminStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore)).toBe(composition.accountAllowlistStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
 
@@ -228,6 +245,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.idempotencyStore.constructor.name).toBe('PostgresIdempotencyStore');
     expect(composition.factorStore.constructor.name).toBe('PostgresConsoleFactorStore');
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
+    expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
   });
 

@@ -35,6 +35,9 @@ const { PostgresConsoleFactorStore } = await import(
 const { PostgresConsoleAccountAdminStore } = await import(
   '../../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js'
 );
+const { PostgresConsoleAccountAllowlistStore } = await import(
+  '../../../../src/web-console/stores/PostgresConsoleAccountAllowlistStore.js'
+);
 const { PostgresConsoleSecurityInvalidationStore } = await import(
   '../../../../src/web-console/services/invalidation/PostgresConsoleSecurityInvalidationStore.js'
 );
@@ -63,6 +66,10 @@ const FOUR_MINUTES = new Date('2026-05-26T12:04:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-26T12:05:00.000Z');
 const THIRTY_MINUTES = new Date('2026-05-26T12:30:00.000Z');
 const ONE_HOUR = new Date('2026-05-26T13:00:00.000Z');
+const ALICE_EMAIL = 'alice@example.test';
+const ALICE_DISPLAY_EMAIL = 'Alice@Example.Test';
+const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
+const ALLOWLIST_ID = 'f0a8d9e6-b1a1-4d94-b600-bef99c8d4ed1';
 
 function hash(byte: number): Buffer {
   return Buffer.alloc(32, byte);
@@ -255,7 +262,7 @@ function principalProjectionRow(overrides: Partial<{
     primary_sub: PRIMARY_SUB,
     username: 'alice',
     display_name: 'Alice',
-    email: 'alice@example.test',
+    email: ALICE_EMAIL,
     email_verified: true,
     auth_methods: ['github'],
     roles: ['account_admin'],
@@ -263,8 +270,33 @@ function principalProjectionRow(overrides: Partial<{
     created_at: NOW,
     last_login_at: FIVE_MINUTES.getTime(),
     admin_factor_enrolled: true,
-    account_correlation_id: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+    account_correlation_id: ACCOUNT_CORRELATION_ID,
     authz_version: 3,
+    ...overrides,
+  };
+}
+
+function allowlistRow(overrides: Partial<{
+  id: string;
+  kind: 'email' | 'github_username' | 'github_id';
+  normalizedValue: string;
+  displayValue: string;
+  note: string | null;
+  createdByUserId: string;
+  createdAt: Date;
+  revokedByUserId: string | null;
+  revokedAt: Date | null;
+}> = {}) {
+  return {
+    id: ALLOWLIST_ID,
+    kind: 'email' as const,
+    normalizedValue: ALICE_EMAIL,
+    displayValue: ALICE_DISPLAY_EMAIL,
+    note: 'initial',
+    createdByUserId: USER_ID,
+    createdAt: FIVE_MINUTES,
+    revokedByUserId: null,
+    revokedAt: null,
     ...overrides,
   };
 }
@@ -788,7 +820,7 @@ describe('PostgresConsoleAccountAdminStore', () => {
       primarySub: PRIMARY_SUB,
       username: 'alice',
       displayName: 'Alice',
-      email: 'alice@example.test',
+      email: ALICE_EMAIL,
       emailVerified: true,
       authMethods: ['github'],
       roles: ['account_admin'],
@@ -796,7 +828,7 @@ describe('PostgresConsoleAccountAdminStore', () => {
       createdAt: NOW,
       lastLoginAt: FIVE_MINUTES,
       adminFactorEnrolled: true,
-      accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
       authzVersion: 3,
     }]);
 
@@ -804,8 +836,8 @@ describe('PostgresConsoleAccountAdminStore', () => {
     await expect(store.findPrincipal(USER_ID)).rejects.toThrow('unknown administrative role');
 
     transaction.execute = jest.fn(() => Promise.resolve([row]));
-    await expect(store.findPrincipalByAccountCorrelationId('7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8'))
-      .resolves.toMatchObject({ userId: USER_ID, accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8' });
+    await expect(store.findPrincipalByAccountCorrelationId(ACCOUNT_CORRELATION_ID))
+      .resolves.toMatchObject({ userId: USER_ID, accountCorrelationId: ACCOUNT_CORRELATION_ID });
   });
 });
 
@@ -988,6 +1020,108 @@ describe('PostgresAdminAuditWriter', () => {
 
     await expect(writer.write(adminAuditEvent(overrides))).rejects.toThrow(message);
     expect(transaction.execute).not.toHaveBeenCalled();
+  });
+});
+
+describe('PostgresConsoleAccountAllowlistStore', () => {
+  it('uses active-entry filters and maps allowlist rows without exposing revoked history', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.select = jest.fn(() => selectingOrderedChain([allowlistRow()]));
+
+    await expect(store.listActive()).resolves.toEqual([{
+      id: ALLOWLIST_ID,
+      kind: 'email',
+      normalizedValue: ALICE_EMAIL,
+      displayValue: ALICE_DISPLAY_EMAIL,
+      note: 'initial',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+      revokedByUserId: null,
+      revokedAt: null,
+    }]);
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('finds a single active allowlist row by id', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.select = jest.fn(() => selectingChain([allowlistRow()]));
+
+    await expect(store.findActive(ALLOWLIST_ID)).resolves.toMatchObject({
+      id: ALLOWLIST_ID,
+      normalizedValue: ALICE_EMAIL,
+    });
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('normalizes inserted allowlist values and maps duplicate active entries to conflicts', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    const unique = Object.assign(new Error('duplicate'), { code: '23505' });
+    const insert = insertChain([allowlistRow()]);
+    transaction.insert = jest.fn(() => insert);
+
+    await expect(store.add({
+      kind: 'email',
+      value: ` ${ALICE_DISPLAY_EMAIL} `,
+      note: 'initial',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      normalizedValue: ALICE_EMAIL,
+      displayValue: ALICE_DISPLAY_EMAIL,
+    });
+    expect(insert.values).toHaveBeenCalledWith(expect.objectContaining({
+      normalizedValue: ALICE_EMAIL,
+      displayValue: ALICE_DISPLAY_EMAIL,
+    }));
+
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => ({
+        returning: jest.fn(() => Promise.reject(unique)),
+      })),
+    }));
+    await expect(store.add({
+      kind: 'email',
+      value: ALICE_EMAIL,
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow(ConsoleStoreConflictError);
+  });
+
+  it('updates and removes only active allowlist rows', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    const update = returningChain([allowlistRow({ note: null })]);
+    transaction.update = jest.fn(() => update);
+
+    await expect(store.update({
+      id: ALLOWLIST_ID,
+      note: null,
+    })).resolves.toMatchObject({ note: null });
+    expect(update.set).toHaveBeenCalledWith({ note: null });
+
+    transaction.select = jest.fn(() => selectingChain([allowlistRow({ note: 'initial' })]));
+    transaction.update = jest.fn();
+    await expect(store.update({ id: ALLOWLIST_ID })).resolves.toMatchObject({ note: 'initial' });
+    expect(transaction.update).not.toHaveBeenCalled();
+
+    const remove = returningChain([allowlistRow({
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    })]);
+    transaction.update = jest.fn(() => remove);
+    await expect(store.remove({
+      id: ALLOWLIST_ID,
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    })).resolves.toMatchObject({
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    });
+    expect(remove.set).toHaveBeenCalledWith({
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    });
   });
 });
 

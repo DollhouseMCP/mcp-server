@@ -20,9 +20,11 @@ import type { ILoginTransactionStore } from './stores/ILoginTransactionStore.js'
 import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransactionStore.js';
 import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
+import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
+import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import {
@@ -41,6 +43,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   idempotencyStore: 'WebConsoleIdempotencyStore',
   factorStore: 'WebConsoleFactorStore',
   accountAdminStore: 'WebConsoleAccountAdminStore',
+  accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   identityResolver: 'WebConsoleIdentityResolver',
   opaqueValues: 'WebConsoleOpaqueValueService',
@@ -62,6 +65,7 @@ export interface WebConsoleRegistrarOptions {
   readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
   readonly protectedCorrelationSelectorHmacKey?: Buffer;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
+  readonly enableAccountAllowlistRoutes?: boolean;
 }
 
 export interface WebConsoleComposition {
@@ -71,6 +75,7 @@ export interface WebConsoleComposition {
   readonly idempotencyStore: IIdempotencyStore;
   readonly factorStore: IConsoleFactorStore;
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
@@ -95,6 +100,7 @@ export class WebConsoleRegistrar {
       database,
       container,
       accountAdminStore: stores.accountAdminStore,
+      accountAllowlistStore: stores.accountAllowlistStore,
       securityInvalidationStore: stores.securityInvalidationStore,
       adminAuditWriter,
     });
@@ -102,9 +108,11 @@ export class WebConsoleRegistrar {
     const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
     registry.register(createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
+      accountAllowlistStore: stores.accountAllowlistStore,
       sessionStore: stores.sessionStore,
       oauthGrantRevocationService,
-      roleMutationTransactionRunner: accountAdminMutationTransactionRunner,
+      accountAdminMutationTransactionRunner,
+      enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
     }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
@@ -132,6 +140,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => stores.factorStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => stores.accountAllowlistStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
     container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
@@ -188,6 +197,7 @@ interface ConsoleStoreSet {
   readonly idempotencyStore: IIdempotencyStore;
   readonly factorStore: IConsoleFactorStore;
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly identityResolver: IConsoleIdentityResolver;
 }
@@ -200,6 +210,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresIdempotencyStore },
       { PostgresConsoleFactorStore },
       { PostgresConsoleAccountAdminStore },
+      { PostgresConsoleAccountAllowlistStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresConsoleIdentityResolver },
     ] = await Promise.all([
@@ -208,6 +219,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresIdempotencyStore.js'),
       import('./stores/PostgresConsoleFactorStore.js'),
       import('./stores/PostgresConsoleAccountAdminStore.js'),
+      import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./identity/PostgresConsoleIdentityResolver.js'),
     ]);
@@ -217,6 +229,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       idempotencyStore: new PostgresIdempotencyStore(database),
       factorStore: new PostgresConsoleFactorStore(database),
       accountAdminStore: new PostgresConsoleAccountAdminStore(database),
+      accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
       securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
     };
@@ -228,6 +241,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     idempotencyStore: new InMemoryIdempotencyStore(),
     factorStore: new InMemoryConsoleFactorStore(),
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
+    accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),
   };
@@ -258,6 +272,7 @@ function resolveAccountAdminMutationTransactionRunner(options: {
   readonly database: DatabaseInstance | undefined;
   readonly container: DiContainerFacade;
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: IAdminAuditWriter;
 }): IAccountAdminMutationTransactionRunner {
@@ -272,6 +287,7 @@ function resolveAccountAdminMutationTransactionRunner(options: {
   }
   return new InMemoryAccountAdminMutationTransactionRunner({
     accountAdminStore: options.accountAdminStore,
+    accountAllowlistStore: options.accountAllowlistStore,
     securityInvalidationStore: options.securityInvalidationStore,
     adminAuditWriter: options.adminAuditWriter,
   });

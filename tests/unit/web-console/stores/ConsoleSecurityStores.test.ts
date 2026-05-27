@@ -4,6 +4,7 @@ import {
   ConsoleStoreValidationError,
   InMemoryConsoleSessionStore,
   InMemoryConsoleFactorStore,
+  InMemoryConsoleAccountAllowlistStore,
   InMemoryConsoleAccountAdminStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
@@ -30,6 +31,8 @@ const THIRTY_MINUTES = new Date('2026-05-26T12:30:00.000Z');
 const ONE_HOUR = new Date('2026-05-26T13:00:00.000Z');
 const SELF_CAPABILITY = 'console:self' as const;
 const ADMIN_ACR = 'urn:dollhouse:acr:admin';
+const ALICE_EMAIL = 'alice@example.test';
+const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
 
 function hash(byte: number): Buffer {
   return Buffer.alloc(32, byte);
@@ -115,7 +118,7 @@ function principal(overrides: Partial<PrincipalFixture> = {}): PrincipalFixture 
     primarySub: 'github_user-7',
     username: 'alice',
     displayName: 'Alice',
-    email: 'alice@example.test',
+    email: ALICE_EMAIL,
     emailVerified: true,
     authMethods: ['github'],
     roles: [] as const,
@@ -123,7 +126,7 @@ function principal(overrides: Partial<PrincipalFixture> = {}): PrincipalFixture 
     createdAt: NOW,
     lastLoginAt: null,
     adminFactorEnrolled: false,
-    accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+    accountCorrelationId: ACCOUNT_CORRELATION_ID,
     authzVersion: 1,
     ...overrides,
   };
@@ -497,7 +500,7 @@ describe('InMemoryConsoleAccountAdminStore', () => {
     })).rejects.toThrow('already active');
     expect(await store.listActiveRoles(USER_ID)).toEqual(['account_admin']);
     expect((await store.findPrincipal(USER_ID))?.roles).toEqual(['account_admin']);
-    expect((await store.findPrincipalByAccountCorrelationId('7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8'))?.userId)
+    expect((await store.findPrincipalByAccountCorrelationId(ACCOUNT_CORRELATION_ID))?.userId)
       .toBe(USER_ID);
     expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(2);
 
@@ -556,6 +559,112 @@ describe('InMemoryConsoleAccountAdminStore', () => {
       revokedAt: FIVE_MINUTES,
     })).resolves.toBeNull();
     await expect(store.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES })).resolves.toBeNull();
+  });
+});
+
+describe('InMemoryConsoleAccountAllowlistStore', () => {
+  it('normalizes active duplicates while preserving removal history', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    const created = await store.add({
+      kind: 'email',
+      value: ' Alice@Example.Test ',
+      note: 'initial',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+
+    expect(created).toMatchObject({
+      kind: 'email',
+      normalizedValue: ALICE_EMAIL,
+      displayValue: 'Alice@Example.Test',
+      note: 'initial',
+      createdByUserId: USER_ID,
+      revokedAt: null,
+    });
+    await expect(store.add({
+      kind: 'email',
+      value: ALICE_EMAIL,
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('already exists');
+
+    await expect(store.update({ id: created.id, note: null })).resolves.toMatchObject({ note: null });
+    await expect(store.remove({
+      id: created.id,
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    })).resolves.toMatchObject({
+      id: created.id,
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    });
+    await expect(store.findActive(created.id)).resolves.toBeNull();
+    await expect(store.add({
+      kind: 'email',
+      value: ALICE_EMAIL,
+      createdByUserId: USER_ID,
+      createdAt: THIRTY_MINUTES,
+    })).resolves.toMatchObject({ normalizedValue: ALICE_EMAIL, revokedAt: null });
+    await expect(store.listActive()).resolves.toHaveLength(1);
+  });
+
+  it('preserves github_id values exactly and leaves note unchanged when omitted', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    const created = await store.add({
+      kind: 'github_id',
+      value: '00123',
+      note: 'numeric id',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+    await expect(store.add({
+      kind: 'github_id',
+      value: '123',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ normalizedValue: '123' });
+    await expect(store.update({ id: created.id })).resolves.toMatchObject({
+      id: created.id,
+      normalizedValue: '00123',
+      note: 'numeric id',
+    });
+  });
+
+  it('validates allowlist inputs before storing entries', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    await expect(store.add({
+      kind: 'github_id',
+      value: ' ',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('value must be non-empty');
+    await expect(store.add({
+      kind: 'email',
+      value: 'not-an-email',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('valid email');
+    await expect(store.add({
+      kind: 'github_username',
+      value: 'alice example',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('valid GitHub username');
+    await expect(store.add({
+      kind: 'github_id',
+      value: 'abc',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('numeric GitHub id');
+    await expect(store.update({ id: 'not-a-uuid', note: 'x' })).rejects.toThrow('id must be a UUID');
+    await expect(store.remove({
+      id: USER_ID,
+      revokedByUserId: 'not-a-uuid',
+      revokedAt: FIVE_MINUTES,
+    })).rejects.toThrow('revokedByUserId must be a UUID');
   });
 });
 

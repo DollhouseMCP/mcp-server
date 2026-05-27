@@ -4,6 +4,14 @@ import type {
   AccountPrincipalListDto,
   AccountRoleListDto,
 } from './AccountAdminDtos.js';
+import type {
+  AccountAllowlistEntryDto,
+  AccountAllowlistListDto,
+} from './AccountAdminAllowlistDtos.js';
+import {
+  serializeAccountAllowlistEntry,
+  serializeAccountAllowlistList,
+} from './AccountAdminAllowlistDtos.js';
 import {
   serializeAccountPrincipalLifecycle,
   serializeAccountPrincipal,
@@ -23,6 +31,15 @@ export function projectAccountPrincipalList(value: unknown): AccountPrincipalLis
 export function projectAccountRoleList(value: unknown): AccountRoleListDto {
   const roleList = value as AccountRoleListDto;
   return serializeAccountRoleList(roleList.user_id, roleList.roles);
+}
+
+export function projectAccountAllowlistEntry(value: unknown): AccountAllowlistEntryDto {
+  return serializeAccountAllowlistEntry(fromAllowlistDto(value));
+}
+
+export function projectAccountAllowlistList(value: unknown): AccountAllowlistListDto {
+  const list = value as AccountAllowlistListDto;
+  return serializeAccountAllowlistList(list.entries.map(item => fromAllowlistDto(item)));
 }
 
 export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincipalLifecycleDto {
@@ -80,5 +97,20 @@ function fromPrincipalDto(value: unknown): {
     adminFactorEnrolled: principal.admin_factor_enrolled,
     accountCorrelationId: '',
     authzVersion: 0,
+  };
+}
+
+function fromAllowlistDto(value: unknown) {
+  const entry = value as AccountAllowlistEntryDto;
+  return {
+    id: entry.id,
+    kind: entry.kind,
+    normalizedValue: '',
+    displayValue: entry.value,
+    note: entry.note,
+    createdByUserId: entry.created_by_user_id ?? '',
+    createdAt: new Date(entry.created_at),
+    revokedByUserId: null,
+    revokedAt: null,
   };
 }

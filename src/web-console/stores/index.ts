@@ -9,3 +9,5 @@ export * from './IConsoleFactorStore.js';
 export * from './InMemoryConsoleFactorStore.js';
 export * from './IConsoleAccountAdminStore.js';
 export * from './InMemoryConsoleAccountAdminStore.js';
+export * from './IConsoleAccountAllowlistStore.js';
+export * from './InMemoryConsoleAccountAllowlistStore.js';
