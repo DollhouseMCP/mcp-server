@@ -1,10 +1,15 @@
-import type { ConsoleAdminAuditEvent, IAdminAuditWriter } from './IAdminAuditWriter.js';
+import {
+  validateConsoleAdminAuditEvent,
+  type ConsoleAdminAuditEvent,
+  type IAdminAuditWriter,
+} from './IAdminAuditWriter.js';
 
 export class InMemoryAdminAuditWriter implements IAdminAuditWriter {
   private readonly events: ConsoleAdminAuditEvent[] = [];
 
   async write(event: ConsoleAdminAuditEvent): Promise<void> {
     await Promise.resolve();
+    validateConsoleAdminAuditEvent(event);
     this.events.push(cloneEvent(event));
   }
 
@@ -22,7 +27,13 @@ function cloneEvent(event: ConsoleAdminAuditEvent): ConsoleAdminAuditEvent {
     elevationAuthTime: event.elevationAuthTime
       ? new Date(event.elevationAuthTime.getTime())
       : null,
-    // Phase 2 accepts an empty record only. Clone its contents when the contract widens.
-    argsRedacted: {},
+    argsRedacted: cloneJsonRecord(event.argsRedacted),
+    resultDetailRedacted: event.resultDetailRedacted
+      ? cloneJsonRecord(event.resultDetailRedacted)
+      : null,
   };
+}
+
+function cloneJsonRecord(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+  return JSON.parse(JSON.stringify(record)) as Readonly<Record<string, unknown>>;
 }

@@ -1,6 +1,7 @@
 import type { ConsoleRouteDefinition, ConsoleRequest } from '../platform/ConsolePlatformTypes.js';
 import { requireConsoleRequestContext } from '../platform/ConsoleRequestContext.js';
 import type {
+  ConsoleAdminActorRole,
   ConsoleAdminAuditEvent,
   ConsoleAdminAuditResult,
   IAdminAuditWriter,
@@ -39,6 +40,8 @@ function buildEvent(
     occurredAt,
     actorUserId: authentication.userId,
     actorSub: authentication.authSub,
+    actorRole: null,
+    actorCapabilityRole: roleForCapability(route.requiredCapability),
     actorConsoleSessionHash: Buffer.from(authentication.sessionIdHash),
     capability: route.requiredCapability,
     elevationAcr: elevation?.acr ?? null,
@@ -47,8 +50,29 @@ function buildEvent(
     correlationId: requireConsoleRequestContext(req).correlationId,
     endpoint: `${route.method} ${route.path}`,
     operation: auditOperation,
+    resourceKind: null,
+    resourceId: null,
+    targetUserId: null,
     argsRedacted: {},
     result,
     errorCode,
+    resultDetailRedacted: null,
+    clientIp: req.ip ?? null,
+    userAgent: req.get('user-agent') ?? null,
   };
+}
+
+function roleForCapability(capability: Exclude<ConsoleRouteDefinition['requiredCapability'], 'none'>): ConsoleAdminActorRole {
+  switch (capability) {
+    case 'console:admin:accounts':
+      return 'account_admin';
+    case 'console:admin:operate':
+      return 'operator';
+    case 'console:admin:audit':
+      return 'auditor';
+    case 'console:admin:security':
+      return 'security_admin';
+    case 'console:self':
+      throw new Error('Administrative audit cannot use self-service capability');
+  }
 }

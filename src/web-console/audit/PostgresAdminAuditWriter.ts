@@ -1,0 +1,162 @@
+import { createHmac } from 'node:crypto';
+
+import { sql } from 'drizzle-orm';
+
+import { withSystemContext } from '../../database/admin.js';
+import type { DatabaseInstance } from '../../database/connection.js';
+import type { AuditHmacKeyMaterial } from '../../security/auditHmacKey.js';
+import {
+  stringifyBoundedAdminAuditJson,
+  validateConsoleAdminAuditEvent,
+  type ConsoleAdminAuditEvent,
+  type IAdminAuditWriter,
+} from './IAdminAuditWriter.js';
+
+export interface AdminAuditHmacKeyResolver {
+  resolve(): Promise<AuditHmacKeyMaterial>;
+}
+
+interface ChainHeadRow {
+  readonly last_sequence_id: number | string | null;
+  readonly last_chain_hmac: Buffer | null;
+}
+
+interface InsertedAuditRow {
+  readonly sequence_id: number | string;
+  readonly chain_hmac: Buffer;
+}
+
+const ADMIN_AUDIT_STREAM_ID = 'admin';
+
+export class PostgresAdminAuditWriter implements IAdminAuditWriter {
+  constructor(
+    private readonly db: DatabaseInstance,
+    private readonly hmacKeyResolver: AdminAuditHmacKeyResolver,
+  ) {}
+
+  async write(event: ConsoleAdminAuditEvent): Promise<void> {
+    validateConsoleAdminAuditEvent(event);
+    const keyMaterial = await this.hmacKeyResolver.resolve();
+    const argsRedactedJson = stringifyBoundedAdminAuditJson(event.argsRedacted, 'argsRedacted');
+    const resultDetailRedactedJson = event.resultDetailRedacted
+      ? stringifyBoundedAdminAuditJson(event.resultDetailRedacted, 'resultDetailRedacted')
+      : null;
+
+    await withSystemContext(this.db, async (tx) => {
+      await tx.execute(sql`
+        INSERT INTO admin_audit_chain_heads (stream_id)
+        VALUES (${ADMIN_AUDIT_STREAM_ID})
+        ON CONFLICT (stream_id) DO NOTHING
+      `);
+      const headRows = await tx.execute(sql`
+        SELECT last_sequence_id, last_chain_hmac
+        FROM admin_audit_chain_heads
+        WHERE stream_id = ${ADMIN_AUDIT_STREAM_ID}
+        FOR UPDATE
+      `) as unknown as ChainHeadRow[];
+      const head = headRows.at(0);
+      if (!head) {
+        throw new Error('admin audit chain head is unavailable');
+      }
+      const chainPrev = head.last_chain_hmac ? Buffer.from(head.last_chain_hmac) : null;
+      const chainHmac = computeChainHmac(event, keyMaterial.key, chainPrev);
+      const rows = await tx.execute(sql`
+        INSERT INTO admin_audit_events (
+          occurred_at,
+          actor_user_id,
+          actor_sub,
+          actor_role,
+          actor_capability_role,
+          actor_console_session_hash,
+          capability,
+          elevation_acr,
+          elevation_amr,
+          elevation_auth_time,
+          endpoint,
+          operation,
+          resource_kind,
+          resource_id,
+          target_user_id,
+          args_redacted,
+          result,
+          error_code,
+          result_detail_redacted,
+          correlation_id,
+          client_ip,
+          user_agent,
+          chain_key_id,
+          chain_prev,
+          chain_hmac
+        )
+        VALUES (
+          ${event.occurredAt},
+          ${event.actorUserId},
+          ${event.actorSub},
+          ${event.actorRole},
+          ${event.actorCapabilityRole},
+          ${event.actorConsoleSessionHash},
+          ${event.capability},
+          ${event.elevationAcr},
+          ${event.elevationAmr},
+          ${event.elevationAuthTime},
+          ${event.endpoint},
+          ${event.operation},
+          ${event.resourceKind},
+          ${event.resourceId},
+          ${event.targetUserId},
+          ${argsRedactedJson}::jsonb,
+          ${event.result},
+          ${event.errorCode},
+          ${resultDetailRedactedJson}::jsonb,
+          ${event.correlationId},
+          ${event.clientIp}::inet,
+          ${event.userAgent},
+          ${keyMaterial.keyId},
+          ${chainPrev},
+          ${chainHmac}
+        )
+        RETURNING sequence_id, chain_hmac
+      `) as unknown as InsertedAuditRow[];
+      const inserted = rows.at(0);
+      if (!inserted) {
+        throw new Error('admin audit append did not return a row');
+      }
+      await tx.execute(sql`
+        UPDATE admin_audit_chain_heads
+        SET last_sequence_id = ${Number(inserted.sequence_id)},
+            last_chain_hmac = ${inserted.chain_hmac},
+            updated_at = NOW()
+        WHERE stream_id = ${ADMIN_AUDIT_STREAM_ID}
+      `);
+    });
+  }
+}
+
+function computeChainHmac(event: ConsoleAdminAuditEvent, key: Buffer, chainPrev: Buffer | null): Buffer {
+  const canonical = JSON.stringify({
+    occurredAt: event.occurredAt.toISOString(),
+    actorUserId: event.actorUserId,
+    actorSub: event.actorSub,
+    actorRole: event.actorRole,
+    actorCapabilityRole: event.actorCapabilityRole,
+    actorConsoleSessionHash: event.actorConsoleSessionHash.toString('hex'),
+    capability: event.capability,
+    elevationAcr: event.elevationAcr,
+    elevationAmr: [...event.elevationAmr],
+    elevationAuthTime: event.elevationAuthTime ? event.elevationAuthTime.toISOString() : null,
+    endpoint: event.endpoint,
+    operation: event.operation,
+    resourceKind: event.resourceKind,
+    resourceId: event.resourceId,
+    targetUserId: event.targetUserId,
+    argsRedacted: event.argsRedacted,
+    result: event.result,
+    errorCode: event.errorCode,
+    resultDetailRedacted: event.resultDetailRedacted,
+    correlationId: event.correlationId,
+    clientIp: event.clientIp,
+    userAgent: event.userAgent,
+    chainPrev: chainPrev ? chainPrev.toString('hex') : null,
+  });
+  return createHmac('sha256', key).update(canonical).digest();
+}

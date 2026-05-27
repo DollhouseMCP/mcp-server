@@ -193,3 +193,48 @@ export const securityInvalidationAcks = pgTable('security_invalidation_acks', {
 }, (table) => [
   uniqueIndex('idx_security_invalidation_acks_unique').on(table.eventId, table.replicaId),
 ]);
+
+export const adminAuditChainHeads = pgTable('admin_audit_chain_heads', {
+  streamId: text('stream_id').primaryKey(),
+  lastSequenceId: bigint('last_sequence_id', { mode: 'number' }),
+  lastChainHmac: bytea('last_chain_hmac'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+});
+
+export const adminAuditEvents = pgTable('admin_audit_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  sequenceId: bigint('sequence_id', { mode: 'number' }).notNull().generatedAlwaysAsIdentity(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  actorUserId: uuid('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  actorSub: text('actor_sub').notNull(),
+  actorRole: text('actor_role'),
+  actorCapabilityRole: text('actor_capability_role').notNull(),
+  actorConsoleSessionHash: bytea('actor_console_session_hash').notNull(),
+  capability: text('capability').notNull(),
+  elevationAcr: text('elevation_acr'),
+  elevationAmr: text('elevation_amr').array().notNull(),
+  elevationAuthTime: timestamp('elevation_auth_time', { withTimezone: true }),
+  endpoint: text('endpoint').notNull(),
+  operation: text('operation').notNull(),
+  resourceKind: text('resource_kind'),
+  resourceId: text('resource_id'),
+  targetUserId: uuid('target_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  argsRedacted: jsonb('args_redacted').notNull().default({}),
+  result: text('result').notNull(),
+  errorCode: text('error_code'),
+  resultDetailRedacted: jsonb('result_detail_redacted'),
+  correlationId: uuid('correlation_id').notNull(),
+  clientIp: text('client_ip'),
+  userAgent: text('user_agent'),
+  chainKeyId: text('chain_key_id').notNull(),
+  chainPrev: bytea('chain_prev'),
+  chainHmac: bytea('chain_hmac').notNull(),
+}, (table) => [
+  uniqueIndex('idx_admin_audit_events_sequence').on(table.sequenceId),
+  index('idx_admin_audit_events_occurred').on(table.occurredAt, table.sequenceId),
+  index('idx_admin_audit_events_actor').on(table.actorUserId, table.sequenceId),
+  index('idx_admin_audit_events_target_user').on(table.targetUserId, table.sequenceId)
+    .where(sql`${table.targetUserId} IS NOT NULL`),
+  index('idx_admin_audit_events_operation').on(table.operation, table.sequenceId),
+  index('idx_admin_audit_events_correlation').on(table.correlationId),
+]);

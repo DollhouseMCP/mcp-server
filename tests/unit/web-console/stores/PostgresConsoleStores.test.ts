@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { createHmac } from 'node:crypto';
 import type { DatabaseInstance } from '../../../../src/database/connection.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
@@ -7,6 +8,7 @@ import type {
   IdempotencyRecord,
   IdempotencyRequestIdentity,
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
+import type { ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
 
 let transaction: Record<string, jest.Mock>;
 const withSystemContextMock = jest.fn(async (
@@ -36,6 +38,9 @@ const { PostgresConsoleAccountAdminStore } = await import(
 const { PostgresConsoleSecurityInvalidationStore } = await import(
   '../../../../src/web-console/services/invalidation/PostgresConsoleSecurityInvalidationStore.js'
 );
+const { PostgresAdminAuditWriter } = await import(
+  '../../../../src/web-console/audit/PostgresAdminAuditWriter.js'
+);
 const { PostgresConsoleIdentityResolver } = await import(
   '../../../../src/web-console/identity/PostgresConsoleIdentityResolver.js'
 );
@@ -48,6 +53,7 @@ const { ConsoleStoreConflictError, ConsoleStoreValidationError } = await import(
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const PRIMARY_SUB = 'github_user-7';
+const AUDIT_KEY_ID = 'audit-key-test';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
 const FOUR_MINUTES = new Date('2026-05-26T12:04:00.000Z');
@@ -880,3 +886,174 @@ describe('PostgresConsoleSecurityInvalidationStore', () => {
       .resolves.toEqual(['replica-b']);
   });
 });
+
+describe('PostgresAdminAuditWriter', () => {
+  it('serializes audit appends through the admin chain head', async () => {
+    const event = adminAuditEvent();
+    const key = Buffer.alloc(32, 9);
+    const returnedChainHmac = Buffer.alloc(32, 5);
+    const writer = new PostgresAdminAuditWriter({} as DatabaseInstance, {
+      resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key }),
+    });
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ last_sequence_id: null, last_chain_hmac: null }])
+      .mockResolvedValueOnce([{ sequence_id: '1', chain_hmac: returnedChainHmac }])
+      .mockResolvedValueOnce([]);
+
+    await expect(writer.write(event)).resolves.toBeUndefined();
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.execute).toHaveBeenCalledTimes(4);
+    expect(sqlText(0)).toContain('INSERT INTO admin_audit_chain_heads');
+    expect(sqlText(1)).toContain('FOR UPDATE');
+    expect(sqlText(2)).toContain('INSERT INTO admin_audit_events');
+    expect(sqlText(3)).toContain('UPDATE admin_audit_chain_heads');
+
+    const insertChunks = sqlChunks(2);
+    expect(insertChunks).toContain(AUDIT_KEY_ID);
+    expect(insertChunks).toContain(null);
+    expect(insertChunks).toContainEqual(expectedAuditHmac(event, key, null));
+    expect(sqlChunks(3)).toContain(returnedChainHmac);
+  });
+
+  it('chains subsequent audit events to the previous HMAC value', async () => {
+    const event = adminAuditEvent();
+    const previous = Buffer.alloc(32, 4);
+    const key = Buffer.alloc(32, 9);
+    const returnedChainHmac = Buffer.alloc(32, 6);
+    const writer = new PostgresAdminAuditWriter({} as DatabaseInstance, {
+      resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key }),
+    });
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ last_sequence_id: '7', last_chain_hmac: previous }])
+      .mockResolvedValueOnce([{ sequence_id: '8', chain_hmac: returnedChainHmac }])
+      .mockResolvedValueOnce([]);
+
+    await expect(writer.write(event)).resolves.toBeUndefined();
+
+    expect(transaction.execute).toHaveBeenCalledTimes(4);
+    expect(sqlChunks(2)).toContainEqual(previous);
+    expect(sqlChunks(2)).toContainEqual(expectedAuditHmac(event, key, previous));
+    expect(sqlChunks(3)).toContainEqual(returnedChainHmac);
+  });
+
+  it('rejects missing audit chain rows and missing inserted audit rows', async () => {
+    const writer = new PostgresAdminAuditWriter({} as DatabaseInstance, {
+      resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+    });
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await expect(writer.write(adminAuditEvent())).rejects.toThrow('admin audit chain head is unavailable');
+
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ last_sequence_id: null, last_chain_hmac: null }])
+      .mockResolvedValueOnce([]);
+
+    await expect(writer.write(adminAuditEvent())).rejects.toThrow('admin audit append did not return a row');
+  });
+
+  it('rejects oversized redacted audit payloads before writing', async () => {
+    const writer = new PostgresAdminAuditWriter({} as DatabaseInstance, {
+      resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+    });
+    transaction.execute = jest.fn();
+
+    await expect(writer.write(adminAuditEvent({
+      argsRedacted: { value: 'x'.repeat(4096) },
+    }))).rejects.toThrow('argsRedacted');
+
+    expect(transaction.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['actorConsoleSessionHash', { actorConsoleSessionHash: Buffer.alloc(31, 8) }, 'actor session hash'],
+    ['actorSub', { actorSub: ' ' }, 'actorSub'],
+    ['actorCapabilityRole', { actorCapabilityRole: ' ' as never }, 'actorCapabilityRole'],
+    ['endpoint', { endpoint: ' ' }, 'endpoint'],
+    ['operation', { operation: ' ' }, 'operation'],
+    ['correlationId', { correlationId: ' ' }, 'correlationId'],
+  ])('validates audit event field %s', async (_field, overrides, message) => {
+    const writer = new PostgresAdminAuditWriter({} as DatabaseInstance, {
+      resolve: () => Promise.resolve({ keyId: AUDIT_KEY_ID, key: Buffer.alloc(32, 9) }),
+    });
+    transaction.execute = jest.fn();
+
+    await expect(writer.write(adminAuditEvent(overrides))).rejects.toThrow(message);
+    expect(transaction.execute).not.toHaveBeenCalled();
+  });
+});
+
+function adminAuditEvent(overrides: Partial<ConsoleAdminAuditEvent> = {}): ConsoleAdminAuditEvent {
+  return {
+    occurredAt: FIVE_MINUTES,
+    actorUserId: USER_ID,
+    actorSub: PRIMARY_SUB,
+    actorRole: null,
+    actorCapabilityRole: 'account_admin',
+    actorConsoleSessionHash: hash(8),
+    capability: 'console:admin:accounts',
+    elevationAcr: 'urn:dollhouse:acr:admin-stepup',
+    elevationAmr: ['otp'],
+    elevationAuthTime: BEFORE_NOW,
+    correlationId: '497ed92c-22a8-4a6f-87e3-5b458bfe9d38',
+    endpoint: 'POST /api/v1/admin/accounts/users/{user_id}/disable',
+    operation: 'accounts.user.disable',
+    resourceKind: 'user',
+    resourceId: USER_ID,
+    targetUserId: USER_ID,
+    argsRedacted: { reason: 'bounded' },
+    result: 'approved',
+    errorCode: null,
+    resultDetailRedacted: { authzVersion: 2 },
+    clientIp: '192.0.2.10',
+    userAgent: 'console-test',
+    ...overrides,
+  };
+}
+
+function sqlChunks(callIndex: number): readonly unknown[] {
+  const statement = transaction.execute.mock.calls[callIndex]?.[0] as { queryChunks?: readonly unknown[] } | undefined;
+  return statement?.queryChunks ?? [];
+}
+
+function sqlText(callIndex: number): string {
+  return sqlChunks(callIndex)
+    .map(chunk => typeof chunk === 'object' && chunk !== null && 'value' in chunk
+      ? String((chunk as { value: readonly string[] }).value.join(''))
+      : '')
+    .join('');
+}
+
+function expectedAuditHmac(event: ConsoleAdminAuditEvent, key: Buffer, chainPrev: Buffer | null): Buffer {
+  const canonical = JSON.stringify({
+    occurredAt: event.occurredAt.toISOString(),
+    actorUserId: event.actorUserId,
+    actorSub: event.actorSub,
+    actorRole: event.actorRole,
+    actorCapabilityRole: event.actorCapabilityRole,
+    actorConsoleSessionHash: event.actorConsoleSessionHash.toString('hex'),
+    capability: event.capability,
+    elevationAcr: event.elevationAcr,
+    elevationAmr: [...event.elevationAmr],
+    elevationAuthTime: event.elevationAuthTime ? event.elevationAuthTime.toISOString() : null,
+    endpoint: event.endpoint,
+    operation: event.operation,
+    resourceKind: event.resourceKind,
+    resourceId: event.resourceId,
+    targetUserId: event.targetUserId,
+    argsRedacted: event.argsRedacted,
+    result: event.result,
+    errorCode: event.errorCode,
+    resultDetailRedacted: event.resultDetailRedacted,
+    correlationId: event.correlationId,
+    clientIp: event.clientIp,
+    userAgent: event.userAgent,
+    chainPrev: chainPrev ? chainPrev.toString('hex') : null,
+  });
+  return createHmac('sha256', key).update(canonical).digest();
+}

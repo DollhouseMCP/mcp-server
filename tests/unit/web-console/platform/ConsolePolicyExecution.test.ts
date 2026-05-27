@@ -36,6 +36,8 @@ function auditEvent(): ConsoleAdminAuditEvent {
     occurredAt: new Date('2026-05-26T12:00:00.000Z'),
     actorUserId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
     actorSub: 'github_user-7',
+    actorRole: null,
+    actorCapabilityRole: 'auditor',
     actorConsoleSessionHash: Buffer.alloc(32, 7),
     capability: 'console:admin:audit',
     elevationAcr: 'urn:dollhouse:acr:admin-stepup',
@@ -44,9 +46,15 @@ function auditEvent(): ConsoleAdminAuditEvent {
     correlationId: 'ac2422b8-243f-4a67-9df6-87643c7a77a4',
     endpoint: 'GET /api/v1/admin/audit',
     operation: 'admin.audit.read',
-    argsRedacted: {},
+    resourceKind: null,
+    resourceId: null,
+    targetUserId: null,
+    argsRedacted: { filter: 'metadata-only' },
     result: 'approved',
     errorCode: null,
+    resultDetailRedacted: { count: 1 },
+    clientIp: '192.0.2.10',
+    userAgent: 'console-test',
   };
 }
 
@@ -239,16 +247,29 @@ describe('InMemoryAdminAuditWriter', () => {
     event.actorConsoleSessionHash[0] = 0;
     (event.elevationAmr as string[]).push('mutated-input');
     event.occurredAt.setUTCFullYear(2000);
+    (event.argsRedacted as Record<string, unknown>).filter = 'mutated-input';
 
     const returned = writer.getEvents()[0];
     returned.actorConsoleSessionHash[1] = 0;
     (returned.elevationAmr as string[]).push('mutated-output');
     returned.elevationAuthTime?.setUTCFullYear(2000);
+    (returned.resultDetailRedacted as Record<string, unknown>).count = 99;
 
     const retained = writer.getEvents()[0];
     expect(retained.actorConsoleSessionHash).toEqual(Buffer.alloc(32, 7));
     expect(retained.elevationAmr).toEqual(['otp']);
     expect(retained.occurredAt).toEqual(new Date('2026-05-26T12:00:00.000Z'));
     expect(retained.elevationAuthTime).toEqual(new Date('2026-05-26T11:55:00.000Z'));
+    expect(retained.argsRedacted).toEqual({ filter: 'metadata-only' });
+    expect(retained.resultDetailRedacted).toEqual({ count: 1 });
+  });
+
+  it('uses the shared audit event validation contract', async () => {
+    const writer = new InMemoryAdminAuditWriter();
+
+    await expect(writer.write({
+      ...auditEvent(),
+      actorConsoleSessionHash: Buffer.alloc(31, 7),
+    })).rejects.toThrow('actor session hash');
   });
 });

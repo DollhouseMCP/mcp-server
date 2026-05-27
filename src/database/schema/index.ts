@@ -38,6 +38,8 @@ export {
   securityInvalidationReplicaCursors,
   securityInvalidationReplicaLeases,
   securityInvalidationAcks,
+  adminAuditChainHeads,
+  adminAuditEvents,
 } from './webConsole.js';
 export type {
   ConsoleAccountFactorType,
