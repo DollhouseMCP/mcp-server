@@ -4,10 +4,12 @@ import {
   ConsoleStoreValidationError,
   InMemoryConsoleSessionStore,
   InMemoryConsoleFactorStore,
+  InMemoryConsoleAccountAdminStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
+import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/index.js';
 import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/index.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
@@ -18,6 +20,7 @@ import type {
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
@@ -100,6 +103,28 @@ function totpFactor(overrides: Partial<ConsoleTotpFactorRecord> = {}): ConsoleTo
     enrolledAt: NOW,
     disabledAt: null,
     lastUsedAt: null,
+    ...overrides,
+  };
+}
+
+type PrincipalFixture = ConstructorParameters<typeof InMemoryConsoleAccountAdminStore>[0][number];
+
+function principal(overrides: Partial<PrincipalFixture> = {}): PrincipalFixture {
+  return {
+    userId: USER_ID,
+    primarySub: 'github_user-7',
+    username: 'alice',
+    displayName: 'Alice',
+    email: 'alice@example.test',
+    emailVerified: true,
+    authMethods: ['github'],
+    roles: [] as const,
+    disabledAt: null,
+    createdAt: NOW,
+    lastLoginAt: null,
+    adminFactorEnrolled: false,
+    accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+    authzVersion: 1,
     ...overrides,
   };
 }
@@ -440,5 +465,199 @@ describe('InMemoryConsoleIdentityResolver', () => {
     });
     await expect(resolver.resolveEnabledPrincipal('disabled')).resolves.toBeNull();
     await expect(resolver.resolveEnabledPrincipal('missing')).resolves.toBeNull();
+  });
+});
+
+describe('InMemoryConsoleAccountAdminStore', () => {
+  it('projects principal metadata only and manages active role history', async () => {
+    const store = new InMemoryConsoleAccountAdminStore([
+      principal(),
+      principal({
+        userId: SECOND_USER_ID,
+        primarySub: 'github_user-8',
+        username: 'bob',
+        roles: ['admin'],
+        accountCorrelationId: '11df9917-b534-4014-a03f-e2eb1f0c6fef',
+      }),
+    ]);
+
+    const grant = await store.grantRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      grantedByUserId: null,
+      grantedAt: FIVE_MINUTES,
+    });
+
+    expect(grant).toMatchObject({ userId: USER_ID, role: 'account_admin', revokedAt: null });
+    await expect(store.grantRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      grantedByUserId: null,
+      grantedAt: FIVE_MINUTES,
+    })).rejects.toThrow('already active');
+    expect(await store.listActiveRoles(USER_ID)).toEqual(['account_admin']);
+    expect((await store.findPrincipal(USER_ID))?.roles).toEqual(['account_admin']);
+    expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(2);
+
+    const revoked = await store.revokeRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      revokedByUserId: USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    });
+
+    expect(revoked).toMatchObject({ role: 'account_admin', revokedAt: THIRTY_MINUTES });
+    expect(await store.listActiveRoles(USER_ID)).toEqual([]);
+    expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(3);
+  });
+
+  it('counts only enabled account administrators and bumps security version on disablement', async () => {
+    const store = new InMemoryConsoleAccountAdminStore([
+      principal({ roles: ['account_admin'] }),
+      principal({
+        userId: SECOND_USER_ID,
+        primarySub: 'github_user-8',
+        username: 'bob',
+        roles: ['admin'],
+        accountCorrelationId: '11df9917-b534-4014-a03f-e2eb1f0c6fef',
+      }),
+    ]);
+
+    expect(await store.countEnabledAccountsAdmins()).toBe(2);
+    expect(await store.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES }))
+      .toMatchObject({ userId: USER_ID, disabledAt: FIVE_MINUTES, authzVersion: 2 });
+    expect(await store.countEnabledAccountsAdmins()).toBe(1);
+    expect(await store.disablePrincipal({ userId: USER_ID, disabledAt: THIRTY_MINUTES })).toBeNull();
+    expect(await store.enablePrincipal({ userId: USER_ID, enabledAt: THIRTY_MINUTES }))
+      .toMatchObject({ userId: USER_ID, disabledAt: null, authzVersion: 3 });
+  });
+
+  it('rejects missing principals and prevents orphaning the last accounts administrator', async () => {
+    const store = new InMemoryConsoleAccountAdminStore([principal({ roles: ['account_admin'] })]);
+
+    await expect(store.grantRole({
+      userId: SECOND_USER_ID,
+      role: 'operator',
+      grantedByUserId: USER_ID,
+      grantedAt: FIVE_MINUTES,
+    })).rejects.toThrow('principal does not exist');
+    await expect(store.revokeRole({
+      userId: SECOND_USER_ID,
+      role: 'operator',
+      revokedByUserId: USER_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+    await expect(store.revokeRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      revokedByUserId: USER_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+    await expect(store.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES })).resolves.toBeNull();
+  });
+});
+
+describe('InMemoryConsoleSecurityInvalidationStore', () => {
+  it('appends durable-ordered invalidation events and advances replica cursors monotonically', async () => {
+    const store = new InMemoryConsoleSecurityInvalidationStore();
+
+    const event = await store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 2,
+      reason: 'admin_disabled',
+      payload: { revokedSessions: 2 },
+      createdAt: FIVE_MINUTES,
+      createdByUserId: SECOND_USER_ID,
+    });
+    const second = await store.appendEvent({
+      kind: 'console_session_revoked',
+      urgency: 'eventual',
+      userId: null,
+      consoleSessionIdHash: hash(1),
+      reason: 'user_logout',
+      createdAt: THIRTY_MINUTES,
+    });
+
+    expect(event.sequenceId).toBe(1);
+    expect(second.sequenceId).toBe(2);
+    expect(await store.listEventsAfter(0)).toHaveLength(2);
+
+    await store.recordReplicaCursor('replica-a', 2, THIRTY_MINUTES);
+    await store.recordReplicaCursor('replica-a', 1, THIRTY_MINUTES);
+    expect(await store.getReplicaCursor('replica-a')).toBe(2);
+    expect(await store.listEventsAfter(2)).toEqual([]);
+    await expect(store.listEventsAfter(-1)).rejects.toThrow('non-negative integer');
+    await expect(store.listEventsAfter(0, 1001)).rejects.toThrow('between 1 and 1000');
+  });
+
+  it('tracks live leases and idempotent event acknowledgements', async () => {
+    const store = new InMemoryConsoleSecurityInvalidationStore();
+    const event = await store.appendEvent({
+      kind: 'admin_factor_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      reason: 'factor_disabled',
+      createdAt: FIVE_MINUTES,
+    });
+
+    await store.acquireReplicaLease({
+      replicaId: 'replica-b',
+      renewedAt: FIVE_MINUTES,
+      leaseUntil: THIRTY_MINUTES,
+    });
+    await store.acquireReplicaLease({
+      replicaId: 'replica-a',
+      renewedAt: BEFORE_NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    expect(await store.listLiveReplicaIds(new Date('2026-05-26T12:06:00.000Z'))).toEqual(['replica-b']);
+
+    await store.acknowledgeEvent(event.eventId, 'replica-b', FIVE_MINUTES);
+    await store.acknowledgeEvent(event.eventId, 'replica-b', THIRTY_MINUTES);
+    expect(await store.listAcknowledgedReplicaIds(event.eventId)).toEqual(['replica-b']);
+  });
+
+  it('rejects invalid event inputs before durable append', async () => {
+    const store = new InMemoryConsoleSecurityInvalidationStore();
+    await expect(store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: null,
+      reason: 'admin_disabled',
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('userId is required');
+    await expect(store.appendEvent({
+      kind: 'console_session_revoked',
+      urgency: 'eventual',
+      userId: null,
+      consoleSessionIdHash: Buffer.from('raw-session'),
+      reason: 'user_logout',
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('32-byte keyed hash');
+    await expect(store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 0,
+      reason: 'admin_disabled',
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('positive integer');
+    await expect(store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      reason: 'x'.repeat(201),
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('at most 200');
+    await expect(store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      reason: 'admin_disabled',
+      payload: { secret: 'not allowed' },
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('not allowed');
   });
 });

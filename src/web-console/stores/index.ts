@@ -7,3 +7,5 @@ export * from './IIdempotencyStore.js';
 export * from './InMemoryIdempotencyStore.js';
 export * from './IConsoleFactorStore.js';
 export * from './InMemoryConsoleFactorStore.js';
+export * from './IConsoleAccountAdminStore.js';
+export * from './InMemoryConsoleAccountAdminStore.js';

@@ -18,6 +18,10 @@ import { InMemoryIdempotencyStore } from './stores/InMemoryIdempotencyStore.js';
 import type { ILoginTransactionStore } from './stores/ILoginTransactionStore.js';
 import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransactionStore.js';
 import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
+import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
+import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
+import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
+import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -26,6 +30,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   loginTransactionStore: 'WebConsoleLoginTransactionStore',
   idempotencyStore: 'WebConsoleIdempotencyStore',
   factorStore: 'WebConsoleFactorStore',
+  accountAdminStore: 'WebConsoleAccountAdminStore',
+  securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   identityResolver: 'WebConsoleIdentityResolver',
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
@@ -49,6 +55,8 @@ export interface WebConsoleComposition {
   readonly loginTransactionStore: ILoginTransactionStore;
   readonly idempotencyStore: IIdempotencyStore;
   readonly factorStore: IConsoleFactorStore;
+  readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
@@ -86,6 +94,8 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.loginTransactionStore, () => stores.loginTransactionStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => stores.factorStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
     container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
     if (secretEncryption) {
@@ -127,6 +137,8 @@ interface ConsoleStoreSet {
   readonly loginTransactionStore: ILoginTransactionStore;
   readonly idempotencyStore: IIdempotencyStore;
   readonly factorStore: IConsoleFactorStore;
+  readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
@@ -137,12 +149,16 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresLoginTransactionStore },
       { PostgresIdempotencyStore },
       { PostgresConsoleFactorStore },
+      { PostgresConsoleAccountAdminStore },
+      { PostgresConsoleSecurityInvalidationStore },
       { PostgresConsoleIdentityResolver },
     ] = await Promise.all([
       import('./stores/PostgresConsoleSessionStore.js'),
       import('./stores/PostgresLoginTransactionStore.js'),
       import('./stores/PostgresIdempotencyStore.js'),
       import('./stores/PostgresConsoleFactorStore.js'),
+      import('./stores/PostgresConsoleAccountAdminStore.js'),
+      import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./identity/PostgresConsoleIdentityResolver.js'),
     ]);
     return {
@@ -150,6 +166,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       loginTransactionStore: new PostgresLoginTransactionStore(database),
       idempotencyStore: new PostgresIdempotencyStore(database),
       factorStore: new PostgresConsoleFactorStore(database),
+      accountAdminStore: new PostgresConsoleAccountAdminStore(database),
+      securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }
@@ -159,6 +177,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     loginTransactionStore: new InMemoryLoginTransactionStore(),
     idempotencyStore: new InMemoryIdempotencyStore(),
     factorStore: new InMemoryConsoleFactorStore(),
+    accountAdminStore: new InMemoryConsoleAccountAdminStore(),
+    securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),
   };
 }

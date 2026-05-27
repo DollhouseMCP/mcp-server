@@ -169,6 +169,13 @@
       "when": 1778990000000,
       "tag": "0023_web_console_platform_foundations",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1778995000000,
+      "tag": "0024_web_console_account_admin_invalidation",
+      "breakpoints": true
     }
   ]
 }

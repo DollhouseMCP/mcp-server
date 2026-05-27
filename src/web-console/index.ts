@@ -6,4 +6,5 @@ export * from './security/index.js';
 export * from './audit/index.js';
 export * from './lifecycle/index.js';
 export * from './auth/index.js';
+export * from './services/index.js';
 export * from './WebConsoleRegistrar.js';

@@ -34,5 +34,15 @@ export {
   idempotencyRecords,
   accountFactors,
   accountFactorBackupCodes,
+  securityInvalidationEvents,
+  securityInvalidationReplicaCursors,
+  securityInvalidationReplicaLeases,
+  securityInvalidationAcks,
 } from './webConsole.js';
-export type { ConsoleAccountFactorType, ConsoleAdminRole, ConsoleLoginFlowKind } from './webConsole.js';
+export type {
+  ConsoleAccountFactorType,
+  ConsoleAdminRole,
+  ConsoleLoginFlowKind,
+  ConsoleSecurityInvalidationKind,
+  ConsoleSecurityInvalidationUrgency,
+} from './webConsole.js';

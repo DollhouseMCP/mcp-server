@@ -10,11 +10,13 @@ import {
   text,
   timestamp,
   integer,
+  bigint,
   boolean,
   jsonb,
   customType,
   index,
   uniqueIndex,
+  check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -137,4 +139,57 @@ export const accountFactorBackupCodes = pgTable('account_factor_backup_codes', {
     .on(table.factorId, table.codeHash),
   index('idx_account_factor_backup_codes_factor_unused')
     .on(table.factorId, table.usedAt),
+]);
+
+export type ConsoleSecurityInvalidationKind =
+  | 'principal_disabled'
+  | 'principal_reenabled'
+  | 'principal_authz_changed'
+  | 'principal_credentials_revoked'
+  | 'admin_factor_disabled'
+  | 'console_session_revoked'
+  | 'console_elevation_revoked'
+  | 'runtime_sessions_terminated';
+
+export type ConsoleSecurityInvalidationUrgency = 'eventual' | 'acknowledged';
+
+export const securityInvalidationEvents = pgTable('security_invalidation_events', {
+  sequenceId: bigint('sequence_id', { mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+  eventId: uuid('event_id').notNull().defaultRandom(),
+  kind: text('kind').$type<ConsoleSecurityInvalidationKind>().notNull(),
+  urgency: text('urgency').$type<ConsoleSecurityInvalidationUrgency>().notNull(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  consoleSessionIdHash: bytea('console_session_id_hash'),
+  authzVersion: bigint('authz_version', { mode: 'number' }),
+  reason: text('reason').notNull(),
+  payload: jsonb('payload').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  createdByUserId: uuid('created_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+}, (table) => [
+  uniqueIndex('idx_security_invalidation_events_event_id').on(table.eventId),
+  index('idx_security_invalidation_events_user').on(table.userId, table.sequenceId),
+  index('idx_security_invalidation_events_created').on(table.createdAt),
+  check('security_invalidation_events_payload_size_check', sql`pg_column_size(${table.payload}) <= 4096`),
+]);
+
+export const securityInvalidationReplicaCursors = pgTable('security_invalidation_replica_cursors', {
+  replicaId: text('replica_id').primaryKey(),
+  lastSequenceId: bigint('last_sequence_id', { mode: 'number' }).notNull().default(0),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+});
+
+export const securityInvalidationReplicaLeases = pgTable('security_invalidation_replica_leases', {
+  replicaId: text('replica_id').primaryKey(),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+  renewedAt: timestamp('renewed_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  index('idx_security_invalidation_replica_leases_until').on(table.leaseUntil),
+]);
+
+export const securityInvalidationAcks = pgTable('security_invalidation_acks', {
+  eventId: uuid('event_id').notNull().references(() => securityInvalidationEvents.eventId, { onDelete: 'cascade' }),
+  replicaId: text('replica_id').notNull(),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('idx_security_invalidation_acks_unique').on(table.eventId, table.replicaId),
 ]);

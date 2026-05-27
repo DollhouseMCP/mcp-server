@@ -1,0 +1,439 @@
+import { and, eq, isNull, sql } from 'drizzle-orm';
+
+import { withSystemContext } from '../../database/admin.js';
+import type { DatabaseInstance } from '../../database/connection.js';
+import { userAdminRoles, users } from '../../database/schema/index.js';
+import type {
+  ConsoleAdminRole,
+  ConsolePrincipalSummary,
+  ConsoleRoleAssignment,
+  IConsoleAccountAdminStore,
+  PrincipalDirectoryQuery,
+  PrincipalDisableInput,
+  PrincipalEnableInput,
+  PrincipalStateChange,
+  RoleGrantInput,
+  RoleRevokeInput,
+} from './IConsoleAccountAdminStore.js';
+import {
+  assertAdminRole,
+  clonePrincipalSummary,
+  cloneRoleAssignment,
+  validatePrincipalDirectoryQuery,
+  validatePrincipalDisableInput,
+  validatePrincipalEnableInput,
+  validateRoleGrantInput,
+  validateRoleRevokeInput,
+} from './IConsoleAccountAdminStore.js';
+import {
+  ConsoleStoreConflictError,
+  assertUuid,
+  isUniqueViolation,
+} from './ConsoleStoreValidation.js';
+
+type PrincipalRow = Record<string, unknown> & {
+  user_id: string;
+  primary_sub: string | null;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  email_verified: boolean | null;
+  auth_methods: string[] | null;
+  roles: string[] | null;
+  disabled_at: Date | string | null;
+  created_at: Date | string;
+  last_login_at: number | string | null;
+  admin_factor_enrolled: boolean;
+  account_correlation_id: string;
+  authz_version: number | string;
+};
+
+export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminStore {
+  constructor(private readonly db: DatabaseInstance) {}
+
+  async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<ConsolePrincipalSummary[]> {
+    validatePrincipalDirectoryQuery(query);
+    const limit = query.limit ?? 100;
+    const rows: PrincipalRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
+      SELECT
+        u.id AS user_id,
+        primary_account.sub AS primary_sub,
+        u.username,
+        COALESCE(u.display_name, primary_account.display_name) AS display_name,
+        COALESCE(u.email, primary_account.email) AS email,
+        COALESCE(primary_account.email_verified, false) AS email_verified,
+        COALESCE(identity_summary.auth_methods, ARRAY[]::TEXT[]) AS auth_methods,
+        COALESCE(role_summary.roles, ARRAY[]::TEXT[]) AS roles,
+        u.disabled_at,
+        u.created_at,
+        identity_summary.last_login_at,
+        EXISTS (
+          SELECT 1 FROM account_factors af
+          WHERE af.user_id = u.id AND af.factor_type = 'totp' AND af.disabled_at IS NULL
+        ) AS admin_factor_enrolled,
+        u.account_correlation_id,
+        u.authz_version
+      FROM users u
+      LEFT JOIN LATERAL (
+        SELECT aa.sub, aa.display_name, aa.email, aa.email_verified
+        FROM auth_accounts aa
+        WHERE aa.user_id = u.id
+        ORDER BY aa.created_at ASC, aa.sub ASC
+        LIMIT 1
+      ) primary_account ON true
+      LEFT JOIN LATERAL (
+        SELECT
+          ARRAY_AGG(DISTINCT aa.provider ORDER BY aa.provider) AS auth_methods,
+          MAX(aa.last_auth_at) AS last_login_at
+        FROM auth_accounts aa
+        WHERE aa.user_id = u.id
+      ) identity_summary ON true
+      LEFT JOIN LATERAL (
+        SELECT ARRAY_AGG(uar.role ORDER BY uar.role) AS roles
+        FROM user_admin_roles uar
+        WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
+      ) role_summary ON true
+      WHERE (${query.sub ?? null}::TEXT IS NULL OR EXISTS (
+        SELECT 1 FROM auth_accounts aa
+        WHERE aa.user_id = u.id AND aa.sub = ${query.sub ?? null}
+      ))
+      ORDER BY u.created_at ASC, u.id ASC
+      LIMIT ${limit}
+    `));
+    return rows.map(row => fromPrincipalRow(row));
+  }
+
+  async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
+    assertUuid(userId, 'userId');
+    const directRows: PrincipalRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
+      SELECT *
+      FROM (
+        SELECT
+          u.id AS user_id,
+          primary_account.sub AS primary_sub,
+          u.username,
+          COALESCE(u.display_name, primary_account.display_name) AS display_name,
+          COALESCE(u.email, primary_account.email) AS email,
+          COALESCE(primary_account.email_verified, false) AS email_verified,
+          COALESCE(identity_summary.auth_methods, ARRAY[]::TEXT[]) AS auth_methods,
+          COALESCE(role_summary.roles, ARRAY[]::TEXT[]) AS roles,
+          u.disabled_at,
+          u.created_at,
+          identity_summary.last_login_at,
+          EXISTS (
+            SELECT 1 FROM account_factors af
+            WHERE af.user_id = u.id AND af.factor_type = 'totp' AND af.disabled_at IS NULL
+          ) AS admin_factor_enrolled,
+          u.account_correlation_id,
+          u.authz_version
+        FROM users u
+        LEFT JOIN LATERAL (
+          SELECT aa.sub, aa.display_name, aa.email, aa.email_verified
+          FROM auth_accounts aa
+          WHERE aa.user_id = u.id
+          ORDER BY aa.created_at ASC, aa.sub ASC
+          LIMIT 1
+        ) primary_account ON true
+        LEFT JOIN LATERAL (
+          SELECT
+            ARRAY_AGG(DISTINCT aa.provider ORDER BY aa.provider) AS auth_methods,
+            MAX(aa.last_auth_at) AS last_login_at
+          FROM auth_accounts aa
+          WHERE aa.user_id = u.id
+        ) identity_summary ON true
+        LEFT JOIN LATERAL (
+          SELECT ARRAY_AGG(uar.role ORDER BY uar.role) AS roles
+          FROM user_admin_roles uar
+          WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
+        ) role_summary ON true
+        WHERE u.id = ${userId}
+      ) principal
+      LIMIT 1
+    `));
+    return directRows[0] ? fromPrincipalRow(directRows[0]) : null;
+  }
+
+  async listActiveRoles(userId: string): Promise<ConsoleAdminRole[]> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select({ role: userAdminRoles.role }).from(userAdminRoles)
+        .where(and(eq(userAdminRoles.userId, userId), isNull(userAdminRoles.revokedAt))),
+    );
+    return rows.map(row => {
+      assertAdminRole(row.role, 'role');
+      return row.role;
+    }).sort();
+  }
+
+  async grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment> {
+    validateRoleGrantInput(input);
+    try {
+      const rows = await withSystemContext(this.db, async (tx) => {
+        const granted = await tx.insert(userAdminRoles).values({
+          userId: input.userId,
+          role: input.role,
+          grantedAt: input.grantedAt,
+          grantedByUserId: input.grantedByUserId,
+        }).returning();
+        await tx.update(users).set({
+          authzVersion: sql`${users.authzVersion} + 1`,
+          updatedAt: input.grantedAt,
+        }).where(eq(users.id, input.userId));
+        return granted;
+      });
+      return fromRoleRow(rows[0]);
+    } catch (error) {
+      if (isUniqueViolation(error)) {
+        throw new ConsoleStoreConflictError('administrative role is already active for principal');
+      }
+      throw error;
+    }
+  }
+
+  async revokeRole(input: RoleRevokeInput): Promise<ConsoleRoleAssignment | null> {
+    validateRoleRevokeInput(input);
+    const rows = await withSystemContext(this.db, async (tx) => {
+      if (isAccountsAdminRole(input.role)) {
+        const revokedRows: RoleMutationRow[] = await tx.execute(sql`
+          WITH live_account_admins AS (
+            SELECT u.id
+            FROM users u
+            WHERE u.disabled_at IS NULL
+              AND EXISTS (
+                SELECT 1
+                FROM user_admin_roles r
+                WHERE r.user_id = u.id
+                  AND r.revoked_at IS NULL
+                  AND r.role IN ('admin', 'account_admin')
+              )
+            FOR UPDATE OF u
+          ),
+          revoked_role AS (
+            UPDATE user_admin_roles
+            SET revoked_at = ${input.revokedAt},
+                revoked_by_user_id = ${input.revokedByUserId}
+            WHERE user_id = ${input.userId}
+              AND role = ${input.role}
+              AND revoked_at IS NULL
+              AND (SELECT COUNT(*) FROM live_account_admins) > 1
+            RETURNING id, user_id, role, granted_at, granted_by_user_id, revoked_at, revoked_by_user_id
+          )
+          UPDATE users
+          SET authz_version = authz_version + 1,
+              updated_at = ${input.revokedAt}
+          WHERE id = ${input.userId}
+            AND EXISTS (SELECT 1 FROM revoked_role)
+          RETURNING (
+            SELECT jsonb_build_object(
+              'id', revoked_role.id,
+              'userId', revoked_role.user_id,
+              'role', revoked_role.role,
+              'grantedAt', revoked_role.granted_at,
+              'grantedByUserId', revoked_role.granted_by_user_id,
+              'revokedAt', revoked_role.revoked_at,
+              'revokedByUserId', revoked_role.revoked_by_user_id
+            )
+            FROM revoked_role
+          ) AS role
+        `);
+        return revokedRows;
+      }
+      const revoked = await tx.update(userAdminRoles).set({
+        revokedAt: input.revokedAt,
+        revokedByUserId: input.revokedByUserId,
+      }).where(and(
+        eq(userAdminRoles.userId, input.userId),
+        eq(userAdminRoles.role, input.role),
+        isNull(userAdminRoles.revokedAt),
+      )).returning();
+      if (revoked[0]) {
+        await tx.update(users).set({
+          authzVersion: sql`${users.authzVersion} + 1`,
+          updatedAt: input.revokedAt,
+        }).where(eq(users.id, input.userId));
+      }
+      return revoked;
+    });
+    if (!rows[0]) return null;
+    return isRoleMutationRow(rows[0]) ? fromRoleMutationRow(rows[0]) : fromRoleRow(rows[0]);
+  }
+
+  async countEnabledAccountsAdmins(): Promise<number> {
+    const rows: (Record<string, unknown> & { count: number | string })[] = await withSystemContext(this.db, tx =>
+      tx.execute(sql`
+        SELECT COUNT(DISTINCT u.id) AS count
+        FROM users u
+        JOIN user_admin_roles r ON r.user_id = u.id AND r.revoked_at IS NULL
+        WHERE u.disabled_at IS NULL AND r.role IN ('admin', 'account_admin')
+      `),
+    );
+    return Number(rows[0]?.count ?? 0);
+  }
+
+  async disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null> {
+    validatePrincipalDisableInput(input);
+    const rows: PrincipalStateChangeRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
+      WITH target_principal AS (
+        SELECT u.id,
+               EXISTS (
+                 SELECT 1
+                 FROM user_admin_roles r
+                 WHERE r.user_id = u.id
+                   AND r.revoked_at IS NULL
+                   AND r.role IN ('admin', 'account_admin')
+               ) AS is_account_admin
+        FROM users u
+        WHERE u.id = ${input.userId}
+          AND u.disabled_at IS NULL
+        FOR UPDATE
+      ),
+      live_account_admins AS (
+        SELECT u.id
+        FROM users u
+        WHERE u.disabled_at IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM user_admin_roles r
+            WHERE r.user_id = u.id
+              AND r.revoked_at IS NULL
+              AND r.role IN ('admin', 'account_admin')
+          )
+        FOR UPDATE OF u
+      )
+      UPDATE users
+      SET disabled_at = ${input.disabledAt},
+          authz_version = authz_version + 1,
+          updated_at = ${input.disabledAt}
+      WHERE id = ${input.userId}
+        AND EXISTS (
+          SELECT 1
+          FROM target_principal
+          WHERE NOT target_principal.is_account_admin
+             OR (SELECT COUNT(*) FROM live_account_admins) > 1
+        )
+      RETURNING id AS "userId", authz_version AS "authzVersion", disabled_at AS "disabledAt"
+    `));
+    return rows[0] ? {
+      userId: rows[0].userId,
+      authzVersion: Number(rows[0].authzVersion),
+      disabledAt: toDate(rows[0].disabledAt),
+      changedAt: new Date(input.disabledAt.getTime()),
+    } : null;
+  }
+
+  async enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null> {
+    validatePrincipalEnableInput(input);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(users).set({
+        disabledAt: null,
+        authzVersion: sql`${users.authzVersion} + 1`,
+        updatedAt: input.enabledAt,
+      }).where(and(eq(users.id, input.userId), sql`${users.disabledAt} IS NOT NULL`))
+        .returning({
+          userId: users.id,
+          authzVersion: users.authzVersion,
+          disabledAt: users.disabledAt,
+        }),
+    );
+    return rows[0] ? {
+      userId: rows[0].userId,
+      authzVersion: rows[0].authzVersion,
+      disabledAt: null,
+      changedAt: new Date(input.enabledAt.getTime()),
+    } : null;
+  }
+
+}
+
+type PrincipalStateChangeRow = Record<string, unknown> & {
+  userId: string;
+  authzVersion: number | string;
+  disabledAt: Date | string | null;
+};
+
+type RoleMutationRow = Record<string, unknown> & {
+  role: {
+    id: string;
+    userId: string;
+    role: ConsoleAdminRole;
+    grantedAt: Date | string;
+    grantedByUserId: string | null;
+    revokedAt: Date | string | null;
+    revokedByUserId: string | null;
+  } | null;
+};
+
+function fromRoleRow(row: typeof userAdminRoles.$inferSelect): ConsoleRoleAssignment {
+  return cloneRoleAssignment({
+    id: row.id,
+    userId: row.userId,
+    role: row.role,
+    grantedAt: row.grantedAt,
+    grantedByUserId: row.grantedByUserId,
+    revokedAt: row.revokedAt,
+    revokedByUserId: row.revokedByUserId,
+  });
+}
+
+function fromRoleMutationRow(row: RoleMutationRow): ConsoleRoleAssignment | null {
+  if (!row.role) return null;
+  return cloneRoleAssignment({
+    id: row.role.id,
+    userId: row.role.userId,
+    role: row.role.role,
+    grantedAt: requireDate(row.role.grantedAt, 'grantedAt'),
+    grantedByUserId: row.role.grantedByUserId,
+    revokedAt: toDate(row.role.revokedAt),
+    revokedByUserId: row.role.revokedByUserId,
+  });
+}
+
+function isRoleMutationRow(row: unknown): row is RoleMutationRow {
+  return !!row && typeof row === 'object' && 'role' in row
+    && (row as { role?: unknown }).role !== null
+    && typeof (row as { role?: unknown }).role === 'object';
+}
+
+function isAccountsAdminRole(role: ConsoleAdminRole): boolean {
+  return role === 'admin' || role === 'account_admin';
+}
+
+function fromPrincipalRow(row: PrincipalRow): ConsolePrincipalSummary {
+  const roles = (row.roles ?? []).map(role => {
+    assertAdminRole(role, 'roles');
+    return role;
+  });
+  return clonePrincipalSummary({
+    userId: row.user_id,
+    primarySub: row.primary_sub,
+    username: row.username,
+    displayName: row.display_name,
+    email: row.email,
+    emailVerified: row.email_verified ?? false,
+    authMethods: row.auth_methods ?? [],
+    roles,
+    disabledAt: toDate(row.disabled_at),
+    createdAt: requireDate(row.created_at, 'created_at'),
+    lastLoginAt: lastLoginDate(row.last_login_at),
+    adminFactorEnrolled: row.admin_factor_enrolled,
+    accountCorrelationId: row.account_correlation_id,
+    authzVersion: Number(row.authz_version),
+  });
+}
+
+function toDate(value: Date | string | null): Date | null {
+  if (value === null) return null;
+  return value instanceof Date ? new Date(value.getTime()) : new Date(value);
+}
+
+function requireDate(value: Date | string, name: string): Date {
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (Number.isNaN(date.getTime())) throw new Error(`${name} is not a valid timestamp`);
+  return date;
+}
+
+function lastLoginDate(value: number | string | null): Date | null {
+  if (value === null) return null;
+  const millis = Number(value);
+  return Number.isFinite(millis) ? new Date(millis) : null;
+}

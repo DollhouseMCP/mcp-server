@@ -30,6 +30,12 @@ const { PostgresIdempotencyStore } = await import(
 const { PostgresConsoleFactorStore } = await import(
   '../../../../src/web-console/stores/PostgresConsoleFactorStore.js'
 );
+const { PostgresConsoleAccountAdminStore } = await import(
+  '../../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js'
+);
+const { PostgresConsoleSecurityInvalidationStore } = await import(
+  '../../../../src/web-console/services/invalidation/PostgresConsoleSecurityInvalidationStore.js'
+);
 const { PostgresConsoleIdentityResolver } = await import(
   '../../../../src/web-console/identity/PostgresConsoleIdentityResolver.js'
 );
@@ -40,6 +46,8 @@ const { ConsoleStoreConflictError, ConsoleStoreValidationError } = await import(
 );
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
+const PRIMARY_SUB = 'github_user-7';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
 const FOUR_MINUTES = new Date('2026-05-26T12:04:00.000Z');
@@ -61,7 +69,7 @@ function sessionRow(overrides: Partial<ConsoleSessionRecord & {
   return {
     idHash: hash(1),
     userId: USER_ID,
-    authSub: 'github_user-7',
+    authSub: PRIMARY_SUB,
     csrfTokenHash: hash(2),
     grantedCapabilities: ['console:self'],
     elevatedCapabilities: [],
@@ -133,6 +141,15 @@ function returningChain(rows: unknown[]) {
   return chain;
 }
 
+function insertChain(rows: unknown[] = []) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.values = jest.fn(() => chain);
+  chain.onConflictDoUpdate = jest.fn(() => chain);
+  chain.onConflictDoNothing = jest.fn(() => chain);
+  chain.returning = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
 function selectingChain(rows: unknown[]) {
   const chain: Record<string, jest.Mock> = {};
   chain.from = jest.fn(() => chain);
@@ -140,6 +157,14 @@ function selectingChain(rows: unknown[]) {
   chain.where = jest.fn(() => chain);
   chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
+function selectingOrderedChain(rows: unknown[]) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.from = jest.fn(() => chain);
+  chain.where = jest.fn(() => chain);
+  chain.orderBy = jest.fn(() => Promise.resolve(rows));
   return chain;
 }
 
@@ -160,6 +185,77 @@ function factorRow(overrides: Partial<{
     enrolledAt: NOW,
     disabledAt: null,
     lastUsedAt: null,
+    ...overrides,
+  };
+}
+
+function roleRow(overrides: Partial<{
+  id: string;
+  userId: string;
+  role: 'admin' | 'account_admin' | 'operator' | 'auditor' | 'security_admin';
+  grantedAt: Date;
+  grantedByUserId: string | null;
+  revokedAt: Date | null;
+  revokedByUserId: string | null;
+}> = {}) {
+  return {
+    id: '117f4897-f16d-4402-b6bb-b95f18ea5e40',
+    userId: USER_ID,
+    role: 'account_admin' as const,
+    grantedAt: NOW,
+    grantedByUserId: null,
+    revokedAt: null,
+    revokedByUserId: null,
+    ...overrides,
+  };
+}
+
+function roleMutationRow(overrides: Partial<ReturnType<typeof roleRow>> = {}) {
+  const row = roleRow(overrides);
+  return {
+    role: {
+      id: row.id,
+      userId: row.userId,
+      role: row.role,
+      grantedAt: row.grantedAt,
+      grantedByUserId: row.grantedByUserId,
+      revokedAt: row.revokedAt,
+      revokedByUserId: row.revokedByUserId,
+    },
+  };
+}
+
+function principalProjectionRow(overrides: Partial<{
+  user_id: string;
+  primary_sub: string | null;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  email_verified: boolean | null;
+  auth_methods: string[] | null;
+  roles: string[] | null;
+  disabled_at: Date | null;
+  created_at: Date;
+  last_login_at: number | null;
+  admin_factor_enrolled: boolean;
+  account_correlation_id: string;
+  authz_version: number;
+}> = {}) {
+  return {
+    user_id: USER_ID,
+    primary_sub: PRIMARY_SUB,
+    username: 'alice',
+    display_name: 'Alice',
+    email: 'alice@example.test',
+    email_verified: true,
+    auth_methods: ['github'],
+    roles: ['account_admin'],
+    disabled_at: null,
+    created_at: NOW,
+    last_login_at: FIVE_MINUTES.getTime(),
+    admin_factor_enrolled: true,
+    account_correlation_id: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+    authz_version: 3,
     ...overrides,
   };
 }
@@ -553,18 +649,230 @@ describe('PostgresConsoleFactorStore', () => {
 describe('PostgresConsoleIdentityResolver', () => {
   it('returns the queried canonical security state for an enabled principal', async () => {
     transaction.select = jest.fn(() => selectingChain([{
-      sub: 'github_user-7',
+      sub: PRIMARY_SUB,
       userId: USER_ID,
       disabledAt: null,
       authzVersion: 4,
     }]));
     const resolver = new PostgresConsoleIdentityResolver({} as DatabaseInstance);
 
-    await expect(resolver.resolveEnabledPrincipal('github_user-7')).resolves.toEqual({
-      sub: 'github_user-7',
+    await expect(resolver.resolveEnabledPrincipal(PRIMARY_SUB)).resolves.toEqual({
+      sub: PRIMARY_SUB,
       userId: USER_ID,
       disabledAt: null,
       authzVersion: 4,
     });
+  });
+});
+
+describe('PostgresConsoleAccountAdminStore', () => {
+  it('writes role grants through the role table and bumps principal authz version', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.insert = jest.fn(() => insertChain([roleRow()]));
+    transaction.update = jest.fn(() => returningChain([]));
+
+    await expect(store.grantRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      grantedByUserId: SECOND_USER_ID,
+      grantedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ userId: USER_ID, role: 'account_admin' });
+
+    expect(transaction.insert).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('translates duplicate role grants to a store conflict', async () => {
+    const unique = Object.assign(new Error('duplicate'), { code: '23505' });
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => ({
+        returning: jest.fn(() => Promise.reject(unique)),
+      })),
+    }));
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+
+    await expect(store.grantRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      grantedByUserId: SECOND_USER_ID,
+      grantedAt: FIVE_MINUTES,
+    })).rejects.toThrow(ConsoleStoreConflictError);
+  });
+
+  it('revokes account-admin roles through an atomic orphan-checked statement', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([roleMutationRow({ revokedAt: FIVE_MINUTES, revokedByUserId: SECOND_USER_ID })]);
+    transaction.update = jest.fn();
+
+    await expect(store.revokeRole({
+      userId: USER_ID,
+      role: 'account_admin',
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ revokedAt: FIVE_MINUTES });
+
+    expect(transaction.execute).toHaveBeenCalledTimes(1);
+    expect(transaction.update).not.toHaveBeenCalled();
+  });
+
+  it('revokes non-account-admin roles and bumps authz version in one system transaction', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(returningChain([roleRow({
+        role: 'operator',
+        revokedAt: FIVE_MINUTES,
+        revokedByUserId: SECOND_USER_ID,
+      })]))
+      .mockReturnValueOnce(returningChain([]));
+
+    await expect(store.revokeRole({
+      userId: USER_ID,
+      role: 'operator',
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ revokedAt: FIVE_MINUTES });
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null for no-op role and principal state changes', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.revokeRole({
+      userId: USER_ID,
+      role: 'operator',
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+
+    transaction.execute = jest.fn(() => Promise.resolve([]));
+    await expect(store.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES })).resolves.toBeNull();
+    await expect(store.enablePrincipal({ userId: USER_ID, enabledAt: THIRTY_MINUTES })).resolves.toBeNull();
+  });
+
+  it('counts enabled account administrators', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.execute = jest.fn(() => Promise.resolve([{ count: '2' }]));
+    await expect(store.countEnabledAccountsAdmins()).resolves.toBe(2);
+  });
+
+  it('bumps authz_version when disabling and enabling principals', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.execute = jest.fn(() => Promise.resolve([{ userId: USER_ID, authzVersion: '2', disabledAt: FIVE_MINUTES }]));
+
+    await expect(store.disablePrincipal({ userId: USER_ID, disabledAt: FIVE_MINUTES }))
+      .resolves.toEqual({ userId: USER_ID, authzVersion: 2, disabledAt: FIVE_MINUTES, changedAt: FIVE_MINUTES });
+
+    transaction.update = jest.fn(() => returningChain([{ userId: USER_ID, authzVersion: 3, disabledAt: null }]));
+    await expect(store.enablePrincipal({ userId: USER_ID, enabledAt: THIRTY_MINUTES }))
+      .resolves.toEqual({ userId: USER_ID, authzVersion: 3, disabledAt: null, changedAt: THIRTY_MINUTES });
+  });
+
+  it('projects account directory rows without private content', async () => {
+    const row = principalProjectionRow();
+    transaction.execute = jest.fn(() => Promise.resolve([row]));
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+
+    await expect(store.listPrincipals({ sub: PRIMARY_SUB, limit: 20 })).resolves.toEqual([{
+      userId: USER_ID,
+      primarySub: PRIMARY_SUB,
+      username: 'alice',
+      displayName: 'Alice',
+      email: 'alice@example.test',
+      emailVerified: true,
+      authMethods: ['github'],
+      roles: ['account_admin'],
+      disabledAt: null,
+      createdAt: NOW,
+      lastLoginAt: FIVE_MINUTES,
+      adminFactorEnrolled: true,
+      accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8',
+      authzVersion: 3,
+    }]);
+
+    transaction.execute = jest.fn(() => Promise.resolve([principalProjectionRow({ roles: ['unknown'] })]));
+    await expect(store.findPrincipal(USER_ID)).rejects.toThrow('unknown administrative role');
+  });
+});
+
+describe('PostgresConsoleSecurityInvalidationStore', () => {
+  it('appends invalidation events and lists them by durable sequence', async () => {
+    const row = {
+      sequenceId: 7,
+      eventId: 'e6174fd8-f6ef-4286-8bd2-3f3eb30194c1',
+      kind: 'principal_disabled' as const,
+      urgency: 'acknowledged' as const,
+      userId: USER_ID,
+      consoleSessionIdHash: null,
+      authzVersion: 2,
+      reason: 'admin_disabled',
+      payload: { revokedSessions: 1 },
+      createdAt: FIVE_MINUTES,
+      createdByUserId: SECOND_USER_ID,
+    };
+    const store = new PostgresConsoleSecurityInvalidationStore({} as DatabaseInstance);
+    transaction.insert = jest.fn(() => insertChain([row]));
+
+    await expect(store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 2,
+      reason: 'admin_disabled',
+      payload: { revokedSessions: 1 },
+      createdAt: FIVE_MINUTES,
+      createdByUserId: SECOND_USER_ID,
+    })).resolves.toMatchObject({ sequenceId: 7, eventId: row.eventId });
+
+    transaction.select = jest.fn(() => selectingChain([row]));
+    await expect(store.listEventsAfter(6, 10)).resolves.toHaveLength(1);
+  });
+
+  it('records monotonic cursors, live leases, and acknowledgements with upserts', async () => {
+    const store = new PostgresConsoleSecurityInvalidationStore({} as DatabaseInstance);
+    const cursorChain = insertChain();
+    const leaseChain = insertChain();
+    const ackChain = insertChain();
+    transaction.insert = jest.fn()
+      .mockReturnValueOnce(cursorChain)
+      .mockReturnValueOnce(leaseChain)
+      .mockReturnValueOnce(ackChain);
+
+    await expect(store.recordReplicaCursor('replica-a', 7, FIVE_MINUTES)).resolves.toBeUndefined();
+    await expect(store.acquireReplicaLease({
+      replicaId: 'replica-a',
+      renewedAt: FIVE_MINUTES,
+      leaseUntil: THIRTY_MINUTES,
+    })).resolves.toBeUndefined();
+    await expect(store.acknowledgeEvent(
+      'e6174fd8-f6ef-4286-8bd2-3f3eb30194c1',
+      'replica-a',
+      THIRTY_MINUTES,
+    )).resolves.toBeUndefined();
+
+    expect(transaction.insert).toHaveBeenCalledTimes(3);
+    expect(cursorChain.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      set: expect.objectContaining({ lastSequenceId: expect.anything() }),
+    }));
+    expect(ackChain.onConflictDoNothing).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.any(Array),
+    }));
+    expect(ackChain.onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('reads cursors, live replicas, and acknowledgement IDs', async () => {
+    const store = new PostgresConsoleSecurityInvalidationStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([]))
+      .mockReturnValueOnce(selectingChain([{ lastSequenceId: 12 }]))
+      .mockReturnValueOnce(selectingOrderedChain([{ replicaId: 'replica-a' }, { replicaId: 'replica-b' }]))
+      .mockReturnValueOnce(selectingOrderedChain([{ replicaId: 'replica-b' }]));
+
+    await expect(store.getReplicaCursor('replica-a')).resolves.toBe(0);
+    await expect(store.getReplicaCursor('replica-a')).resolves.toBe(12);
+    await expect(store.listLiveReplicaIds(FIVE_MINUTES)).resolves.toEqual(['replica-a', 'replica-b']);
+    await expect(store.listAcknowledgedReplicaIds('e6174fd8-f6ef-4286-8bd2-3f3eb30194c1'))
+      .resolves.toEqual(['replica-b']);
   });
 });
