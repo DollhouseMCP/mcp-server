@@ -5,6 +5,7 @@ import type {
   ConsoleRequest,
   ConsoleRouteDefinition,
 } from './ConsolePlatformTypes.js';
+import { serializeConsoleCookie, validateConsoleCookieDirectives } from '../middleware/ConsoleCookies.js';
 
 export async function executeConsoleRoute(
   route: ConsoleRouteDefinition,
@@ -23,6 +24,10 @@ export async function executeConsoleRoute(
 }
 
 export function sendConsoleHandlerResult(response: Response, result: ConsoleHandlerResult): void {
+  validateResult(result);
+  for (const cookie of result.cookies ?? []) {
+    response.append('Set-Cookie', serializeConsoleCookie(cookie));
+  }
   if (result.body === undefined) {
     response.status(result.status).end();
     return;
@@ -34,4 +39,8 @@ function validateResult(result: ConsoleHandlerResult): void {
   if (!Number.isInteger(result.status) || result.status < 100 || result.status > 599) {
     throw new Error('Console route handler returned an invalid HTTP status');
   }
+  if (result.cookies && !Array.isArray(result.cookies)) {
+    throw new Error('Console route handler returned invalid cookie directives');
+  }
+  validateConsoleCookieDirectives(result.cookies);
 }

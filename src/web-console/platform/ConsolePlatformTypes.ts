@@ -1,4 +1,5 @@
 import type { Request } from 'express';
+import type { ConsoleCookieDirective } from '../middleware/ConsoleCookies.js';
 
 export const CONSOLE_API_PREFIX = '/api/v1' as const;
 
@@ -69,12 +70,14 @@ export interface ConsoleRequest extends Request {
 
 export interface ConsoleHandlerResult {
   /**
-   * Models ordinary JSON or bodyless module responses. BFF authentication
-   * cookie issuance/clearing requires a later platform-owned response type;
-   * modules must not receive unrestricted Set-Cookie control.
+   * Models ordinary JSON or bodyless module responses. The cookie directive
+   * surface is deliberately closed to the BFF cookie names and attributes
+   * defined by the platform; modules do not receive unrestricted Set-Cookie
+   * control.
    */
   readonly status: number;
   readonly body?: unknown;
+  readonly cookies?: readonly ConsoleCookieDirective[];
 }
 
 /**

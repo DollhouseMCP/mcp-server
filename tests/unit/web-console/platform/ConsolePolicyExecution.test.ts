@@ -8,6 +8,13 @@ import {
   type ConsoleAdminAuditEvent,
   type ConsoleRouteDefinition,
 } from '../../../../src/web-console/index.js';
+import {
+  CONSOLE_CSRF_COOKIE,
+  CONSOLE_INTEGRATION_STATE_COOKIE,
+  CONSOLE_LOGIN_STATE_COOKIE,
+  CONSOLE_SESSION_COOKIE,
+  serializeConsoleCookie,
+} from '../../../../src/web-console/middleware/ConsoleCookies.js';
 
 function route(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
   return {
@@ -104,6 +111,104 @@ describe('console route policy execution', () => {
     sendConsoleHandlerResult(response, { status: 200, body: { ok: true } });
     expect(response.status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('emits platform-controlled cookie directives before completing a response', () => {
+    const response = {
+      append: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      end: jest.fn(),
+    } as unknown as Response;
+
+    sendConsoleHandlerResult(response, {
+      status: 204,
+      cookies: [
+        { operation: 'set', name: CONSOLE_SESSION_COOKIE, value: 'opaque session' },
+        { operation: 'clear', name: CONSOLE_CSRF_COOKIE },
+      ],
+    });
+
+    expect(response.append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      'dh_session=opaque%20session; Path=/; Secure; SameSite=Lax; HttpOnly',
+    );
+    expect(response.append).toHaveBeenCalledWith(
+      'Set-Cookie',
+      'dh_csrf=; Path=/; Max-Age=0; Secure; SameSite=Lax',
+    );
+    expect(response.status).toHaveBeenCalledWith(204);
+  });
+
+  it('validates cookie directives even when serializing a fabricated result directly', () => {
+    const response = {
+      append: jest.fn(),
+      status: jest.fn().mockReturnThis(),
+      end: jest.fn(),
+    } as unknown as Response;
+
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 204,
+      cookies: { operation: 'clear', name: CONSOLE_SESSION_COOKIE } as never,
+    })).toThrow('invalid cookie directives');
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 204,
+      cookies: [{ operation: 'set', name: CONSOLE_SESSION_COOKIE, value: '' }],
+    })).toThrow('non-empty value');
+    expect(response.append).not.toHaveBeenCalled();
+  });
+});
+
+describe('console cookie directives', () => {
+  it('serializes fixed BFF cookie policies from the API contract', () => {
+    expect(serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_LOGIN_STATE_COOKIE,
+      value: 'login-state',
+    })).toBe('dh_login_state=login-state; Path=/api/v1/auth; Max-Age=600; Secure; SameSite=Lax; HttpOnly');
+    expect(serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_INTEGRATION_STATE_COOKIE,
+      value: 'integration-state',
+    })).toBe('dh_integration_state=integration-state; Path=/api/v1/me/integrations; Max-Age=600; Secure; SameSite=Lax; HttpOnly');
+    expect(serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_CSRF_COOKIE,
+      value: 'csrf-token',
+    })).toBe('dh_csrf=csrf-token; Path=/; Secure; SameSite=Lax');
+  });
+
+  it('uses the cookie-specific path and HttpOnly policy when clearing values', () => {
+    expect(serializeConsoleCookie({
+      operation: 'clear',
+      name: CONSOLE_LOGIN_STATE_COOKIE,
+    })).toBe('dh_login_state=; Path=/api/v1/auth; Max-Age=0; Secure; SameSite=Lax; HttpOnly');
+    expect(serializeConsoleCookie({
+      operation: 'clear',
+      name: CONSOLE_SESSION_COOKIE,
+    })).toBe('dh_session=; Path=/; Max-Age=0; Secure; SameSite=Lax; HttpOnly');
+  });
+
+  it('rejects invalid cookie directives at the kernel boundary', () => {
+    expect(() => serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_SESSION_COOKIE,
+      value: '',
+    })).toThrow('non-empty value');
+    expect(() => serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_SESSION_COOKIE,
+      value: 'x'.repeat(3501),
+    })).toThrow('maximum supported size');
+    expect(() => serializeConsoleCookie({
+      operation: 'set',
+      name: CONSOLE_SESSION_COOKIE,
+      value: Buffer.from('opaque') as never,
+    })).toThrow('must be a string');
+    expect(() => serializeConsoleCookie({
+      operation: 'set',
+      name: 'dh_unknown' as never,
+      value: 'opaque',
+    })).toThrow('Unknown console cookie name');
   });
 });
 
