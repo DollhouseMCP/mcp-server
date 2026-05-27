@@ -13,10 +13,12 @@ import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { ILoginTransactionStore } from '../stores/ILoginTransactionStore.js';
 import type {
   ConsoleAuthenticatedContext,
+  ConsoleCapability,
   ConsoleHandlerResult,
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../platform/ConsolePlatformTypes.js';
+import { CONSOLE_CAPABILITIES } from '../platform/ConsolePlatformTypes.js';
 import { normalizeConsoleReturnPath } from '../platform/ConsoleReturnPaths.js';
 import type { IConsoleOAuthClient } from './IConsoleOAuthClient.js';
 
@@ -26,6 +28,12 @@ const SESSION_ABSOLUTE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const PKCE_VERIFIER_BYTES = 32;
 const PKCE_SECRET_CLASS = 'pkce_verifier';
 const AUTH_PATH = '/api/v1/auth';
+const SELF_CAPABILITY = 'console:self';
+const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
+// The BFF attaches a maximum elevation lifetime; route-specific 30m/5m freshness remains enforced by authorization middleware.
+const ELEVATION_TTL_MAX_MS = 30 * 60 * 1000;
+// The callback accepts only recent AS administrative proof before any route-specific freshness check runs later.
+const AUTH_TIME_FRESHNESS_MAX_MS = 30 * 60 * 1000;
 
 export interface ConsoleBffAuthModuleOptions {
   readonly oauthClient: IConsoleOAuthClient;
@@ -45,7 +53,7 @@ export function createConsoleBffAuthModule(options: ConsoleBffAuthModuleOptions)
   return {
     id: 'auth',
     apiVersion: 'v1',
-    capabilities: ['console:self'],
+    capabilities: [SELF_CAPABILITY],
     routes: [{
       method: 'GET',
       path: `${AUTH_PATH}/login`,
@@ -67,10 +75,40 @@ export function createConsoleBffAuthModule(options: ConsoleBffAuthModuleOptions)
       idempotency: 'not_applicable',
       handler: req => service.completeLogin(req),
     }, {
+      method: 'GET',
+      path: `${AUTH_PATH}/step-up`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_security',
+      idempotency: 'not_applicable',
+      handler: req => service.startStepUp(req),
+    }, {
+      method: 'GET',
+      path: `${AUTH_PATH}/step-up/callback`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_security',
+      idempotency: 'not_applicable',
+      handler: req => service.completeStepUp(req),
+    }, {
+      method: 'POST',
+      path: `${AUTH_PATH}/step-down`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_security',
+      idempotency: 'not_applicable',
+      handler: req => service.stepDown(req),
+    }, {
       method: 'POST',
       path: `${AUTH_PATH}/logout`,
       audience: 'self',
-      requiredCapability: 'console:self',
+      requiredCapability: SELF_CAPABILITY,
       ownership: 'authenticated_user',
       elevation: 'none',
       privacyClass: 'self_security',
@@ -80,7 +118,7 @@ export function createConsoleBffAuthModule(options: ConsoleBffAuthModuleOptions)
       method: 'GET',
       path: `${AUTH_PATH}/me`,
       audience: 'self',
-      requiredCapability: 'console:self',
+      requiredCapability: SELF_CAPABILITY,
       ownership: 'authenticated_user',
       elevation: 'none',
       privacyClass: 'self_security',
@@ -125,6 +163,7 @@ class ConsoleBffAuthService {
       redirectTo: this.options.oauthClient.createAuthorizationUrl({
         state,
         codeChallenge: createPkceChallenge(pkceVerifier),
+        codeChallengeMethod: 'S256',
         redirectUri: this.redirectUri,
       }),
       cookies: [{ operation: 'set', name: CONSOLE_LOGIN_STATE_COOKIE, value: transactionId }],
@@ -175,7 +214,7 @@ class ConsoleBffAuthService {
       userId: principal.userId,
       authSub: principal.sub,
       csrfTokenHash: this.options.opaqueValues.hashOpaqueValue(csrfValue),
-      grantedCapabilities: ['console:self'],
+      grantedCapabilities: [SELF_CAPABILITY],
       elevation: null,
       createdAt: now,
       lastUsedAt: now,
@@ -195,6 +234,119 @@ class ConsoleBffAuthService {
         { operation: 'set', name: CONSOLE_CSRF_COOKIE, value: csrfValue },
       ],
     };
+  }
+
+  async startStepUp(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const authentication = requireAuthentication(req);
+    const capability = readRequestedAdminCapability(req);
+    if (!capability) {
+      return invalidCapability();
+    }
+    const now = this.now();
+    const transactionId = this.options.opaqueValues.createOpaqueValue();
+    const state = this.options.opaqueValues.createOpaqueValue();
+    const pkceVerifier = createPkceVerifier();
+    const pkceVerifierEnc = this.options.secretEncryption.encrypt(
+      Buffer.from(pkceVerifier, 'utf8'),
+      pkceContext(transactionId),
+    );
+    await this.options.loginTransactions.create({
+      idHash: this.options.opaqueValues.hashOpaqueValue(transactionId),
+      flowKind: 'step_up',
+      stateHash: this.options.opaqueValues.hashOpaqueValue(state),
+      pkceVerifierEnc,
+      userId: authentication.userId,
+      consoleSessionIdHash: Buffer.from(authentication.sessionIdHash),
+      requestedCapability: capability,
+      returnTo: readReturnTo(req),
+      createdAt: now,
+      expiresAt: new Date(now.getTime() + LOGIN_TRANSACTION_TTL_MS),
+      consumedAt: null,
+    });
+
+    return {
+      status: 302,
+      redirectTo: this.options.oauthClient.createAuthorizationUrl({
+        state,
+        codeChallenge: createPkceChallenge(pkceVerifier),
+        codeChallengeMethod: 'S256',
+        redirectUri: this.stepUpRedirectUri,
+        prompt: 'login',
+        maxAgeSeconds: 0,
+        acrValues: ADMIN_ACR,
+      }),
+      cookies: [{ operation: 'set', name: CONSOLE_LOGIN_STATE_COOKIE, value: transactionId }],
+    };
+  }
+
+  async completeStepUp(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const authentication = requireAuthentication(req);
+    const transactionId = readCookie(req.headers.cookie, CONSOLE_LOGIN_STATE_COOKIE);
+    const code = singleQueryValue(req.query.code);
+    const state = singleQueryValue(req.query.state);
+    if (!transactionId || !code || !state) {
+      return failedCallback();
+    }
+
+    const transaction = await this.options.loginTransactions.consume(
+      this.options.opaqueValues.hashOpaqueValue(transactionId),
+      this.options.opaqueValues.hashOpaqueValue(state),
+      this.now(),
+    );
+    if (transaction?.flowKind !== 'step_up' ||
+        !transaction.userId ||
+        !transaction.consoleSessionIdHash ||
+        !transaction.requestedCapability ||
+        transaction.userId !== authentication.userId ||
+        !buffersEqual(transaction.consoleSessionIdHash, authentication.sessionIdHash)) {
+      return failedCallback();
+    }
+
+    const pkceVerifier = this.options.secretEncryption.decrypt(
+      transaction.pkceVerifierEnc,
+      pkceContext(transactionId),
+    ).toString('utf8');
+    let claims;
+    try {
+      claims = await this.options.oauthClient.exchangeAuthorizationCode({
+        code,
+        codeVerifier: pkceVerifier,
+        redirectUri: this.stepUpRedirectUri,
+      });
+    } catch {
+      return failedCallback();
+    }
+    const principal = await this.options.identityResolver.resolveEnabledPrincipal(claims.sub);
+    const now = this.now();
+    if (principal?.userId !== authentication.userId ||
+        claims.acr !== ADMIN_ACR ||
+        !claims.amr?.includes('otp') ||
+        !claims.authTime ||
+        claims.authTime > now ||
+        claims.authTime.getTime() + AUTH_TIME_FRESHNESS_MAX_MS <= now.getTime()) {
+      return failedCallback();
+    }
+    const attached = await this.options.sessionStore.setElevation(authentication.sessionIdHash, {
+      capabilities: [transaction.requestedCapability],
+      expiresAt: new Date(now.getTime() + ELEVATION_TTL_MAX_MS),
+      acr: claims.acr,
+      amr: claims.amr,
+      authTime: claims.authTime,
+    }, now);
+    if (!attached) {
+      return failedCallback();
+    }
+    return {
+      status: 302,
+      redirectTo: transaction.returnTo ?? '/',
+      cookies: [{ operation: 'clear', name: CONSOLE_LOGIN_STATE_COOKIE }],
+    };
+  }
+
+  async stepDown(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const authentication = requireAuthentication(req);
+    await this.options.sessionStore.clearElevation(authentication.sessionIdHash, this.now());
+    return { status: 204 };
   }
 
   async logout(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
@@ -233,6 +385,10 @@ class ConsoleBffAuthService {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+
+  private get stepUpRedirectUri(): string {
+    return new URL(`${AUTH_PATH}/step-up/callback`, normalizeBaseUrl(this.options.publicBaseUrl)).toString();
+  }
 }
 
 function createPkceVerifier(): string {
@@ -249,6 +405,17 @@ function pkceContext(transactionId: string): { secretClass: string; ownerId: str
 
 function readReturnTo(req: ConsoleRequest): string {
   return normalizeConsoleReturnPath(singleQueryValue(req.query.return_to));
+}
+
+function readRequestedAdminCapability(req: ConsoleRequest): ConsoleCapability | null {
+  const capability = singleQueryValue(req.query.capability);
+  return isAdminCapability(capability) ? capability : null;
+}
+
+function isAdminCapability(value: string | null): value is ConsoleCapability {
+  return !!value &&
+    value.startsWith('console:admin:') &&
+    (CONSOLE_CAPABILITIES as readonly string[]).includes(value);
 }
 
 function singleQueryValue(value: unknown): string | null {
@@ -272,9 +439,23 @@ function failedCallback(): ConsoleHandlerResult {
   };
 }
 
+function invalidCapability(): ConsoleHandlerResult {
+  return {
+    status: 400,
+    body: {
+      code: 'invalid_capability',
+      detail: 'Step-up requires a valid administrative console capability.',
+    },
+  };
+}
+
 function requireAuthentication(req: ConsoleRequest): ConsoleAuthenticatedContext {
   if (!req.consoleAuthentication) {
     throw new Error('Console authentication context is required');
   }
   return req.consoleAuthentication;
+}
+
+function buffersEqual(left: Buffer, right: Buffer): boolean {
+  return left.length === right.length && left.equals(right);
 }

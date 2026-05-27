@@ -43,6 +43,7 @@ export interface IConsoleSessionStore {
   findActiveByIdHash(idHash: Buffer, at?: Date): Promise<ConsoleSessionRecord | null>;
   touch(idHash: Buffer, touch: ConsoleSessionTouch, at?: Date): Promise<boolean>;
   setElevation(idHash: Buffer, elevation: ConsoleSessionElevation, at?: Date): Promise<boolean>;
+  clearElevation(idHash: Buffer, at?: Date): Promise<boolean>;
   revoke(idHash: Buffer, revokedAt?: Date): Promise<boolean>;
   revokeForUser(userId: string, revokedAt?: Date): Promise<number>;
   sweepExpired(before?: Date): Promise<number>;

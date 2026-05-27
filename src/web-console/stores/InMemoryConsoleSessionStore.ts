@@ -64,12 +64,26 @@ export class InMemoryConsoleSessionStore implements IConsoleSessionStore {
     const record = await this.findActiveByIdHash(idHash, at);
     if (!record) return false;
     if (record.elevation && record.elevation.expiresAt > at) return false;
+    if (elevation.authTime > at) return false;
     const grantedCapabilities = [
       ...new Set<ConsoleCapability>(['console:self', ...elevation.capabilities]),
     ];
     if (elevation.expiresAt > record.absoluteExpiresAt) return false;
-    validateSessionElevation(elevation, grantedCapabilities, at);
+    validateSessionElevation(elevation, grantedCapabilities, record.createdAt);
     const updated = { ...record, grantedCapabilities, elevation };
+    validateConsoleSessionRecord(updated);
+    this.sessions.set(hashKey(idHash), cloneConsoleSession(updated));
+    return true;
+  }
+
+  async clearElevation(idHash: Buffer, at: Date = new Date()): Promise<boolean> {
+    const record = await this.findActiveByIdHash(idHash, at);
+    if (!record?.elevation) return false;
+    const updated = {
+      ...record,
+      grantedCapabilities: record.grantedCapabilities.filter(capability => capability === 'console:self'),
+      elevation: null,
+    };
     validateConsoleSessionRecord(updated);
     this.sessions.set(hashKey(idHash), cloneConsoleSession(updated));
     return true;

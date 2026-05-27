@@ -35,8 +35,16 @@ const OPAQUE_KEY = Buffer.alloc(32, 11);
 const SECRET_KEY = Buffer.alloc(32, 9);
 const LOGIN_PATH = '/api/v1/auth/login';
 const CALLBACK_PATH = '/api/v1/auth/callback';
+const STEP_UP_PATH = '/api/v1/auth/step-up';
+const STEP_UP_CALLBACK_PATH = '/api/v1/auth/step-up/callback';
+const STEP_DOWN_PATH = '/api/v1/auth/step-down';
 const AUTH_CODE = 'auth-code-1';
 const FAILED_CALLBACK_LOCATION = LOGIN_PATH;
+const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
+const SELF_CAPABILITY = 'console:self';
+const ADMIN_CAPABILITY = 'console:admin:accounts';
+const CSRF_HEADER = 'X-CSRF-Token';
+const ME_PATH = '/api/v1/auth/me';
 
 class FakeConsoleOAuthClient implements IConsoleOAuthClient {
   readonly authorizationRequests: ConsoleAuthorizationUrlRequest[] = [];
@@ -50,7 +58,11 @@ class FakeConsoleOAuthClient implements IConsoleOAuthClient {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('state', request.state);
     url.searchParams.set('code_challenge', request.codeChallenge);
+    url.searchParams.set('code_challenge_method', request.codeChallengeMethod);
     url.searchParams.set('redirect_uri', request.redirectUri);
+    if (request.prompt) url.searchParams.set('prompt', request.prompt);
+    if (request.maxAgeSeconds !== undefined) url.searchParams.set('max_age', String(request.maxAgeSeconds));
+    if (request.acrValues) url.searchParams.set('acr_values', request.acrValues);
     return url.toString();
   }
 
@@ -128,6 +140,7 @@ describe('ConsoleBffAuthModule', () => {
     expect(cookieValue(response.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)).toBeTruthy();
     expect(oauthClient.authorizationRequests).toHaveLength(1);
     expect(oauthClient.authorizationRequests[0].redirectUri).toBe('https://console.example.test/api/v1/auth/callback');
+    expect(oauthClient.authorizationRequests[0].codeChallengeMethod).toBe('S256');
     expect(oauthClient.authorizationRequests[0].codeChallenge).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
@@ -160,12 +173,12 @@ describe('ConsoleBffAuthModule', () => {
     expect(session?.userId).toBe(USER_ID);
     expect(session?.authSub).toBe(AUTH_SUB);
 
-    const me = await request(app).get('/api/v1/auth/me').set('Cookie', sessionCookie);
+    const me = await request(app).get(ME_PATH).set('Cookie', sessionCookie);
     expect(me.status).toBe(200);
     expect(me.body).toEqual({
       user_id: USER_ID,
       auth_sub: AUTH_SUB,
-      granted_capabilities: ['console:self'],
+      granted_capabilities: [SELF_CAPABILITY],
       available_admin_capabilities: [],
       elevation: { active: false, expires_at: null, acr: null },
     });
@@ -368,7 +381,7 @@ describe('ConsoleBffAuthModule', () => {
       userId: USER_ID,
       authSub: AUTH_SUB,
       csrfTokenHash: opaqueValues.hashOpaqueValue(csrfValue),
-      grantedCapabilities: ['console:self', 'console:admin:accounts'],
+      grantedCapabilities: [SELF_CAPABILITY, ADMIN_CAPABILITY],
       elevation: {
         capabilities: ['console:admin:accounts'],
         expiresAt: new Date('2026-05-26T12:30:00.000Z'),
@@ -386,7 +399,7 @@ describe('ConsoleBffAuthModule', () => {
     });
 
     const response = await request(app)
-      .get('/api/v1/auth/me')
+      .get(ME_PATH)
       .set('Cookie', `${CONSOLE_SESSION_COOKIE}=${encodeURIComponent(sessionValue)}`);
 
     expect(response.status).toBe(200);
@@ -396,7 +409,332 @@ describe('ConsoleBffAuthModule', () => {
       acr: 'urn:dollhouse:acr:admin-stepup',
     });
   });
+
+  it('starts a session-bound administrative step-up transaction with AS freshness parameters', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}&return_to=/admin/accounts`)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(302);
+    expect(cookieValue(response.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)).toBeTruthy();
+    const redirect = new URL(response.headers.location);
+    expect(redirect.searchParams.get('prompt')).toBe('login');
+    expect(redirect.searchParams.get('max_age')).toBe('0');
+    expect(redirect.searchParams.get('acr_values')).toBe(ADMIN_ACR);
+    expect(redirect.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(redirect.searchParams.get('redirect_uri')).toBe(`${ORIGIN}${STEP_UP_CALLBACK_PATH}`);
+  });
+
+  it('completes step-up once and attaches TOTP-backed elevation to the current session', async () => {
+    const fixture = buildFixture();
+    fixture.oauthClient.claims = {
+      sub: AUTH_SUB,
+      acr: ADMIN_ACR,
+      amr: ['pwd', 'otp'],
+      authTime: NOW,
+    };
+    const session = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}&return_to=/admin/accounts`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+    const loginStateCookie = cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE);
+
+    const callback = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${loginStateCookie}`);
+
+    expect(callback.status).toBe(302);
+    expect(callback.headers.location).toBe('/admin/accounts');
+    expect(callback.headers['set-cookie']).toEqual(expect.arrayContaining([
+      expect.stringContaining('dh_login_state=; Path=/api/v1/auth; Max-Age=0'),
+    ]));
+
+    const me = await request(fixture.app).get(ME_PATH).set('Cookie', session.sessionCookie);
+    expect(me.body.granted_capabilities).toEqual([SELF_CAPABILITY, ADMIN_CAPABILITY]);
+    expect(me.body.elevation).toEqual({
+      active: true,
+      expires_at: '2026-05-26T12:30:00.000Z',
+      acr: ADMIN_ACR,
+    });
+  });
+
+  it('rejects step-up callback replay without extending elevation', async () => {
+    const fixture = buildFixture();
+    fixture.oauthClient.claims = {
+      sub: AUTH_SUB,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: NOW,
+    };
+    const session = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+    const callbackPath = `${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`;
+    const cookies = `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`;
+
+    await request(fixture.app).get(callbackPath).set('Cookie', cookies);
+    const replay = await request(fixture.app).get(callbackPath).set('Cookie', cookies);
+
+    expect(replay.status).toBe(302);
+    expect(replay.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+    expect(fixture.oauthClient.exchangeRequests).toHaveLength(2);
+  });
+
+  it('rejects a step-up callback with a login transaction cookie', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+    const login = await request(fixture.app).get(LOGIN_PATH);
+    const state = new URL(login.headers.location).searchParams.get('state');
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${cookieHeader(login.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+    expect(fixture.oauthClient.exchangeRequests).toHaveLength(1);
+  });
+
+  it.each([
+    ['missing transient cookie', false, AUTH_CODE, 'state-from-step-up'],
+    ['missing authorization code', true, null, 'state-from-step-up'],
+    ['missing state', true, AUTH_CODE, null],
+    ['tampered state', true, AUTH_CODE, 'tampered-state'],
+  ])('rejects step-up callback with %s before exchanging the code', async (_label, includeCookie, code, stateOverride) => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = stateOverride === 'state-from-step-up'
+      ? new URL(start.headers.location).searchParams.get('state')
+      : stateOverride;
+    const params = new URLSearchParams();
+    if (code) params.set('code', code);
+    if (state) params.set('state', state);
+    const call = request(fixture.app).get(`${STEP_UP_CALLBACK_PATH}?${params.toString()}`)
+      .set('Cookie', session.sessionCookie);
+    if (includeCookie) {
+      call.set('Cookie', `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+    }
+
+    const response = await call;
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+    expect(fixture.oauthClient.exchangeRequests).toHaveLength(1);
+  });
+
+  it('collapses step-up OAuth exchange failures to the same failed callback redirect', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+    fixture.oauthClient.rejectExchange = true;
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+    expect(fixture.oauthClient.exchangeRequests).toHaveLength(1);
+  });
+
+  it('rejects step-up callback when elevation attachment loses the session race', async () => {
+    const fixture = buildFixture();
+    fixture.oauthClient.claims = { sub: AUTH_SUB, acr: ADMIN_ACR, amr: ['otp'], authTime: NOW };
+    const session = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+    fixture.sessionStore.setElevation = () => Promise.resolve(false);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+  });
+
+  it.each([
+    ['missing admin ACR', { sub: AUTH_SUB, amr: ['otp'], authTime: NOW }],
+    ['missing OTP AMR', { sub: AUTH_SUB, acr: ADMIN_ACR, amr: ['pwd'], authTime: NOW }],
+    ['missing auth_time', { sub: AUTH_SUB, acr: ADMIN_ACR, amr: ['otp'] }],
+    ['future auth_time', {
+      sub: AUTH_SUB,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: new Date('2026-05-26T12:01:00.000Z'),
+    }],
+    ['stale auth_time', {
+      sub: AUTH_SUB,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: new Date('2026-05-26T11:20:00.000Z'),
+    }],
+    ['different principal', {
+      sub: 'github_other',
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: NOW,
+    }],
+  ])('rejects step-up callback with %s', async (_label, claims) => {
+    const fixture = buildFixture({
+      principals: [{
+        sub: AUTH_SUB,
+        userId: USER_ID,
+        disabledAt: null,
+        authzVersion: 3,
+      }, {
+        sub: 'github_other',
+        userId: '118f3d47-73ae-7f10-a0de-0742618d4fb1',
+        disabledAt: null,
+        authzVersion: 1,
+      }],
+    });
+    const session = await loginSession(fixture);
+    fixture.oauthClient.claims = claims;
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+    const me = await request(fixture.app).get(ME_PATH).set('Cookie', session.sessionCookie);
+    expect(me.body.elevation).toEqual({ active: false, expires_at: null, acr: null });
+  });
+
+  it('rejects step-up callback bound to a different browser session', async () => {
+    const fixture = buildFixture();
+    fixture.oauthClient.claims = { sub: AUTH_SUB, acr: ADMIN_ACR, amr: ['otp'], authTime: NOW };
+    const first = await loginSession(fixture);
+    const second = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', first.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${second.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    expect(response.status).toBe(302);
+    expect(response.headers.location).toBe(FAILED_CALLBACK_LOCATION);
+  });
+
+  it('rejects invalid requested step-up capabilities before creating a transaction', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(SELF_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      code: 'invalid_capability',
+      detail: 'Step-up requires a valid administrative console capability.',
+    });
+    expect(response.headers['set-cookie']).toBeUndefined();
+  });
+
+  it('rejects missing requested step-up capability before creating a transaction', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(STEP_UP_PATH)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(400);
+    expect(response.body.code).toBe('invalid_capability');
+  });
+
+  it('rejects step-down without the session-bound CSRF header', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .post(STEP_DOWN_PATH)
+      .set('Cookie', session.allCookies)
+      .set('Origin', ORIGIN)
+      .set('X-Console-Request', '1');
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('clears active elevation on step-down without revoking the session', async () => {
+    const fixture = buildFixture();
+    fixture.oauthClient.claims = { sub: AUTH_SUB, acr: ADMIN_ACR, amr: ['otp'], authTime: NOW };
+    const session = await loginSession(fixture);
+    const start = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+    const state = new URL(start.headers.location).searchParams.get('state');
+    await request(fixture.app)
+      .get(`${STEP_UP_CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', `${session.sessionCookie}; ${cookieHeader(start.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE)}`);
+
+    const response = await request(fixture.app)
+      .post(STEP_DOWN_PATH)
+      .set('Cookie', session.allCookies)
+      .set('Origin', ORIGIN)
+      .set('X-Console-Request', '1')
+      .set(CSRF_HEADER, session.csrfValue);
+
+    expect(response.status).toBe(204);
+    const me = await request(fixture.app).get(ME_PATH).set('Cookie', session.sessionCookie);
+    expect(me.body.granted_capabilities).toEqual([SELF_CAPABILITY]);
+    expect(me.body.elevation).toEqual({ active: false, expires_at: null, acr: null });
+  });
 });
+
+async function loginSession(fixture: ReturnType<typeof buildFixture>): Promise<{
+  readonly sessionCookie: string;
+  readonly allCookies: string;
+  readonly csrfValue: string;
+  readonly cookieValues: {
+    readonly session: string;
+    readonly csrf: string;
+  };
+}> {
+  const login = await request(fixture.app).get(LOGIN_PATH);
+  const state = new URL(login.headers.location).searchParams.get('state');
+  const callback = await request(fixture.app)
+    .get(`${CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+    .set('Cookie', cookieHeader(login.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE));
+  const sessionValue = cookieValue(callback.headers['set-cookie'], CONSOLE_SESSION_COOKIE) ?? '';
+  const csrfValue = cookieValue(callback.headers['set-cookie'], CONSOLE_CSRF_COOKIE) ?? '';
+  return {
+    sessionCookie: `${CONSOLE_SESSION_COOKIE}=${encodeURIComponent(sessionValue)}`,
+    allCookies: [
+      `${CONSOLE_SESSION_COOKIE}=${encodeURIComponent(sessionValue)}`,
+      `${CONSOLE_CSRF_COOKIE}=${encodeURIComponent(csrfValue)}`,
+    ].join('; '),
+    csrfValue,
+    cookieValues: {
+      session: sessionValue,
+      csrf: csrfValue,
+    },
+  };
+}
 
 function loginTransactionFixture(overrides: {
   readonly flowKind: ConsoleLoginFlowKind;

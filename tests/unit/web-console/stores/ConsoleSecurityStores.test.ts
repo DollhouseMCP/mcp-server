@@ -15,6 +15,7 @@ import type {
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-26T12:05:00.000Z');
 const FOUR_MINUTES = new Date('2026-05-26T12:04:00.000Z');
@@ -132,6 +133,25 @@ describe('InMemoryConsoleSessionStore', () => {
     }, FIVE_MINUTES)).toBe(false);
   });
 
+  it('clears active elevation without revoking the ordinary browser session', async () => {
+    const store = new InMemoryConsoleSessionStore();
+    await store.create(session());
+    await expect(store.setElevation(hash(1), {
+      capabilities: ['console:admin:security'],
+      expiresAt: THIRTY_MINUTES,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: FIVE_MINUTES,
+    }, FIVE_MINUTES)).resolves.toBe(true);
+
+    expect(await store.clearElevation(hash(1), FIVE_MINUTES)).toBe(true);
+
+    const ordinary = await store.findActiveByIdHash(hash(1), FIVE_MINUTES);
+    expect(ordinary?.grantedCapabilities).toEqual([SELF_CAPABILITY]);
+    expect(ordinary?.elevation).toBeNull();
+    expect(await store.clearElevation(hash(1), FIVE_MINUTES)).toBe(false);
+  });
+
   it('rejects raw-sized identifiers and administrative grants without elevation', async () => {
     const store = new InMemoryConsoleSessionStore();
     await expect(store.create(session({ idHash: Buffer.from('raw-cookie') })))
@@ -179,7 +199,7 @@ describe('InMemoryConsoleSessionStore', () => {
       expiresAt: THIRTY_MINUTES,
       acr: ADMIN_ACR,
       amr: ['otp'],
-      authTime: NOW,
+      authTime: BEFORE_NOW,
     }, FIVE_MINUTES)).rejects.toThrow('timestamps are inconsistent');
   });
 });

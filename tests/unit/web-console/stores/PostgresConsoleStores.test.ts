@@ -163,6 +163,32 @@ describe('PostgresConsoleSessionStore', () => {
     }));
   });
 
+  it('clears elevation with one active-session conditional update', async () => {
+    const chain = returningChain([{ idHash: hash(1) }]);
+    transaction.update = jest.fn(() => chain);
+    transaction.select = jest.fn();
+    const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
+
+    await expect(store.clearElevation(hash(1), FIVE_MINUTES)).resolves.toBe(true);
+
+    expect(transaction.select).not.toHaveBeenCalled();
+    expect(chain.set).toHaveBeenCalledWith({
+      grantedCapabilities: ['console:self'],
+      elevatedCapabilities: [],
+      elevationExpiresAt: null,
+      elevationAcr: null,
+      elevationAmr: null,
+      elevationAuthTime: null,
+    });
+  });
+
+  it('returns false when clearing elevation updates no active elevated row', async () => {
+    transaction.update = jest.fn(() => returningChain([]));
+    const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
+
+    await expect(store.clearElevation(hash(1), FIVE_MINUTES)).resolves.toBe(false);
+  });
+
   it('rejects unvalidated capabilities read from database state', async () => {
     transaction.select = jest.fn(() => selectingChain([sessionRow({
       grantedCapabilities: ['console:self', 'console:admin:unknown'],

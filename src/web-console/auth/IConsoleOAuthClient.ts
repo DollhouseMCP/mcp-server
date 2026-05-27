@@ -1,7 +1,11 @@
 export interface ConsoleAuthorizationUrlRequest {
   readonly state: string;
   readonly codeChallenge: string;
+  readonly codeChallengeMethod: 'S256';
   readonly redirectUri: string;
+  readonly prompt?: 'login';
+  readonly maxAgeSeconds?: number;
+  readonly acrValues?: string;
 }
 
 export interface ConsoleOAuthCodeExchangeRequest {
@@ -15,6 +19,9 @@ export interface ConsoleOAuthIdentityClaims {
   readonly displayName?: string;
   readonly email?: string;
   readonly authMethod?: string;
+  readonly acr?: string;
+  readonly amr?: readonly string[];
+  readonly authTime?: Date;
 }
 
 /**

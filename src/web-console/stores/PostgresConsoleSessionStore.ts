@@ -78,7 +78,8 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
     const grantedCapabilities = [
       ...new Set<ConsoleCapability>(['console:self', ...elevation.capabilities]),
     ];
-    validateSessionElevation(elevation, grantedCapabilities, at);
+    if (elevation.authTime > at) return false;
+    validateSessionElevation(elevation, grantedCapabilities, new Date(0));
     const rows = await withSystemContext(this.db, tx =>
       tx.update(consoleSessions).set({
         grantedCapabilities,
@@ -93,7 +94,29 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
         gt(consoleSessions.idleExpiresAt, at),
         gt(consoleSessions.absoluteExpiresAt, at),
         gte(consoleSessions.absoluteExpiresAt, elevation.expiresAt),
+        lte(consoleSessions.createdAt, elevation.authTime),
         or(isNull(consoleSessions.elevationExpiresAt), lte(consoleSessions.elevationExpiresAt, at)),
+      )).returning({ idHash: consoleSessions.idHash }),
+    );
+    return rows.length === 1;
+  }
+
+  async clearElevation(idHash: Buffer, at: Date = new Date()): Promise<boolean> {
+    assertHash(idHash, 'idHash');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(consoleSessions).set({
+        grantedCapabilities: ['console:self'],
+        elevatedCapabilities: [],
+        elevationExpiresAt: null,
+        elevationAcr: null,
+        elevationAmr: null,
+        elevationAuthTime: null,
+      }).where(and(
+        eq(consoleSessions.idHash, idHash),
+        isNull(consoleSessions.revokedAt),
+        gt(consoleSessions.idleExpiresAt, at),
+        gt(consoleSessions.absoluteExpiresAt, at),
+        gt(consoleSessions.elevationExpiresAt, at),
       )).returning({ idHash: consoleSessions.idHash }),
     );
     return rows.length === 1;
