@@ -5,3 +5,5 @@ export * from './ILoginTransactionStore.js';
 export * from './InMemoryLoginTransactionStore.js';
 export * from './IIdempotencyStore.js';
 export * from './InMemoryIdempotencyStore.js';
+export * from './IConsoleFactorStore.js';
+export * from './InMemoryConsoleFactorStore.js';

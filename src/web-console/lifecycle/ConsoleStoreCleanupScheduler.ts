@@ -9,6 +9,7 @@ export interface ConsoleStoreCleanupStores {
   readonly sessionStore: Pick<IConsoleSessionStore, 'sweepExpired'>;
   readonly loginTransactionStore: Pick<ILoginTransactionStore, 'sweepExpired'>;
   readonly idempotencyStore: Pick<IIdempotencyStore, 'sweepExpired'>;
+  // account_factors is intentionally excluded; disabled factor rows remain for status history and audit context.
 }
 
 export interface ConsoleStoreCleanupLifecycle {

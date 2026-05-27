@@ -176,3 +176,30 @@ CREATE INDEX IF NOT EXISTS "idx_idempotency_records_expiry"
   ON "idempotency_records" ("expires_at");
 ALTER TABLE "idempotency_records" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "idempotency_records" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+
+CREATE TABLE IF NOT EXISTS "account_factors" (
+  "user_id" UUID NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+  "factor_id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "factor_type" TEXT NOT NULL CHECK ("factor_type" IN ('totp')),
+  "secret_ciphertext" BYTEA,
+  "backup_code_hashes" BYTEA[] NOT NULL,
+  "enrolled_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "disabled_at" TIMESTAMPTZ,
+  "last_used_at" TIMESTAMPTZ,
+  CONSTRAINT "account_factors_totp_secret_check"
+    CHECK ("factor_type" <> 'totp' OR (
+      "secret_ciphertext" IS NOT NULL
+      AND octet_length("secret_ciphertext") > 0
+    )),
+  CONSTRAINT "account_factors_lifecycle_check"
+    CHECK (("last_used_at" IS NULL OR "last_used_at" >= "enrolled_at")
+      AND ("disabled_at" IS NULL OR "disabled_at" >= "enrolled_at"))
+);
+CREATE INDEX IF NOT EXISTS "idx_account_factors_user_active"
+  ON "account_factors" ("user_id", "factor_type", "disabled_at");
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_account_factors_active_totp_unique"
+  ON "account_factors" ("user_id", "factor_type")
+  WHERE "factor_type" = 'totp' AND "disabled_at" IS NULL;
+ALTER TABLE "account_factors" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "account_factors" FORCE ROW LEVEL SECURITY;

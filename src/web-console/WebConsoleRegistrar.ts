@@ -17,6 +17,7 @@ import type { IIdempotencyStore } from './stores/IIdempotencyStore.js';
 import { InMemoryIdempotencyStore } from './stores/InMemoryIdempotencyStore.js';
 import type { ILoginTransactionStore } from './stores/ILoginTransactionStore.js';
 import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransactionStore.js';
+import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -24,6 +25,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   sessionStore: 'WebConsoleSessionStore',
   loginTransactionStore: 'WebConsoleLoginTransactionStore',
   idempotencyStore: 'WebConsoleIdempotencyStore',
+  factorStore: 'WebConsoleFactorStore',
   identityResolver: 'WebConsoleIdentityResolver',
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
@@ -46,6 +48,7 @@ export interface WebConsoleComposition {
   readonly sessionStore: IConsoleSessionStore;
   readonly loginTransactionStore: ILoginTransactionStore;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly factorStore: IConsoleFactorStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
@@ -82,6 +85,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionStore, () => stores.sessionStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.loginTransactionStore, () => stores.loginTransactionStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => stores.factorStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
     container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
     if (secretEncryption) {
@@ -122,6 +126,7 @@ interface ConsoleStoreSet {
   readonly sessionStore: IConsoleSessionStore;
   readonly loginTransactionStore: ILoginTransactionStore;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly factorStore: IConsoleFactorStore;
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
@@ -131,24 +136,29 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleSessionStore },
       { PostgresLoginTransactionStore },
       { PostgresIdempotencyStore },
+      { PostgresConsoleFactorStore },
       { PostgresConsoleIdentityResolver },
     ] = await Promise.all([
       import('./stores/PostgresConsoleSessionStore.js'),
       import('./stores/PostgresLoginTransactionStore.js'),
       import('./stores/PostgresIdempotencyStore.js'),
+      import('./stores/PostgresConsoleFactorStore.js'),
       import('./identity/PostgresConsoleIdentityResolver.js'),
     ]);
     return {
       sessionStore: new PostgresConsoleSessionStore(database),
       loginTransactionStore: new PostgresLoginTransactionStore(database),
       idempotencyStore: new PostgresIdempotencyStore(database),
+      factorStore: new PostgresConsoleFactorStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }
+  const { InMemoryConsoleFactorStore } = await import('./stores/InMemoryConsoleFactorStore.js');
   return {
     sessionStore: new InMemoryConsoleSessionStore(),
     loginTransactionStore: new InMemoryLoginTransactionStore(),
     idempotencyStore: new InMemoryIdempotencyStore(),
+    factorStore: new InMemoryConsoleFactorStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),
   };
 }

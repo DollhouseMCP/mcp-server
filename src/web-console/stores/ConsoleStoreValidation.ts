@@ -21,9 +21,16 @@ export class ConsoleStoreConflictError extends Error {
 }
 
 export function isUniqueViolation(error: unknown): boolean {
-  if (!error || typeof error !== 'object') return false;
-  if ('code' in error && error.code === '23505') return true;
-  return 'cause' in error && isUniqueViolation(error.cause);
+  const seen = new WeakSet<object>();
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== 'object') return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if ('code' in current && current.code === '23505') return true;
+    current = 'cause' in current ? current.cause : null;
+  }
+  return false;
 }
 
 export function assertHash(value: Buffer, name: string): void {
@@ -33,6 +40,7 @@ export function assertHash(value: Buffer, name: string): void {
 }
 
 export function assertNonEmptyBuffer(value: Buffer, name: string): void {
+  // Shape guard only; AEAD authentication remains owned by ISecretEncryptionService.
   if (!Buffer.isBuffer(value) || value.length === 0) {
     throw new ConsoleStoreValidationError(`${name} must be non-empty encrypted ciphertext`);
   }

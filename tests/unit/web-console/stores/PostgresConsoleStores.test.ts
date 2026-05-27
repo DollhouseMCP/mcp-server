@@ -27,14 +27,20 @@ const { PostgresLoginTransactionStore } = await import(
 const { PostgresIdempotencyStore } = await import(
   '../../../../src/web-console/stores/PostgresIdempotencyStore.js'
 );
+const { PostgresConsoleFactorStore } = await import(
+  '../../../../src/web-console/stores/PostgresConsoleFactorStore.js'
+);
 const { PostgresConsoleIdentityResolver } = await import(
   '../../../../src/web-console/identity/PostgresConsoleIdentityResolver.js'
 );
+const { desc } = await import('drizzle-orm');
+const { accountFactors } = await import('../../../../src/database/schema/index.js');
 const { ConsoleStoreConflictError, ConsoleStoreValidationError } = await import(
   '../../../../src/web-console/stores/ConsoleStoreValidation.js'
 );
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
 const FOUR_MINUTES = new Date('2026-05-26T12:04:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-26T12:05:00.000Z');
@@ -132,8 +138,32 @@ function selectingChain(rows: unknown[]) {
   chain.from = jest.fn(() => chain);
   chain.innerJoin = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
+  chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => Promise.resolve(rows));
   return chain;
+}
+
+function factorRow(overrides: Partial<{
+  userId: string;
+  factorId: string;
+  factorType: 'totp';
+  secretCiphertext: Buffer | null;
+  backupCodeHashes: Buffer[];
+  enrolledAt: Date;
+  disabledAt: Date | null;
+  lastUsedAt: Date | null;
+}> = {}) {
+  return {
+    userId: USER_ID,
+    factorId: 'cd8f6d0e-7294-42bc-9e01-094890a820a8',
+    factorType: 'totp' as const,
+    secretCiphertext: Buffer.from('encrypted-totp-seed'),
+    backupCodeHashes: [hash(11), hash(12)],
+    enrolledAt: NOW,
+    disabledAt: null,
+    lastUsedAt: null,
+    ...overrides,
+  };
 }
 
 beforeEach(() => {
@@ -372,6 +402,123 @@ describe('PostgresIdempotencyStore', () => {
     const store = new PostgresIdempotencyStore({} as DatabaseInstance);
 
     await expect(store.claim(idempotencyIdentity())).rejects.toThrow(ConsoleStoreValidationError);
+  });
+});
+
+describe('PostgresConsoleFactorStore', () => {
+  it('normalizes duplicate active TOTP inserts to a store conflict', async () => {
+    const conflict = Object.assign(new Error('duplicate'), { code: '23505' });
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => Promise.reject(conflict)),
+    }));
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    await expect(store.createTotpFactor(factorRow())).rejects.toThrow(ConsoleStoreConflictError);
+  });
+
+  it('returns status-only active factor projection', async () => {
+    transaction.select = jest.fn(() => selectingChain([{
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: null,
+      lastUsedAt: FIVE_MINUTES,
+    }]));
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    await expect(store.getTotpStatus(USER_ID)).resolves.toEqual({
+      enrolled: true,
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: null,
+      lastUsedAt: FIVE_MINUTES,
+    });
+  });
+
+  it('falls back to latest disabled factor metadata when no active factor exists', async () => {
+    const activeChain = selectingChain([]);
+    const disabledChain = selectingChain([{
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: FIVE_MINUTES,
+      lastUsedAt: FOUR_MINUTES,
+    }]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(activeChain)
+      .mockReturnValueOnce(disabledChain);
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    await expect(store.getTotpStatus(USER_ID)).resolves.toEqual({
+      enrolled: false,
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: FIVE_MINUTES,
+      lastUsedAt: FOUR_MINUTES,
+    });
+    expect(disabledChain.orderBy).toHaveBeenCalledWith(desc(accountFactors.disabledAt));
+  });
+
+  it('returns empty status when no active or disabled factor exists', async () => {
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([]))
+      .mockReturnValueOnce(selectingChain([]));
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    await expect(store.getTotpStatus(USER_ID)).resolves.toEqual({
+      enrolled: false,
+      factorType: null,
+      enrolledAt: null,
+      disabledAt: null,
+      lastUsedAt: null,
+    });
+  });
+
+  it('clones AS-only active factor material from PostgreSQL', async () => {
+    const row = factorRow();
+    transaction.select = jest.fn(() => selectingChain([row]));
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    const returned = await store.getActiveTotpFactorForAs(USER_ID);
+    returned?.secretCiphertext.fill(0);
+    returned?.backupCodeHashes[0].fill(0);
+
+    expect(row.secretCiphertext).toEqual(Buffer.from('encrypted-totp-seed'));
+    expect(row.backupCodeHashes[0]).toEqual(hash(11));
+  });
+
+  it('rejects corrupt factor rows with an explicit null-ciphertext error', async () => {
+    transaction.select = jest.fn(() => selectingChain([factorRow({ secretCiphertext: null })]));
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+
+    await expect(store.getActiveTotpFactorForAs(USER_ID))
+      .rejects.toThrow('unexpected NULL ciphertext for active TOTP factor row');
+  });
+
+  it('conditionally updates factor use and rejects non-matching use attempts', async () => {
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([{ factorId: factorRow().factorId }]));
+    await expect(store.markTotpUsed(USER_ID, factorRow().factorId, FIVE_MINUTES)).resolves.toBe(true);
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.markTotpUsed(USER_ID, '7acb0d42-8772-4326-a08f-f816b59fc176', FIVE_MINUTES)).resolves.toBe(false);
+    await expect(store.markTotpUsed(USER_ID, factorRow().factorId, BEFORE_NOW)).resolves.toBe(false);
+  });
+
+  it('conditionally disables active TOTP and permits re-enrollment after disable', async () => {
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([{ factorId: factorRow().factorId }]));
+    await expect(store.disableActiveTotp(USER_ID, FIVE_MINUTES)).resolves.toBe(true);
+
+    transaction.insert = jest.fn(() => ({
+      values: jest.fn(() => Promise.resolve()),
+    }));
+    await expect(store.createTotpFactor(factorRow({
+      factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
+      enrolledAt: FIVE_MINUTES,
+    }))).resolves.toBeUndefined();
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.disableActiveTotp(USER_ID, FIVE_MINUTES)).resolves.toBe(false);
+    await expect(store.disableActiveTotp(USER_ID, BEFORE_NOW)).resolves.toBe(false);
   });
 });
 

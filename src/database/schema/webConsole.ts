@@ -108,3 +108,21 @@ export const idempotencyRecords = pgTable('idempotency_records', {
     .on(table.consoleSessionIdHash, table.idempotencyKey),
   index('idx_idempotency_records_expiry').on(table.expiresAt),
 ]);
+
+export type ConsoleAccountFactorType = 'totp';
+
+export const accountFactors = pgTable('account_factors', {
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  factorId: uuid('factor_id').primaryKey().defaultRandom(),
+  factorType: text('factor_type').$type<ConsoleAccountFactorType>().notNull(),
+  secretCiphertext: bytea('secret_ciphertext'),
+  backupCodeHashes: bytea('backup_code_hashes').array().notNull(),
+  enrolledAt: timestamp('enrolled_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+}, (table) => [
+  index('idx_account_factors_user_active').on(table.userId, table.factorType, table.disabledAt),
+  uniqueIndex('idx_account_factors_active_totp_unique')
+    .on(table.userId, table.factorType)
+    .where(sql`${table.factorType} = 'totp' AND ${table.disabledAt} IS NULL`),
+]);

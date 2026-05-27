@@ -3,12 +3,15 @@ import { describe, expect, it } from '@jest/globals';
 import {
   ConsoleStoreValidationError,
   InMemoryConsoleSessionStore,
+  InMemoryConsoleFactorStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
+  isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
 import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/index.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
+import type { ConsoleTotpFactorRecord } from '../../../../src/web-console/stores/IConsoleFactorStore.js';
 import type {
   IdempotencyCompletion,
   IdempotencyRequestIdentity,
@@ -86,6 +89,20 @@ const BODYLESS_COMPLETION: IdempotencyCompletion = {
   responseBodyPresent: false,
   responseBody: null,
 };
+
+function totpFactor(overrides: Partial<ConsoleTotpFactorRecord> = {}): ConsoleTotpFactorRecord {
+  return {
+    userId: USER_ID,
+    factorId: 'cd8f6d0e-7294-42bc-9e01-094890a820a8',
+    factorType: 'totp' as const,
+    secretCiphertext: Buffer.from('encrypted-totp-seed'),
+    backupCodeHashes: [hash(11), hash(12)],
+    enrolledAt: NOW,
+    disabledAt: null,
+    lastUsedAt: null,
+    ...overrides,
+  };
+}
 
 describe('InMemoryConsoleSessionStore', () => {
   it('creates an isolated active self-service session and revokes it immediately', async () => {
@@ -204,6 +221,17 @@ describe('InMemoryConsoleSessionStore', () => {
   });
 });
 
+describe('ConsoleStoreValidation', () => {
+  it('detects unique violations through bounded error causes without cycling forever', () => {
+    const unique = Object.assign(new Error('duplicate'), { code: '23505' });
+    expect(isUniqueViolation(new Error('outer', { cause: unique }))).toBe(true);
+
+    const cyclic: Error & { cause?: unknown } = new Error('cyclic');
+    cyclic.cause = cyclic;
+    expect(isUniqueViolation(cyclic)).toBe(false);
+  });
+});
+
 describe('InMemoryLoginTransactionStore', () => {
   it('consumes matching callback state once and rejects replay or mismatch', async () => {
     const store = new InMemoryLoginTransactionStore();
@@ -314,6 +342,72 @@ describe('InMemoryIdempotencyStore', () => {
       consoleSessionIdHash: hash(8),
     }))).kind).toBe('claimed');
     expect(await store.sweepExpired(ONE_HOUR)).toBe(2);
+  });
+});
+
+describe('InMemoryConsoleFactorStore', () => {
+  it('stores principal-owned TOTP status without exposing seed or backup hashes', async () => {
+    const store = new InMemoryConsoleFactorStore();
+    const source = totpFactor();
+    await store.createTotpFactor(source);
+    source.secretCiphertext.fill(0);
+    source.backupCodeHashes[0].fill(0);
+
+    expect(await store.getTotpStatus(USER_ID)).toEqual({
+      enrolled: true,
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: null,
+      lastUsedAt: null,
+    });
+
+    const asRecord = await store.getActiveTotpFactorForAs(USER_ID);
+    expect(asRecord?.secretCiphertext).toEqual(Buffer.from('encrypted-totp-seed'));
+    expect(asRecord?.backupCodeHashes[0]).toEqual(hash(11));
+  });
+
+  it('permits only one active TOTP factor per principal and allows re-enrollment after disable', async () => {
+    const store = new InMemoryConsoleFactorStore();
+    await store.createTotpFactor(totpFactor());
+
+    await expect(store.createTotpFactor(totpFactor({
+      factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
+    }))).rejects.toThrow('active TOTP factor already exists');
+
+    expect(await store.disableActiveTotp(USER_ID, FOUR_MINUTES)).toBe(true);
+    expect(await store.getTotpStatus(USER_ID)).toEqual({
+      enrolled: false,
+      factorType: 'totp',
+      enrolledAt: NOW,
+      disabledAt: FOUR_MINUTES,
+      lastUsedAt: null,
+    });
+
+    await expect(store.createTotpFactor(totpFactor({
+      factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
+      enrolledAt: FIVE_MINUTES,
+    }))).resolves.toBeUndefined();
+    expect((await store.getTotpStatus(USER_ID)).enrolled).toBe(true);
+  });
+
+  it('marks proof use only for the active owner factor', async () => {
+    const store = new InMemoryConsoleFactorStore();
+    await store.createTotpFactor(totpFactor());
+
+    expect(await store.markTotpUsed(USER_ID, 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(true);
+    expect((await store.getTotpStatus(USER_ID)).lastUsedAt).toEqual(FIVE_MINUTES);
+    expect(await store.markTotpUsed('718c692b-d62b-418b-a495-8255e125ff51', 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(false);
+    expect(await store.disableActiveTotp(USER_ID, FIVE_MINUTES)).toBe(true);
+    expect(await store.markTotpUsed(USER_ID, 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(false);
+  });
+
+  it('rejects plaintext-sized invalid factor material', async () => {
+    const store = new InMemoryConsoleFactorStore();
+
+    await expect(store.createTotpFactor(totpFactor({ secretCiphertext: Buffer.alloc(0) })))
+      .rejects.toThrow('encrypted ciphertext');
+    await expect(store.createTotpFactor(totpFactor({ backupCodeHashes: [Buffer.from('backup-code')] })))
+      .rejects.toThrow('32-byte keyed hash');
   });
 });
 
