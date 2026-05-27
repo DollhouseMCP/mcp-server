@@ -33,5 +33,6 @@ export {
   consoleLoginTransactions,
   idempotencyRecords,
   accountFactors,
+  accountFactorBackupCodes,
 } from './webConsole.js';
 export type { ConsoleAccountFactorType, ConsoleAdminRole, ConsoleLoginFlowKind } from './webConsole.js';

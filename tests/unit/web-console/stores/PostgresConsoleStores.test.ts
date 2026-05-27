@@ -148,7 +148,6 @@ function factorRow(overrides: Partial<{
   factorId: string;
   factorType: 'totp';
   secretCiphertext: Buffer | null;
-  backupCodeHashes: Buffer[];
   enrolledAt: Date;
   disabledAt: Date | null;
   lastUsedAt: Date | null;
@@ -158,7 +157,6 @@ function factorRow(overrides: Partial<{
     factorId: 'cd8f6d0e-7294-42bc-9e01-094890a820a8',
     factorType: 'totp' as const,
     secretCiphertext: Buffer.from('encrypted-totp-seed'),
-    backupCodeHashes: [hash(11), hash(12)],
     enrolledAt: NOW,
     disabledAt: null,
     lastUsedAt: null,
@@ -413,7 +411,7 @@ describe('PostgresConsoleFactorStore', () => {
     }));
     const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
 
-    await expect(store.createTotpFactor(factorRow())).rejects.toThrow(ConsoleStoreConflictError);
+    await expect(store.createTotpFactor(factorRow(), [hash(11)])).rejects.toThrow(ConsoleStoreConflictError);
   });
 
   it('returns status-only active factor projection', async () => {
@@ -479,10 +477,8 @@ describe('PostgresConsoleFactorStore', () => {
 
     const returned = await store.getActiveTotpFactorForAs(USER_ID);
     returned?.secretCiphertext.fill(0);
-    returned?.backupCodeHashes[0].fill(0);
 
     expect(row.secretCiphertext).toEqual(Buffer.from('encrypted-totp-seed'));
-    expect(row.backupCodeHashes[0]).toEqual(hash(11));
   });
 
   it('rejects corrupt factor rows with an explicit null-ciphertext error', async () => {
@@ -503,6 +499,38 @@ describe('PostgresConsoleFactorStore', () => {
     await expect(store.markTotpUsed(USER_ID, factorRow().factorId, BEFORE_NOW)).resolves.toBe(false);
   });
 
+  it('consumes a matching active backup code once', async () => {
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+    const chain = returningChain([{ codeId: '7acb0d42-8772-4326-a08f-f816b59fc176' }]);
+    transaction.update = jest.fn(() => chain);
+
+    await expect(store.consumeBackupCode(USER_ID, factorRow().factorId, hash(11), FIVE_MINUTES)).resolves.toBe(true);
+    expect(chain.set).toHaveBeenCalledWith({ usedAt: FIVE_MINUTES });
+    expect(chain.where).toHaveBeenCalledWith(expect.anything());
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.consumeBackupCode(USER_ID, factorRow().factorId, hash(11), FIVE_MINUTES)).resolves.toBe(false);
+  });
+
+  it('does not consume backup codes for inactive, foreign, or not-yet-created factors', async () => {
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([]));
+
+    await expect(store.consumeBackupCode(USER_ID, factorRow().factorId, hash(11), FIVE_MINUTES)).resolves.toBe(false);
+    await expect(store.consumeBackupCode(USER_ID, factorRow().factorId, hash(11), BEFORE_NOW)).resolves.toBe(false);
+  });
+
+  it('disables with a matching backup code in one transactional store operation', async () => {
+    const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(returningChain([{ codeId: '7acb0d42-8772-4326-a08f-f816b59fc176' }]))
+      .mockReturnValueOnce(returningChain([{ factorId: factorRow().factorId }]));
+
+    await expect(store.disableActiveTotpWithBackupCode(USER_ID, factorRow().factorId, hash(11), FIVE_MINUTES))
+      .resolves.toBe(true);
+    expect(transaction.update).toHaveBeenCalledTimes(2);
+  });
+
   it('conditionally disables active TOTP and permits re-enrollment after disable', async () => {
     const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
     transaction.update = jest.fn(() => returningChain([{ factorId: factorRow().factorId }]));
@@ -514,7 +542,7 @@ describe('PostgresConsoleFactorStore', () => {
     await expect(store.createTotpFactor(factorRow({
       factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
       enrolledAt: FIVE_MINUTES,
-    }))).resolves.toBeUndefined();
+    }), [hash(11), hash(12)])).resolves.toBeUndefined();
 
     transaction.update = jest.fn(() => returningChain([]));
     await expect(store.disableActiveTotp(USER_ID, FIVE_MINUTES)).resolves.toBe(false);

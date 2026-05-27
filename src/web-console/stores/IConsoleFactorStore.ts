@@ -14,7 +14,6 @@ export interface ConsoleTotpFactorRecord {
   readonly factorId: string;
   readonly factorType: 'totp';
   readonly secretCiphertext: Buffer;
-  readonly backupCodeHashes: readonly Buffer[];
   readonly enrolledAt: Date;
   readonly disabledAt: Date | null;
   readonly lastUsedAt: Date | null;
@@ -29,10 +28,12 @@ export interface ConsoleFactorStatus {
 }
 
 export interface IConsoleFactorStore {
-  createTotpFactor(record: ConsoleTotpFactorRecord): Promise<void>;
+  createTotpFactor(record: ConsoleTotpFactorRecord, backupCodeHashes: readonly Buffer[]): Promise<void>;
   getTotpStatus(userId: string): Promise<ConsoleFactorStatus>;
   getActiveTotpFactorForAs(userId: string): Promise<ConsoleTotpFactorRecord | null>;
   markTotpUsed(userId: string, factorId: string, usedAt?: Date): Promise<boolean>;
+  consumeBackupCode(userId: string, factorId: string, codeHash: Buffer, usedAt?: Date): Promise<boolean>;
+  disableActiveTotpWithBackupCode(userId: string, factorId: string, codeHash: Buffer, disabledAt?: Date): Promise<boolean>;
   // Callers that disable a factor must also revoke active admin elevations for the principal.
   disableActiveTotp(userId: string, disabledAt?: Date): Promise<boolean>;
 }
@@ -41,14 +42,17 @@ export function validateTotpFactorRecord(record: ConsoleTotpFactorRecord): void 
   assertUuid(record.userId, 'userId');
   assertUuid(record.factorId, 'factorId');
   assertNonEmptyBuffer(record.secretCiphertext, 'secretCiphertext');
-  for (const backupCodeHash of record.backupCodeHashes) {
-    assertHash(backupCodeHash, 'backupCodeHash');
-  }
   if (record.disabledAt && record.disabledAt < record.enrolledAt) {
     throw new ConsoleStoreValidationError('factor disabledAt cannot precede enrolledAt');
   }
   if (record.lastUsedAt && record.lastUsedAt < record.enrolledAt) {
     throw new ConsoleStoreValidationError('factor lastUsedAt cannot precede enrolledAt');
+  }
+}
+
+export function validateBackupCodeHashes(backupCodeHashes: readonly Buffer[]): void {
+  for (const backupCodeHash of backupCodeHashes) {
+    assertHash(backupCodeHash, 'backupCodeHash');
   }
 }
 
@@ -58,7 +62,6 @@ export function cloneTotpFactorRecord(record: ConsoleTotpFactorRecord): ConsoleT
     factorId: record.factorId,
     factorType: record.factorType,
     secretCiphertext: cloneBuffer(record.secretCiphertext),
-    backupCodeHashes: record.backupCodeHashes.map(cloneBuffer),
     enrolledAt: new Date(record.enrolledAt.getTime()),
     disabledAt: cloneDate(record.disabledAt),
     lastUsedAt: cloneDate(record.lastUsedAt),

@@ -1,6 +1,9 @@
 import {
   ConsoleStoreConflictError,
+  assertHash,
   assertUuid,
+  buffersEqual,
+  cloneBuffer,
 } from './ConsoleStoreValidation.js';
 import type {
   ConsoleFactorStatus,
@@ -10,15 +13,25 @@ import type {
 import {
   cloneFactorStatus,
   cloneTotpFactorRecord,
+  validateBackupCodeHashes,
   validateTotpFactorRecord,
 } from './IConsoleFactorStore.js';
 
+interface BackupCodeRecord {
+  readonly factorId: string;
+  readonly codeHash: Buffer;
+  readonly createdAt: Date;
+  readonly usedAt: Date | null;
+}
+
 export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
   private readonly factors = new Map<string, ConsoleTotpFactorRecord>();
+  private readonly backupCodes = new Map<string, BackupCodeRecord[]>();
 
-  async createTotpFactor(record: ConsoleTotpFactorRecord): Promise<void> {
+  async createTotpFactor(record: ConsoleTotpFactorRecord, backupCodeHashes: readonly Buffer[]): Promise<void> {
     await Promise.resolve();
     validateTotpFactorRecord(record);
+    validateBackupCodeHashes(backupCodeHashes);
     if (this.factors.has(record.factorId)) {
       throw new ConsoleStoreConflictError('console factor id already exists');
     }
@@ -26,6 +39,12 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
       throw new ConsoleStoreConflictError('active TOTP factor already exists for user');
     }
     this.factors.set(record.factorId, cloneTotpFactorRecord(record));
+    this.backupCodes.set(record.factorId, backupCodeHashes.map(codeHash => ({
+      factorId: record.factorId,
+      codeHash: cloneBuffer(codeHash),
+      createdAt: new Date(record.enrolledAt.getTime()),
+      usedAt: null,
+    })));
   }
 
   async getTotpStatus(userId: string): Promise<ConsoleFactorStatus> {
@@ -74,6 +93,53 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
     const factor = this.factors.get(factorId);
     if (factor?.userId !== userId || factor.disabledAt || usedAt < factor.enrolledAt) return false;
     this.factors.set(factorId, cloneTotpFactorRecord({ ...factor, lastUsedAt: usedAt }));
+    return true;
+  }
+
+  async consumeBackupCode(
+    userId: string,
+    factorId: string,
+    codeHash: Buffer,
+    usedAt: Date = new Date(),
+  ): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    assertUuid(factorId, 'factorId');
+    assertHash(codeHash, 'codeHash');
+    const factor = this.factors.get(factorId);
+    if (factor?.userId !== userId || factor.disabledAt || usedAt < factor.enrolledAt) return false;
+    const codes = this.backupCodes.get(factorId) ?? [];
+    const index = codes.findIndex(code => !code.usedAt && buffersEqual(code.codeHash, codeHash));
+    if (index < 0) return false;
+    const updated = [...codes];
+    updated[index] = {
+      ...updated[index],
+      usedAt,
+    };
+    this.backupCodes.set(factorId, updated);
+    return true;
+  }
+
+  async disableActiveTotpWithBackupCode(
+    userId: string,
+    factorId: string,
+    codeHash: Buffer,
+    disabledAt: Date = new Date(),
+  ): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    assertUuid(factorId, 'factorId');
+    assertHash(codeHash, 'codeHash');
+    const factor = this.factors.get(factorId);
+    if (factor?.userId !== userId || factor.disabledAt || disabledAt < factor.enrolledAt) return false;
+    const codes = this.backupCodes.get(factorId) ?? [];
+    const index = codes.findIndex(code => !code.usedAt && code.createdAt <= disabledAt
+      && buffersEqual(code.codeHash, codeHash));
+    if (index < 0) return false;
+    const updatedCodes = [...codes];
+    updatedCodes[index] = { ...updatedCodes[index], usedAt: disabledAt };
+    this.backupCodes.set(factorId, updatedCodes);
+    this.factors.set(factorId, cloneTotpFactorRecord({ ...factor, disabledAt }));
     return true;
   }
 

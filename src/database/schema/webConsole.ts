@@ -116,7 +116,6 @@ export const accountFactors = pgTable('account_factors', {
   factorId: uuid('factor_id').primaryKey().defaultRandom(),
   factorType: text('factor_type').$type<ConsoleAccountFactorType>().notNull(),
   secretCiphertext: bytea('secret_ciphertext'),
-  backupCodeHashes: bytea('backup_code_hashes').array().notNull(),
   enrolledAt: timestamp('enrolled_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
   lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
@@ -125,4 +124,17 @@ export const accountFactors = pgTable('account_factors', {
   uniqueIndex('idx_account_factors_active_totp_unique')
     .on(table.userId, table.factorType)
     .where(sql`${table.factorType} = 'totp' AND ${table.disabledAt} IS NULL`),
+]);
+
+export const accountFactorBackupCodes = pgTable('account_factor_backup_codes', {
+  factorId: uuid('factor_id').notNull().references(() => accountFactors.factorId, { onDelete: 'cascade' }),
+  codeId: uuid('code_id').primaryKey().defaultRandom(),
+  codeHash: bytea('code_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  usedAt: timestamp('used_at', { withTimezone: true }),
+}, (table) => [
+  uniqueIndex('idx_account_factor_backup_codes_factor_hash_unique')
+    .on(table.factorId, table.codeHash),
+  index('idx_account_factor_backup_codes_factor_unused')
+    .on(table.factorId, table.usedAt),
 ]);

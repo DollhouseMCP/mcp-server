@@ -183,7 +183,6 @@ CREATE TABLE IF NOT EXISTS "account_factors" (
   "factor_id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   "factor_type" TEXT NOT NULL CHECK ("factor_type" IN ('totp')),
   "secret_ciphertext" BYTEA,
-  "backup_code_hashes" BYTEA[] NOT NULL,
   "enrolled_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   "disabled_at" TIMESTAMPTZ,
   "last_used_at" TIMESTAMPTZ,
@@ -203,3 +202,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS "idx_account_factors_active_totp_unique"
   WHERE "factor_type" = 'totp' AND "disabled_at" IS NULL;
 ALTER TABLE "account_factors" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "account_factors" FORCE ROW LEVEL SECURITY;
+--> statement-breakpoint
+
+CREATE TABLE IF NOT EXISTS "account_factor_backup_codes" (
+  "factor_id" UUID NOT NULL REFERENCES "account_factors"("factor_id") ON DELETE CASCADE,
+  "code_id" UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  "code_hash" BYTEA NOT NULL,
+  "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "used_at" TIMESTAMPTZ,
+  CONSTRAINT "account_factor_backup_codes_hash_check"
+    CHECK (octet_length("code_hash") = 32),
+  CONSTRAINT "account_factor_backup_codes_lifecycle_check"
+    CHECK ("used_at" IS NULL OR "used_at" >= "created_at")
+);
+CREATE UNIQUE INDEX IF NOT EXISTS "idx_account_factor_backup_codes_factor_hash_unique"
+  ON "account_factor_backup_codes" ("factor_id", "code_hash");
+CREATE INDEX IF NOT EXISTS "idx_account_factor_backup_codes_factor_unused"
+  ON "account_factor_backup_codes" ("factor_id", "used_at");
+ALTER TABLE "account_factor_backup_codes" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "account_factor_backup_codes" FORCE ROW LEVEL SECURITY;

@@ -18,6 +18,7 @@ import type {
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-26T12:05:00.000Z');
@@ -93,10 +94,9 @@ const BODYLESS_COMPLETION: IdempotencyCompletion = {
 function totpFactor(overrides: Partial<ConsoleTotpFactorRecord> = {}): ConsoleTotpFactorRecord {
   return {
     userId: USER_ID,
-    factorId: 'cd8f6d0e-7294-42bc-9e01-094890a820a8',
+    factorId: FACTOR_ID,
     factorType: 'totp' as const,
     secretCiphertext: Buffer.from('encrypted-totp-seed'),
-    backupCodeHashes: [hash(11), hash(12)],
     enrolledAt: NOW,
     disabledAt: null,
     lastUsedAt: null,
@@ -346,12 +346,11 @@ describe('InMemoryIdempotencyStore', () => {
 });
 
 describe('InMemoryConsoleFactorStore', () => {
-  it('stores principal-owned TOTP status without exposing seed or backup hashes', async () => {
+  it('stores principal-owned TOTP status without exposing seed material', async () => {
     const store = new InMemoryConsoleFactorStore();
     const source = totpFactor();
-    await store.createTotpFactor(source);
+    await store.createTotpFactor(source, [hash(11), hash(12)]);
     source.secretCiphertext.fill(0);
-    source.backupCodeHashes[0].fill(0);
 
     expect(await store.getTotpStatus(USER_ID)).toEqual({
       enrolled: true,
@@ -363,16 +362,15 @@ describe('InMemoryConsoleFactorStore', () => {
 
     const asRecord = await store.getActiveTotpFactorForAs(USER_ID);
     expect(asRecord?.secretCiphertext).toEqual(Buffer.from('encrypted-totp-seed'));
-    expect(asRecord?.backupCodeHashes[0]).toEqual(hash(11));
   });
 
   it('permits only one active TOTP factor per principal and allows re-enrollment after disable', async () => {
     const store = new InMemoryConsoleFactorStore();
-    await store.createTotpFactor(totpFactor());
+    await store.createTotpFactor(totpFactor(), [hash(11)]);
 
     await expect(store.createTotpFactor(totpFactor({
       factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
-    }))).rejects.toThrow('active TOTP factor already exists');
+    }), [hash(12)])).rejects.toThrow('active TOTP factor already exists');
 
     expect(await store.disableActiveTotp(USER_ID, FOUR_MINUTES)).toBe(true);
     expect(await store.getTotpStatus(USER_ID)).toEqual({
@@ -386,27 +384,38 @@ describe('InMemoryConsoleFactorStore', () => {
     await expect(store.createTotpFactor(totpFactor({
       factorId: '7acb0d42-8772-4326-a08f-f816b59fc176',
       enrolledAt: FIVE_MINUTES,
-    }))).resolves.toBeUndefined();
+    }), [hash(12)])).resolves.toBeUndefined();
     expect((await store.getTotpStatus(USER_ID)).enrolled).toBe(true);
   });
 
   it('marks proof use only for the active owner factor', async () => {
     const store = new InMemoryConsoleFactorStore();
-    await store.createTotpFactor(totpFactor());
+    await store.createTotpFactor(totpFactor(), [hash(11)]);
 
-    expect(await store.markTotpUsed(USER_ID, 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(true);
+    expect(await store.markTotpUsed(USER_ID, FACTOR_ID, FIVE_MINUTES)).toBe(true);
     expect((await store.getTotpStatus(USER_ID)).lastUsedAt).toEqual(FIVE_MINUTES);
-    expect(await store.markTotpUsed('718c692b-d62b-418b-a495-8255e125ff51', 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(false);
+    expect(await store.markTotpUsed('718c692b-d62b-418b-a495-8255e125ff51', FACTOR_ID, FIVE_MINUTES)).toBe(false);
     expect(await store.disableActiveTotp(USER_ID, FIVE_MINUTES)).toBe(true);
-    expect(await store.markTotpUsed(USER_ID, 'cd8f6d0e-7294-42bc-9e01-094890a820a8', FIVE_MINUTES)).toBe(false);
+    expect(await store.markTotpUsed(USER_ID, FACTOR_ID, FIVE_MINUTES)).toBe(false);
+  });
+
+  it('atomically consumes active backup codes once', async () => {
+    const store = new InMemoryConsoleFactorStore();
+    await store.createTotpFactor(totpFactor(), [hash(11), hash(12)]);
+
+    expect(await store.consumeBackupCode(USER_ID, FACTOR_ID, hash(11), FIVE_MINUTES)).toBe(true);
+    expect(await store.consumeBackupCode(USER_ID, FACTOR_ID, hash(11), FIVE_MINUTES)).toBe(false);
+    expect(await store.consumeBackupCode(USER_ID, FACTOR_ID, hash(12), BEFORE_NOW)).toBe(false);
+    expect(await store.disableActiveTotp(USER_ID, FIVE_MINUTES)).toBe(true);
+    expect(await store.consumeBackupCode(USER_ID, FACTOR_ID, hash(12), FIVE_MINUTES)).toBe(false);
   });
 
   it('rejects plaintext-sized invalid factor material', async () => {
     const store = new InMemoryConsoleFactorStore();
 
-    await expect(store.createTotpFactor(totpFactor({ secretCiphertext: Buffer.alloc(0) })))
+    await expect(store.createTotpFactor(totpFactor({ secretCiphertext: Buffer.alloc(0) }), [hash(11)]))
       .rejects.toThrow('encrypted ciphertext');
-    await expect(store.createTotpFactor(totpFactor({ backupCodeHashes: [Buffer.from('backup-code')] })))
+    await expect(store.createTotpFactor(totpFactor(), [Buffer.from('backup-code')]))
       .rejects.toThrow('32-byte keyed hash');
   });
 });
