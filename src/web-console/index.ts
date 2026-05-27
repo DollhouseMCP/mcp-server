@@ -4,3 +4,4 @@ export * from './identity/index.js';
 export * from './middleware/index.js';
 export * from './security/index.js';
 export * from './audit/index.js';
+export * from './lifecycle/index.js';
