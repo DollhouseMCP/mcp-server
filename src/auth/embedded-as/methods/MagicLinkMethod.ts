@@ -264,7 +264,10 @@ export class MagicLinkMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${consume.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, consume.identity.sub, deps.storage, deps.defaultResource);
+          await finishInteractionWithIdentity(req, res, provider, details, consume.identity.sub, {
+            storage: deps.storage,
+            defaultResource: deps.defaultResource,
+          });
         } catch (err) {
           next(err);
         }

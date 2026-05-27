@@ -35,6 +35,10 @@ export const OAUTH_STATE_MODELS: readonly string[] = [
   'Interaction',
   'InteractionCsrf',
   'InteractionMethodChoice',
+  'AdminStepUpPending',
+  'AdminStepUpClaims',
+  'AdminTotpRouteCsrf',
+  'ConsoleTotpEnrollment',
   'PushedAuthorizationRequest',
   'BackchannelAuthenticationRequest',
   // Cycle-16 fix: oidc-provider's PKCE replay-detection records are
@@ -141,4 +145,3 @@ export async function persistModeFingerprint(
   const current = computeFingerprint(inputs);
   await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: current });
 }
-

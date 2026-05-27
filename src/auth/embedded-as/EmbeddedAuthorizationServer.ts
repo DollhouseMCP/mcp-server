@@ -33,6 +33,7 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import { normalizeIp } from './rateLimit.js';
+import type { IRateLimitStore } from './storage/IRateLimitStore.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import {
   createInteractionRouter,
@@ -53,6 +54,12 @@ import {
   rotateCookieSecretViaStore,
 } from './cookieSecret.js';
 import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import type { AdminTotpService } from './totp/AdminTotpService.js';
+import {
+  mountAdminTotpInteractionRoutes,
+  type TotpSessionProvider,
+} from './totp/AdminTotpInteractionRoutes.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 import {
   checkModeFingerprint,
   persistModeFingerprint,
@@ -199,6 +206,9 @@ export interface EmbeddedAuthorizationServerOptions {
    * Wired in by AuthServiceRegistrar from the DI-resolved 'SigningKeyStore'.
    */
   signingKeyStore?: ISigningKeyStore;
+  adminTotpService?: AdminTotpService;
+  consoleIdentityResolver?: IConsoleIdentityResolver;
+  adminTotpRateLimitStore?: IRateLimitStore;
 }
 
 interface InitializedState {
@@ -228,6 +238,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly admin: EmbeddedASAdmin;
   private readonly tokens: EmbeddedASTokens;
   private readonly oidcAccount: EmbeddedASOidcAccount;
+  private readonly adminTotpService: AdminTotpService | null;
+  private readonly consoleIdentityResolver: IConsoleIdentityResolver | null;
+  private readonly adminTotpRateLimitStore: IRateLimitStore | null;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -262,6 +275,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
     this.signingKeyStore = options.signingKeyStore ?? null;
+    this.adminTotpService = options.adminTotpService ?? null;
+    this.consoleIdentityResolver = options.consoleIdentityResolver ?? null;
+    this.adminTotpRateLimitStore = options.adminTotpRateLimitStore ?? null;
     this.bootstrap = new EmbeddedASBootstrap(
       this.methods,
       this.storage,
@@ -400,6 +416,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // delegates to assertHasRole('admin'); a non-admin valid token
     // gets 403, no token / invalid token gets 401.
     router.get('/auth/admin/me', this.createAdminMeHandler());
+
+    if (this.adminTotpService && this.consoleIdentityResolver) {
+      mountAdminTotpInteractionRoutes(router, {
+        storage: this.storage,
+        totpService: this.adminTotpService,
+        identityResolver: this.consoleIdentityResolver,
+        rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        ensureInitialized: () => this.ensureInitialized()
+          .then((s) => ({ provider: s.provider as unknown as TotpSessionProvider })),
+      });
+    }
 
     // Each method owns its own standalone routes (callbacks, invite-redemption
     // pages, etc.) and registers them via contributeRoutes. Replaces the
@@ -746,11 +773,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // constructor, but the runtime accepts a class. Cast bridges the
       // mismatch — see https://github.com/panva/node-oidc-provider docs on
       // adapter shape (the `Adapter` interface is structural at runtime).
-      adapter: adapterFactory as unknown as Configuration['adapter'],
+      adapter: adapterFactory,
       // jwks: the JWKS object shape we produce from `loadOrGenerateSigningJwks`
       // matches the runtime spec ({ keys: [JWK] }) but the @types/oidc-provider
       // declares a narrower internal type. Cast preserves runtime correctness.
-      jwks: keyset.jwks as unknown as Configuration['jwks'],
+      jwks: keyset.jwks,
       // Pre-register the default Claude connector client so curl-based dev
       // flows and native MCP clients work without DCR. The bare-host
       // loopback redirect_uris below are deliberate: with
@@ -988,6 +1015,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // Without this, the grant ends up scope-empty for the resource
       // dimension, oidc-provider re-prompts, and the consent flow loops.
       defaultResource: this.resource,
+      adminStepUp: this.adminTotpService && this.consoleIdentityResolver
+        ? {
+          totpService: this.adminTotpService,
+          identityResolver: this.consoleIdentityResolver,
+          rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        }
+        : undefined,
     });
 
     return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };

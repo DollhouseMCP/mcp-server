@@ -68,6 +68,10 @@ export type AdminTotpProofResult =
   | { readonly ok: true; readonly method: 'totp' | 'backup'; readonly authTime: Date }
   | { readonly ok: false };
 
+export type AdminTotpDisableResult =
+  | { readonly ok: true; readonly method: 'totp' | 'backup'; readonly authTime: Date }
+  | { readonly ok: false };
+
 interface PendingEnrollment {
   readonly userId: string;
   readonly label: string;
@@ -153,6 +157,10 @@ export class AdminTotpService {
     return { factorId, enrolledAt, backupCodes };
   }
 
+  async hasActiveFactor(userId: string): Promise<boolean> {
+    return (await this.factorStore.getTotpStatus(userId)).enrolled;
+  }
+
   async prove(userId: string, code: string): Promise<AdminTotpProofResult> {
     const factor = await this.factorStore.getActiveTotpFactorForAs(userId);
     if (!factor) return { ok: false };
@@ -175,22 +183,30 @@ export class AdminTotpService {
   }
 
   async disable(userId: string, code: string): Promise<boolean> {
+    return (await this.disableWithProof(userId, code)).ok;
+  }
+
+  async disableWithProof(userId: string, code: string): Promise<AdminTotpDisableResult> {
     const factor = await this.factorStore.getActiveTotpFactorForAs(userId);
-    if (!factor) return false;
+    if (!factor) return { ok: false };
     const authTime = this.now();
     const secretBase32 = this.secretEncryption.decrypt(
       factor.secretCiphertext,
       { secretClass: 'console_totp_seed', ownerId: secretOwnerId(userId, factor.factorId) },
     ).toString('utf8');
     if (verifyTotpCode(secretBase32, userId, code, authTime)) {
-      return this.factorStore.disableActiveTotp(userId, authTime);
+      return await this.factorStore.disableActiveTotp(userId, authTime)
+        ? { ok: true, method: 'totp', authTime }
+        : { ok: false };
     }
-    return this.factorStore.disableActiveTotpWithBackupCode(
+    return await this.factorStore.disableActiveTotpWithBackupCode(
       userId,
       factor.factorId,
       hashBackupCode(normalizeBackupCode(code)),
       authTime,
-    );
+    )
+      ? { ok: true, method: 'backup', authTime }
+      : { ok: false };
   }
 
   private async readPendingEnrollment(userId: string, pendingId: string): Promise<PendingEnrollment> {

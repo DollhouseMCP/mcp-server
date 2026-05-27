@@ -1,4 +1,5 @@
 import type { IAuthMethod } from './IAuthMethod.js';
+import { ADMIN_STEP_UP_CLAIMS_MODEL, type AdminStepUpClaims } from './InteractionRouter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 export class EmbeddedASOidcAccount {
@@ -16,6 +17,20 @@ export class EmbeddedASOidcAccount {
     const extras: Record<string, unknown> = {};
     if (account.lastAuthAt) {
       extras.auth_time = Math.floor(account.lastAuthAt / 1000);
+    }
+    const grantId = typeof (token as { grantId?: unknown }).grantId === 'string'
+      ? (token as { grantId: string }).grantId
+      : null;
+    if (grantId) {
+      const claimed = await this.storage.genericConsume(ADMIN_STEP_UP_CLAIMS_MODEL, grantId);
+      const adminClaims = claimed
+        ? await this.storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, grantId)
+        : null;
+      if (isAdminStepUpClaims(adminClaims, accountId)) {
+        extras.acr = adminClaims.acr;
+        extras.amr = adminClaims.amr;
+        extras.auth_time = adminClaims.authTime;
+      }
     }
     if (account.roles && account.roles.length > 0) {
       extras.roles = account.roles;
@@ -49,4 +64,14 @@ export class EmbeddedASOidcAccount {
     }
     return undefined;
   }
+}
+
+function isAdminStepUpClaims(raw: unknown, accountId: string): raw is AdminStepUpClaims {
+  if (!raw || typeof raw !== 'object') return false;
+  const value = raw as Record<string, unknown>;
+  return value.accountId === accountId
+    && value.acr === 'urn:dollhouse:acr:admin-stepup'
+    && Array.isArray(value.amr)
+    && value.amr.every((entry) => typeof entry === 'string')
+    && typeof value.authTime === 'number';
 }

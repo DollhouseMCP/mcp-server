@@ -270,7 +270,10 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
+          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, {
+            storage: deps.storage,
+            defaultResource: deps.defaultResource,
+          });
         } catch (err) {
           next(err);
         }

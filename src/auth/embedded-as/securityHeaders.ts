@@ -4,7 +4,7 @@
  * Middleware that emits the four security headers every response from
  * the embedded AS should carry (must-fix #7 + Phase 7 follow-ups):
  *
- *   - `Content-Security-Policy: frame-ancestors 'none'`
+ *   - `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'`
  *   - `X-Frame-Options: DENY`
  *     Both prevent the consent page (and any future login forms) from
  *     being embedded in an attacker-controlled iframe — which would
@@ -34,7 +34,10 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 export function securityHeaders(): RequestHandler {
   return (_req: Request, res: Response, next: NextFunction): void => {
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+    );
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');
