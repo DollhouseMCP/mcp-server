@@ -22,6 +22,7 @@ import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminSto
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
+import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -73,6 +74,7 @@ export class WebConsoleRegistrar {
     const database = resolveConsoleDatabase(container);
     const stores = await createConsoleStores(database);
     const registry = new ConsoleModuleRegistry();
+    registry.register(createAccountAdminModule({ accountAdminStore: stores.accountAdminStore }));
     const adminAuditWriter = new InMemoryAdminAuditWriter();
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);

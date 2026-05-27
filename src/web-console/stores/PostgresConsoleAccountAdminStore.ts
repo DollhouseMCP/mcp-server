@@ -106,51 +106,19 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
   async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
     assertUuid(userId, 'userId');
     const directRows: PrincipalRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
-      SELECT *
-      FROM (
-        SELECT
-          u.id AS user_id,
-          primary_account.sub AS primary_sub,
-          u.username,
-          COALESCE(u.display_name, primary_account.display_name) AS display_name,
-          COALESCE(u.email, primary_account.email) AS email,
-          COALESCE(primary_account.email_verified, false) AS email_verified,
-          COALESCE(identity_summary.auth_methods, ARRAY[]::TEXT[]) AS auth_methods,
-          COALESCE(role_summary.roles, ARRAY[]::TEXT[]) AS roles,
-          u.disabled_at,
-          u.created_at,
-          identity_summary.last_login_at,
-          EXISTS (
-            SELECT 1 FROM account_factors af
-            WHERE af.user_id = u.id AND af.factor_type = 'totp' AND af.disabled_at IS NULL
-          ) AS admin_factor_enrolled,
-          u.account_correlation_id,
-          u.authz_version
-        FROM users u
-        LEFT JOIN LATERAL (
-          SELECT aa.sub, aa.display_name, aa.email, aa.email_verified
-          FROM auth_accounts aa
-          WHERE aa.user_id = u.id
-          ORDER BY aa.created_at ASC, aa.sub ASC
-          LIMIT 1
-        ) primary_account ON true
-        LEFT JOIN LATERAL (
-          SELECT
-            ARRAY_AGG(DISTINCT aa.provider ORDER BY aa.provider) AS auth_methods,
-            MAX(aa.last_auth_at) AS last_login_at
-          FROM auth_accounts aa
-          WHERE aa.user_id = u.id
-        ) identity_summary ON true
-        LEFT JOIN LATERAL (
-          SELECT ARRAY_AGG(uar.role ORDER BY uar.role) AS roles
-          FROM user_admin_roles uar
-          WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
-        ) role_summary ON true
-        WHERE u.id = ${userId}
-      ) principal
+      ${principalProjectionSql(sql`u.id = ${userId}`)}
       LIMIT 1
     `));
     return directRows[0] ? fromPrincipalRow(directRows[0]) : null;
+  }
+
+  async findPrincipalByAccountCorrelationId(accountCorrelationId: string): Promise<ConsolePrincipalSummary | null> {
+    assertUuid(accountCorrelationId, 'accountCorrelationId');
+    const rows: PrincipalRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
+      ${principalProjectionSql(sql`u.account_correlation_id = ${accountCorrelationId}`)}
+      LIMIT 1
+    `));
+    return rows[0] ? fromPrincipalRow(rows[0]) : null;
   }
 
   async listActiveRoles(userId: string): Promise<ConsoleAdminRole[]> {
@@ -343,6 +311,50 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     } : null;
   }
 
+}
+
+function principalProjectionSql(whereClause: ReturnType<typeof sql>) {
+  return sql`
+    SELECT
+      u.id AS user_id,
+      primary_account.sub AS primary_sub,
+      u.username,
+      COALESCE(u.display_name, primary_account.display_name) AS display_name,
+      COALESCE(u.email, primary_account.email) AS email,
+      COALESCE(primary_account.email_verified, false) AS email_verified,
+      COALESCE(identity_summary.auth_methods, ARRAY[]::TEXT[]) AS auth_methods,
+      COALESCE(role_summary.roles, ARRAY[]::TEXT[]) AS roles,
+      u.disabled_at,
+      u.created_at,
+      identity_summary.last_login_at,
+      EXISTS (
+        SELECT 1 FROM account_factors af
+        WHERE af.user_id = u.id AND af.factor_type = 'totp' AND af.disabled_at IS NULL
+      ) AS admin_factor_enrolled,
+      u.account_correlation_id,
+      u.authz_version
+    FROM users u
+    LEFT JOIN LATERAL (
+      SELECT aa.sub, aa.display_name, aa.email, aa.email_verified
+      FROM auth_accounts aa
+      WHERE aa.user_id = u.id
+      ORDER BY aa.created_at ASC, aa.sub ASC
+      LIMIT 1
+    ) primary_account ON true
+    LEFT JOIN LATERAL (
+      SELECT
+        ARRAY_AGG(DISTINCT aa.provider ORDER BY aa.provider) AS auth_methods,
+        MAX(aa.last_auth_at) AS last_login_at
+      FROM auth_accounts aa
+      WHERE aa.user_id = u.id
+    ) identity_summary ON true
+    LEFT JOIN LATERAL (
+      SELECT ARRAY_AGG(uar.role ORDER BY uar.role) AS roles
+      FROM user_admin_roles uar
+      WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
+    ) role_summary ON true
+    WHERE ${whereClause}
+  `;
 }
 
 type PrincipalStateChangeRow = Record<string, unknown> & {

@@ -1,9 +1,11 @@
 import { Router } from 'express';
-import type { RequestHandler } from 'express';
+import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { createConsoleRequestContextMiddleware } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
 import type { ConsoleHttpMethod, ConsoleRequest, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
+import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
+import { requireConsoleRequestContext } from './ConsoleRequestContext.js';
 
 function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
   const handler: RequestHandler = (request, response, next): void => {
@@ -45,5 +47,14 @@ export function assembleConsoleRouter(registry: ConsoleModuleRegistry): Router {
       registerRoute(router, route);
     }
   }
+  const sendKnownProblem: ErrorRequestHandler = (error, request, response, next): void => {
+    const problem = problemForConsoleError(error);
+    if (!problem || response.headersSent) {
+      next(error);
+      return;
+    }
+    sendProblemResponse(response, problem, requireConsoleRequestContext(request as ConsoleRequest).correlationId);
+  };
+  router.use(sendKnownProblem);
   return router;
 }

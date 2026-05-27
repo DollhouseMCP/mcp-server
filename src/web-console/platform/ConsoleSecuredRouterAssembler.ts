@@ -18,7 +18,7 @@ import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatfor
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
-import { sendProblemResponse } from './ProblemResponses.js';
+import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
 import type { ConsoleRequest } from './ConsolePlatformTypes.js';
 
 export interface SecuredConsoleRouterOptions {
@@ -63,6 +63,11 @@ export function assembleSecuredConsoleRouter(
       return;
     }
     const correlationId = requireConsoleRequestContext(request as ConsoleRequest).correlationId;
+    const knownProblem = problemForConsoleError(error);
+    if (knownProblem) {
+      sendProblemResponse(response, knownProblem, correlationId);
+      return;
+    }
     try {
       options.reportInternalError?.(error, correlationId);
     } catch {
@@ -137,8 +142,16 @@ async function executeAuditedConsoleRoute(
     result = await executeConsoleRoute(route, req);
   } catch (error) {
     if (route.audience !== 'admin') throw error;
+    const problem = problemForConsoleError(error);
     try {
-      await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'failed', 'internal_error', occurredAt);
+      await writeConsoleAdminAudit(
+        options.adminAuditWriter,
+        route,
+        req,
+        'failed',
+        problem?.code ?? 'internal_error',
+        occurredAt,
+      );
     } catch (auditError) {
       throw new AggregateError(
         [error, auditError],

@@ -68,6 +68,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryConsoleIdentityResolver,
       InMemoryConsoleSessionStore,
       InMemoryConsoleFactorStore,
+      InMemoryConsoleAccountAdminStore,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
       WEB_CONSOLE_SERVICE_NAMES,
@@ -84,11 +85,18 @@ describe('WebConsoleRegistrar', () => {
       routesMounted: false,
     });
     expect(composition.registry).toBeInstanceOf(ConsoleModuleRegistry);
-    expect(composition.registry.createRouteManifest()).toEqual({ apiVersion: 'v1', routes: [] });
+    expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        moduleId: 'accountAdmin',
+        path: '/api/v1/admin/accounts/users',
+        requiredCapability: 'console:admin:accounts',
+      }),
+    ]));
     expect(composition.sessionStore).toBeInstanceOf(InMemoryConsoleSessionStore);
     expect(composition.loginTransactionStore).toBeInstanceOf(InMemoryLoginTransactionStore);
     expect(composition.idempotencyStore).toBeInstanceOf(InMemoryIdempotencyStore);
     expect(composition.factorStore).toBeInstanceOf(InMemoryConsoleFactorStore);
+    expect(composition.accountAdminStore).toBeInstanceOf(InMemoryConsoleAccountAdminStore);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
     expect(composition.adminAuditWriter).toBeInstanceOf(InMemoryAdminAuditWriter);
@@ -101,6 +109,7 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.moduleRegistry)).toBe(composition.registry);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionStore)).toBe(composition.sessionStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.factorStore)).toBe(composition.factorStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore)).toBe(composition.accountAdminStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
 
@@ -154,11 +163,14 @@ describe('WebConsoleRegistrar', () => {
 
     expect(composition.storageBackend).toBe('postgres');
     expect(composition.routesMounted).toBe(false);
-    expect(composition.registry.createRouteManifest()).toEqual({ apiVersion: 'v1', routes: [] });
+    expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ moduleId: 'accountAdmin' }),
+    ]));
     expect(composition.sessionStore.constructor.name).toBe('PostgresConsoleSessionStore');
     expect(composition.loginTransactionStore.constructor.name).toBe('PostgresLoginTransactionStore');
     expect(composition.idempotencyStore.constructor.name).toBe('PostgresIdempotencyStore');
     expect(composition.factorStore.constructor.name).toBe('PostgresConsoleFactorStore');
+    expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
   });
 });

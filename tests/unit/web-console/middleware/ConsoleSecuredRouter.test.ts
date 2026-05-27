@@ -11,6 +11,7 @@ import {
   InMemoryAdminAuditWriter,
   InMemoryConsoleSessionStore,
   InMemoryIdempotencyStore,
+  ConsoleStoreValidationError,
   requireConsoleAuthentication,
   type ConsoleModuleDescriptor,
 } from '../../../../src/web-console/index.js';
@@ -33,6 +34,7 @@ const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
+const INVALID_REQUEST_PATH = '/api/v1/me/invalid-request';
 const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
 const ELEVATED_EXPIRES = new Date('2026-05-26T12:30:00.000Z');
 const RECENT_AUTH_TIME = new Date('2026-05-26T11:55:00.000Z');
@@ -81,6 +83,23 @@ function fixtureModules(onChange?: () => void, onAdminMutation?: () => void): re
       handler: () => {
         onChange?.();
         return { status: 200, body: { changed: true } };
+      },
+    }],
+  }, {
+    id: 'validation_fixture',
+    apiVersion: 'v1',
+    capabilities: [SELF_CAPABILITY],
+    routes: [{
+      method: 'GET',
+      path: INVALID_REQUEST_PATH,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      handler: () => {
+        throw new ConsoleStoreValidationError('limit must be between 1 and 200');
       },
     }],
   }, {
@@ -345,6 +364,21 @@ describe('secured console router authentication', () => {
 
     expect(response.status).toBe(500);
     expect(response.body.code).toBe('internal_error');
+  });
+
+  it('maps console validation errors to invalid-request problems without internal diagnostics', async () => {
+    const reportInternalError = jest.fn();
+    const { app } = await buildApp(record(), undefined, reportInternalError);
+
+    const response = await request(app).get(INVALID_REQUEST_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(400);
+    expect(response.headers['content-type']).toMatch(/^application\/problem\+json/);
+    expect(response.body).toMatchObject({
+      code: 'invalid_request',
+      detail: 'limit must be between 1 and 200',
+    });
+    expect(reportInternalError).not.toHaveBeenCalled();
   });
 
   it('fails closed if a session becomes inactive before its request touch completes', async () => {

@@ -73,6 +73,7 @@ export interface PrincipalEnableInput {
 export interface IConsoleAccountAdminStore {
   listPrincipals(query?: PrincipalDirectoryQuery): Promise<ConsolePrincipalSummary[]>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
+  findPrincipalByAccountCorrelationId(accountCorrelationId: string): Promise<ConsolePrincipalSummary | null>;
   listActiveRoles(userId: string): Promise<ConsoleAdminRole[]>;
   grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment>;
   revokeRole(input: RoleRevokeInput): Promise<ConsoleRoleAssignment | null>;

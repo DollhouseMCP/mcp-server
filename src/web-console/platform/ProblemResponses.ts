@@ -1,4 +1,5 @@
 import type { Response } from 'express';
+import { ConsoleStoreValidationError } from '../stores/ConsoleStoreValidation.js';
 
 const PROBLEM_TYPE_BASE_URI = 'https://dollhousemcp.com/errors/';
 const RESERVED_PROBLEM_MEMBERS = new Set([
@@ -65,4 +66,16 @@ export function sendProblemResponse(
     .status(problem.status)
     .type('application/problem+json')
     .json(createProblemDetails(problem, correlationId));
+}
+
+export function problemForConsoleError(error: unknown): ConsoleProblemInput | null {
+  if (error instanceof ConsoleStoreValidationError) {
+    return {
+      status: 400,
+      code: 'invalid_request',
+      title: 'Invalid request',
+      detail: error.message,
+    };
+  }
+  return null;
 }

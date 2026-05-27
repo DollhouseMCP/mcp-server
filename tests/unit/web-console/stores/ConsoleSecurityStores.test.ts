@@ -497,6 +497,8 @@ describe('InMemoryConsoleAccountAdminStore', () => {
     })).rejects.toThrow('already active');
     expect(await store.listActiveRoles(USER_ID)).toEqual(['account_admin']);
     expect((await store.findPrincipal(USER_ID))?.roles).toEqual(['account_admin']);
+    expect((await store.findPrincipalByAccountCorrelationId('7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8'))?.userId)
+      .toBe(USER_ID);
     expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(2);
 
     const revoked = await store.revokeRole({

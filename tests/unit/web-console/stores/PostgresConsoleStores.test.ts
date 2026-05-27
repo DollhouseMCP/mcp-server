@@ -793,6 +793,10 @@ describe('PostgresConsoleAccountAdminStore', () => {
 
     transaction.execute = jest.fn(() => Promise.resolve([principalProjectionRow({ roles: ['unknown'] })]));
     await expect(store.findPrincipal(USER_ID)).rejects.toThrow('unknown administrative role');
+
+    transaction.execute = jest.fn(() => Promise.resolve([row]));
+    await expect(store.findPrincipalByAccountCorrelationId('7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8'))
+      .resolves.toMatchObject({ userId: USER_ID, accountCorrelationId: '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8' });
   });
 });
 

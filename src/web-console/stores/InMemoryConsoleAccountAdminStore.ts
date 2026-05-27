@@ -70,6 +70,14 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return principal ? this.withCurrentRoles(principal) : null;
   }
 
+  async findPrincipalByAccountCorrelationId(accountCorrelationId: string): Promise<ConsolePrincipalSummary | null> {
+    await Promise.resolve();
+    assertUuid(accountCorrelationId, 'accountCorrelationId');
+    const principal = [...this.principals.values()]
+      .find(candidate => candidate.accountCorrelationId === accountCorrelationId);
+    return principal ? this.withCurrentRoles(principal) : null;
+  }
+
   async listActiveRoles(userId: string): Promise<ConsoleAdminRole[]> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
