@@ -1,0 +1,164 @@
+import type { DiContainerFacade } from '../di/DiContainerFacade.js';
+import type { DatabaseInstance } from '../database/connection.js';
+import { InMemoryAdminAuditWriter } from './audit/InMemoryAdminAuditWriter.js';
+import { InMemoryConsoleIdentityResolver } from './identity/InMemoryConsoleIdentityResolver.js';
+import { ConsoleStoreCleanupScheduler } from './lifecycle/ConsoleStoreCleanupScheduler.js';
+import type { ConsoleStoreCleanupError } from './lifecycle/ConsoleStoreCleanupScheduler.js';
+import type { IConsoleOpaqueValueService } from './security/ConsoleOpaqueValues.js';
+import { HmacConsoleOpaqueValueService } from './security/ConsoleOpaqueValues.js';
+import type { IAdminAuditWriter } from './audit/IAdminAuditWriter.js';
+import type { IConsoleIdentityResolver } from './identity/IConsoleIdentityResolver.js';
+import { ConsoleModuleRegistry } from './platform/ConsoleModuleRegistry.js';
+import type { IConsoleSessionStore } from './stores/IConsoleSessionStore.js';
+import { InMemoryConsoleSessionStore } from './stores/InMemoryConsoleSessionStore.js';
+import type { IIdempotencyStore } from './stores/IIdempotencyStore.js';
+import { InMemoryIdempotencyStore } from './stores/InMemoryIdempotencyStore.js';
+import type { ILoginTransactionStore } from './stores/ILoginTransactionStore.js';
+import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransactionStore.js';
+
+export const WEB_CONSOLE_SERVICE_NAMES = {
+  composition: 'WebConsoleComposition',
+  moduleRegistry: 'WebConsoleModuleRegistry',
+  sessionStore: 'WebConsoleSessionStore',
+  loginTransactionStore: 'WebConsoleLoginTransactionStore',
+  idempotencyStore: 'WebConsoleIdempotencyStore',
+  identityResolver: 'WebConsoleIdentityResolver',
+  opaqueValues: 'WebConsoleOpaqueValueService',
+  adminAuditWriter: 'WebConsoleAdminAuditWriter',
+  cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
+} as const;
+
+export interface WebConsoleRegistrarOptions {
+  readonly opaqueValueHmacKey?: Buffer;
+  readonly registerCleanup?: boolean;
+  readonly cleanupIntervalMs?: number;
+  readonly now?: () => Date;
+  readonly reportCleanupError?: (error: ConsoleStoreCleanupError) => void;
+}
+
+export interface WebConsoleComposition {
+  readonly registry: ConsoleModuleRegistry;
+  readonly sessionStore: IConsoleSessionStore;
+  readonly loginTransactionStore: ILoginTransactionStore;
+  readonly idempotencyStore: IIdempotencyStore;
+  readonly identityResolver: IConsoleIdentityResolver;
+  readonly opaqueValues: IConsoleOpaqueValueService;
+  readonly adminAuditWriter: IAdminAuditWriter;
+  readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
+  readonly storageBackend: 'memory' | 'postgres';
+  readonly routesMounted: false;
+}
+
+export class WebConsoleRegistrar {
+  constructor(private readonly options: WebConsoleRegistrarOptions = {}) {}
+
+  async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
+    const database = resolveConsoleDatabase(container);
+    const stores = await createConsoleStores(database);
+    const registry = new ConsoleModuleRegistry();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
+    const cleanupScheduler = this.createCleanupScheduler(stores, container);
+    const composition: WebConsoleComposition = {
+      registry,
+      ...stores,
+      opaqueValues,
+      adminAuditWriter,
+      cleanupScheduler,
+      storageBackend: database ? 'postgres' : 'memory',
+      routesMounted: false,
+    };
+
+    container.register(WEB_CONSOLE_SERVICE_NAMES.composition, () => composition);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.moduleRegistry, () => registry);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionStore, () => stores.sessionStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.loginTransactionStore, () => stores.loginTransactionStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
+    if (cleanupScheduler) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
+    }
+
+    return composition;
+  }
+
+  private createCleanupScheduler(
+    stores: Pick<WebConsoleComposition, 'sessionStore' | 'loginTransactionStore' | 'idempotencyStore'>,
+    container: DiContainerFacade,
+  ): ConsoleStoreCleanupScheduler | null {
+    if (this.options.registerCleanup === false) return null;
+    const reportError = this.options.reportCleanupError;
+    if (!reportError) {
+      throw new Error('Web console cleanup registration requires reportCleanupError');
+    }
+    if (!container.hasRegistration('LifecycleService')) {
+      throw new Error('Web console cleanup registration requires LifecycleService');
+    }
+    const scheduler = new ConsoleStoreCleanupScheduler({
+      stores,
+      intervalMs: this.options.cleanupIntervalMs,
+      now: this.options.now,
+      reportError,
+    });
+    scheduler.register(container.resolve('LifecycleService'));
+    return scheduler;
+  }
+}
+
+interface ConsoleStoreSet {
+  readonly sessionStore: IConsoleSessionStore;
+  readonly loginTransactionStore: ILoginTransactionStore;
+  readonly idempotencyStore: IIdempotencyStore;
+  readonly identityResolver: IConsoleIdentityResolver;
+}
+
+async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {
+  if (database) {
+    const [
+      { PostgresConsoleSessionStore },
+      { PostgresLoginTransactionStore },
+      { PostgresIdempotencyStore },
+      { PostgresConsoleIdentityResolver },
+    ] = await Promise.all([
+      import('./stores/PostgresConsoleSessionStore.js'),
+      import('./stores/PostgresLoginTransactionStore.js'),
+      import('./stores/PostgresIdempotencyStore.js'),
+      import('./identity/PostgresConsoleIdentityResolver.js'),
+    ]);
+    return {
+      sessionStore: new PostgresConsoleSessionStore(database),
+      loginTransactionStore: new PostgresLoginTransactionStore(database),
+      idempotencyStore: new PostgresIdempotencyStore(database),
+      identityResolver: new PostgresConsoleIdentityResolver(database),
+    };
+  }
+  return {
+    sessionStore: new InMemoryConsoleSessionStore(),
+    loginTransactionStore: new InMemoryLoginTransactionStore(),
+    idempotencyStore: new InMemoryIdempotencyStore(),
+    identityResolver: new InMemoryConsoleIdentityResolver(),
+  };
+}
+
+function resolveConsoleDatabase(container: DiContainerFacade): DatabaseInstance | undefined {
+  if (container.hasRegistration('SystemDatabaseInstance')) {
+    return container.resolve<DatabaseInstance>('SystemDatabaseInstance');
+  }
+  if (container.hasRegistration('DatabaseInstance')) {
+    return container.resolve<DatabaseInstance>('DatabaseInstance');
+  }
+  return undefined;
+}
+
+function resolveOpaqueValueHmacKey(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): Buffer {
+  if (options.opaqueValueHmacKey) return Buffer.from(options.opaqueValueHmacKey);
+  if (container.hasRegistration('WebConsoleOpaqueValueHmacKey')) {
+    return Buffer.from(container.resolve<Buffer>('WebConsoleOpaqueValueHmacKey'));
+  }
+  throw new Error('Web console composition requires a WebConsoleOpaqueValueHmacKey registration or opaqueValueHmacKey option');
+}
