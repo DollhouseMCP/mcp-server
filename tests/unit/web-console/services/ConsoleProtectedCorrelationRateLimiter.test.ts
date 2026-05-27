@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, jest } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type {
@@ -64,7 +64,13 @@ function input(overrides: Partial<Parameters<ConsoleProtectedCorrelationRateLimi
 }
 
 beforeEach(() => {
+  jest.useFakeTimers({ now: NOW });
   SecurityMonitor.clearAllEventsForTesting();
+});
+
+afterEach(() => {
+  jest.useRealTimers();
+  jest.restoreAllMocks();
 });
 
 describe('ConsoleProtectedCorrelationRateLimiter', () => {

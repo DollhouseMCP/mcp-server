@@ -23,6 +23,8 @@ import type { IConsoleSecurityInvalidationStore } from './services/invalidation/
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStore.js';
+import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -37,6 +39,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
+  protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -48,6 +51,7 @@ export interface WebConsoleRegistrarOptions {
   readonly reportCleanupError?: (error: ConsoleStoreCleanupError) => void;
   readonly secretEncryptionKey?: AeadSecretKey;
   readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
+  readonly protectedCorrelationSelectorHmacKey?: Buffer;
 }
 
 export interface WebConsoleComposition {
@@ -62,6 +66,7 @@ export interface WebConsoleComposition {
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: false;
@@ -78,6 +83,7 @@ export class WebConsoleRegistrar {
     const adminAuditWriter = new InMemoryAdminAuditWriter();
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
+    const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
       registry,
@@ -85,6 +91,7 @@ export class WebConsoleRegistrar {
       opaqueValues,
       secretEncryption,
       adminAuditWriter,
+      protectedCorrelationRateLimiter,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
       routesMounted: false,
@@ -104,6 +111,12 @@ export class WebConsoleRegistrar {
       container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => secretEncryption);
     }
     container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
+    if (protectedCorrelationRateLimiter) {
+      container.register(
+        WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter,
+        () => protectedCorrelationRateLimiter,
+      );
+    }
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
     }
@@ -216,4 +229,23 @@ function resolveSecretEncryption(
       : null);
   if (!key) return null;
   return new AeadSecretEncryptionService(key, options.retainedSecretEncryptionKeys ?? []);
+}
+
+function resolveProtectedCorrelationRateLimiter(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ConsoleProtectedCorrelationRateLimiter | null {
+  const key = options.protectedCorrelationSelectorHmacKey ??
+    (container.hasRegistration('WebConsoleProtectedCorrelationSelectorHmacKey')
+      ? container.resolve<Buffer>('WebConsoleProtectedCorrelationSelectorHmacKey')
+      : null);
+  if (!key) return null;
+  if (!container.hasRegistration('RateLimitStore')) {
+    throw new Error('Web console protected correlation rate limiting requires RateLimitStore');
+  }
+  return new ConsoleProtectedCorrelationRateLimiter({
+    store: container.resolve<IRateLimitStore>('RateLimitStore'),
+    selectorHmacKey: Buffer.from(key),
+    now: options.now,
+  });
 }

@@ -7,6 +7,7 @@ import {
   createConsoleAuthenticationMiddleware,
   createConsoleAuthorizationMiddleware,
   createConsoleCsrfProtectionMiddleware,
+  createConsoleRateLimitMiddleware,
   createConsoleSecurityHeadersMiddleware,
   executeWithConsoleIdempotency,
   writeConsoleAdminAudit,
@@ -14,6 +15,7 @@ import {
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
+import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
@@ -28,6 +30,7 @@ export interface SecuredConsoleRouterOptions {
   readonly consoleOrigin: string;
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
   readonly idleTimeoutMs: number;
   readonly now?: () => Date;
   readonly reportInternalError?: (error: unknown, correlationId: string) => void;
@@ -52,6 +55,7 @@ export function assembleSecuredConsoleRouter(
           authenticate,
           csrf,
           createConsoleAuthorizationMiddleware(route, options),
+          createConsoleRateLimitMiddleware(route, options),
           createSecuredHandler(route, options),
         ]);
       }

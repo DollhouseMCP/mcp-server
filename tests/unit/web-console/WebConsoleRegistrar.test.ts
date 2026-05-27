@@ -126,6 +126,62 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.opaqueValues.createOpaqueValue()).toEqual(expect.any(String));
   });
 
+  it('registers protected correlation rate limiting only with explicit shared dependencies', async () => {
+    const container = new TestContainer();
+    const { InMemoryRateLimitStore } = await import('../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js');
+    const {
+      ConsoleProtectedCorrelationRateLimiter,
+      WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
+    } = await import('../../../src/web-console/index.js');
+    const rateLimitStore = new InMemoryRateLimitStore();
+    container.seed('RateLimitStore', rateLimitStore);
+    const selectorKey = Buffer.alloc(32, 22);
+    const now = () => new Date('2026-05-27T14:30:00.000Z');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 21),
+      protectedCorrelationSelectorHmacKey: selectorKey,
+      registerCleanup: false,
+      now,
+    }).bootstrapAndRegister(container);
+    selectorKey.fill(0);
+
+    expect(composition.protectedCorrelationRateLimiter).toBeInstanceOf(ConsoleProtectedCorrelationRateLimiter);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter))
+      .toBe(composition.protectedCorrelationRateLimiter);
+
+    const first = await composition.protectedCorrelationRateLimiter?.consume({
+      consoleSessionIdHash: Buffer.alloc(32, 7),
+      ip: null,
+      accountCorrelationId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+    });
+    const second = await new ConsoleProtectedCorrelationRateLimiter({
+      store: new InMemoryRateLimitStore(),
+      selectorHmacKey: Buffer.alloc(32, 22),
+      now,
+    }).consume({
+      consoleSessionIdHash: Buffer.alloc(32, 7),
+      ip: null,
+      accountCorrelationId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+    });
+    expect(first).toMatchObject({
+      allowed: true,
+      attemptsRemaining: second.attemptsRemaining,
+      windowResetsAt: new Date('2026-05-27T15:30:00.000Z'),
+    });
+  });
+
+  it('fails clearly when protected correlation key is supplied without a rate-limit store', async () => {
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 23),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 24),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow('RateLimitStore');
+  });
+
   it('fails clearly when required secrets or scheduled error reporting are missing', async () => {
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 

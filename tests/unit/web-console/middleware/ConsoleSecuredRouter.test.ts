@@ -12,9 +12,12 @@ import {
   InMemoryConsoleSessionStore,
   InMemoryIdempotencyStore,
   ConsoleStoreValidationError,
+  ConsoleProtectedCorrelationRateLimitDependencyError,
+  ConsoleProtectedCorrelationRateLimiter,
   requireConsoleAuthentication,
   type ConsoleModuleDescriptor,
 } from '../../../../src/web-console/index.js';
+import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -34,6 +37,8 @@ const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
+const ADMIN_CORRELATION_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
+const ADMIN_CORRELATION_PATH = `/api/v1/admin/audit/correlations/${ADMIN_CORRELATION_ID}`;
 const INVALID_REQUEST_PATH = '/api/v1/me/invalid-request';
 const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
 const ELEVATED_EXPIRES = new Date('2026-05-26T12:30:00.000Z');
@@ -44,7 +49,11 @@ const CONSOLE_REQUEST_HEADER = 'X-Console-Request';
 const IDEMPOTENCY_HEADER = 'Idempotency-Key';
 const IDEMPOTENCY_KEY = 'a51d7564-c85e-4e11-b319-dbc156d26f70';
 
-function fixtureModules(onChange?: () => void, onAdminMutation?: () => void): readonly ConsoleModuleDescriptor[] {
+function fixtureModules(
+  onChange?: () => void,
+  onAdminMutation?: () => void,
+  onProtectedCorrelation?: () => void,
+): readonly ConsoleModuleDescriptor[] {
   return [{
     id: 'me_fixture',
     apiVersion: 'v1',
@@ -111,6 +120,7 @@ function fixtureModules(onChange?: () => void, onAdminMutation?: () => void): re
       { id: 'admin.audit.export' },
       { id: 'admin.audit.failure' },
       { id: 'admin.audit.mutate' },
+      { id: 'admin.audit.correlation' },
     ],
     routes: [{
       method: 'GET',
@@ -161,6 +171,21 @@ function fixtureModules(onChange?: () => void, onAdminMutation?: () => void): re
         onAdminMutation?.();
         return { status: 200, body: { changed: true } };
       },
+    }, {
+      method: 'GET',
+      path: '/api/v1/admin/audit/correlations/:account_correlation_id',
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_5m',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      rateLimit: 'protected_correlation_resolution',
+      auditOperation: 'admin.audit.correlation',
+      privacyProjector: value => value,
+      handler: () => {
+        onProtectedCorrelation?.();
+        return { status: 200, body: { resolved: true } };
+      },
     }],
   }];
 }
@@ -193,14 +218,16 @@ async function buildApp(
     authzVersion: 2,
   }]),
   reportInternalError?: (error: unknown, correlationId: string) => void,
+  protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null = protectedCorrelationLimiter(),
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   const idempotencyStore = new InMemoryIdempotencyStore();
   const onChange = jest.fn();
   const onAdminMutation = jest.fn();
+  const onProtectedCorrelation = jest.fn();
   if (session) await sessionStore.create(session);
   const registry = new ConsoleModuleRegistry();
-  fixtureModules(onChange, onAdminMutation).forEach(module => registry.register(module));
+  fixtureModules(onChange, onAdminMutation, onProtectedCorrelation).forEach(module => registry.register(module));
   const adminAuditWriter = new InMemoryAdminAuditWriter();
   const app = express();
   app.use(express.json());
@@ -211,11 +238,20 @@ async function buildApp(
     consoleOrigin: ORIGIN,
     adminAuditWriter,
     idempotencyStore,
+    protectedCorrelationRateLimiter,
     idleTimeoutMs: 60 * 60 * 1000,
     now: () => NOW,
     reportInternalError,
   }));
-  return { app, sessionStore, adminAuditWriter, idempotencyStore, onChange, onAdminMutation };
+  return {
+    app,
+    sessionStore,
+    adminAuditWriter,
+    idempotencyStore,
+    onChange,
+    onAdminMutation,
+    onProtectedCorrelation,
+  };
 }
 
 function sessionCookie(): string {
@@ -237,6 +273,28 @@ function elevatedAuditSession(): ConsoleSessionRecord {
       amr: ['otp'],
       authTime: RECENT_AUTH_TIME,
     },
+  });
+}
+
+function freshlyElevatedAuditSession(): ConsoleSessionRecord {
+  return record({
+    createdAt: SESSION_CREATED,
+    grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+    elevation: {
+      capabilities: [AUDIT_CAPABILITY],
+      expiresAt: ELEVATED_EXPIRES,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: new Date('2026-05-26T11:56:00.000Z'),
+    },
+  });
+}
+
+function protectedCorrelationLimiter(): ConsoleProtectedCorrelationRateLimiter {
+  return new ConsoleProtectedCorrelationRateLimiter({
+    store: new InMemoryRateLimitStore(),
+    selectorHmacKey: Buffer.alloc(32, 24),
+    now: () => NOW,
   });
 }
 
@@ -816,5 +874,131 @@ describe('secured console router elevation', () => {
       expect.objectContaining({ message: 'fixture admin execution failure' }),
       auditError,
     ]);
+  });
+});
+
+describe('secured console router rate limiting', () => {
+  it('invokes protected correlation limiter before executing a protected route', async () => {
+    const limiter = protectedCorrelationLimiter();
+    const consume = jest.spyOn(limiter, 'consume');
+    const { app, onProtectedCorrelation } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      undefined,
+      limiter,
+    );
+
+    const response = await request(app).get(ADMIN_CORRELATION_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ resolved: true });
+    expect(onProtectedCorrelation).toHaveBeenCalledTimes(1);
+    expect(consume).toHaveBeenCalledWith({
+      consoleSessionIdHash: OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE),
+      ip: expect.any(String),
+      accountCorrelationId: ADMIN_CORRELATION_ID,
+    });
+  });
+
+  it('returns rate-limited problem details and does not invoke the handler when denied', async () => {
+    const limiter = protectedCorrelationLimiter();
+    jest.spyOn(limiter, 'consume').mockResolvedValue({
+      allowed: false,
+      attemptsRemaining: 7,
+      windowResetsAt: new Date('2026-05-26T13:00:00.000Z'),
+      retryAfterSeconds: 3600,
+      exceededScopes: ['session'],
+    });
+    const { app, onProtectedCorrelation } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      undefined,
+      limiter,
+    );
+
+    const response = await request(app).get(ADMIN_CORRELATION_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(429);
+    expect(response.headers['retry-after']).toBe('3600');
+    expect(response.body).toMatchObject({
+      code: 'rate_limited',
+      attempts_remaining: 7,
+      window_resets_at: '2026-05-26T13:00:00.000Z',
+      exceeded_scopes: ['session'],
+    });
+    expect(onProtectedCorrelation).not.toHaveBeenCalled();
+  });
+
+  it('does not consume protected budget before authentication succeeds', async () => {
+    const limiter = protectedCorrelationLimiter();
+    const consume = jest.spyOn(limiter, 'consume');
+    const { app, onProtectedCorrelation } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      undefined,
+      limiter,
+    );
+
+    const response = await request(app).get(ADMIN_CORRELATION_PATH);
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+    expect(consume).not.toHaveBeenCalled();
+    expect(onProtectedCorrelation).not.toHaveBeenCalled();
+  });
+
+  it('fails closed on protected rate-limit dependency errors', async () => {
+    const limiter = protectedCorrelationLimiter();
+    jest.spyOn(limiter, 'consume').mockRejectedValue(
+      new ConsoleProtectedCorrelationRateLimitDependencyError('store unavailable'),
+    );
+    const { app, onProtectedCorrelation } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      undefined,
+      limiter,
+    );
+
+    const response = await request(app).get(ADMIN_CORRELATION_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe('service_unavailable');
+    expect(onProtectedCorrelation).not.toHaveBeenCalled();
+  });
+
+  it('routes unexpected protected limiter errors through the kernel error handler', async () => {
+    const limiter = protectedCorrelationLimiter();
+    const error = new Error('unexpected limiter failure');
+    jest.spyOn(limiter, 'consume').mockRejectedValue(error);
+    const reportInternalError = jest.fn();
+    const { app, onProtectedCorrelation } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      reportInternalError,
+      limiter,
+    );
+
+    const response = await request(app).get(ADMIN_CORRELATION_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(500);
+    expect(response.body.code).toBe('internal_error');
+    expect(reportInternalError).toHaveBeenCalledWith(error, expect.any(String));
+    expect(onProtectedCorrelation).not.toHaveBeenCalled();
+  });
+
+  it('does not invoke the protected limiter for routes without a rate-limit policy', async () => {
+    const limiter = protectedCorrelationLimiter();
+    const consume = jest.spyOn(limiter, 'consume');
+    const { app } = await buildApp(elevatedAuditSession(), undefined, undefined, limiter);
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it('fails router assembly when a protected policy is declared without its limiter', async () => {
+    await expect(buildApp(elevatedAuditSession(), undefined, undefined, null))
+      .rejects.toThrow('protected_correlation_resolution route requires a protected correlation rate limiter');
   });
 });
