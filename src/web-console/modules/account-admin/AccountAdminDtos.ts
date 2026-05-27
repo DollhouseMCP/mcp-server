@@ -27,6 +27,17 @@ export interface AccountRoleListDto {
   readonly roles: readonly ConsoleAdminRole[];
 }
 
+export interface AccountPrincipalLifecycleDto {
+  readonly user: AccountPrincipalDto;
+  readonly revocation_summary?: {
+    readonly browser_sessions_revoked: number;
+    readonly mcp_oauth_grants_revoked: number;
+    readonly mcp_refresh_tokens_revoked: number;
+    readonly mcp_sessions_terminated: number;
+    readonly authz_version_bumped: boolean;
+  };
+}
+
 export function serializeAccountPrincipal(summary: ConsolePrincipalSummary): AccountPrincipalDto {
   return {
     user_id: summary.userId,
@@ -56,5 +67,15 @@ export function serializeAccountRoleList(userId: string, roles: readonly Console
   return {
     user_id: userId,
     roles: [...roles],
+  };
+}
+
+export function serializeAccountPrincipalLifecycle(
+  summary: ConsolePrincipalSummary,
+  revocationSummary?: AccountPrincipalLifecycleDto['revocation_summary'],
+): AccountPrincipalLifecycleDto {
+  return {
+    user: serializeAccountPrincipal(summary),
+    ...(revocationSummary ? { revocation_summary: revocationSummary } : {}),
   };
 }

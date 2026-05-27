@@ -5,10 +5,12 @@ import type {
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
 import {
   projectAccountPrincipal,
+  projectAccountPrincipalLifecycle,
   projectAccountPrincipalList,
   projectAccountRoleList,
 } from './AccountAdminPrivacyProjectors.js';
@@ -16,6 +18,8 @@ import {
 const ACCOUNT_ADMIN_AUDIT = {
   usersList: 'accounts.users.list',
   usersShow: 'accounts.users.show',
+  usersDisable: 'accounts.users.disable',
+  usersEnable: 'accounts.users.enable',
   rolesList: 'accounts.roles.list',
   rolesReplace: 'accounts.roles.replace',
   rolesGrant: 'accounts.roles.grant',
@@ -40,6 +44,37 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     transactionRunner: options.roleMutationTransactionRunner,
     now: options.now,
   });
+  const lifecycleMutationService = new AccountAdminLifecycleMutationService({
+    accountAdminStore,
+    transactionRunner: options.roleMutationTransactionRunner,
+    now: options.now,
+  });
+  const disableUserRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/disable',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.usersDisable,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountPrincipalLifecycle,
+    handler: req => disableUser(req, lifecycleMutationService, disableUserRoute),
+  };
+  const enableUserRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/enable',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.usersEnable,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountPrincipalLifecycle,
+    handler: req => enableUser(req, lifecycleMutationService, enableUserRoute),
+  };
   const replaceRolesRoute: ConsoleModuleDescriptor['routes'][number] = {
     method: 'PUT',
     path: '/api/v1/admin/accounts/users/:user_id/roles',
@@ -104,6 +139,8 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
       privacyProjector: projectAccountPrincipal,
       handler: req => getUser(req, service),
     },
+    disableUserRoute,
+    enableUserRoute,
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/users/:user_id/roles',
@@ -160,6 +197,26 @@ async function listRoles(req: ConsoleRequest, service: AccountAdminReadService):
   if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   const body = await service.listRoles(userId);
   return { status: 200, body };
+}
+
+async function disableUser(
+  req: ConsoleRequest,
+  service: AccountAdminLifecycleMutationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.disablePrincipal(req, route, userId);
+}
+
+async function enableUser(
+  req: ConsoleRequest,
+  service: AccountAdminLifecycleMutationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.enablePrincipal(req, route, userId);
 }
 
 async function replaceRoles(

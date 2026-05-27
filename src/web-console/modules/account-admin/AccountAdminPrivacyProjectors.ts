@@ -1,9 +1,11 @@
 import type {
   AccountPrincipalDto,
+  AccountPrincipalLifecycleDto,
   AccountPrincipalListDto,
   AccountRoleListDto,
 } from './AccountAdminDtos.js';
 import {
+  serializeAccountPrincipalLifecycle,
   serializeAccountPrincipal,
   serializeAccountPrincipalList,
   serializeAccountRoleList,
@@ -21,6 +23,25 @@ export function projectAccountPrincipalList(value: unknown): AccountPrincipalLis
 export function projectAccountRoleList(value: unknown): AccountRoleListDto {
   const roleList = value as AccountRoleListDto;
   return serializeAccountRoleList(roleList.user_id, roleList.roles);
+}
+
+export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincipalLifecycleDto {
+  const lifecycle = value as AccountPrincipalLifecycleDto;
+  const summary = fromPrincipalDto(lifecycle.user);
+  const revocationSummary = lifecycle.revocation_summary
+    ? {
+      browser_sessions_revoked: numberField(lifecycle.revocation_summary, 'browser_sessions_revoked'),
+      mcp_oauth_grants_revoked: numberField(lifecycle.revocation_summary, 'mcp_oauth_grants_revoked'),
+      mcp_refresh_tokens_revoked: numberField(lifecycle.revocation_summary, 'mcp_refresh_tokens_revoked'),
+      mcp_sessions_terminated: numberField(lifecycle.revocation_summary, 'mcp_sessions_terminated'),
+      authz_version_bumped: lifecycle.revocation_summary.authz_version_bumped === true,
+    }
+    : undefined;
+  return serializeAccountPrincipalLifecycle(summary, revocationSummary);
+}
+
+function numberField(record: Readonly<Record<string, unknown>>, key: string): number {
+  return Number(record[key] ?? 0);
 }
 
 function fromPrincipalDto(value: unknown): {
