@@ -5,14 +5,18 @@ import {
   InMemoryAccountAdminMutationTransactionRunner,
   InMemoryAdminAuditWriter,
   InMemoryConsoleAccountAdminStore,
+  InMemoryConsoleSessionStore,
   InMemoryConsoleSecurityInvalidationStore,
   createAccountAdminModule,
   type ConsoleRouteDefinition,
   type ConsoleRequest,
+  type ConsoleSessionRecord,
+  type IOAuthGrantRevocationService,
 } from '../../../../src/web-console/index.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
+const UNKNOWN_USER_ID = '11df9917-b534-4014-a03f-e2eb1f0c6fef';
 const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
 const PRIMARY_SUB = 'github_user-7';
 const ACCOUNT_ADMIN_ROLE = 'account_admin';
@@ -21,6 +25,7 @@ const ACCOUNT_ENABLE_PATH = '/api/v1/admin/accounts/users/:user_id/enable';
 const ACCOUNT_ROLES_PATH = '/api/v1/admin/accounts/users/:user_id/roles';
 const ACCOUNT_ROLE_GRANT_PATH = '/api/v1/admin/accounts/users/:user_id/roles/grant';
 const ACCOUNT_ROLE_REVOKE_PATH = '/api/v1/admin/accounts/users/:user_id/roles/revoke';
+const ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH = '/api/v1/admin/accounts/users/:user_id/credentials/revoke-all';
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const ACCOUNT_METADATA_PRIVACY = 'account_metadata';
 const ADMIN_5M_ELEVATION = 'admin_5m';
@@ -28,6 +33,7 @@ const IDEMPOTENCY_REQUIRED = 'required';
 const IDEMPOTENCY_NOT_APPLICABLE = 'not_applicable';
 const AUDIT_USERS_DISABLE = 'accounts.users.disable';
 const AUDIT_USERS_ENABLE = 'accounts.users.enable';
+const AUDIT_USERS_CREDENTIALS_REVOKE_ALL = 'accounts.users.credentials.revoke_all';
 const AUDIT_ROLES_GRANT = 'accounts.roles.grant';
 const NOW = new Date('2026-05-27T14:00:00.000Z');
 const LAST_LOGIN = new Date('2026-05-27T13:00:00.000Z');
@@ -63,14 +69,18 @@ function mutationFixture(
   principals = store(),
 ): {
   readonly accountAdminStore: InMemoryConsoleAccountAdminStore;
+  readonly sessionStore: InMemoryConsoleSessionStore;
   readonly invalidationStore: InMemoryConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: InMemoryAdminAuditWriter;
   readonly module: ReturnType<typeof createAccountAdminModule>;
 } {
   const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
   const adminAuditWriter = new InMemoryAdminAuditWriter();
+  const sessionStore = new InMemoryConsoleSessionStore();
   const module = createAccountAdminModule({
     accountAdminStore: principals,
+    sessionStore,
+    oauthGrantRevocationService: oauthGrantRevocationService(),
     roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
       accountAdminStore: principals,
       securityInvalidationStore: invalidationStore,
@@ -78,7 +88,29 @@ function mutationFixture(
     }),
     now: () => NOW,
   });
-  return { accountAdminStore: principals, invalidationStore, adminAuditWriter, module };
+  return { accountAdminStore: principals, sessionStore, invalidationStore, adminAuditWriter, module };
+}
+
+function oauthGrantRevocationService(overrides: {
+  readonly fail?: boolean;
+  readonly grantsRevoked?: number;
+  readonly grantsDiscovered?: number;
+  readonly subjectsProcessed?: number;
+} = {}): IOAuthGrantRevocationService {
+  return {
+    async revokePrincipalGrants(input) {
+      await Promise.resolve();
+      if (overrides.fail) throw new Error('oauth unavailable');
+      return {
+        userId: input.userId,
+        revokedAt: input.revokedAt,
+        linkedSubjectsProcessed: overrides.subjectsProcessed ?? 1,
+        oauthGrantFamiliesDiscovered: overrides.grantsDiscovered ?? overrides.grantsRevoked ?? 2,
+        oauthGrantFamiliesRevoked: overrides.grantsRevoked ?? 2,
+        subjects: [],
+      };
+    },
+  };
 }
 
 function findRoute(
@@ -118,6 +150,25 @@ function consoleRequest(overrides: Partial<ConsoleRequest> = {}): ConsoleRequest
     },
     ...overrides,
   } as ConsoleRequest;
+}
+
+function sessionRecord(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSessionRecord {
+  return {
+    idHash: Buffer.alloc(32, 9),
+    userId: USER_ID,
+    authSub: PRIMARY_SUB,
+    csrfTokenHash: Buffer.alloc(32, 8),
+    grantedCapabilities: ['console:self'],
+    elevation: null,
+    createdAt: NOW,
+    lastUsedAt: NOW,
+    idleExpiresAt: new Date(NOW.getTime() + 86_400_000),
+    absoluteExpiresAt: new Date(NOW.getTime() + 86_400_000 * 30),
+    revokedAt: null,
+    lastIp: '127.0.0.1',
+    userAgent: 'jest',
+    ...overrides,
+  };
 }
 
 describe('AccountAdminModule', () => {
@@ -225,6 +276,18 @@ describe('AccountAdminModule', () => {
       },
       {
         moduleId: 'accountAdmin',
+        method: 'POST',
+        path: ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: ADMIN_5M_ELEVATION,
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_REQUIRED,
+        auditOperation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      },
+      {
+        moduleId: 'accountAdmin',
         method: 'GET',
         path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
         audience: 'admin',
@@ -289,10 +352,10 @@ describe('AccountAdminModule', () => {
       params: { account_correlation_id: ACCOUNT_CORRELATION_ID },
     }))).resolves.toMatchObject({ status: 200, body: { user_id: USER_ID } });
     await expect(correlation.handler(consoleRequest({
-      params: { account_correlation_id: '11df9917-b534-4014-a03f-e2eb1f0c6fef' },
+      params: { account_correlation_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
     await expect(getUser.handler(consoleRequest({
-      params: { user_id: '11df9917-b534-4014-a03f-e2eb1f0c6fef' },
+      params: { user_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
@@ -594,13 +657,13 @@ describe('AccountAdminModule', () => {
     const enable = findRoute(module.routes, ACCOUNT_ENABLE_PATH);
 
     await expect(disable.handler(consoleRequest({
-      params: { user_id: '11df9917-b534-4014-a03f-e2eb1f0c6fef' },
+      params: { user_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
     await expect(enable.handler(consoleRequest({
       params: { user_id: USER_ID },
     }))).resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
     await expect(enable.handler(consoleRequest({
-      params: { user_id: '11df9917-b534-4014-a03f-e2eb1f0c6fef' },
+      params: { user_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
 
     const disabledStore = new InMemoryConsoleAccountAdminStore([
@@ -656,6 +719,264 @@ describe('AccountAdminModule', () => {
       errorCode: 'conflict',
       argsRedacted: { operation: 'disable', already_disabled: true },
     })]);
+  });
+
+  it('revokes credentials with authz-version invalidation, browser-session revocation, and bounded counts', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const sessionStore = new InMemoryConsoleSessionStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      sessionStore,
+      oauthGrantRevocationService: oauthGrantRevocationService({
+        grantsRevoked: 2,
+        grantsDiscovered: 3,
+        subjectsProcessed: 2,
+      }),
+      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    await sessionStore.create(sessionRecord());
+    await sessionStore.create(sessionRecord({
+      idHash: Buffer.alloc(32, 10),
+      csrfTokenHash: Buffer.alloc(32, 11),
+      userId: SECOND_USER_ID,
+      authSub: 'github_other',
+    }));
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    const result = await revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }));
+
+    expect(result).toMatchObject({
+      status: 200,
+      body: {
+        user: {
+          user_id: USER_ID,
+          roles: ['operator'],
+        },
+        revocation_summary: {
+          browser_sessions_revoked: 1,
+          mcp_oauth_grants_revoked: 2,
+          mcp_sessions_terminated: 0,
+          authz_version_bumped: true,
+          new_authz_version: 4,
+        },
+      },
+    });
+    expect(revokeAll.privacyProjector?.({
+      ...(result.body as Record<string, unknown>),
+      raw_oauth_revocation: { subject: PRIMARY_SUB, grant: 'secret' },
+    })).toMatchObject({
+      revocation_summary: {
+        browser_sessions_revoked: 1,
+        mcp_oauth_grants_revoked: 2,
+        new_authz_version: 4,
+      },
+    });
+    await expect(sessionStore.findActiveByIdHash(Buffer.alloc(32, 9), NOW)).resolves.toBeNull();
+    await expect(sessionStore.findActiveByIdHash(Buffer.alloc(32, 10), NOW)).resolves.toMatchObject({
+      userId: SECOND_USER_ID,
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toMatchObject([{
+      kind: 'principal_credentials_revoked',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 4,
+      payload: { revokedGrants: true, authzVersionBumped: true },
+    }]);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        targetUserId: USER_ID,
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'state_committed' },
+        result: 'approved',
+        resultDetailRedacted: expect.objectContaining({
+          previousAuthzVersion: 3,
+          newAuthzVersion: 4,
+        }),
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        targetUserId: USER_ID,
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_revocation' },
+        result: 'approved',
+        resultDetailRedacted: {
+          browserSessionsRevoked: 1,
+          oauthSubjectsProcessed: 2,
+          oauthGrantFamiliesDiscovered: 3,
+          oauthGrantFamiliesRevoked: 2,
+        },
+      }),
+    ]);
+  });
+
+  it('fails credential revoke-all closed when OAuth grant revocation is unavailable', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: null,
+      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toEqual([]);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'failed',
+      errorCode: 'service_unavailable',
+      argsRedacted: { dependency: 'oauth_grant_revocation' },
+    })]);
+  });
+
+  it('audits credential revoke-all not-found without invalidation', async () => {
+    const { module, invalidationStore, adminAuditWriter } = mutationFixture();
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({
+      params: { user_id: UNKNOWN_USER_ID },
+    }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toEqual([]);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'failed',
+      errorCode: 'not_found',
+      targetUserId: UNKNOWN_USER_ID,
+    })]);
+  });
+
+  it('allows credential revoke-all for a disabled principal with stale grants', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([
+      await principalFixture({
+        disabledAt: new Date('2026-05-27T13:30:00.000Z'),
+        roles: ['operator'],
+      }),
+    ]);
+    const { module, invalidationStore, adminAuditWriter } = mutationFixture(accountAdminStore);
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 200,
+      body: {
+        user: {
+          user_id: USER_ID,
+          disabled_at: '2026-05-27T13:30:00.000Z',
+        },
+        revocation_summary: {
+          authz_version_bumped: true,
+          new_authz_version: 4,
+        },
+      },
+    });
+
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toMatchObject([{
+      kind: 'principal_credentials_revoked',
+      authzVersion: 4,
+    }]);
+    expect(adminAuditWriter.getEvents()).toHaveLength(2);
+  });
+
+  it('returns service_unavailable when post-commit browser-session revocation fails after invalidating credentials', async () => {
+    class FailingSessionStore extends InMemoryConsoleSessionStore {
+      override async revokeForUser(): Promise<number> {
+        await Promise.resolve();
+        throw new Error('session store unavailable');
+      }
+    }
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      sessionStore: new FailingSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toMatchObject([{
+      kind: 'principal_credentials_revoked',
+      authzVersion: 4,
+    }]);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        result: 'approved',
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'state_committed' },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        result: 'failed',
+        errorCode: 'service_unavailable',
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_revocation' },
+      }),
+    ]);
+  });
+
+  it('returns service_unavailable when post-commit OAuth revocation fails after invalidating credentials', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService({ fail: true }),
+      roleMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toMatchObject([{
+      kind: 'principal_credentials_revoked',
+      authzVersion: 4,
+    }]);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        result: 'approved',
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'state_committed' },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        result: 'failed',
+        errorCode: 'service_unavailable',
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_revocation' },
+      }),
+    ]);
   });
 
   it('requires transaction callbacks to write admin audit before reporting success', async () => {

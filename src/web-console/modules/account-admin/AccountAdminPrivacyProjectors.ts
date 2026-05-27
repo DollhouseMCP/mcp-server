@@ -32,9 +32,9 @@ export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincip
     ? {
       browser_sessions_revoked: numberField(lifecycle.revocation_summary, 'browser_sessions_revoked'),
       mcp_oauth_grants_revoked: numberField(lifecycle.revocation_summary, 'mcp_oauth_grants_revoked'),
-      mcp_refresh_tokens_revoked: numberField(lifecycle.revocation_summary, 'mcp_refresh_tokens_revoked'),
       mcp_sessions_terminated: numberField(lifecycle.revocation_summary, 'mcp_sessions_terminated'),
       authz_version_bumped: lifecycle.revocation_summary.authz_version_bumped === true,
+      new_authz_version: optionalNumberField(lifecycle.revocation_summary, 'new_authz_version'),
     }
     : undefined;
   return serializeAccountPrincipalLifecycle(summary, revocationSummary);
@@ -42,6 +42,10 @@ export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincip
 
 function numberField(record: Readonly<Record<string, unknown>>, key: string): number {
   return Number(record[key] ?? 0);
+}
+
+function optionalNumberField(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
+  return record[key] === undefined ? undefined : Number(record[key]);
 }
 
 function fromPrincipalDto(value: unknown): {

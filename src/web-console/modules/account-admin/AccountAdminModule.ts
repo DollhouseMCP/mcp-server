@@ -3,8 +3,11 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
+import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import { AccountAdminCredentialRevocationService } from './AccountAdminCredentialRevocationService.js';
 import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
@@ -20,6 +23,7 @@ const ACCOUNT_ADMIN_AUDIT = {
   usersShow: 'accounts.users.show',
   usersDisable: 'accounts.users.disable',
   usersEnable: 'accounts.users.enable',
+  usersCredentialsRevokeAll: 'accounts.users.credentials.revoke_all',
   rolesList: 'accounts.roles.list',
   rolesReplace: 'accounts.roles.replace',
   rolesGrant: 'accounts.roles.grant',
@@ -32,6 +36,8 @@ const USER_ID_REQUIRED_DETAIL = 'user_id path parameter is required.';
 
 export interface AccountAdminModuleOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly sessionStore: IConsoleSessionStore;
+  readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
   readonly roleMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly now?: () => Date;
 }
@@ -46,6 +52,13 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
   });
   const lifecycleMutationService = new AccountAdminLifecycleMutationService({
     accountAdminStore,
+    transactionRunner: options.roleMutationTransactionRunner,
+    now: options.now,
+  });
+  const credentialRevocationService = new AccountAdminCredentialRevocationService({
+    accountAdminStore,
+    sessionStore: options.sessionStore,
+    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner: options.roleMutationTransactionRunner,
     now: options.now,
   });
@@ -114,6 +127,19 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     privacyProjector: projectAccountRoleList,
     handler: req => revokeRole(req, roleMutationService, revokeRoleRoute),
   };
+  const revokeAllCredentialsRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/credentials/revoke-all',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.usersCredentialsRevokeAll,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountPrincipalLifecycle,
+    handler: req => revokeAllCredentials(req, credentialRevocationService, revokeAllCredentialsRoute),
+  };
   const routes: ConsoleModuleDescriptor['routes'] = [
     {
       method: 'GET',
@@ -156,6 +182,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     replaceRolesRoute,
     grantRoleRoute,
     revokeRoleRoute,
+    revokeAllCredentialsRoute,
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
@@ -247,6 +274,16 @@ async function revokeRole(
   const userId = stringParam(req, USER_ID_PARAM);
   if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   return service.revokeRole(req, route, userId);
+}
+
+async function revokeAllCredentials(
+  req: ConsoleRequest,
+  service: AccountAdminCredentialRevocationService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.revokeAllCredentials(req, route, userId);
 }
 
 async function resolveCorrelation(

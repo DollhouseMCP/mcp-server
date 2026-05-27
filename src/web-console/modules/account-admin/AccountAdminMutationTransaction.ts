@@ -10,10 +10,12 @@ import {
   disableConsolePrincipalWithTx,
   enableConsolePrincipalWithTx,
   grantConsoleAdminRoleWithTx,
+  bumpConsolePrincipalAuthzVersionWithTx,
   revokeConsoleAdminRoleWithTx,
 } from '../../stores/PostgresConsoleAccountAdminStore.js';
 import type {
   ConsoleRoleAssignment,
+  PrincipalAuthzVersionBumpInput,
   PrincipalDisableInput,
   PrincipalEnableInput,
   PrincipalStateChange,
@@ -41,6 +43,7 @@ export interface AccountAdminMutationTransactionContext extends MutationTransact
   revokeRole(input: RoleRevokeInput): Promise<ConsoleRoleAssignment | null>;
   disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null>;
   enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null>;
+  bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null>;
 }
 
 export interface IAccountAdminMutationTransactionRunner {
@@ -80,6 +83,7 @@ implements IAccountAdminMutationTransactionRunner {
       revokeRole: input => revokeConsoleAdminRoleWithTx(tx, input),
       disablePrincipal: input => disableConsolePrincipalWithTx(tx, input),
       enablePrincipal: input => enableConsolePrincipalWithTx(tx, input),
+      bumpPrincipalAuthzVersion: input => bumpConsolePrincipalAuthzVersionWithTx(tx, input),
       appendSecurityInvalidationEvent: input => appendSecurityInvalidationEventWithTx(tx, input),
       writeAdminAuditEvent: async event => {
         await appendConsoleAdminAuditEventWithTx(tx, event, this.options.hmacKeyResolver);
@@ -106,6 +110,7 @@ implements IAccountAdminMutationTransactionRunner {
       revokeRole: input => this.options.accountAdminStore.revokeRole(input),
       disablePrincipal: input => this.options.accountAdminStore.disablePrincipal(input),
       enablePrincipal: input => this.options.accountAdminStore.enablePrincipal(input),
+      bumpPrincipalAuthzVersion: input => this.options.accountAdminStore.bumpPrincipalAuthzVersion(input),
       appendSecurityInvalidationEvent: input => this.options.securityInvalidationStore.appendEvent(input),
       writeAdminAuditEvent: async event => {
         await this.options.adminAuditWriter.write(event);

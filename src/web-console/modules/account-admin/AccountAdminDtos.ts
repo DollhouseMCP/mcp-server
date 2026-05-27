@@ -32,9 +32,9 @@ export interface AccountPrincipalLifecycleDto {
   readonly revocation_summary?: {
     readonly browser_sessions_revoked: number;
     readonly mcp_oauth_grants_revoked: number;
-    readonly mcp_refresh_tokens_revoked: number;
     readonly mcp_sessions_terminated: number;
     readonly authz_version_bumped: boolean;
+    readonly new_authz_version?: number;
   };
 }
 

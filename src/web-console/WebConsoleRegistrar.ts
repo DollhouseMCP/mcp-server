@@ -21,6 +21,7 @@ import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransaction
 import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
+import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
@@ -47,6 +48,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
   accountAdminMutationTransactionRunner: 'WebConsoleAccountAdminMutationTransactionRunner',
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
+  oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -59,6 +61,7 @@ export interface WebConsoleRegistrarOptions {
   readonly secretEncryptionKey?: AeadSecretKey;
   readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
   readonly protectedCorrelationSelectorHmacKey?: Buffer;
+  readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
 }
 
 export interface WebConsoleComposition {
@@ -75,6 +78,7 @@ export interface WebConsoleComposition {
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: false;
@@ -95,8 +99,11 @@ export class WebConsoleRegistrar {
       adminAuditWriter,
     });
     const registry = new ConsoleModuleRegistry();
+    const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
     registry.register(createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
+      sessionStore: stores.sessionStore,
+      oauthGrantRevocationService,
       roleMutationTransactionRunner: accountAdminMutationTransactionRunner,
       now: this.options.now,
     }));
@@ -112,6 +119,7 @@ export class WebConsoleRegistrar {
       adminAuditWriter,
       accountAdminMutationTransactionRunner,
       protectedCorrelationRateLimiter,
+      oauthGrantRevocationService,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
       routesMounted: false,
@@ -140,6 +148,9 @@ export class WebConsoleRegistrar {
         WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter,
         () => protectedCorrelationRateLimiter,
       );
+    }
+    if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
     }
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
@@ -306,4 +317,15 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   });
+}
+
+function resolveOAuthGrantRevocationService(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IOAuthGrantRevocationService | null {
+  if (options.oauthGrantRevocationService !== undefined) return options.oauthGrantRevocationService;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
+    return container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
+  }
+  return null;
 }

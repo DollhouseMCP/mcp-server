@@ -9,6 +9,7 @@ import type {
   ConsolePrincipalSummary,
   ConsoleRoleAssignment,
   IConsoleAccountAdminStore,
+  PrincipalAuthzVersionBumpInput,
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
@@ -23,6 +24,7 @@ import {
   validatePrincipalDirectoryQuery,
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
+  validatePrincipalAuthzVersionBumpInput,
   validateRoleGrantInput,
   validateRoleRevokeInput,
 } from './IConsoleAccountAdminStore.js';
@@ -162,6 +164,10 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return withSystemContext(this.db, tx => enableConsolePrincipalWithTx(tx, input));
   }
 
+  async bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null> {
+    return withSystemContext(this.db, tx => bumpConsolePrincipalAuthzVersionWithTx(tx, input));
+  }
+
 }
 
 export async function grantConsoleAdminRoleWithTx(
@@ -273,6 +279,28 @@ export async function enableConsolePrincipalWithTx(
     authzVersion: rows[0].authzVersion,
     disabledAt: null,
     changedAt: new Date(input.enabledAt.getTime()),
+  } : null;
+}
+
+export async function bumpConsolePrincipalAuthzVersionWithTx(
+  tx: DrizzleTx,
+  input: PrincipalAuthzVersionBumpInput,
+): Promise<PrincipalStateChange | null> {
+  validatePrincipalAuthzVersionBumpInput(input);
+  const rows = await tx.update(users).set({
+    authzVersion: sql`${users.authzVersion} + 1`,
+    updatedAt: input.bumpedAt,
+  }).where(eq(users.id, input.userId))
+    .returning({
+      userId: users.id,
+      authzVersion: users.authzVersion,
+      disabledAt: users.disabledAt,
+    });
+  return rows[0] ? {
+    userId: rows[0].userId,
+    authzVersion: rows[0].authzVersion,
+    disabledAt: rows[0].disabledAt ? toDate(rows[0].disabledAt) : null,
+    changedAt: new Date(input.bumpedAt.getTime()),
   } : null;
 }
 

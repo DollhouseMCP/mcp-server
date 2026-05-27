@@ -70,6 +70,11 @@ export interface PrincipalEnableInput {
   readonly enabledAt: Date;
 }
 
+export interface PrincipalAuthzVersionBumpInput {
+  readonly userId: string;
+  readonly bumpedAt: Date;
+}
+
 export interface IConsoleAccountAdminStore {
   listPrincipals(query?: PrincipalDirectoryQuery): Promise<ConsolePrincipalSummary[]>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
@@ -80,6 +85,7 @@ export interface IConsoleAccountAdminStore {
   countEnabledAccountsAdmins(): Promise<number>;
   disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null>;
   enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null>;
+  bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null>;
 }
 
 export const CONSOLE_ADMIN_ROLES = [
@@ -122,6 +128,10 @@ export function validatePrincipalDisableInput(input: PrincipalDisableInput): voi
 }
 
 export function validatePrincipalEnableInput(input: PrincipalEnableInput): void {
+  assertUuid(input.userId, 'userId');
+}
+
+export function validatePrincipalAuthzVersionBumpInput(input: PrincipalAuthzVersionBumpInput): void {
   assertUuid(input.userId, 'userId');
 }
 
