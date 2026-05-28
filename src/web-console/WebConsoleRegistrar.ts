@@ -24,9 +24,11 @@ import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminSto
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
+import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
+import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
@@ -47,6 +49,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   accountAdminStore: 'WebConsoleAccountAdminStore',
   accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
+  runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
   identityResolver: 'WebConsoleIdentityResolver',
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
@@ -83,6 +86,7 @@ export interface WebConsoleComposition {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
+  readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
@@ -156,6 +160,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => stores.accountAllowlistStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore, () => stores.runtimeSessionControlStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
     container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
     if (secretEncryption) {
@@ -219,6 +224,7 @@ interface ConsoleStoreSet {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
+  readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
@@ -232,6 +238,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
       { PostgresConsoleSecurityInvalidationStore },
+      { PostgresRuntimeSessionControlStore },
       { PostgresConsoleIdentityResolver },
     ] = await Promise.all([
       import('./stores/PostgresConsoleSessionStore.js'),
@@ -241,6 +248,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
+      import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
       import('./identity/PostgresConsoleIdentityResolver.js'),
     ]);
     return {
@@ -251,6 +259,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       accountAdminStore: new PostgresConsoleAccountAdminStore(database),
       accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
       securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
+      runtimeSessionControlStore: new PostgresRuntimeSessionControlStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }
@@ -263,6 +272,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+    runtimeSessionControlStore: new InMemoryRuntimeSessionControlStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),
   };
 }

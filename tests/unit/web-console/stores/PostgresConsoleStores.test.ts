@@ -41,6 +41,9 @@ const { PostgresConsoleAccountAllowlistStore } = await import(
 const { PostgresConsoleSecurityInvalidationStore } = await import(
   '../../../../src/web-console/services/invalidation/PostgresConsoleSecurityInvalidationStore.js'
 );
+const { PostgresRuntimeSessionControlStore } = await import(
+  '../../../../src/web-console/services/runtime/PostgresRuntimeSessionControlStore.js'
+);
 const { PostgresAdminAuditWriter } = await import(
   '../../../../src/web-console/audit/PostgresAdminAuditWriter.js'
 );
@@ -70,6 +73,8 @@ const ALICE_EMAIL = 'alice@example.test';
 const ALICE_DISPLAY_EMAIL = 'Alice@Example.Test';
 const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
 const ALLOWLIST_ID = 'f0a8d9e6-b1a1-4d94-b600-bef99c8d4ed1';
+const RUNTIME_SESSION_ID = 'mcp-session-1';
+const RUNTIME_COMMAND_ID = '9f8a54b9-f195-41f0-802d-d0ec2fdfb30f';
 
 function hash(byte: number): Buffer {
   return Buffer.alloc(32, byte);
@@ -181,6 +186,16 @@ function selectingOrderedChain(rows: unknown[]) {
   chain.from = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
   chain.orderBy = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
+function selectingJoinedChain(rows: unknown[]) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.from = jest.fn(() => chain);
+  chain.leftJoin = jest.fn(() => chain);
+  chain.where = jest.fn(() => chain);
+  chain.orderBy = jest.fn(() => chain);
+  chain.limit = jest.fn(() => Promise.resolve(rows));
   return chain;
 }
 
@@ -878,7 +893,7 @@ describe('PostgresConsoleSecurityInvalidationStore', () => {
     const store = new PostgresConsoleSecurityInvalidationStore({} as DatabaseInstance);
     const cursorChain = insertChain();
     const leaseChain = insertChain();
-    const ackChain = insertChain();
+    const ackChain = insertChain([{ commandId: RUNTIME_COMMAND_ID }]);
     transaction.insert = jest.fn()
       .mockReturnValueOnce(cursorChain)
       .mockReturnValueOnce(leaseChain)
@@ -919,6 +934,170 @@ describe('PostgresConsoleSecurityInvalidationStore', () => {
     await expect(store.listLiveReplicaIds(FIVE_MINUTES)).resolves.toEqual(['replica-a', 'replica-b']);
     await expect(store.listAcknowledgedReplicaIds('e6174fd8-f6ef-4286-8bd2-3f3eb30194c1'))
       .resolves.toEqual(['replica-b']);
+  });
+});
+
+describe('PostgresRuntimeSessionControlStore', () => {
+  const presenceRow = {
+    sessionId: RUNTIME_SESSION_ID,
+    userId: USER_ID,
+    accountCorrelationId: ACCOUNT_CORRELATION_ID,
+    replicaId: 'replica-a',
+    transport: 'streamable-http' as const,
+    clientName: 'Dollhouse CLI',
+    clientVersion: '1.0.0',
+    startedAt: NOW,
+    lastActiveAt: FIVE_MINUTES,
+    requestCount: 3,
+    errorCount: 1,
+    leaseUntil: THIRTY_MINUTES,
+    status: 'active' as const,
+    closedAt: null,
+  };
+  const commandRow = {
+    commandId: RUNTIME_COMMAND_ID,
+    kind: 'terminate_session',
+    sessionId: RUNTIME_SESSION_ID,
+    targetReplicaId: 'replica-a',
+    reason: 'admin_terminated' as const,
+    requestedAt: NOW,
+    requestedByKind: 'admin' as const,
+    requestedByUserId: SECOND_USER_ID,
+    invalidationEventId: null,
+  };
+  const ackRow = {
+    commandId: RUNTIME_COMMAND_ID,
+    replicaId: 'replica-a',
+    acknowledgedAt: FIVE_MINUTES,
+    result: 'terminated' as const,
+    errorCode: null,
+  };
+
+  it('upserts runtime presence and maps heartbeat/closing updates', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    const registerChain = insertChain([presenceRow]);
+    const heartbeatChain = returningChain([presenceRow]);
+    const closingChain = returningChain([{ ...presenceRow, status: 'closing', closedAt: THIRTY_MINUTES }]);
+    transaction.insert = jest.fn(() => registerChain);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(heartbeatChain)
+      .mockReturnValueOnce(closingChain);
+
+    await expect(store.registerPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: 'streamable-http',
+      clientInfo: { name: 'Dollhouse CLI', version: '1.0.0' },
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      sessionId: RUNTIME_SESSION_ID,
+      clientInfo: { name: 'Dollhouse CLI', version: '1.0.0' },
+    });
+    await expect(store.heartbeatPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: FIVE_MINUTES,
+      requestCount: 3,
+      errorCount: 1,
+      leaseUntil: THIRTY_MINUTES,
+    })).resolves.toMatchObject({ kind: 'updated', presence: { requestCount: 3, errorCount: 1 } });
+    await expect(store.markPresenceClosing(RUNTIME_SESSION_ID, THIRTY_MINUTES))
+      .resolves.toMatchObject({ status: 'closing', closedAt: THIRTY_MINUTES });
+
+    expect(registerChain.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      set: expect.objectContaining({ sessionId: RUNTIME_SESSION_ID }),
+    }));
+    expect(transaction.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads runtime presence for self/admin/operator projections', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([presenceRow]))
+      .mockReturnValueOnce(selectingChain([presenceRow]))
+      .mockReturnValueOnce(selectingChain([presenceRow]));
+
+    await expect(store.findPresence(RUNTIME_SESSION_ID, NOW)).resolves.toMatchObject({ sessionId: RUNTIME_SESSION_ID });
+    await expect(store.listPresenceByUser(USER_ID, { now: NOW })).resolves.toHaveLength(1);
+    await expect(store.listOperationalPresence({ now: NOW })).resolves.toHaveLength(1);
+  });
+
+  it('creates runtime termination commands and idempotent acknowledgements', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    const commandChain = insertChain([commandRow]);
+    const ackChain = insertChain([{ commandId: RUNTIME_COMMAND_ID }]);
+    transaction.insert = jest.fn()
+      .mockReturnValueOnce(commandChain)
+      .mockReturnValueOnce(ackChain);
+
+    await expect(store.createTerminationCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      sessionId: RUNTIME_SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'admin_terminated',
+      requestedAt: NOW,
+      requestedBy: { kind: 'admin', userId: SECOND_USER_ID },
+    })).resolves.toMatchObject({
+      commandId: RUNTIME_COMMAND_ID,
+      requestedBy: { kind: 'admin', userId: SECOND_USER_ID },
+    });
+    await expect(store.acknowledgeCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'terminated',
+    })).resolves.toBe(true);
+
+    expect(commandChain.returning).toHaveBeenCalled();
+    expect(ackChain.onConflictDoNothing).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.anything(),
+    }));
+  });
+
+  it('reads pending commands and acknowledgements', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingJoinedChain([{ command: commandRow }]))
+      .mockReturnValueOnce(selectingChain([ackRow]));
+
+    await expect(store.listPendingCommandsForReplica('replica-a')).resolves.toEqual([
+      expect.objectContaining({ commandId: RUNTIME_COMMAND_ID }),
+    ]);
+    await expect(store.getCommandAck(RUNTIME_COMMAND_ID)).resolves.toEqual({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'terminated',
+      errorCode: null,
+    });
+  });
+
+  it('maps lost heartbeat ownership reasons for missing, replica-mismatched, and closing sessions', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(returningChain([]))
+      .mockReturnValueOnce(returningChain([]))
+      .mockReturnValueOnce(returningChain([]));
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([]))
+      .mockReturnValueOnce(selectingChain([{ replicaId: 'replica-b', status: 'active' }]))
+      .mockReturnValueOnce(selectingChain([{ replicaId: 'replica-a', status: 'closing' }]));
+
+    const heartbeat = {
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: FIVE_MINUTES,
+      requestCount: 3,
+      errorCount: 1,
+      leaseUntil: THIRTY_MINUTES,
+    };
+    await expect(store.heartbeatPresence(heartbeat)).resolves.toEqual({ kind: 'lost', reason: 'missing' });
+    await expect(store.heartbeatPresence(heartbeat)).resolves.toEqual({ kind: 'lost', reason: 'replica_mismatch' });
+    await expect(store.heartbeatPresence(heartbeat)).resolves.toEqual({ kind: 'lost', reason: 'closing' });
   });
 });
 

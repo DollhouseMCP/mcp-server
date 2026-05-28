@@ -39,6 +39,9 @@ export {
   securityInvalidationReplicaCursors,
   securityInvalidationReplicaLeases,
   securityInvalidationAcks,
+  runtimeSessionPresence,
+  runtimeControlCommands,
+  runtimeControlAcks,
   adminAuditChainHeads,
   adminAuditEvents,
 } from './webConsole.js';
@@ -48,4 +51,9 @@ export type {
   ConsoleLoginFlowKind,
   ConsoleSecurityInvalidationKind,
   ConsoleSecurityInvalidationUrgency,
+  RuntimeSessionTransport,
+  RuntimeSessionStatus,
+  RuntimeTerminationReason,
+  RuntimeTerminationRequesterKind,
+  RuntimeTerminationAckResult,
 } from './webConsole.js';

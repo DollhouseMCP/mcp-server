@@ -78,6 +78,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryConsoleFactorStore,
       InMemoryConsoleAccountAllowlistStore,
       InMemoryConsoleAccountAdminStore,
+      InMemoryRuntimeSessionControlStore,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
       WEB_CONSOLE_SERVICE_NAMES,
@@ -113,6 +114,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.factorStore).toBeInstanceOf(InMemoryConsoleFactorStore);
     expect(composition.accountAdminStore).toBeInstanceOf(InMemoryConsoleAccountAdminStore);
     expect(composition.accountAllowlistStore).toBeInstanceOf(InMemoryConsoleAccountAllowlistStore);
+    expect(composition.runtimeSessionControlStore).toBeInstanceOf(InMemoryRuntimeSessionControlStore);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
     expect(composition.adminAuditWriter).toBeInstanceOf(InMemoryAdminAuditWriter);
@@ -127,6 +129,8 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.factorStore)).toBe(composition.factorStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore)).toBe(composition.accountAdminStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore)).toBe(composition.accountAllowlistStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore))
+      .toBe(composition.runtimeSessionControlStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
 
@@ -246,6 +250,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.factorStore.constructor.name).toBe('PostgresConsoleFactorStore');
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
+    expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
   });
 

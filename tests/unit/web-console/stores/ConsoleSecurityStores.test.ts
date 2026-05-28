@@ -11,6 +11,7 @@ import {
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
 import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/index.js';
+import { InMemoryRuntimeSessionControlStore } from '../../../../src/web-console/services/runtime/index.js';
 import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/index.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
@@ -33,6 +34,9 @@ const SELF_CAPABILITY = 'console:self' as const;
 const ADMIN_ACR = 'urn:dollhouse:acr:admin';
 const ALICE_EMAIL = 'alice@example.test';
 const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
+const RUNTIME_SESSION_ID = 'mcp-session-1';
+const RUNTIME_COMMAND_ID = '9f8a54b9-f195-41f0-802d-d0ec2fdfb30f';
+const RUNTIME_TRANSPORT = 'streamable-http' as const;
 
 function hash(byte: number): Buffer {
   return Buffer.alloc(32, byte);
@@ -770,5 +774,192 @@ describe('InMemoryConsoleSecurityInvalidationStore', () => {
       payload: { secret: 'not allowed' },
       createdAt: FIVE_MINUTES,
     })).rejects.toThrow('not allowed');
+  });
+});
+
+describe('InMemoryRuntimeSessionControlStore', () => {
+  it('registers, heartbeats, lists, and closes runtime presence without exposing stale leases', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+
+    const presence = await store.registerPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      clientInfo: { name: 'Dollhouse CLI', version: '1.0.0' },
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+
+    expect(presence).toMatchObject({
+      sessionId: RUNTIME_SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      requestCount: 0,
+      errorCount: 0,
+      status: 'active',
+    });
+    await expect(store.findPresence(RUNTIME_SESSION_ID, NOW)).resolves.toMatchObject({
+      clientInfo: { name: 'Dollhouse CLI', version: '1.0.0' },
+    });
+    await expect(store.heartbeatPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: FOUR_MINUTES,
+      requestCount: 3,
+      errorCount: 1,
+      leaseUntil: THIRTY_MINUTES,
+    })).resolves.toMatchObject({
+      kind: 'updated',
+      presence: {
+        requestCount: 3,
+        errorCount: 1,
+        leaseUntil: THIRTY_MINUTES,
+      },
+    });
+    await expect(store.listPresenceByUser(USER_ID, { now: FIVE_MINUTES })).resolves.toHaveLength(1);
+    await expect(store.listOperationalPresence({ now: FIVE_MINUTES })).resolves.toHaveLength(1);
+    await expect(store.findPresence(RUNTIME_SESSION_ID, THIRTY_MINUTES)).resolves.toBeNull();
+    await expect(store.findPresence(RUNTIME_SESSION_ID, ONE_HOUR)).resolves.toBeNull();
+
+    const closing = await store.markPresenceClosing(RUNTIME_SESSION_ID, THIRTY_MINUTES);
+    expect(closing).toMatchObject({ status: 'closing', closedAt: THIRTY_MINUTES });
+    await expect(store.heartbeatPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: THIRTY_MINUTES,
+      requestCount: 4,
+      errorCount: 1,
+      leaseUntil: ONE_HOUR,
+    })).resolves.toEqual({ kind: 'lost', reason: 'closing' });
+    await expect(store.listPresenceByUser(USER_ID, { now: FIVE_MINUTES })).resolves.toEqual([]);
+  });
+
+  it('uses last registration wins semantics and hides mixed invisible runtime presence rows', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    await store.registerPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: THIRTY_MINUTES,
+    });
+    await store.registerPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-b',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: FIVE_MINUTES,
+      leaseUntil: ONE_HOUR,
+    });
+    await store.registerPresence({
+      sessionId: 'mcp-session-expired',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+
+    await expect(store.heartbeatPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: THIRTY_MINUTES,
+      requestCount: 5,
+      errorCount: 0,
+      leaseUntil: ONE_HOUR,
+    })).resolves.toEqual({ kind: 'lost', reason: 'replica_mismatch' });
+    await expect(store.heartbeatPresence({
+      sessionId: 'missing-session',
+      replicaId: 'replica-a',
+      lastActiveAt: THIRTY_MINUTES,
+      requestCount: 1,
+      errorCount: 0,
+      leaseUntil: ONE_HOUR,
+    })).resolves.toEqual({ kind: 'lost', reason: 'missing' });
+    await expect(store.listPresenceByUser(USER_ID, { now: THIRTY_MINUTES })).resolves.toEqual([
+      expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' }),
+    ]);
+  });
+
+  it('persists pending termination commands and idempotent acknowledgements', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+
+    const command = await store.createTerminationCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      sessionId: RUNTIME_SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'admin_terminated',
+      requestedAt: NOW,
+      requestedBy: { kind: 'admin', userId: SECOND_USER_ID },
+    });
+
+    expect(command).toMatchObject({
+      commandId: RUNTIME_COMMAND_ID,
+      kind: 'terminate_session',
+      sessionId: RUNTIME_SESSION_ID,
+      targetReplicaId: 'replica-a',
+      requestedBy: { kind: 'admin', userId: SECOND_USER_ID },
+    });
+    await expect(store.listPendingCommandsForReplica('replica-a')).resolves.toEqual([command]);
+    await expect(store.acknowledgeCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'terminated',
+    })).resolves.toBe(true);
+    await expect(store.acknowledgeCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-b',
+      acknowledgedAt: THIRTY_MINUTES,
+      result: 'failed',
+      errorCode: 'late_duplicate',
+    })).resolves.toBe(false);
+    await expect(store.listPendingCommandsForReplica('replica-a')).resolves.toEqual([]);
+    await expect(store.getCommandAck(RUNTIME_COMMAND_ID)).resolves.toEqual({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'terminated',
+      errorCode: null,
+    });
+  });
+
+  it('rejects malformed runtime-control input at the store boundary', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    await expect(store.registerPresence({
+      sessionId: '',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    })).rejects.toThrow('sessionId must be non-empty');
+    await expect(store.createTerminationCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      sessionId: RUNTIME_SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'admin_terminated',
+      requestedAt: NOW,
+      requestedBy: { kind: 'system', userId: USER_ID },
+    })).rejects.toThrow('system requester');
+    await expect(store.acknowledgeCommand({
+      commandId: RUNTIME_COMMAND_ID,
+      replicaId: 'replica-a',
+      acknowledgedAt: FIVE_MINUTES,
+      result: 'failed',
+    })).rejects.toThrow('errorCode is required');
   });
 });

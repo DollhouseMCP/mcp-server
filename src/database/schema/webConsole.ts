@@ -230,6 +230,117 @@ export const securityInvalidationAcks = pgTable('security_invalidation_acks', {
   uniqueIndex('idx_security_invalidation_acks_unique').on(table.eventId, table.replicaId),
 ]);
 
+export type RuntimeSessionTransport = 'streamable-http';
+export type RuntimeSessionStatus = 'active' | 'closing';
+export type RuntimeTerminationReason =
+  | 'user_requested'
+  | 'admin_disabled'
+  | 'admin_terminated'
+  | 'operator_terminated'
+  | 'credential_revoked'
+  | 'idle_expired';
+export type RuntimeTerminationRequesterKind = 'self' | 'admin' | 'operator' | 'system';
+export type RuntimeTerminationAckResult = 'terminated' | 'already_absent' | 'failed';
+
+export const runtimeSessionPresence = pgTable('runtime_session_presence', {
+  sessionId: text('session_id').primaryKey(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  accountCorrelationId: uuid('account_correlation_id').notNull(),
+  replicaId: text('replica_id').notNull(),
+  transport: text('transport').$type<RuntimeSessionTransport>().notNull(),
+  clientName: text('client_name'),
+  clientVersion: text('client_version'),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true }).notNull(),
+  requestCount: integer('request_count').notNull().default(0),
+  errorCount: integer('error_count').notNull().default(0),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }).notNull(),
+  status: text('status').$type<RuntimeSessionStatus>().notNull(),
+  closedAt: timestamp('closed_at', { withTimezone: true }),
+}, (table) => [
+  check('runtime_session_presence_transport_check', sql`${table.transport} IN ('streamable-http')`),
+  check('runtime_session_presence_status_check', sql`${table.status} IN ('active', 'closing')`),
+  check('runtime_session_presence_shape_check', sql`
+    btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.replicaId}) <> ''
+    AND char_length(${table.replicaId}) <= 128
+    AND (${table.clientName} IS NULL OR char_length(${table.clientName}) <= 100)
+    AND (${table.clientVersion} IS NULL OR char_length(${table.clientVersion}) <= 100)
+    AND ${table.requestCount} >= 0
+    AND ${table.errorCount} >= 0
+    AND ${table.lastActiveAt} >= ${table.startedAt}
+    AND ${table.leaseUntil} > ${table.lastActiveAt}
+    AND (
+      (${table.status} = 'active' AND ${table.closedAt} IS NULL)
+      OR (${table.status} = 'closing')
+    )
+  `),
+  index('idx_runtime_session_presence_user').on(table.userId, table.status, table.leaseUntil),
+  index('idx_runtime_session_presence_replica').on(table.replicaId, table.leaseUntil),
+  index('idx_runtime_session_presence_correlation').on(table.accountCorrelationId),
+]);
+
+export const runtimeControlCommands = pgTable('runtime_control_commands', {
+  commandId: uuid('command_id').primaryKey().defaultRandom(),
+  kind: text('kind').notNull(),
+  sessionId: text('session_id').notNull(),
+  targetReplicaId: text('target_replica_id').notNull(),
+  reason: text('reason').$type<RuntimeTerminationReason>().notNull(),
+  requestedAt: timestamp('requested_at', { withTimezone: true }).notNull(),
+  requestedByKind: text('requested_by_kind').$type<RuntimeTerminationRequesterKind>().notNull(),
+  requestedByUserId: uuid('requested_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
+  invalidationEventId: uuid('invalidation_event_id').references(() => securityInvalidationEvents.eventId, {
+    onDelete: 'set null',
+  }),
+}, (table) => [
+  check('runtime_control_commands_kind_check', sql`${table.kind} = 'terminate_session'`),
+  check('runtime_control_commands_reason_check', sql`
+    ${table.reason} IN (
+      'user_requested',
+      'admin_disabled',
+      'admin_terminated',
+      'operator_terminated',
+      'credential_revoked',
+      'idle_expired'
+    )
+  `),
+  check('runtime_control_commands_requester_check', sql`
+    ${table.requestedByKind} IN ('self', 'admin', 'operator', 'system')
+    AND (
+      (${table.requestedByKind} = 'system' AND ${table.requestedByUserId} IS NULL)
+      OR (${table.requestedByKind} <> 'system' AND ${table.requestedByUserId} IS NOT NULL)
+    )
+  `),
+  check('runtime_control_commands_shape_check', sql`
+    btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.targetReplicaId}) <> ''
+    AND char_length(${table.targetReplicaId}) <= 128
+  `),
+  index('idx_runtime_control_commands_target').on(table.targetReplicaId, table.requestedAt),
+  index('idx_runtime_control_commands_session').on(table.sessionId),
+]);
+
+export const runtimeControlAcks = pgTable('runtime_control_acks', {
+  commandId: uuid('command_id').primaryKey().references(() => runtimeControlCommands.commandId, { onDelete: 'cascade' }),
+  replicaId: text('replica_id').notNull(),
+  acknowledgedAt: timestamp('acknowledged_at', { withTimezone: true }).notNull(),
+  result: text('result').$type<RuntimeTerminationAckResult>().notNull(),
+  errorCode: text('error_code'),
+}, (table) => [
+  check('runtime_control_acks_result_check', sql`${table.result} IN ('terminated', 'already_absent', 'failed')`),
+  check('runtime_control_acks_shape_check', sql`
+    btrim(${table.replicaId}) <> ''
+    AND char_length(${table.replicaId}) <= 128
+    AND (
+      (${table.result} = 'failed' AND ${table.errorCode} IS NOT NULL AND btrim(${table.errorCode}) <> '')
+      OR (${table.result} <> 'failed' AND ${table.errorCode} IS NULL)
+    )
+  `),
+  index('idx_runtime_control_acks_replica').on(table.replicaId, table.acknowledgedAt),
+]);
+
 export const adminAuditChainHeads = pgTable('admin_audit_chain_heads', {
   streamId: text('stream_id').primaryKey(),
   lastSequenceId: bigint('last_sequence_id', { mode: 'number' }),
