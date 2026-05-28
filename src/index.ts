@@ -38,6 +38,8 @@ import type { IdentityHandler } from "./handlers/IdentityHandler.js";
 import type { ConfigHandler } from "./handlers/ConfigHandler.js";
 import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
+import type { WebConsoleComposition } from './web-console/WebConsoleRegistrar.js';
+import type { RuntimeMcpSessionControlService } from './web-console/services/runtime/index.js';
 import { ConfigManager } from "./config/ConfigManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
@@ -1045,6 +1047,7 @@ async function startStreamableHttpServer(
   const activationRegistry = container.hasRegistration('SessionActivationRegistry')
     ? container.resolve<import('./state/SessionActivationState.js').SessionActivationRegistry>('SessionActivationRegistry')
     : undefined;
+  const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
 
   return createStreamableHttpRuntime(async (transport, authClaims) => {
     // SECURITY: fail-closed per-user isolation. Authenticated HTTP
@@ -1097,6 +1100,10 @@ async function startStreamableHttpServer(
       state.dbUserId = sessionUserId;
     }
 
+    const runtimeSession = runtimeSessionControl
+      ? await resolveRuntimeSessionRegistration(runtimeSessionControl.composition, sessionUserId)
+      : undefined;
+
     logger.info('[HTTP] Session connected', {
       sessionId: sessionContext.sessionId,
       userId: sessionContext.userId,
@@ -1104,6 +1111,7 @@ async function startStreamableHttpServer(
     });
 
     return {
+      runtimeSession,
       dispose: async () => {
         logger.info('[HTTP] Session disposing', { sessionId: sessionContext.sessionId });
         await disposeServer();
@@ -1122,6 +1130,7 @@ async function startStreamableHttpServer(
     performanceMonitor: container.hasRegistration('PerformanceMonitor')
       ? container.resolve<import('./utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor')
       : undefined,
+    runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
@@ -1130,6 +1139,64 @@ async function startStreamableHttpServer(
       ingestRoutes?.deregisterHttpSession(sessionId);
     },
   });
+}
+
+async function resolveRuntimeMcpSessionControl(
+  container: DollhouseContainer,
+): Promise<{
+  service: RuntimeMcpSessionControlService;
+  composition: WebConsoleComposition;
+} | undefined> {
+  if (!container.hasRegistration('WebConsoleComposition')) return undefined;
+  const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
+  const { RuntimeMcpSessionControlService } = await import('./web-console/services/runtime/index.js');
+  return {
+    composition,
+    service: new RuntimeMcpSessionControlService({
+      store: composition.runtimeSessionControlStore,
+      replicaId: resolveRuntimeReplicaId(),
+    }),
+  };
+}
+
+async function resolveRuntimeSessionRegistration(
+  composition: WebConsoleComposition,
+  userId: string | undefined,
+): Promise<{
+  readonly userId: string;
+  readonly accountCorrelationId: string;
+} | undefined> {
+  if (!userId) return undefined;
+  try {
+    const principal = await composition.accountAdminStore.findPrincipal(userId);
+    if (!principal || principal.disabledAt) return undefined;
+    return {
+      userId: principal.userId,
+      accountCorrelationId: principal.accountCorrelationId,
+    };
+  } catch (error) {
+    logger.warn('[HTTP] Runtime session registration skipped; principal metadata unavailable', {
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function resolveRuntimeReplicaId(): string {
+  // v1 hosted runtime is single-process per replica. Multi-process worker
+  // deployments should set DOLLHOUSE_REPLICA_ID per worker so durable command
+  // routing targets the process that owns the in-memory transport registry.
+  const raw = process.env.DOLLHOUSE_REPLICA_ID || process.env.HOSTNAME || os.hostname() || `pid-${process.pid}`;
+  if (raw.length <= 128) return raw;
+  const hash = createHash('sha256').update(raw).digest('hex').slice(0, 16);
+  const prefix = raw.slice(0, 111);
+  const replicaId = `${prefix}-${hash}`;
+  logger.warn('[HTTP] Runtime replica id exceeded 128 characters; using hash-suffixed truncation', {
+    originalLength: raw.length,
+    replicaId,
+  });
+  return replicaId;
 }
 
 function isEmbeddedOAuthProvider(value: unknown): value is {

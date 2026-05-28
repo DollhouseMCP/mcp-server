@@ -4,6 +4,11 @@ export {
 export {
   PostgresRuntimeSessionControlStore,
 } from './PostgresRuntimeSessionControlStore.js';
+export {
+  DEFAULT_RUNTIME_COMMAND_BATCH_LIMIT,
+  DEFAULT_RUNTIME_SESSION_LEASE_MS,
+  RuntimeMcpSessionControlService,
+} from './RuntimeMcpSessionControlService.js';
 export type {
   IRuntimeSessionControlStore,
   RuntimeClientInfo,
@@ -22,3 +27,9 @@ export type {
   RuntimeTerminationReason,
   RuntimeTerminationRequesterKind,
 } from './IRuntimeSessionControlStore.js';
+export type {
+  RuntimeLocalTerminationResult,
+  RuntimeMcpSessionControlServiceOptions,
+  RuntimeMcpSessionRegistration,
+  RuntimeMcpSessionTerminator,
+} from './RuntimeMcpSessionControlService.js';

@@ -1026,6 +1026,15 @@ describe('PostgresRuntimeSessionControlStore', () => {
     await expect(store.listOperationalPresence({ now: NOW })).resolves.toHaveLength(1);
   });
 
+  it('sweeps stale runtime presence rows', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.delete = jest.fn(() => returningChain([{ sessionId: RUNTIME_SESSION_ID }]));
+
+    await expect(store.sweepStalePresence(ONE_HOUR)).resolves.toBe(1);
+
+    expect(transaction.delete).toHaveBeenCalledTimes(1);
+  });
+
   it('creates runtime termination commands and idempotent acknowledgements', async () => {
     const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
     const commandChain = insertChain([commandRow]);

@@ -85,6 +85,18 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
     return cloneRuntimeSessionPresence(updated);
   }
 
+  async sweepStalePresence(before: Date = new Date()): Promise<number> {
+    await Promise.resolve();
+    let removed = 0;
+    for (const [sessionId, current] of this.presence) {
+      if (current.leaseUntil < before) {
+        this.presence.delete(sessionId);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   async findPresence(sessionId: string, now: Date = new Date()): Promise<RuntimeSessionPresence | null> {
     await Promise.resolve();
     validateSessionId(sessionId);

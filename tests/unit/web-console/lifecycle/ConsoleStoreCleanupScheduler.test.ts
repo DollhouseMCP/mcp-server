@@ -17,11 +17,13 @@ function stores(overrides: {
   readonly sessions?: jest.Mock<(before?: Date) => Promise<number>>;
   readonly login?: jest.Mock<(before?: Date) => Promise<number>>;
   readonly idempotency?: jest.Mock<(before?: Date) => Promise<number>>;
+  readonly runtime?: jest.Mock<(before?: Date) => Promise<number>>;
 } = {}) {
   return {
     sessionStore: { sweepExpired: overrides.sessions ?? jest.fn(() => Promise.resolve(1)) },
     loginTransactionStore: { sweepExpired: overrides.login ?? jest.fn(() => Promise.resolve(2)) },
     idempotencyStore: { sweepExpired: overrides.idempotency ?? jest.fn(() => Promise.resolve(3)) },
+    ...(overrides.runtime ? { runtimeSessionControlStore: { sweepStalePresence: overrides.runtime } } : {}),
   };
 }
 
@@ -63,6 +65,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         consoleSessions: 1,
         loginTransactions: 2,
         idempotencyRecords: 3,
+        runtimeSessionPresence: 0,
       },
       errors: [],
     });
@@ -113,6 +116,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         consoleSessions: 0,
         loginTransactions: 2,
         idempotencyRecords: 3,
+        runtimeSessionPresence: 0,
       },
       errors: [{ store: 'consoleSessions', error: failure }],
     });
@@ -141,6 +145,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         consoleSessions: 0,
         loginTransactions: 2,
         idempotencyRecords: 0,
+        runtimeSessionPresence: 0,
       },
       errors: [
         { store: 'consoleSessions', error: sessionFailure },
@@ -148,6 +153,44 @@ describe('ConsoleStoreCleanupScheduler', () => {
       ],
     });
     expect(cleanupStores.loginTransactionStore.sweepExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('sweeps stale runtime session presence when a runtime store is configured', async () => {
+    const runtime = jest.fn(() => Promise.resolve(4));
+    const cleanupStores = stores({ runtime });
+    const scheduler = new ConsoleStoreCleanupScheduler({
+      stores: cleanupStores,
+      now: () => NOW,
+    });
+
+    const result = await scheduler.runOnce();
+
+    expect(result?.removed.runtimeSessionPresence).toBe(4);
+    expect(runtime).toHaveBeenCalledWith(NOW);
+  });
+
+  it('reports runtime presence sweep failures and continues other sweeps', async () => {
+    const failure = new Error('runtime cleanup failed');
+    const reportError = jest.fn();
+    const cleanupStores = stores({
+      runtime: jest.fn(() => Promise.reject(failure)),
+    });
+    const scheduler = new ConsoleStoreCleanupScheduler({
+      stores: cleanupStores,
+      now: () => NOW,
+      reportError,
+    });
+
+    const result = await scheduler.runOnce();
+
+    expect(result?.removed).toMatchObject({
+      consoleSessions: 1,
+      loginTransactions: 2,
+      idempotencyRecords: 3,
+      runtimeSessionPresence: 0,
+    });
+    expect(result?.errors).toEqual([{ store: 'runtimeSessionPresence', error: failure }]);
+    expect(reportError).toHaveBeenCalledWith({ store: 'runtimeSessionPresence', error: failure });
   });
 
   it('requires an error reporter before scheduled registration', () => {

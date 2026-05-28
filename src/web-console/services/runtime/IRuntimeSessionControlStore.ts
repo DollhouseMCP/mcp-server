@@ -139,6 +139,7 @@ export interface IRuntimeSessionControlStore {
   registerPresence(input: RuntimeSessionPresenceInput): Promise<RuntimeSessionPresence>;
   heartbeatPresence(input: RuntimeSessionHeartbeatInput): Promise<RuntimeSessionHeartbeatResult>;
   markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null>;
+  sweepStalePresence(before?: Date): Promise<number>;
   findPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null>;
   listPresenceByUser(userId: string, query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;
   listOperationalPresence(query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;

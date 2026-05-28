@@ -16,6 +16,7 @@ import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
+export const DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS = 5_000;
 
 /** Constant form of the streamable-http transport name. Used in /healthz,
  *  /readyz, and runtime selection — extracted so changes (or typos) can't
@@ -64,6 +65,10 @@ export interface StreamableHttpRuntimeOptions {
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
   onSessionDisposed?: (sessionId: string) => void;
+  /** Optional web-console runtime control-plane bridge. Dormant when omitted. */
+  runtimeSessionControl?: StreamableHttpRuntimeSessionControl;
+  /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
+  runtimeCommandPollIntervalMs?: number;
   /**
    * Optional PerformanceMonitor. When provided, /healthz includes
    * per-op auth timing aggregates (latency p50/p95/p99, success rate)
@@ -89,6 +94,31 @@ export interface StreamableHttpRuntimeHandle {
 
 export interface StreamableHttpSessionAttachment {
   dispose(): Promise<void>;
+  runtimeSession?: {
+    readonly userId: string;
+    readonly accountCorrelationId: string;
+    readonly clientInfo?: {
+      readonly name?: string;
+      readonly version?: string;
+    } | null;
+  };
+}
+
+export interface StreamableHttpRuntimeSessionControl {
+  registerSession(input: {
+    readonly sessionId: string;
+    readonly userId: string;
+    readonly accountCorrelationId: string;
+    readonly clientInfo?: {
+      readonly name?: string;
+      readonly version?: string;
+    } | null;
+  }): Promise<void>;
+  recordActivity(sessionId: string, outcome?: 'ok' | 'error'): Promise<unknown>;
+  markSessionDisposed(sessionId: string): Promise<void>;
+  reconcilePendingCommands(terminator: {
+    terminateLocalSession(sessionId: string): Promise<'terminated' | 'already_absent'>;
+  }): Promise<number>;
 }
 
 interface ActiveSessionRecord {
@@ -395,6 +425,10 @@ export async function createStreamableHttpRuntime(
   const rateLimitMaxRequests = Math.max(0, options.rateLimitMaxRequests ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS);
   const sessionIdleTimeoutMs = Math.max(0, options.sessionIdleTimeoutMs ?? env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS);
   const sessionPoolSize = Math.max(0, options.sessionPoolSize ?? env.DOLLHOUSE_HTTP_SESSION_POOL_SIZE);
+  const runtimeCommandPollIntervalMs = Math.max(
+    0,
+    options.runtimeCommandPollIntervalMs ?? DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS,
+  );
   const publicBaseUrl = env.DOLLHOUSE_PUBLIC_BASE_URL;
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
@@ -441,6 +475,8 @@ export async function createStreamableHttpRuntime(
   };
   let closingPromise: Promise<void> | null = null;
   let replenishPoolPromise: Promise<void> | null = null;
+  let runtimeCommandPollTimer: NodeJS.Timeout | null = null;
+  let runtimeCommandPollRunning = false;
 
   const clearSessionTimer = (session: ActiveSessionRecord): void => {
     if (session.expirationTimer) {
@@ -474,6 +510,14 @@ export async function createStreamableHttpRuntime(
     sessionTelemetry.disposed += 1;
     clearSessionTimer(session);
     options.onSessionDisposed?.(sessionId);
+    try {
+      await options.runtimeSessionControl?.markSessionDisposed(sessionId);
+    } catch (error) {
+      logger.warn('[StreamableHTTP] Failed to mark runtime session disposed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     if (!skipTransportClose) {
       await session.transport.close().catch(() => {
@@ -489,6 +533,45 @@ export async function createStreamableHttpRuntime(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  };
+
+  const recordRuntimeActivity = (sessionId: string, outcome: 'ok' | 'error' = 'ok'): void => {
+    void options.runtimeSessionControl?.recordActivity(sessionId, outcome).catch((error) => {
+      logger.warn('[StreamableHTTP] Failed to heartbeat runtime session', {
+        sessionId,
+        outcome,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+
+  const pollRuntimeCommands = async (): Promise<void> => {
+    if (!options.runtimeSessionControl || runtimeCommandPollRunning || closingPromise) return;
+    runtimeCommandPollRunning = true;
+    try {
+      await options.runtimeSessionControl.reconcilePendingCommands({
+        terminateLocalSession: async (sessionId) => {
+          if (!sessions.has(sessionId)) return 'already_absent';
+          await disposeSession(sessionId);
+          return 'terminated';
+        },
+      });
+    } catch (error) {
+      logger.warn('[StreamableHTTP] Runtime command reconciliation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      runtimeCommandPollRunning = false;
+    }
+  };
+
+  const startRuntimeCommandPolling = (): void => {
+    if (!options.runtimeSessionControl || runtimeCommandPollIntervalMs <= 0 || runtimeCommandPollTimer) return;
+    runtimeCommandPollTimer = setInterval(() => {
+      void pollRuntimeCommands();
+    }, runtimeCommandPollIntervalMs);
+    runtimeCommandPollTimer.unref();
+    void pollRuntimeCommands();
   };
 
   const touchSession = (sessionId: string): void => {
@@ -614,6 +697,20 @@ export async function createStreamableHttpRuntime(
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
         options.onSessionCreated?.(sessionId);
+        const runtimeSession = attachment.runtimeSession;
+        if (runtimeSession && options.runtimeSessionControl) {
+          void options.runtimeSessionControl.registerSession({
+            sessionId,
+            userId: runtimeSession.userId,
+            accountCorrelationId: runtimeSession.accountCorrelationId,
+            clientInfo: runtimeSession.clientInfo ?? null,
+          }).catch((error) => {
+            logger.warn('[StreamableHTTP] Failed to register runtime session presence', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
         // Fire-and-forget: replenishPoolPromise guard inside maintainSessionPool()
         // prevents concurrent replenishment — safe to call without awaiting.
         void maintainSessionPool();
@@ -769,6 +866,7 @@ export async function createStreamableHttpRuntime(
 
         touchSession(sessionId);
         await existingSession.transport.handleRequest(req, res, req.body);
+        recordRuntimeActivity(sessionId);
         return;
       }
 
@@ -793,6 +891,7 @@ export async function createStreamableHttpRuntime(
         throw error;
       }
     } catch (error) {
+      if (sessionId) recordRuntimeActivity(sessionId, 'error');
       handleRequestFailure(req, res, 'POST', error, sessionId);
     }
   });
@@ -867,12 +966,14 @@ export async function createStreamableHttpRuntime(
     // attach to someone else's session (GET) or terminate it (DELETE).
     if (!assertSessionOwner(req, res, sessionId, session)) return;
 
-    try {
-      touchSession(sessionId);
-      await session.transport.handleRequest(req, res);
-    } catch (error) {
-      handleRequestFailure(req, res, methodName, error, sessionId);
-    }
+      try {
+        touchSession(sessionId);
+        await session.transport.handleRequest(req, res);
+        recordRuntimeActivity(sessionId);
+      } catch (error) {
+        recordRuntimeActivity(sessionId, 'error');
+        handleRequestFailure(req, res, methodName, error, sessionId);
+      }
   };
 
   app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
@@ -918,6 +1019,7 @@ export async function createStreamableHttpRuntime(
   });
 
   await maintainSessionPool();
+  startRuntimeCommandPolling();
 
   const shutdown = async (): Promise<void> => {
     if (closingPromise) {
@@ -935,6 +1037,10 @@ export async function createStreamableHttpRuntime(
 
       const allSessions = Array.from(sessions.keys());
       const warmSessions = pooledSessions.splice(0);
+      if (runtimeCommandPollTimer) {
+        clearInterval(runtimeCommandPollTimer);
+        runtimeCommandPollTimer = null;
+      }
 
       for (const sessionId of allSessions) {
         await disposeSession(sessionId);

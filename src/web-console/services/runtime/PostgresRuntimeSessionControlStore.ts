@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
@@ -47,6 +47,15 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
 
   async markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null> {
     return withSystemContext(this.db, tx => markRuntimePresenceClosingWithTx(tx, sessionId, closedAt));
+  }
+
+  async sweepStalePresence(before: Date = new Date()): Promise<number> {
+    const rows = await withSystemContext(this.db, tx =>
+      tx.delete(runtimeSessionPresence)
+        .where(lt(runtimeSessionPresence.leaseUntil, before))
+        .returning({ sessionId: runtimeSessionPresence.sessionId }),
+    );
+    return rows.length;
   }
 
   async findPresence(sessionId: string, now: Date = new Date()): Promise<RuntimeSessionPresence | null> {

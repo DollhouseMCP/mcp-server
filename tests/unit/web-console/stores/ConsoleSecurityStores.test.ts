@@ -836,6 +836,15 @@ describe('InMemoryRuntimeSessionControlStore', () => {
       leaseUntil: ONE_HOUR,
     })).resolves.toEqual({ kind: 'lost', reason: 'closing' });
     await expect(store.listPresenceByUser(USER_ID, { now: FIVE_MINUTES })).resolves.toEqual([]);
+    await expect(store.sweepStalePresence(ONE_HOUR)).resolves.toBe(1);
+    await expect(store.heartbeatPresence({
+      sessionId: RUNTIME_SESSION_ID,
+      replicaId: 'replica-a',
+      lastActiveAt: ONE_HOUR,
+      requestCount: 5,
+      errorCount: 1,
+      leaseUntil: new Date(ONE_HOUR.getTime() + 1_000),
+    })).resolves.toEqual({ kind: 'lost', reason: 'missing' });
   });
 
   it('uses last registration wins semantics and hides mixed invisible runtime presence rows', async () => {
@@ -888,6 +897,11 @@ describe('InMemoryRuntimeSessionControlStore', () => {
       leaseUntil: ONE_HOUR,
     })).resolves.toEqual({ kind: 'lost', reason: 'missing' });
     await expect(store.listPresenceByUser(USER_ID, { now: THIRTY_MINUTES })).resolves.toEqual([
+      expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' }),
+    ]);
+    await expect(store.sweepStalePresence(FIVE_MINUTES)).resolves.toBe(0);
+    await expect(store.sweepStalePresence(THIRTY_MINUTES)).resolves.toBe(1);
+    await expect(store.listOperationalPresence({ now: THIRTY_MINUTES })).resolves.toEqual([
       expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' }),
     ]);
   });

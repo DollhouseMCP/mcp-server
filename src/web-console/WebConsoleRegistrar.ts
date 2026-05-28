@@ -194,7 +194,9 @@ export class WebConsoleRegistrar {
   }
 
   private createCleanupScheduler(
-    stores: Pick<WebConsoleComposition, 'sessionStore' | 'loginTransactionStore' | 'idempotencyStore'>,
+    stores: Pick<WebConsoleComposition,
+      'sessionStore' | 'loginTransactionStore' | 'idempotencyStore' | 'runtimeSessionControlStore'
+    >,
     container: DiContainerFacade,
   ): ConsoleStoreCleanupScheduler | null {
     if (this.options.registerCleanup === false) return null;
