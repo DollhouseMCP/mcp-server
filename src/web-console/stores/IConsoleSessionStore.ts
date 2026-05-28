@@ -41,11 +41,34 @@ export interface ConsoleSessionTouch {
 export interface IConsoleSessionStore {
   create(record: ConsoleSessionRecord): Promise<void>;
   findActiveByIdHash(idHash: Buffer, at?: Date): Promise<ConsoleSessionRecord | null>;
+  /**
+   * Lists active browser console sessions for a single owner. Callers must
+   * treat the returned page as bounded by `limit`, not as an exhaustive audit.
+   */
+  listActiveForUser(userId: string, at?: Date, limit?: number): Promise<ConsoleSessionRecord[]>;
   touch(idHash: Buffer, touch: ConsoleSessionTouch, at?: Date): Promise<boolean>;
   setElevation(idHash: Buffer, elevation: ConsoleSessionElevation, at?: Date): Promise<boolean>;
   clearElevation(idHash: Buffer, at?: Date): Promise<boolean>;
+  /**
+   * Revokes a session by hash after the caller has already selected the
+   * correct authority/ownership context. Admin and logout flows use this.
+   */
   revoke(idHash: Buffer, revokedAt?: Date): Promise<boolean>;
+  /**
+   * Revokes a browser session only when the hash belongs to `userId`.
+   * Self-service routes use this composite predicate for defense in depth.
+   */
+  revokeForUserSession(userId: string, idHash: Buffer, revokedAt?: Date): Promise<boolean>;
+  /**
+   * Revokes every browser console session for a user. Incident/admin flows use
+   * this when the current browser session must not be preserved.
+   */
   revokeForUser(userId: string, revokedAt?: Date): Promise<number>;
+  /**
+   * Revokes every browser console session for a user except one server-derived
+   * session hash. Self-service "log out other sessions" uses this.
+   */
+  revokeForUserExcept(userId: string, exceptIdHash: Buffer, revokedAt?: Date): Promise<number>;
   sweepExpired(before?: Date): Promise<number>;
 }
 

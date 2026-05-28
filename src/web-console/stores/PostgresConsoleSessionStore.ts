@@ -1,4 +1,4 @@
-import { and, eq, gt, gte, isNull, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, isNull, lte, ne, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -48,6 +48,20 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
       )).limit(1),
     );
     return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async listActiveForUser(userId: string, at: Date = new Date(), limit = 100): Promise<ConsoleSessionRecord[]> {
+    assertUuid(userId, 'userId');
+    if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(consoleSessions).where(and(
+        eq(consoleSessions.userId, userId),
+        isNull(consoleSessions.revokedAt),
+        gt(consoleSessions.idleExpiresAt, at),
+        gt(consoleSessions.absoluteExpiresAt, at),
+      )).orderBy(desc(consoleSessions.lastUsedAt)).limit(limit),
+    );
+    return rows.map(fromRow);
   }
 
   async touch(idHash: Buffer, touch: ConsoleSessionTouch, at: Date = new Date()): Promise<boolean> {
@@ -133,11 +147,37 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
     return rows.length === 1;
   }
 
+  async revokeForUserSession(userId: string, idHash: Buffer, revokedAt: Date = new Date()): Promise<boolean> {
+    assertUuid(userId, 'userId');
+    assertHash(idHash, 'idHash');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(consoleSessions).set({ revokedAt }).where(and(
+        eq(consoleSessions.userId, userId),
+        eq(consoleSessions.idHash, idHash),
+        isNull(consoleSessions.revokedAt),
+      )).returning({ idHash: consoleSessions.idHash }),
+    );
+    return rows.length === 1;
+  }
+
   async revokeForUser(userId: string, revokedAt: Date = new Date()): Promise<number> {
     assertUuid(userId, 'userId');
     const rows = await withSystemContext(this.db, tx =>
       tx.update(consoleSessions).set({ revokedAt }).where(and(
         eq(consoleSessions.userId, userId),
+        isNull(consoleSessions.revokedAt),
+      )).returning({ idHash: consoleSessions.idHash }),
+    );
+    return rows.length;
+  }
+
+  async revokeForUserExcept(userId: string, exceptIdHash: Buffer, revokedAt: Date = new Date()): Promise<number> {
+    assertUuid(userId, 'userId');
+    assertHash(exceptIdHash, 'exceptIdHash');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(consoleSessions).set({ revokedAt }).where(and(
+        eq(consoleSessions.userId, userId),
+        ne(consoleSessions.idHash, exceptIdHash),
         isNull(consoleSessions.revokedAt),
       )).returning({ idHash: consoleSessions.idHash }),
     );

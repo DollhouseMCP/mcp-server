@@ -232,6 +232,27 @@ describe('InMemoryConsoleSessionStore', () => {
     expect(await store.sweepExpired(ONE_HOUR)).toBe(2);
   });
 
+  it('lists and revokes active sessions for one user without exposing other users', async () => {
+    const store = new InMemoryConsoleSessionStore();
+    await store.create(session());
+    await store.create(session({ idHash: hash(5), lastUsedAt: FIVE_MINUTES }));
+    await store.create(session({
+      idHash: hash(7),
+      idleExpiresAt: FOUR_MINUTES,
+      absoluteExpiresAt: FIVE_MINUTES,
+    }));
+    await store.create(session({ idHash: hash(6), userId: SECOND_USER_ID }));
+
+    expect((await store.listActiveForUser(USER_ID, FIVE_MINUTES)).map(record => record.idHash))
+      .toEqual([hash(5), hash(1)]);
+    expect(await store.revokeForUserSession(SECOND_USER_ID, hash(5), FIVE_MINUTES)).toBe(false);
+    expect(await store.revokeForUserSession(USER_ID, hash(5), FIVE_MINUTES)).toBe(true);
+    await store.create(session({ idHash: hash(8), lastUsedAt: FIVE_MINUTES }));
+    expect(await store.revokeForUserExcept(USER_ID, hash(1), FIVE_MINUTES)).toBe(2);
+    expect(await store.findActiveByIdHash(hash(1), FIVE_MINUTES)).not.toBeNull();
+    expect(await store.findActiveByIdHash(hash(8), FIVE_MINUTES)).toBeNull();
+  });
+
   it('rejects elevating self scope or using stale authentication evidence', async () => {
     const store = new InMemoryConsoleSessionStore();
     await store.create(session());

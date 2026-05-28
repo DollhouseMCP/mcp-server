@@ -40,6 +40,17 @@ export class InMemoryConsoleSessionStore implements IConsoleSessionStore {
     return cloneConsoleSession(record);
   }
 
+  async listActiveForUser(userId: string, at: Date = new Date(), limit = 100): Promise<ConsoleSessionRecord[]> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    if (!Number.isSafeInteger(limit) || limit <= 0) return [];
+    return [...this.sessions.values()]
+      .filter(record => record.userId === userId && isActive(record, at))
+      .sort((a, b) => b.lastUsedAt.getTime() - a.lastUsedAt.getTime())
+      .slice(0, limit)
+      .map(cloneConsoleSession);
+  }
+
   async touch(idHash: Buffer, touch: ConsoleSessionTouch, at: Date = new Date()): Promise<boolean> {
     const record = await this.findActiveByIdHash(idHash, at);
     if (!record || touch.lastUsedAt < record.lastUsedAt
@@ -99,12 +110,38 @@ export class InMemoryConsoleSessionStore implements IConsoleSessionStore {
     return true;
   }
 
+  async revokeForUserSession(userId: string, idHash: Buffer, revokedAt: Date = new Date()): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    assertHash(idHash, 'idHash');
+    const key = hashKey(idHash);
+    const record = this.sessions.get(key);
+    if (record?.userId !== userId || record.revokedAt) return false;
+    this.sessions.set(key, cloneConsoleSession({ ...record, revokedAt }));
+    return true;
+  }
+
   async revokeForUser(userId: string, revokedAt: Date = new Date()): Promise<number> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
     let revoked = 0;
     for (const [key, record] of this.sessions) {
       if (record.userId === userId && !record.revokedAt) {
+        this.sessions.set(key, cloneConsoleSession({ ...record, revokedAt }));
+        revoked += 1;
+      }
+    }
+    return revoked;
+  }
+
+  async revokeForUserExcept(userId: string, exceptIdHash: Buffer, revokedAt: Date = new Date()): Promise<number> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    assertHash(exceptIdHash, 'exceptIdHash');
+    const exceptKey = hashKey(exceptIdHash);
+    let revoked = 0;
+    for (const [key, record] of this.sessions) {
+      if (key !== exceptKey && record.userId === userId && !record.revokedAt) {
         this.sessions.set(key, cloneConsoleSession({ ...record, revokedAt }));
         revoked += 1;
       }

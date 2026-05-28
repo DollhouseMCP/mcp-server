@@ -154,6 +154,8 @@ export class WebConsoleRegistrar {
     }));
     registry.register(createSelfSecurityModule({
       factorStore: stores.factorStore,
+      sessionStore: stores.sessionStore,
+      now: this.options.now,
     }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);

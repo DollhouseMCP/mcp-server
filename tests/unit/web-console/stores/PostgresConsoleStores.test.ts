@@ -75,6 +75,7 @@ const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
 const ALLOWLIST_ID = 'f0a8d9e6-b1a1-4d94-b600-bef99c8d4ed1';
 const RUNTIME_SESSION_ID = 'mcp-session-1';
 const RUNTIME_COMMAND_ID = '9f8a54b9-f195-41f0-802d-d0ec2fdfb30f';
+const SELF_CAPABILITY = 'console:self';
 
 function hash(byte: number): Buffer {
   return Buffer.alloc(32, byte);
@@ -92,7 +93,7 @@ function sessionRow(overrides: Partial<ConsoleSessionRecord & {
     userId: USER_ID,
     authSub: PRIMARY_SUB,
     csrfTokenHash: hash(2),
-    grantedCapabilities: ['console:self'],
+    grantedCapabilities: [SELF_CAPABILITY],
     elevatedCapabilities: [],
     elevationExpiresAt: null,
     elevationAcr: null,
@@ -338,7 +339,7 @@ describe('PostgresConsoleSessionStore', () => {
 
     expect(transaction.select).not.toHaveBeenCalled();
     expect(chain.set).toHaveBeenCalledWith(expect.objectContaining({
-      grantedCapabilities: ['console:self', 'console:admin:audit'],
+      grantedCapabilities: [SELF_CAPABILITY, 'console:admin:audit'],
       elevatedCapabilities: ['console:admin:audit'],
     }));
   });
@@ -353,7 +354,7 @@ describe('PostgresConsoleSessionStore', () => {
 
     expect(transaction.select).not.toHaveBeenCalled();
     expect(chain.set).toHaveBeenCalledWith({
-      grantedCapabilities: ['console:self'],
+      grantedCapabilities: [SELF_CAPABILITY],
       elevatedCapabilities: [],
       elevationExpiresAt: null,
       elevationAcr: null,
@@ -371,7 +372,7 @@ describe('PostgresConsoleSessionStore', () => {
 
   it('rejects unvalidated capabilities read from database state', async () => {
     transaction.select = jest.fn(() => selectingChain([sessionRow({
-      grantedCapabilities: ['console:self', 'console:admin:unknown'],
+      grantedCapabilities: [SELF_CAPABILITY, 'console:admin:unknown'],
     })]));
     const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
 
@@ -394,6 +395,27 @@ describe('PostgresConsoleSessionStore', () => {
     expect(row.createdAt).toEqual(NOW);
   });
 
+  it('lists active sessions for a user ordered by recent use', async () => {
+    const row = sessionRow({
+      grantedCapabilities: [SELF_CAPABILITY, 'console:admin:security'],
+      elevatedCapabilities: ['console:admin:security'],
+      elevationExpiresAt: THIRTY_MINUTES,
+      elevationAcr: 'urn:dollhouse:acr:admin',
+      elevationAmr: ['otp'],
+      elevationAuthTime: FIVE_MINUTES,
+    });
+    transaction.select = jest.fn(() => selectingChain([row]));
+    const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
+
+    const sessions = await store.listActiveForUser(USER_ID, FOUR_MINUTES, 25);
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.elevation?.expiresAt).toEqual(THIRTY_MINUTES);
+
+    const chain = transaction.select.mock.results[0]?.value;
+    expect(chain.orderBy).toHaveBeenCalled();
+    expect(chain.limit).toHaveBeenCalledWith(25);
+  });
+
   it('uses conditional touch results and counts bulk revocation and cleanup writes', async () => {
     const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
     transaction.update = jest.fn(() => returningChain([]));
@@ -404,6 +426,15 @@ describe('PostgresConsoleSessionStore', () => {
 
     transaction.update = jest.fn(() => returningChain([{ idHash: hash(1) }, { idHash: hash(2) }]));
     await expect(store.revokeForUser(USER_ID, FIVE_MINUTES)).resolves.toBe(2);
+
+    transaction.update = jest.fn(() => returningChain([{ idHash: hash(1) }]));
+    await expect(store.revokeForUserSession(USER_ID, hash(1), FIVE_MINUTES)).resolves.toBe(true);
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.revokeForUserSession(USER_ID, hash(1), FIVE_MINUTES)).resolves.toBe(false);
+
+    transaction.update = jest.fn(() => returningChain([{ idHash: hash(2) }]));
+    await expect(store.revokeForUserExcept(USER_ID, hash(1), FIVE_MINUTES)).resolves.toBe(1);
 
     transaction.delete = jest.fn(() => returningChain([{ idHash: hash(1) }]));
     await expect(store.sweepExpired(ONE_HOUR)).resolves.toBe(1);
