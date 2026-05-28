@@ -35,7 +35,9 @@ const ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH = '/api/v1/admin/accounts/users/:user_
 const ACCOUNT_ALLOWLIST_PATH = '/api/v1/admin/accounts/allowlist';
 const ACCOUNT_ALLOWLIST_ITEM_PATH = '/api/v1/admin/accounts/allowlist/:id';
 const ACCOUNT_BOOTSTRAP_PATH = '/api/v1/admin/accounts/bootstrap';
+const SELF_CAPABILITY = 'console:self';
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
+const OPERATE_CAPABILITY = 'console:admin:operate';
 const ACCOUNT_METADATA_PRIVACY = 'account_metadata';
 const ADMIN_5M_ELEVATION = 'admin_5m';
 const IDEMPOTENCY_REQUIRED = 'required';
@@ -51,6 +53,7 @@ const LAST_LOGIN = new Date('2026-05-27T13:00:00.000Z');
 const INVITE_EMAIL = 'bob@example.test';
 const RUNTIME_SESSION_ID = 'mcp-session-incident';
 const RUNTIME_REPLICA_ID = 'replica-a';
+const MISSING_AUTHENTICATION_FIXTURE = 'missing authenticated fixture';
 
 function store(): InMemoryConsoleAccountAdminStore {
   return new InMemoryConsoleAccountAdminStore([{
@@ -249,7 +252,7 @@ function consoleRequest(overrides: Partial<ConsoleRequest> = {}): ConsoleRequest
       userId: USER_ID,
       authSub: PRIMARY_SUB,
       authzVersion: 3,
-      grantedCapabilities: ['console:self', ACCOUNT_ADMIN_CAPABILITY],
+      grantedCapabilities: [SELF_CAPABILITY, ACCOUNT_ADMIN_CAPABILITY],
       elevation: {
         capabilities: [ACCOUNT_ADMIN_CAPABILITY],
         expiresAt: new Date(NOW.getTime() + 300_000),
@@ -268,7 +271,7 @@ function sessionRecord(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSe
     userId: USER_ID,
     authSub: PRIMARY_SUB,
     csrfTokenHash: Buffer.alloc(32, 8),
-    grantedCapabilities: ['console:self'],
+    grantedCapabilities: [SELF_CAPABILITY],
     elevation: null,
     createdAt: NOW,
     lastUsedAt: NOW,
@@ -556,6 +559,8 @@ describe('AccountAdminModule', () => {
   it('issues account invites after bootstrap with transaction audit and privacy projection', async () => {
     const { module, adminAuditWriter } = mutationFixture();
     const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+    const authentication = consoleRequest().consoleAuthentication;
+    if (!authentication) throw new Error(MISSING_AUTHENTICATION_FIXTURE);
 
     const result = await invite.handler(consoleRequest({
       body: {
@@ -563,6 +568,10 @@ describe('AccountAdminModule', () => {
         email: INVITE_EMAIL,
         ttl_minutes: 15,
         roles: ['operator'],
+      },
+      consoleAuthentication: {
+        ...authentication,
+        grantedCapabilities: [SELF_CAPABILITY, ACCOUNT_ADMIN_CAPABILITY, OPERATE_CAPABILITY],
       },
     }));
 
@@ -590,7 +599,7 @@ describe('AccountAdminModule', () => {
     })]);
   });
 
-  it('currently permits security-admin invite roles until role-tier separation lands', async () => {
+  it('requires matching higher-tier capability before inviting higher-tier roles', async () => {
     const { module, adminAuditWriter } = mutationFixture();
     const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
 
@@ -601,17 +610,15 @@ describe('AccountAdminModule', () => {
         roles: ['security_admin'],
       },
     }))).resolves.toMatchObject({
-      status: 201,
-      body: {
-        user_id: SECOND_USER_ID,
-        primary_sub: 'local_security_admin_invitee',
-      },
+      status: 403,
+      body: { code: 'insufficient_role_authority' },
     });
 
     expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
       operation: AUDIT_USERS_INVITE,
-      result: 'approved',
-      argsRedacted: { operation: 'invite', roles: ['security_admin'], ttlMinutes: 15 },
+      result: 'rejected',
+      errorCode: 'insufficient_role_authority',
+      argsRedacted: { operation: 'invite', roles: ['security_admin'] },
     })]);
   });
 
@@ -1052,7 +1059,7 @@ describe('AccountAdminModule', () => {
     const { module, invalidationStore, adminAuditWriter } = mutationFixture();
     const grant = findRoute(module.routes, ACCOUNT_ROLE_GRANT_PATH);
     const authentication = consoleRequest().consoleAuthentication;
-    if (!authentication) throw new Error('missing authenticated fixture');
+    if (!authentication) throw new Error(MISSING_AUTHENTICATION_FIXTURE);
 
     const result = await grant.handler(consoleRequest({
       params: { user_id: USER_ID },
@@ -1060,6 +1067,7 @@ describe('AccountAdminModule', () => {
       consoleAuthentication: {
         ...authentication,
         userId: SECOND_USER_ID,
+        grantedCapabilities: [SELF_CAPABILITY, ACCOUNT_ADMIN_CAPABILITY, OPERATE_CAPABILITY],
       },
     }));
 
@@ -1109,6 +1117,101 @@ describe('AccountAdminModule', () => {
       result: 'rejected',
       errorCode: 'self_escalation_denied',
       argsRedacted: { operation: 'grant', grants: ['security_admin'] },
+    })]);
+  });
+
+  it('requires matching higher-tier capability before granting higher-tier roles', async () => {
+    const { module, invalidationStore, adminAuditWriter } = mutationFixture();
+    const grant = findRoute(module.routes, ACCOUNT_ROLE_GRANT_PATH);
+    const authentication = consoleRequest().consoleAuthentication;
+    if (!authentication) throw new Error(MISSING_AUTHENTICATION_FIXTURE);
+
+    await expect(grant.handler(consoleRequest({
+      params: { user_id: USER_ID },
+      body: { role: 'security_admin' },
+      consoleAuthentication: {
+        ...authentication,
+        userId: SECOND_USER_ID,
+      },
+    }))).resolves.toMatchObject({
+      status: 403,
+      body: { code: 'insufficient_role_authority' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toEqual([]);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_ROLES_GRANT,
+      result: 'rejected',
+      errorCode: 'insufficient_role_authority',
+      argsRedacted: { operation: 'grant', grants: ['security_admin'] },
+    })]);
+  });
+
+  it('requires matching higher-tier capability before revoking higher-tier roles', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([
+      await principalFixture({ roles: [ACCOUNT_ADMIN_ROLE, 'security_admin'] }),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        username: 'bob',
+        roles: [ACCOUNT_ADMIN_ROLE],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const { module, invalidationStore, adminAuditWriter } = mutationFixture(accountAdminStore);
+    const revoke = findRoute(module.routes, ACCOUNT_ROLE_REVOKE_PATH);
+    const authentication = consoleRequest().consoleAuthentication;
+    if (!authentication) throw new Error(MISSING_AUTHENTICATION_FIXTURE);
+
+    await expect(revoke.handler(consoleRequest({
+      params: { user_id: USER_ID },
+      body: { role: 'security_admin' },
+      consoleAuthentication: {
+        ...authentication,
+        userId: SECOND_USER_ID,
+      },
+    }))).resolves.toMatchObject({
+      status: 403,
+      body: { code: 'insufficient_role_authority' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toEqual([]);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      result: 'rejected',
+      errorCode: 'insufficient_role_authority',
+      argsRedacted: { operation: 'revoke', revokes: ['security_admin'] },
+    })]);
+  });
+
+  it('requires matching higher-tier capability before replacing roles to remove higher-tier roles', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([
+      await principalFixture({ roles: [ACCOUNT_ADMIN_ROLE, 'security_admin', 'operator'] }),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        username: 'bob',
+        roles: [ACCOUNT_ADMIN_ROLE],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const { module, invalidationStore, adminAuditWriter } = mutationFixture(accountAdminStore);
+    const replace = findRoute(module.routes, ACCOUNT_ROLES_PATH, 'PUT');
+    const authentication = consoleRequest().consoleAuthentication;
+    if (!authentication) throw new Error(MISSING_AUTHENTICATION_FIXTURE);
+
+    await expect(replace.handler(consoleRequest({
+      params: { user_id: USER_ID },
+      body: { roles: [ACCOUNT_ADMIN_ROLE, 'operator'] },
+      consoleAuthentication: {
+        ...authentication,
+        userId: SECOND_USER_ID,
+        grantedCapabilities: [SELF_CAPABILITY, ACCOUNT_ADMIN_CAPABILITY, OPERATE_CAPABILITY],
+      },
+    }))).resolves.toMatchObject({
+      status: 403,
+      body: { code: 'insufficient_role_authority' },
+    });
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toEqual([]);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      result: 'rejected',
+      errorCode: 'insufficient_role_authority',
+      argsRedacted: { operation: 'replace', revokes: ['security_admin'] },
     })]);
   });
 

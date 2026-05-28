@@ -10,6 +10,7 @@ import {
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountInvite } from './AccountAdminOnboardingDtos.js';
+import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 
 export interface ConsoleAccountInviteIssueInput {
   readonly username: string;
@@ -57,6 +58,19 @@ export class AccountAdminInviteService {
         invalid_body: true,
       });
       return problem(400, 'invalid_request', 'Invalid request', parsed.detail);
+    }
+    const unauthorizedRoles = rolesActorMayNotManage(req, parsed.value.roles);
+    if (unauthorizedRoles.length > 0) {
+      await this.writeAudit(req, route, 'rejected', 'insufficient_role_authority', null, {
+        operation: 'invite',
+        roles: unauthorizedRoles,
+      });
+      return problem(
+        403,
+        'insufficient_role_authority',
+        'Forbidden',
+        'Actor cannot invite principals with administrative roles outside their assigned capability tier.',
+      );
     }
     if (!this.options.authStorage) {
       await this.writeAudit(req, route, 'failed', 'service_unavailable', null, {

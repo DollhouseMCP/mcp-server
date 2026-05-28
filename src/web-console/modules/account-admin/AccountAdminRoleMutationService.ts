@@ -9,6 +9,7 @@ import {
 } from '../../stores/IConsoleAccountAdminStore.js';
 import { ConsoleStoreConflictError } from '../../stores/ConsoleStoreValidation.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 import { serializeAccountRoleList } from './AccountAdminDtos.js';
 
 export interface AccountAdminRoleMutationServiceOptions {
@@ -108,6 +109,40 @@ export class AccountAdminRoleMutationService {
         'self_escalation_denied',
         'Forbidden',
         'Administrators cannot grant additional roles to their own principal.',
+      );
+    }
+    const unauthorizedGrants = rolesActorMayNotManage(req, grants);
+    if (unauthorizedGrants.length > 0) {
+      await this.writeAttemptAudit(
+        req,
+        route,
+        'rejected',
+        'insufficient_role_authority',
+        userId,
+        { operation, grants: unauthorizedGrants },
+      );
+      return problem(
+        403,
+        'insufficient_role_authority',
+        'Forbidden',
+        'Actor cannot grant administrative roles outside their assigned capability tier.',
+      );
+    }
+    const unauthorizedRevokes = rolesActorMayNotManage(req, revokes);
+    if (unauthorizedRevokes.length > 0) {
+      await this.writeAttemptAudit(
+        req,
+        route,
+        'rejected',
+        'insufficient_role_authority',
+        userId,
+        { operation, revokes: unauthorizedRevokes },
+      );
+      return problem(
+        403,
+        'insufficient_role_authority',
+        'Forbidden',
+        'Actor cannot revoke administrative roles outside their assigned capability tier.',
       );
     }
 
