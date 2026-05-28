@@ -85,8 +85,16 @@ export interface ConsoleHandlerResult {
    */
   readonly status: number;
   readonly body?: unknown;
+  readonly headers?: ConsoleResponseHeaders;
   readonly cookies?: readonly ConsoleCookieDirective[];
   readonly redirectTo?: string;
+}
+
+export interface ConsoleResponseHeaders {
+  readonly ETag?: string;
+  readonly 'Cache-Control'?: string;
+  readonly Vary?: string;
+  readonly 'Last-Modified'?: string;
 }
 
 /**

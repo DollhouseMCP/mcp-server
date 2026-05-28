@@ -854,6 +854,30 @@ describe('PostgresConsoleAccountAdminStore', () => {
     await expect(store.findPrincipalByAccountCorrelationId(ACCOUNT_CORRELATION_ID))
       .resolves.toMatchObject({ userId: USER_ID, accountCorrelationId: ACCOUNT_CORRELATION_ID });
   });
+
+  it('updates principal display name before re-projecting account metadata', async () => {
+    const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([{ id: USER_ID }]));
+    transaction.execute = jest.fn(() => Promise.resolve([principalProjectionRow({ display_name: 'Alice Console' })]));
+
+    await expect(store.updatePrincipalProfile({
+      userId: USER_ID,
+      displayName: 'Alice Console',
+      updatedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      userId: USER_ID,
+      displayName: 'Alice Console',
+    });
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+    expect(transaction.execute).toHaveBeenCalledTimes(1);
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.updatePrincipalProfile({
+      userId: USER_ID,
+      displayName: null,
+      updatedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+  });
 });
 
 describe('PostgresConsoleSecurityInvalidationStore', () => {

@@ -13,6 +13,7 @@ import type {
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
+  PrincipalProfileUpdateInput,
   PrincipalStateChange,
   RoleGrantInput,
   RoleRevokeInput,
@@ -24,6 +25,7 @@ import {
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
+  validatePrincipalProfileUpdateInput,
   validateRoleGrantInput,
   validateRoleRevokeInput,
 } from './IConsoleAccountAdminStore.js';
@@ -174,6 +176,19 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     };
     this.principals.set(input.userId, clonePrincipalSummary(updated));
     return stateChangeFromPrincipal(updated, input.bumpedAt);
+  }
+
+  async updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null> {
+    await Promise.resolve();
+    validatePrincipalProfileUpdateInput(input);
+    const principal = this.principals.get(input.userId);
+    if (!principal) return null;
+    const updated = {
+      ...principal,
+      displayName: input.displayName,
+    };
+    this.principals.set(input.userId, clonePrincipalSummary(updated));
+    return this.withCurrentRoles(updated);
   }
 
   private withCurrentRoles(principal: ConsolePrincipalSummary): ConsolePrincipalSummary {

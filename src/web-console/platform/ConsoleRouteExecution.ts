@@ -3,9 +3,17 @@ import type { Response } from 'express';
 import type {
   ConsoleHandlerResult,
   ConsoleRequest,
+  ConsoleResponseHeaders,
   ConsoleRouteDefinition,
 } from './ConsolePlatformTypes.js';
 import { serializeConsoleCookie, validateConsoleCookieDirectives } from '../middleware/ConsoleCookies.js';
+
+const ALLOWED_HANDLER_HEADERS = new Set<keyof ConsoleResponseHeaders>([
+  'ETag',
+  'Cache-Control',
+  'Vary',
+  'Last-Modified',
+]);
 
 export async function executeConsoleRoute(
   route: ConsoleRouteDefinition,
@@ -25,6 +33,9 @@ export async function executeConsoleRoute(
 
 export function sendConsoleHandlerResult(response: Response, result: ConsoleHandlerResult): void {
   validateResult(result);
+  for (const [name, value] of Object.entries(result.headers ?? {})) {
+    response.setHeader(name, value);
+  }
   for (const cookie of result.cookies ?? []) {
     response.append('Set-Cookie', serializeConsoleCookie(cookie));
   }
@@ -45,7 +56,28 @@ function validateResult(result: ConsoleHandlerResult): void {
   if (result.cookies && !Array.isArray(result.cookies)) {
     throw new Error('Console route handler returned invalid cookie directives');
   }
+  validateHeaders(result.headers);
   validateConsoleCookieDirectives(result.cookies);
+  validateRedirect(result);
+}
+
+function validateHeaders(headers: ConsoleHandlerResult['headers']): void {
+  if (headers === undefined) return;
+  if (typeof headers !== 'object' || Array.isArray(headers)) {
+    throw new Error('Console route handler returned invalid headers');
+  }
+  for (const [name, value] of Object.entries(headers)) {
+    if (!ALLOWED_HANDLER_HEADERS.has(name as keyof ConsoleResponseHeaders) || !isPrintableAsciiHeaderValue(value)) {
+      throw new Error('Console route handler returned invalid headers');
+    }
+  }
+}
+
+function isPrintableAsciiHeaderValue(value: string): boolean {
+  return typeof value === 'string' && /^[\t\x20-\x7E]*$/.test(value);
+}
+
+function validateRedirect(result: ConsoleHandlerResult): void {
   if (result.redirectTo !== undefined) {
     if (typeof result.redirectTo !== 'string' || result.redirectTo.trim() === '') {
       throw new Error('Console route handler returned an invalid redirect target');

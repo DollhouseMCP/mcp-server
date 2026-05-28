@@ -75,6 +75,12 @@ export interface PrincipalAuthzVersionBumpInput {
   readonly bumpedAt: Date;
 }
 
+export interface PrincipalProfileUpdateInput {
+  readonly userId: string;
+  readonly displayName: string | null;
+  readonly updatedAt: Date;
+}
+
 export interface IConsoleAccountAdminStore {
   listPrincipals(query?: PrincipalDirectoryQuery): Promise<ConsolePrincipalSummary[]>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
@@ -86,6 +92,7 @@ export interface IConsoleAccountAdminStore {
   disablePrincipal(input: PrincipalDisableInput): Promise<PrincipalStateChange | null>;
   enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null>;
   bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null>;
+  updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null>;
 }
 
 export const CONSOLE_ADMIN_ROLES = [
@@ -133,6 +140,36 @@ export function validatePrincipalEnableInput(input: PrincipalEnableInput): void 
 
 export function validatePrincipalAuthzVersionBumpInput(input: PrincipalAuthzVersionBumpInput): void {
   assertUuid(input.userId, 'userId');
+}
+
+export function validatePrincipalProfileUpdateInput(input: PrincipalProfileUpdateInput): void {
+  assertUuid(input.userId, 'userId');
+  if (input.displayName !== null) {
+    validateConsoleDisplayName(input.displayName, 'displayName');
+  }
+}
+
+export function validateConsoleDisplayName(value: string, name: string): void {
+  if (value.length > 255 || Buffer.byteLength(value, 'utf8') > 255) {
+    throw new ConsoleStoreValidationError(`${name} must be 255 characters or fewer`);
+  }
+  if (hasUnsupportedControlCharacter(value)) {
+    throw new ConsoleStoreValidationError(`${name} contains unsupported control characters`);
+  }
+  if (/[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u.test(value)) {
+    throw new ConsoleStoreValidationError(`${name} contains unsupported directional or zero-width characters`);
+  }
+  if (/[<>]/u.test(value)) {
+    throw new ConsoleStoreValidationError(`${name} contains unsupported markup characters`);
+  }
+}
+
+function hasUnsupportedControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.codePointAt(0) ?? 0;
+    if ((code <= 0x08 || (code >= 0x0A && code <= 0x1F) || (code >= 0x7F && code <= 0x9F))) return true;
+  }
+  return false;
 }
 
 export function cloneRoleAssignment(assignment: ConsoleRoleAssignment): ConsoleRoleAssignment {

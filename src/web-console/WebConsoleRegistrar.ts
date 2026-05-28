@@ -25,12 +25,15 @@ import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllo
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
+import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js';
+import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfigStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
+import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
@@ -60,6 +63,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
+  userConfigStore: 'WebConsoleUserConfigStore',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -98,6 +102,7 @@ export interface WebConsoleComposition {
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
+  readonly userConfigStore: IUserConfigStore;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: false;
@@ -122,6 +127,7 @@ export class WebConsoleRegistrar {
     const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
     const authStorage = resolveAuthStorage(container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
+    const userConfigStore = resolveUserConfigStore(database, container);
     registry.register(createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
@@ -140,6 +146,11 @@ export class WebConsoleRegistrar {
       accountAdminStore: stores.accountAdminStore,
       now: this.options.now,
     }));
+    registry.register(createSelfServiceModule({
+      accountAdminStore: stores.accountAdminStore,
+      userConfigStore,
+      now: this.options.now,
+    }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
@@ -155,6 +166,7 @@ export class WebConsoleRegistrar {
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
+      userConfigStore,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
       routesMounted: false,
@@ -194,6 +206,9 @@ export class WebConsoleRegistrar {
     }
     if (accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => accountInviteIssuer);
+    }
+    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => userConfigStore);
     }
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
@@ -374,6 +389,19 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   });
+}
+
+function resolveUserConfigStore(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+): IUserConfigStore {
+  if (container.hasRegistration('UserConfigStore')) {
+    return container.resolve<IUserConfigStore>('UserConfigStore');
+  }
+  if (database) {
+    throw new Error('Web console PostgreSQL self-service settings require UserConfigStore');
+  }
+  return new InMemoryUserConfigStore();
 }
 
 function resolveOAuthGrantRevocationService(

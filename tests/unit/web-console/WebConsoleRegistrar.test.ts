@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import type { DiContainerFacade } from '../../../src/di/DiContainerFacade.js';
+import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleSessionStore.js', () => ({
   PostgresConsoleSessionStore: class PostgresConsoleSessionStore {
@@ -116,6 +117,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAllowlistStore).toBeInstanceOf(InMemoryConsoleAccountAllowlistStore);
     expect(composition.runtimeSessionControlStore).toBeInstanceOf(InMemoryRuntimeSessionControlStore);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
+    expect(composition.userConfigStore).toBeInstanceOf(InMemoryUserConfigStore);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
     expect(composition.adminAuditWriter).toBeInstanceOf(InMemoryAdminAuditWriter);
     expect(lifecycle.registerPeriodicTask).toHaveBeenCalledWith(
@@ -131,6 +133,7 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore)).toBe(composition.accountAllowlistStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore))
       .toBe(composition.runtimeSessionControlStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
 
@@ -230,6 +233,7 @@ describe('WebConsoleRegistrar', () => {
     const database = {};
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
@@ -252,6 +256,19 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
+  });
+
+  it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 17),
+      reportCleanupError: jest.fn(),
+    }).bootstrapAndRegister(container)).rejects.toThrow('UserConfigStore');
   });
 
   it('fails clearly when PostgreSQL storage lacks durable admin audit HMAC resolution', async () => {

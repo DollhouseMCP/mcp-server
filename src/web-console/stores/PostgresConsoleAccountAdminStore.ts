@@ -13,6 +13,7 @@ import type {
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
+  PrincipalProfileUpdateInput,
   PrincipalStateChange,
   RoleGrantInput,
   RoleRevokeInput,
@@ -25,6 +26,7 @@ import {
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
+  validatePrincipalProfileUpdateInput,
   validateRoleGrantInput,
   validateRoleRevokeInput,
 } from './IConsoleAccountAdminStore.js';
@@ -166,6 +168,23 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
 
   async bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null> {
     return withSystemContext(this.db, tx => bumpConsolePrincipalAuthzVersionWithTx(tx, input));
+  }
+
+  async updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null> {
+    validatePrincipalProfileUpdateInput(input);
+    const rows: PrincipalRow[] = await withSystemContext(this.db, async tx => {
+      const updated = await tx.update(users)
+        .set({
+          displayName: input.displayName,
+          updatedAt: input.updatedAt,
+        })
+        .where(eq(users.id, input.userId))
+        .returning({ id: users.id });
+      if (updated.length === 0) return [];
+      const condition = sql`u.id = ${input.userId}`;
+      return tx.execute(sql`${principalProjectionSql(condition)} LIMIT 1`);
+    });
+    return rows[0] ? fromPrincipalRow(rows[0]) : null;
   }
 
 }

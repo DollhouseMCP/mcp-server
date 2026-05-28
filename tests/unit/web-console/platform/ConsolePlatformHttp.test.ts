@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import {
@@ -195,6 +195,71 @@ describe('console platform HTTP foundations', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ route: 'settings' });
     expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'settings']);
+  });
+
+  it('sends allowlisted handler headers', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'settings',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/settings',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: () => ({
+          status: 200,
+          headers: { ETag: '"settings-1"' },
+          body: { route: 'settings' },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app).get('/api/v1/me/settings');
+
+    expect(response.status).toBe(200);
+    expect(response.headers.etag).toBe('"settings-1"');
+    expect(response.body).toEqual({ route: 'settings' });
+  });
+
+  it('rejects invalid or reserved handler headers', async () => {
+    const { sendConsoleHandlerResult } = await import('../../../../src/web-console/index.js');
+    const response = {
+      setHeader: jest.fn(),
+      append: jest.fn(),
+      status: jest.fn(() => response),
+      json: jest.fn(),
+      end: jest.fn(),
+      location: jest.fn(),
+    };
+
+    expect(() => sendConsoleHandlerResult(response as never, {
+      status: 200,
+      headers: { 'Content-Security-Policy': 'default-src *' } as never,
+      body: {},
+    })).toThrow('invalid headers');
+    expect(() => sendConsoleHandlerResult(response as never, {
+      status: 200,
+      headers: { ETag: '"ok"\r\nX-Test: bad' },
+      body: {},
+    })).toThrow('invalid headers');
+    expect(() => sendConsoleHandlerResult(response as never, {
+      status: 200,
+      headers: [] as never,
+      body: {},
+    })).toThrow('invalid headers');
+    expect(() => sendConsoleHandlerResult(response as never, {
+      status: 200,
+      headers: { ETag: 'W/"caf\u00e9"' },
+      body: {},
+    })).toThrow('invalid headers');
   });
 
   it('sends RFC 9457 responses with the problem media type and request instance', async () => {

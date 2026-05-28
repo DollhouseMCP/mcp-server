@@ -18,7 +18,7 @@ import * as path from 'node:path';
 import type { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { logger } from '../../utils/logger.js';
 import type { IUserConfigStore, UserConfig } from './IUserConfigStore.js';
-import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
+import { DEFAULT_USER_CONFIG, UserConfigConflictError } from './IUserConfigStore.js';
 
 export interface FilesystemUserConfigStoreOptions {
   /** Root directory for per-user JSON files; the store appends `users/<userId>/config.json`. */
@@ -66,8 +66,13 @@ export class FilesystemUserConfigStore implements IUserConfigStore {
   async save(
     userId: string,
     config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
   ): Promise<void> {
     assertValidUserId(userId);
+    if (options.expectedUpdatedAt !== undefined) {
+      const current = await this.load(userId);
+      if (current.updatedAt !== options.expectedUpdatedAt) throw new UserConfigConflictError();
+    }
     const configPath = this.pathForUser(userId);
     const payload: UserConfig = {
       githubConfig: config.githubConfig,
