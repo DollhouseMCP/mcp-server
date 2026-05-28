@@ -1,5 +1,6 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import { InMemoryAdminAuditWriter } from './audit/InMemoryAdminAuditWriter.js';
 import { PostgresAdminAuditWriter, type AdminAuditHmacKeyResolver } from './audit/PostgresAdminAuditWriter.js';
 import { InMemoryConsoleIdentityResolver } from './identity/InMemoryConsoleIdentityResolver.js';
@@ -27,6 +28,7 @@ import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccoun
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
   PostgresAccountAdminMutationTransactionRunner,
@@ -52,6 +54,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   accountAdminMutationTransactionRunner: 'WebConsoleAccountAdminMutationTransactionRunner',
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
+  authStorage: 'WebConsoleAuthStorage',
+  accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -65,6 +69,8 @@ export interface WebConsoleRegistrarOptions {
   readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
   readonly protectedCorrelationSelectorHmacKey?: Buffer;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
+  readonly authStorage?: IAuthStorageLayer | null;
+  readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
 }
 
@@ -84,6 +90,8 @@ export interface WebConsoleComposition {
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
+  readonly authStorage: IAuthStorageLayer | null;
+  readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: false;
@@ -106,10 +114,14 @@ export class WebConsoleRegistrar {
     });
     const registry = new ConsoleModuleRegistry();
     const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
+    const authStorage = resolveAuthStorage(container, this.options);
+    const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     registry.register(createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
       sessionStore: stores.sessionStore,
+      authStorage,
+      accountInviteIssuer,
       oauthGrantRevocationService,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
@@ -128,6 +140,8 @@ export class WebConsoleRegistrar {
       accountAdminMutationTransactionRunner,
       protectedCorrelationRateLimiter,
       oauthGrantRevocationService,
+      authStorage,
+      accountInviteIssuer,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
       routesMounted: false,
@@ -160,6 +174,12 @@ export class WebConsoleRegistrar {
     }
     if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
+    }
+    if (authStorage && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.authStorage, () => authStorage);
+    }
+    if (accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => accountInviteIssuer);
     }
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
@@ -342,6 +362,33 @@ function resolveOAuthGrantRevocationService(
   if (options.oauthGrantRevocationService !== undefined) return options.oauthGrantRevocationService;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
     return container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
+  }
+  return null;
+}
+
+function resolveAuthStorage(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IAuthStorageLayer | null {
+  if (options.authStorage !== undefined) return options.authStorage;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
+    return container.resolve<IAuthStorageLayer>(WEB_CONSOLE_SERVICE_NAMES.authStorage);
+  }
+  // Transitional bridge for the embedded AS bootstrap wiring, which still
+  // publishes its storage under the legacy container key.
+  if (container.hasRegistration('AuthStorage')) {
+    return container.resolve<IAuthStorageLayer>('AuthStorage');
+  }
+  return null;
+}
+
+function resolveAccountInviteIssuer(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IConsoleAccountInviteIssuer | null {
+  if (options.accountInviteIssuer !== undefined) return options.accountInviteIssuer;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
+    return container.resolve<IConsoleAccountInviteIssuer>(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer);
   }
   return null;
 }

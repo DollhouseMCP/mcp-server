@@ -1,5 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
+import type { IAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
 import {
   ConsoleModuleRegistry,
   InMemoryAccountAdminMutationTransactionRunner,
@@ -12,6 +13,7 @@ import {
   type ConsoleRouteDefinition,
   type ConsoleRequest,
   type ConsoleSessionRecord,
+  type IConsoleAccountInviteIssuer,
   type IOAuthGrantRevocationService,
 } from '../../../../src/web-console/index.js';
 
@@ -23,12 +25,14 @@ const PRIMARY_SUB = 'github_user-7';
 const ACCOUNT_ADMIN_ROLE = 'account_admin';
 const ACCOUNT_DISABLE_PATH = '/api/v1/admin/accounts/users/:user_id/disable';
 const ACCOUNT_ENABLE_PATH = '/api/v1/admin/accounts/users/:user_id/enable';
+const ACCOUNT_INVITE_PATH = '/api/v1/admin/accounts/users/invite';
 const ACCOUNT_ROLES_PATH = '/api/v1/admin/accounts/users/:user_id/roles';
 const ACCOUNT_ROLE_GRANT_PATH = '/api/v1/admin/accounts/users/:user_id/roles/grant';
 const ACCOUNT_ROLE_REVOKE_PATH = '/api/v1/admin/accounts/users/:user_id/roles/revoke';
 const ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH = '/api/v1/admin/accounts/users/:user_id/credentials/revoke-all';
 const ACCOUNT_ALLOWLIST_PATH = '/api/v1/admin/accounts/allowlist';
 const ACCOUNT_ALLOWLIST_ITEM_PATH = '/api/v1/admin/accounts/allowlist/:id';
+const ACCOUNT_BOOTSTRAP_PATH = '/api/v1/admin/accounts/bootstrap';
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const ACCOUNT_METADATA_PRIVACY = 'account_metadata';
 const ADMIN_5M_ELEVATION = 'admin_5m';
@@ -36,11 +40,13 @@ const IDEMPOTENCY_REQUIRED = 'required';
 const IDEMPOTENCY_NOT_APPLICABLE = 'not_applicable';
 const AUDIT_USERS_DISABLE = 'accounts.users.disable';
 const AUDIT_USERS_ENABLE = 'accounts.users.enable';
+const AUDIT_USERS_INVITE = 'accounts.users.invite';
 const AUDIT_USERS_CREDENTIALS_REVOKE_ALL = 'accounts.users.credentials.revoke_all';
 const AUDIT_ALLOWLIST_ADD = 'accounts.allowlist.add';
 const AUDIT_ROLES_GRANT = 'accounts.roles.grant';
 const NOW = new Date('2026-05-27T14:00:00.000Z');
 const LAST_LOGIN = new Date('2026-05-27T13:00:00.000Z');
+const INVITE_EMAIL = 'bob@example.test';
 
 function store(): InMemoryConsoleAccountAdminStore {
   return new InMemoryConsoleAccountAdminStore([{
@@ -86,6 +92,8 @@ function mutationFixture(
     accountAdminStore: principals,
     accountAllowlistStore,
     sessionStore,
+    authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
+    accountInviteIssuer: accountInviteIssuer(),
     oauthGrantRevocationService: oauthGrantRevocationService(),
     enableAccountAllowlistRoutes: true,
     accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
@@ -97,6 +105,41 @@ function mutationFixture(
     now: () => NOW,
   });
   return { accountAdminStore: principals, sessionStore, invalidationStore, adminAuditWriter, module };
+}
+
+function authStorageFixture(overrides: {
+  readonly completed?: boolean;
+  readonly adminSub?: string;
+  readonly completedAt?: number;
+} = {}): IAuthStorageLayer {
+  return {
+    getBootstrapState() {
+      return Promise.resolve({
+        completed: overrides.completed ?? true,
+        adminSub: overrides.adminSub,
+        adminMethod: 'local-password',
+        completedAt: overrides.completedAt ?? ((overrides.completed ?? true) ? NOW.getTime() : undefined),
+      });
+    },
+  } as IAuthStorageLayer;
+}
+
+function accountInviteIssuer(overrides: Partial<{
+  readonly userId: string;
+  readonly primarySub: string;
+  readonly inviteUrl: string;
+}> = {}): IConsoleAccountInviteIssuer {
+  return {
+    async issueInvite(input) {
+      await Promise.resolve();
+      return {
+        inviteUrl: overrides.inviteUrl ?? `https://console.example.test/invite/${input.username}`,
+        expiresAt: new Date(input.issuedAt.getTime() + input.ttlMinutes * 60_000),
+        userId: overrides.userId ?? SECOND_USER_ID,
+        primarySub: overrides.primarySub ?? `local_${input.username}`,
+      };
+    },
+  };
 }
 
 function oauthGrantRevocationService(overrides: {
@@ -209,6 +252,18 @@ describe('AccountAdminModule', () => {
         privacyClass: ACCOUNT_METADATA_PRIVACY,
         idempotency: IDEMPOTENCY_NOT_APPLICABLE,
         auditOperation: 'accounts.users.show',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'POST',
+        path: ACCOUNT_INVITE_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: ADMIN_5M_ELEVATION,
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_REQUIRED,
+        auditOperation: AUDIT_USERS_INVITE,
       },
       {
         moduleId: 'accountAdmin',
@@ -357,6 +412,18 @@ describe('AccountAdminModule', () => {
       {
         moduleId: 'accountAdmin',
         method: 'GET',
+        path: ACCOUNT_BOOTSTRAP_PATH,
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: 'admin_30m',
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_NOT_APPLICABLE,
+        auditOperation: 'accounts.bootstrap.show',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'GET',
         path: '/api/v1/admin/accounts/correlations/:account_correlation_id',
         audience: 'admin',
         requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
@@ -425,6 +492,367 @@ describe('AccountAdminModule', () => {
     await expect(getUser.handler(consoleRequest({
       params: { user_id: UNKNOWN_USER_ID },
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
+  });
+
+  it('issues account invites after bootstrap with transaction audit and privacy projection', async () => {
+    const { module, adminAuditWriter } = mutationFixture();
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    const result = await invite.handler(consoleRequest({
+      body: {
+        username: 'bob_2',
+        email: INVITE_EMAIL,
+        ttl_minutes: 15,
+        roles: ['operator'],
+      },
+    }));
+
+    expect(result).toEqual({
+      status: 201,
+      body: {
+        invite_url: 'https://console.example.test/invite/bob_2',
+        expires_at: new Date(NOW.getTime() + 900_000).toISOString(),
+        user_id: SECOND_USER_ID,
+        primary_sub: 'local_bob_2',
+      },
+    });
+    expect(invite.privacyProjector?.({
+      ...(result.body as Record<string, unknown>),
+      raw_invite_token: 'secret',
+      credential_material: { leaked: true },
+    })).toEqual(result.body);
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      targetUserId: SECOND_USER_ID,
+      resourceKind: 'account_principal',
+      resourceId: SECOND_USER_ID,
+      argsRedacted: { operation: 'invite', roles: ['operator'], ttlMinutes: 15 },
+      result: 'approved',
+    })]);
+  });
+
+  it('currently permits security-admin invite roles until role-tier separation lands', async () => {
+    const { module, adminAuditWriter } = mutationFixture();
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(invite.handler(consoleRequest({
+      body: {
+        username: 'security_admin_invitee',
+        email: 'security-admin@example.test',
+        roles: ['security_admin'],
+      },
+    }))).resolves.toMatchObject({
+      status: 201,
+      body: {
+        user_id: SECOND_USER_ID,
+        primary_sub: 'local_security_admin_invitee',
+      },
+    });
+
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'approved',
+      argsRedacted: { operation: 'invite', roles: ['security_admin'], ttlMinutes: 15 },
+    })]);
+  });
+
+  it('audits invite issuer failures with dependency context', async () => {
+    const accountAdminStore = store();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
+      accountInviteIssuer: {
+        async issueInvite() {
+          await Promise.resolve();
+          throw new Error('issuer unavailable');
+        },
+      },
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(invite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'failed',
+      errorCode: 'issuer_error',
+      argsRedacted: { operation: 'invite', dependency: 'account_invite_issuer' },
+    })]);
+  });
+
+  it('fails account invites closed before bootstrap and when the issuer dependency is missing', async () => {
+    const accountAdminStore = store();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const sessionStore = new InMemoryConsoleSessionStore();
+    const firstAuditWriter = new InMemoryAdminAuditWriter();
+    const firstModule = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore,
+      authStorage: authStorageFixture({ completed: false }),
+      accountInviteIssuer: accountInviteIssuer(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: firstAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const firstInvite = findRoute(firstModule.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(firstInvite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 412,
+      body: { code: 'no_admin_yet' },
+    });
+    expect(firstAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'rejected',
+      errorCode: 'no_admin_yet',
+      argsRedacted: { operation: 'invite' },
+    })]);
+
+    const secondAuditWriter = new InMemoryAdminAuditWriter();
+    const secondModule = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore,
+      authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
+      accountInviteIssuer: null,
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: secondAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const secondInvite = findRoute(secondModule.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(secondInvite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    expect(secondAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'failed',
+      errorCode: 'service_unavailable',
+      argsRedacted: { operation: 'invite', dependency: 'account_invite_issuer' },
+    })]);
+
+    const thirdAuditWriter = new InMemoryAdminAuditWriter();
+    const thirdModule = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore,
+      authStorage: null,
+      accountInviteIssuer: accountInviteIssuer(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: thirdAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const thirdInvite = findRoute(thirdModule.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(thirdInvite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL },
+    }))).resolves.toMatchObject({
+      status: 503,
+      body: { code: 'service_unavailable' },
+    });
+    expect(thirdAuditWriter.getEvents()).toEqual([expect.objectContaining({
+      operation: AUDIT_USERS_INVITE,
+      result: 'failed',
+      errorCode: 'service_unavailable',
+      argsRedacted: { operation: 'invite', dependency: 'auth_storage' },
+    })]);
+  });
+
+  it('rejects malformed account invite requests before issuing an invite', async () => {
+    let issueCalls = 0;
+    const accountAdminStore = store();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      authStorage: authStorageFixture({ adminSub: PRIMARY_SUB }),
+      accountInviteIssuer: {
+        async issueInvite(input) {
+          issueCalls += 1;
+          return accountInviteIssuer().issueInvite(input);
+        },
+      },
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const invite = findRoute(module.routes, ACCOUNT_INVITE_PATH, 'POST');
+
+    await expect(invite.handler(consoleRequest({
+      body: { username: 'bob', email: 'not-an-email' },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(invite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL, ttl_minutes: 0 },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+    await expect(invite.handler(consoleRequest({
+      body: { username: 'bob', email: INVITE_EMAIL, roles: ['definitely_not_a_role'] },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
+
+    expect(issueCalls).toBe(0);
+    expect(adminAuditWriter.getEvents()).toHaveLength(3);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_INVITE,
+        result: 'rejected',
+        errorCode: 'invalid_request',
+        argsRedacted: { operation: 'invite', invalid_body: true },
+      }),
+    ]);
+  });
+
+  it('returns bootstrap status without exposing bootstrap subject material', async () => {
+    const { module } = mutationFixture();
+    const bootstrap = findRoute(module.routes, ACCOUNT_BOOTSTRAP_PATH, 'GET');
+
+    const result = await bootstrap.handler(consoleRequest());
+
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        completed: true,
+        completed_at: NOW.toISOString(),
+        admin_user_id: USER_ID,
+      },
+    });
+    expect(bootstrap.privacyProjector?.({
+      ...(result.body as Record<string, unknown>),
+      admin_auth_sub: PRIMARY_SUB,
+      bootstrap_secret: 'secret',
+    })).toEqual(result.body);
+
+    const incompleteModule = createAccountAdminModule({
+      accountAdminStore: store(),
+      accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+      sessionStore: new InMemoryConsoleSessionStore(),
+      authStorage: authStorageFixture({ completed: false }),
+      accountInviteIssuer: accountInviteIssuer(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore: store(),
+        accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: new InMemoryAdminAuditWriter(),
+      }),
+      now: () => NOW,
+    });
+    await expect(findRoute(incompleteModule.routes, ACCOUNT_BOOTSTRAP_PATH, 'GET').handler(consoleRequest()))
+      .resolves.toEqual({
+        status: 200,
+        body: {
+          completed: false,
+          completed_at: null,
+          admin_user_id: null,
+        },
+      });
+
+    const missingPrincipalModule = createAccountAdminModule({
+      accountAdminStore: store(),
+      accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+      sessionStore: new InMemoryConsoleSessionStore(),
+      authStorage: authStorageFixture({ adminSub: 'github_missing' }),
+      accountInviteIssuer: accountInviteIssuer(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore: store(),
+        accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: new InMemoryAdminAuditWriter(),
+      }),
+      now: () => NOW,
+    });
+    await expect(findRoute(missingPrincipalModule.routes, ACCOUNT_BOOTSTRAP_PATH, 'GET').handler(consoleRequest()))
+      .resolves.toEqual({
+        status: 200,
+        body: {
+          completed: true,
+          completed_at: NOW.toISOString(),
+          admin_user_id: null,
+        },
+      });
+
+    const unavailableModule = createAccountAdminModule({
+      accountAdminStore: store(),
+      accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+      sessionStore: new InMemoryConsoleSessionStore(),
+      authStorage: null,
+      accountInviteIssuer: accountInviteIssuer(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore: store(),
+        accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+        securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+        adminAuditWriter: new InMemoryAdminAuditWriter(),
+      }),
+      now: () => NOW,
+    });
+    await expect(findRoute(unavailableModule.routes, ACCOUNT_BOOTSTRAP_PATH, 'GET').handler(consoleRequest()))
+      .resolves.toMatchObject({
+        status: 503,
+        body: { code: 'service_unavailable' },
+      });
   });
 
   it('manages account allowlist entries with mutation audit and privacy projection', async () => {

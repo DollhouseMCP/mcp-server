@@ -8,10 +8,18 @@ import type {
   AccountAllowlistEntryDto,
   AccountAllowlistListDto,
 } from './AccountAdminAllowlistDtos.js';
+import type {
+  AccountBootstrapStatusDto,
+  AccountInviteDto,
+} from './AccountAdminOnboardingDtos.js';
 import {
   serializeAccountAllowlistEntry,
   serializeAccountAllowlistList,
 } from './AccountAdminAllowlistDtos.js';
+import {
+  serializeAccountBootstrapStatus,
+  serializeAccountInvite,
+} from './AccountAdminOnboardingDtos.js';
 import {
   serializeAccountPrincipalLifecycle,
   serializeAccountPrincipal,
@@ -40,6 +48,25 @@ export function projectAccountAllowlistEntry(value: unknown): AccountAllowlistEn
 export function projectAccountAllowlistList(value: unknown): AccountAllowlistListDto {
   const list = value as AccountAllowlistListDto;
   return serializeAccountAllowlistList(list.entries.map(item => fromAllowlistDto(item)));
+}
+
+export function projectAccountInvite(value: unknown): AccountInviteDto {
+  const invite = value as AccountInviteDto;
+  return serializeAccountInvite({
+    inviteUrl: invite.invite_url,
+    expiresAt: new Date(invite.expires_at),
+    userId: invite.user_id,
+    primarySub: invite.primary_sub,
+  });
+}
+
+export function projectAccountBootstrapStatus(value: unknown): AccountBootstrapStatusDto {
+  const status = value as AccountBootstrapStatusDto;
+  return serializeAccountBootstrapStatus({
+    completed: status.completed === true,
+    completedAt: status.completed_at ? new Date(status.completed_at) : null,
+    adminUserId: status.admin_user_id ?? null,
+  });
 }
 
 export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincipalLifecycleDto {

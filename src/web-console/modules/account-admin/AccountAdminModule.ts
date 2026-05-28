@@ -3,13 +3,19 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import type { IAuthStorageLayer } from '../../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IConsoleAccountAllowlistStore } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
+import { AccountAdminBootstrapService } from './AccountAdminBootstrapService.js';
 import { AccountAdminCredentialRevocationService } from './AccountAdminCredentialRevocationService.js';
+import {
+  AccountAdminInviteService,
+  type IConsoleAccountInviteIssuer,
+} from './AccountAdminInviteService.js';
 import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
@@ -17,6 +23,8 @@ import {
   projectAccountPrincipal,
   projectAccountAllowlistEntry,
   projectAccountAllowlistList,
+  projectAccountBootstrapStatus,
+  projectAccountInvite,
   projectAccountPrincipalLifecycle,
   projectAccountPrincipalList,
   projectAccountRoleList,
@@ -25,6 +33,7 @@ import {
 const ACCOUNT_ADMIN_AUDIT = {
   usersList: 'accounts.users.list',
   usersShow: 'accounts.users.show',
+  usersInvite: 'accounts.users.invite',
   usersDisable: 'accounts.users.disable',
   usersEnable: 'accounts.users.enable',
   usersCredentialsRevokeAll: 'accounts.users.credentials.revoke_all',
@@ -38,6 +47,7 @@ const ACCOUNT_ADMIN_AUDIT = {
   allowlistAdd: 'accounts.allowlist.add',
   allowlistUpdate: 'accounts.allowlist.update',
   allowlistRemove: 'accounts.allowlist.remove',
+  bootstrapShow: 'accounts.bootstrap.show',
 } as const;
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const USER_ID_PARAM = 'user_id';
@@ -47,6 +57,8 @@ export interface AccountAdminModuleOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly sessionStore: IConsoleSessionStore;
+  readonly authStorage?: IAuthStorageLayer | null;
+  readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly enableAccountAllowlistRoutes?: boolean;
@@ -78,6 +90,16 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     allowlistStore: options.accountAllowlistStore,
     transactionRunner,
     now: options.now,
+  });
+  const inviteService = new AccountAdminInviteService({
+    authStorage: options.authStorage ?? null,
+    inviteIssuer: options.accountInviteIssuer ?? null,
+    transactionRunner,
+    now: options.now,
+  });
+  const bootstrapService = new AccountAdminBootstrapService({
+    authStorage: options.authStorage ?? null,
+    accountAdminStore,
   });
   const disableUserRoute: ConsoleModuleDescriptor['routes'][number] = {
     method: 'POST',
@@ -157,6 +179,19 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     privacyProjector: projectAccountPrincipalLifecycle,
     handler: req => revokeAllCredentials(req, credentialRevocationService, revokeAllCredentialsRoute),
   };
+  const inviteRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/invite',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.usersInvite,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountInvite,
+    handler: req => inviteService.invite(req, inviteRoute),
+  };
   const addAllowlistRoute: ConsoleModuleDescriptor['routes'][number] = {
     method: 'POST',
     path: '/api/v1/admin/accounts/allowlist',
@@ -221,6 +256,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
       privacyProjector: projectAccountPrincipal,
       handler: req => getUser(req, service),
     },
+    inviteRoute,
     disableUserRoute,
     enableUserRoute,
     {
@@ -268,6 +304,18 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
       updateAllowlistRoute,
       removeAllowlistRoute,
     ] satisfies ConsoleModuleDescriptor['routes'] : []),
+    {
+      method: 'GET',
+      path: '/api/v1/admin/accounts/bootstrap',
+      audience: 'admin',
+      requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'account_metadata',
+      idempotency: 'not_applicable',
+      auditOperation: ACCOUNT_ADMIN_AUDIT.bootstrapShow,
+      privacyProjector: projectAccountBootstrapStatus,
+      handler: () => bootstrapService.getStatus(),
+    },
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/correlations/:account_correlation_id',

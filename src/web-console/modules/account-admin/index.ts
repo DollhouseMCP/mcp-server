@@ -1,5 +1,10 @@
 export { createAccountAdminModule } from './AccountAdminModule.js';
 export type { AccountAdminModuleOptions } from './AccountAdminModule.js';
+export type {
+  ConsoleAccountInviteIssueInput,
+  ConsoleAccountInviteIssueResult,
+  IConsoleAccountInviteIssuer,
+} from './AccountAdminInviteService.js';
 export {
   InMemoryAccountAdminMutationTransactionRunner,
   PostgresAccountAdminMutationTransactionRunner,
