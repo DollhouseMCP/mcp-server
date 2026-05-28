@@ -77,6 +77,10 @@ export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincip
       browser_sessions_revoked: numberField(lifecycle.revocation_summary, 'browser_sessions_revoked'),
       mcp_oauth_grants_revoked: numberField(lifecycle.revocation_summary, 'mcp_oauth_grants_revoked'),
       mcp_sessions_terminated: numberField(lifecycle.revocation_summary, 'mcp_sessions_terminated'),
+      mcp_sessions_termination_requested: optionalNumberField(lifecycle.revocation_summary, 'mcp_sessions_termination_requested'),
+      mcp_sessions_termination_acknowledged: optionalNumberField(lifecycle.revocation_summary, 'mcp_sessions_termination_acknowledged'),
+      mcp_sessions_termination_failed: optionalNumberField(lifecycle.revocation_summary, 'mcp_sessions_termination_failed'),
+      mcp_sessions_termination_timed_out: optionalNumberField(lifecycle.revocation_summary, 'mcp_sessions_termination_timed_out'),
       authz_version_bumped: lifecycle.revocation_summary.authz_version_bumped === true,
       new_authz_version: optionalNumberField(lifecycle.revocation_summary, 'new_authz_version'),
     }

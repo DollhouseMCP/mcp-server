@@ -76,6 +76,7 @@ export interface WebConsoleRegistrarOptions {
   readonly authStorage?: IAuthStorageLayer | null;
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
+  readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
 }
 
 export interface WebConsoleComposition {
@@ -128,6 +129,8 @@ export class WebConsoleRegistrar {
       authStorage,
       accountInviteIssuer,
       oauthGrantRevocationService,
+      runtimeSessionControlStore: stores.runtimeSessionControlStore,
+      runtimeTerminationAcknowledgementTimeoutMs: this.options.runtimeTerminationAcknowledgementTimeoutMs,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,

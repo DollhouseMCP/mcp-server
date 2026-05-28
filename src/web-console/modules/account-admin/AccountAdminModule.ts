@@ -5,6 +5,7 @@ import type {
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IAuthStorageLayer } from '../../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
+import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { IConsoleAccountAllowlistStore } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
@@ -19,6 +20,7 @@ import {
 import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
 import { AccountAdminReadService } from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
+import { AccountAdminRuntimeTerminationService } from './AccountAdminRuntimeTerminationService.js';
 import {
   projectAccountPrincipal,
   projectAccountAllowlistEntry,
@@ -60,6 +62,8 @@ export interface AccountAdminModuleOptions {
   readonly authStorage?: IAuthStorageLayer | null;
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
+  readonly runtimeSessionControlStore?: IRuntimeSessionControlStore | null;
+  readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly now?: () => Date;
@@ -69,6 +73,13 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
   const { accountAdminStore } = options;
   const service = new AccountAdminReadService(accountAdminStore);
   const transactionRunner = options.accountAdminMutationTransactionRunner;
+  const runtimeTerminationService = options.runtimeSessionControlStore
+    ? new AccountAdminRuntimeTerminationService({
+      runtimeStore: options.runtimeSessionControlStore,
+      acknowledgementTimeoutMs: options.runtimeTerminationAcknowledgementTimeoutMs,
+      now: options.now,
+    })
+    : null;
   const roleMutationService = new AccountAdminRoleMutationService({
     accountAdminStore,
     transactionRunner,
@@ -77,6 +88,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
   const lifecycleMutationService = new AccountAdminLifecycleMutationService({
     accountAdminStore,
     transactionRunner,
+    runtimeTerminationService,
     now: options.now,
   });
   const credentialRevocationService = new AccountAdminCredentialRevocationService({
@@ -84,6 +96,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     sessionStore: options.sessionStore,
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
+    runtimeTerminationService,
     now: options.now,
   });
   const allowlistService = new AccountAdminAllowlistService({

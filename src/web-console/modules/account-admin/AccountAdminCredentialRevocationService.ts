@@ -10,12 +10,19 @@ import type {
 } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountPrincipalLifecycle } from './AccountAdminDtos.js';
+import type { AccountAdminRuntimeTerminationService } from './AccountAdminRuntimeTerminationService.js';
+import {
+  emptyRuntimeTerminationSummary,
+  runtimeTerminationErrorCode,
+  type AccountRuntimeTerminationSummary,
+} from './AccountAdminRuntimeTerminationService.js';
 
 export interface AccountAdminCredentialRevocationServiceOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly sessionStore: IConsoleSessionStore;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
   readonly now?: () => Date;
 }
 
@@ -84,13 +91,6 @@ export class AccountAdminCredentialRevocationService {
         userId,
         revokedAt: occurredAt,
       });
-      const revocationSummary = {
-        browser_sessions_revoked: browserSessionsRevoked,
-        mcp_oauth_grants_revoked: oauthSummary.oauthGrantFamiliesRevoked,
-        mcp_sessions_terminated: 0,
-        authz_version_bumped: true,
-        new_authz_version: changed.authzVersion,
-      };
       await this.writeAttemptAudit(req, route, 'approved', null, userId, {
         operation: 'credentials_revoke_all',
         phase: 'post_commit_revocation',
@@ -100,8 +100,38 @@ export class AccountAdminCredentialRevocationService {
         oauthGrantFamiliesDiscovered: oauthSummary.oauthGrantFamiliesDiscovered,
         oauthGrantFamiliesRevoked: oauthSummary.oauthGrantFamiliesRevoked,
       });
+      const runtimeSummary = await this.terminateRuntimeSessions(req, route, userId, actor.userId);
+      const revocationSummary = {
+        browser_sessions_revoked: browserSessionsRevoked,
+        mcp_oauth_grants_revoked: oauthSummary.oauthGrantFamiliesRevoked,
+        mcp_sessions_terminated: runtimeSummary.terminated + runtimeSummary.alreadyAbsent,
+        mcp_sessions_termination_requested: runtimeSummary.requested,
+        mcp_sessions_termination_acknowledged: runtimeSummary.acknowledged,
+        mcp_sessions_termination_failed: runtimeSummary.failed,
+        mcp_sessions_termination_timed_out: runtimeSummary.timedOut,
+        authz_version_bumped: true,
+        new_authz_version: changed.authzVersion,
+      };
+      const runtimeFailed = runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0;
+      await this.writeAttemptAudit(
+        req,
+        route,
+        runtimeFailed ? 'failed' : 'approved',
+        runtimeTerminationErrorCode(runtimeSummary),
+        userId,
+        {
+          operation: 'credentials_revoke_all',
+          phase: 'post_commit_runtime_termination',
+        },
+        {
+          runtimeSessionsRequested: runtimeSummary.requested,
+          runtimeSessionsAcknowledged: runtimeSummary.acknowledged,
+          runtimeSessionsTimedOut: runtimeSummary.timedOut,
+          runtimeSessionsFailed: runtimeSummary.failed,
+        },
+      );
       return {
-        status: 200,
+        status: runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0 ? 503 : 200,
         body: serializeAccountPrincipalLifecycle(changed, revocationSummary),
       };
     } catch {
@@ -136,6 +166,31 @@ export class AccountAdminCredentialRevocationService {
 
   private now(): Date {
     return this.options.now?.() ?? new Date();
+  }
+
+  private async terminateRuntimeSessions(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+    actorUserId: string,
+  ): Promise<AccountRuntimeTerminationSummary> {
+    if (!this.options.runtimeTerminationService) return emptyRuntimeTerminationSummary();
+    try {
+      return await this.options.runtimeTerminationService.terminatePrincipalSessions({
+        userId,
+        requestedByUserId: actorUserId,
+        reason: 'credential_revoked',
+      });
+    } catch {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation: 'credentials_revoke_all',
+        phase: 'post_commit_runtime_termination',
+      });
+      return {
+        ...emptyRuntimeTerminationSummary(),
+        failed: 1,
+      };
+    }
   }
 }
 

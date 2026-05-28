@@ -33,6 +33,10 @@ export interface AccountPrincipalLifecycleDto {
     readonly browser_sessions_revoked: number;
     readonly mcp_oauth_grants_revoked: number;
     readonly mcp_sessions_terminated: number;
+    readonly mcp_sessions_termination_requested?: number;
+    readonly mcp_sessions_termination_acknowledged?: number;
+    readonly mcp_sessions_termination_failed?: number;
+    readonly mcp_sessions_termination_timed_out?: number;
     readonly authz_version_bumped: boolean;
     readonly new_authz_version?: number;
   };

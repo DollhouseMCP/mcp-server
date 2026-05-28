@@ -18,6 +18,14 @@ export type {
 } from './AccountAdminMutationTransaction.js';
 export {
   type AccountPrincipalDto,
+  type AccountPrincipalLifecycleDto,
   type AccountPrincipalListDto,
   type AccountRoleListDto,
 } from './AccountAdminDtos.js';
+export {
+  AccountAdminRuntimeTerminationService,
+  emptyRuntimeTerminationSummary,
+  runtimeTerminationErrorCode,
+  type AccountAdminRuntimeTerminationServiceOptions,
+  type AccountRuntimeTerminationSummary,
+} from './AccountAdminRuntimeTerminationService.js';

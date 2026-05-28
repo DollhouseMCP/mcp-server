@@ -8,10 +8,17 @@ import type {
 } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountPrincipalLifecycle } from './AccountAdminDtos.js';
+import type { AccountAdminRuntimeTerminationService } from './AccountAdminRuntimeTerminationService.js';
+import {
+  emptyRuntimeTerminationSummary,
+  runtimeTerminationErrorCode,
+  type AccountRuntimeTerminationSummary,
+} from './AccountAdminRuntimeTerminationService.js';
 
 export interface AccountAdminLifecycleMutationServiceOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
   readonly now?: () => Date;
 }
 
@@ -43,10 +50,13 @@ export class AccountAdminLifecycleMutationService {
         disabledAuthzVersion = change.authzVersion;
         await tx.appendSecurityInvalidationEvent({
           kind: 'principal_disabled',
-          urgency: 'eventual',
+          urgency: 'acknowledged',
           userId,
           authzVersion: change.authzVersion,
           reason: 'account_admin_principal_disabled',
+          payload: {
+            terminatedRuntimeSessions: this.options.runtimeTerminationService ? true : false,
+          },
           createdAt: occurredAt,
           createdByUserId: actor.userId,
         });
@@ -71,11 +81,19 @@ export class AccountAdminLifecycleMutationService {
       throw error;
     }
 
+    const disabled = withLifecycleState(before, occurredAt, disabledAuthzVersion);
+    const runtimeSummary = await this.terminateRuntimeSessions(req, route, userId, actor.userId, 'disable');
+    if (runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0) {
+      return {
+        status: 503,
+        body: serializeAccountPrincipalLifecycle(disabled, runtimeRevocationSummary(runtimeSummary, disabledAuthzVersion)),
+      };
+    }
     return {
       status: 200,
-      body: serializeAccountPrincipalLifecycle(
-        withLifecycleState(before, occurredAt, disabledAuthzVersion),
-      ),
+      body: serializeAccountPrincipalLifecycle(disabled, runtimeSummary.requested > 0
+        ? runtimeRevocationSummary(runtimeSummary, disabledAuthzVersion)
+        : undefined),
     };
   }
 
@@ -187,6 +205,44 @@ export class AccountAdminLifecycleMutationService {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+
+  private async terminateRuntimeSessions(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+    actorUserId: string,
+    operation: string,
+  ): Promise<AccountRuntimeTerminationSummary> {
+    if (!this.options.runtimeTerminationService) return emptyRuntimeTerminationSummary();
+    try {
+      const summary = await this.options.runtimeTerminationService.terminatePrincipalSessions({
+        userId,
+        requestedByUserId: actorUserId,
+        reason: 'admin_disabled',
+      });
+      await this.writeAttemptAudit(
+        req,
+        route,
+        summary.timedOut > 0 || summary.failed > 0 ? 'failed' : 'approved',
+        runtimeTerminationErrorCode(summary),
+        userId,
+        {
+          operation,
+          phase: 'post_commit_runtime_termination',
+        },
+      );
+      return summary;
+    } catch {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation,
+        phase: 'post_commit_runtime_termination',
+      });
+      return {
+        ...emptyRuntimeTerminationSummary(),
+        failed: 1,
+      };
+    }
+  }
 }
 
 interface LifecycleAuditEventInput {
@@ -220,6 +276,20 @@ function withLifecycleState(
     ...principal,
     disabledAt: disabledAt ? new Date(disabledAt.getTime()) : null,
     authzVersion,
+  };
+}
+
+function runtimeRevocationSummary(summary: AccountRuntimeTerminationSummary, authzVersion: number) {
+  return {
+    browser_sessions_revoked: 0,
+    mcp_oauth_grants_revoked: 0,
+    mcp_sessions_terminated: summary.terminated + summary.alreadyAbsent,
+    mcp_sessions_termination_requested: summary.requested,
+    mcp_sessions_termination_acknowledged: summary.acknowledged,
+    mcp_sessions_termination_failed: summary.failed,
+    mcp_sessions_termination_timed_out: summary.timedOut,
+    authz_version_bumped: true,
+    new_authz_version: authzVersion,
   };
 }
 

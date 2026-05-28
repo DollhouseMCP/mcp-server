@@ -9,6 +9,7 @@ import {
   InMemoryConsoleAccountAdminStore,
   InMemoryConsoleSessionStore,
   InMemoryConsoleSecurityInvalidationStore,
+  InMemoryRuntimeSessionControlStore,
   createAccountAdminModule,
   type ConsoleRouteDefinition,
   type ConsoleRequest,
@@ -21,6 +22,7 @@ const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
 const UNKNOWN_USER_ID = '11df9917-b534-4014-a03f-e2eb1f0c6fef';
 const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
+const SECOND_ACCOUNT_CORRELATION_ID = '0344c33e-8776-46fc-9547-e5282ce167fa';
 const PRIMARY_SUB = 'github_user-7';
 const ACCOUNT_ADMIN_ROLE = 'account_admin';
 const ACCOUNT_DISABLE_PATH = '/api/v1/admin/accounts/users/:user_id/disable';
@@ -47,6 +49,8 @@ const AUDIT_ROLES_GRANT = 'accounts.roles.grant';
 const NOW = new Date('2026-05-27T14:00:00.000Z');
 const LAST_LOGIN = new Date('2026-05-27T13:00:00.000Z');
 const INVITE_EMAIL = 'bob@example.test';
+const RUNTIME_SESSION_ID = 'mcp-session-incident';
+const RUNTIME_REPLICA_ID = 'replica-a';
 
 function store(): InMemoryConsoleAccountAdminStore {
   return new InMemoryConsoleAccountAdminStore([{
@@ -162,6 +166,61 @@ function oauthGrantRevocationService(overrides: {
       };
     },
   };
+}
+
+class AutoAckRuntimeSessionControlStore extends InMemoryRuntimeSessionControlStore {
+  override async createTerminationCommand(
+    input: Parameters<InMemoryRuntimeSessionControlStore['createTerminationCommand']>[0],
+  ): ReturnType<InMemoryRuntimeSessionControlStore['createTerminationCommand']> {
+    const command = await super.createTerminationCommand(input);
+    await this.acknowledgeCommand({
+      commandId: command.commandId,
+      replicaId: command.targetReplicaId,
+      acknowledgedAt: NOW,
+      result: 'terminated',
+    });
+    return command;
+  }
+}
+
+class FailedAckRuntimeSessionControlStore extends InMemoryRuntimeSessionControlStore {
+  override async createTerminationCommand(
+    input: Parameters<InMemoryRuntimeSessionControlStore['createTerminationCommand']>[0],
+  ): ReturnType<InMemoryRuntimeSessionControlStore['createTerminationCommand']> {
+    const command = await super.createTerminationCommand(input);
+    await this.acknowledgeCommand({
+      commandId: command.commandId,
+      replicaId: command.targetReplicaId,
+      acknowledgedAt: NOW,
+      result: 'failed',
+      errorCode: 'local_termination_failed',
+    });
+    return command;
+  }
+}
+
+class ThrowingRuntimeSessionControlStore extends InMemoryRuntimeSessionControlStore {
+  override async listPresenceByUser(): ReturnType<InMemoryRuntimeSessionControlStore['listPresenceByUser']> {
+    await Promise.resolve();
+    throw new Error('runtime store unavailable');
+  }
+}
+
+async function registerRuntimePresence(
+  runtimeStore: InMemoryRuntimeSessionControlStore,
+  userId = USER_ID,
+  sessionId = RUNTIME_SESSION_ID,
+): Promise<void> {
+  await runtimeStore.registerPresence({
+    sessionId,
+    userId,
+    accountCorrelationId: userId === USER_ID ? ACCOUNT_CORRELATION_ID : SECOND_ACCOUNT_CORRELATION_ID,
+    replicaId: RUNTIME_REPLICA_ID,
+    transport: 'streamable-http',
+    startedAt: NOW,
+    lastActiveAt: NOW,
+    leaseUntil: new Date(NOW.getTime() + 300_000),
+  });
 }
 
 function findRoute(
@@ -1060,7 +1119,7 @@ describe('AccountAdminModule', () => {
         userId: SECOND_USER_ID,
         username: 'bob',
         roles: ['admin', 'security_admin'],
-        accountCorrelationId: '0344c33e-8776-46fc-9547-e5282ce167fa',
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
       }),
     ]);
     const { module } = mutationFixture(accountAdminStore);
@@ -1157,7 +1216,7 @@ describe('AccountAdminModule', () => {
         userId: SECOND_USER_ID,
         username: 'bob',
         roles: [ACCOUNT_ADMIN_ROLE],
-        accountCorrelationId: '0344c33e-8776-46fc-9547-e5282ce167fa',
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
       }),
     ]);
     const { module, invalidationStore, adminAuditWriter } = mutationFixture(accountAdminStore);
@@ -1194,7 +1253,8 @@ describe('AccountAdminModule', () => {
       kind: 'principal_disabled',
       userId: USER_ID,
       authzVersion: 4,
-      payload: {},
+      urgency: 'acknowledged',
+      payload: { terminatedRuntimeSessions: false },
     }]);
     expect(adminAuditWriter.getEvents()).toEqual([expect.objectContaining({
       operation: AUDIT_USERS_DISABLE,
@@ -1206,6 +1266,122 @@ describe('AccountAdminModule', () => {
         newAuthzVersion: 4,
       }),
     })]);
+  });
+
+  it('terminates active runtime sessions when disabling a principal', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([
+      await principalFixture({ roles: ['operator'] }),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        username: 'bob',
+        roles: [ACCOUNT_ADMIN_ROLE],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const runtimeStore = new AutoAckRuntimeSessionControlStore();
+    await registerRuntimePresence(runtimeStore);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      runtimeSessionControlStore: runtimeStore,
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const disable = findRoute(module.routes, ACCOUNT_DISABLE_PATH);
+
+    await expect(disable.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 200,
+      body: {
+        revocation_summary: {
+          mcp_sessions_terminated: 1,
+          mcp_sessions_termination_requested: 1,
+          mcp_sessions_termination_acknowledged: 1,
+          mcp_sessions_termination_timed_out: 0,
+          new_authz_version: 4,
+        },
+      },
+    });
+    await expect(runtimeStore.listPendingCommandsForReplica(RUNTIME_REPLICA_ID)).resolves.toEqual([]);
+    await expect(invalidationStore.listEventsAfter(0)).resolves.toMatchObject([{
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      payload: { terminatedRuntimeSessions: true },
+    }]);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({
+        operation: AUDIT_USERS_DISABLE,
+        result: 'approved',
+        argsRedacted: { operation: 'disable' },
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_DISABLE,
+        result: 'approved',
+        argsRedacted: { operation: 'disable', phase: 'post_commit_runtime_termination' },
+      }),
+    ]);
+  });
+
+  it('reports service unavailable when disable runtime termination acknowledgement times out', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([
+      await principalFixture({ roles: ['operator'] }),
+      await principalFixture({
+        userId: SECOND_USER_ID,
+        username: 'bob',
+        roles: [ACCOUNT_ADMIN_ROLE],
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
+      }),
+    ]);
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await registerRuntimePresence(runtimeStore);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      runtimeSessionControlStore: runtimeStore,
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const disable = findRoute(module.routes, ACCOUNT_DISABLE_PATH);
+
+    await expect(disable.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: {
+        revocation_summary: {
+          mcp_sessions_termination_requested: 1,
+          mcp_sessions_termination_acknowledged: 0,
+          mcp_sessions_termination_timed_out: 1,
+        },
+      },
+    });
+    expect(adminAuditWriter.getEvents()[1]).toMatchObject({
+      operation: AUDIT_USERS_DISABLE,
+      result: 'failed',
+      errorCode: 'runtime_termination_ack_timeout',
+      argsRedacted: { operation: 'disable', phase: 'post_commit_runtime_termination' },
+    });
   });
 
   it('enables a disabled principal with transaction audit and invalidation', async () => {
@@ -1310,7 +1486,7 @@ describe('AccountAdminModule', () => {
         userId: SECOND_USER_ID,
         username: 'bob',
         roles: [ACCOUNT_ADMIN_ROLE],
-        accountCorrelationId: '0344c33e-8776-46fc-9547-e5282ce167fa',
+        accountCorrelationId: SECOND_ACCOUNT_CORRELATION_ID,
       }),
     ]);
     const { module, invalidationStore, adminAuditWriter } = mutationFixture(raceStore);
@@ -1416,14 +1592,208 @@ describe('AccountAdminModule', () => {
         targetUserId: USER_ID,
         argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_revocation' },
         result: 'approved',
-        resultDetailRedacted: {
+        resultDetailRedacted: expect.objectContaining({
           browserSessionsRevoked: 1,
           oauthSubjectsProcessed: 2,
           oauthGrantFamiliesDiscovered: 3,
           oauthGrantFamiliesRevoked: 2,
-        },
+        }),
+      }),
+      expect.objectContaining({
+        operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+        targetUserId: USER_ID,
+        argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_runtime_termination' },
+        result: 'approved',
+        resultDetailRedacted: expect.objectContaining({
+          runtimeSessionsRequested: 0,
+          runtimeSessionsAcknowledged: 0,
+          runtimeSessionsTimedOut: 0,
+          runtimeSessionsFailed: 0,
+        }),
       }),
     ]);
+  });
+
+  it('revokes credentials and reports acknowledged runtime termination counts', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const sessionStore = new InMemoryConsoleSessionStore();
+    const runtimeStore = new AutoAckRuntimeSessionControlStore();
+    await registerRuntimePresence(runtimeStore);
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore,
+      oauthGrantRevocationService: oauthGrantRevocationService({ grantsRevoked: 1 }),
+      runtimeSessionControlStore: runtimeStore,
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 200,
+      body: {
+        revocation_summary: {
+          mcp_oauth_grants_revoked: 1,
+          mcp_sessions_terminated: 1,
+          mcp_sessions_termination_requested: 1,
+          mcp_sessions_termination_acknowledged: 1,
+          mcp_sessions_termination_timed_out: 0,
+          new_authz_version: 4,
+        },
+      },
+    });
+    expect(adminAuditWriter.getEvents()).toHaveLength(3);
+    expect(adminAuditWriter.getEvents()[2]).toMatchObject({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'approved',
+      argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_runtime_termination' },
+      resultDetailRedacted: expect.objectContaining({
+        runtimeSessionsRequested: 1,
+        runtimeSessionsAcknowledged: 1,
+        runtimeSessionsTimedOut: 0,
+      }),
+    });
+  });
+
+  it('reports runtime termination failed acknowledgements distinctly from timeouts', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const runtimeStore = new FailedAckRuntimeSessionControlStore();
+    await registerRuntimePresence(runtimeStore);
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      runtimeSessionControlStore: runtimeStore,
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: {
+        revocation_summary: {
+          mcp_sessions_termination_requested: 1,
+          mcp_sessions_termination_acknowledged: 1,
+          mcp_sessions_termination_failed: 1,
+          mcp_sessions_termination_timed_out: 0,
+        },
+      },
+    });
+    expect(adminAuditWriter.getEvents()[2]).toMatchObject({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'failed',
+      errorCode: 'runtime_termination_failed',
+      argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_runtime_termination' },
+    });
+  });
+
+  it('reports runtime service failures through the post-commit runtime phase', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      runtimeSessionControlStore: new ThrowingRuntimeSessionControlStore(),
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: {
+        revocation_summary: {
+          mcp_sessions_termination_requested: 0,
+          mcp_sessions_termination_acknowledged: 0,
+          mcp_sessions_termination_failed: 1,
+          mcp_sessions_termination_timed_out: 0,
+        },
+      },
+    });
+    expect(adminAuditWriter.getEvents()[2]).toMatchObject({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'failed',
+      errorCode: 'service_unavailable',
+      argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_runtime_termination' },
+    });
+  });
+
+  it('reports service unavailable when runtime termination acknowledgement times out after credential invalidation', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([await principalFixture({ roles: ['operator'] })]);
+    const invalidationStore = new InMemoryConsoleSecurityInvalidationStore();
+    const adminAuditWriter = new InMemoryAdminAuditWriter();
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await registerRuntimePresence(runtimeStore);
+    const accountAllowlistStore = new InMemoryConsoleAccountAllowlistStore();
+    const module = createAccountAdminModule({
+      accountAdminStore,
+      accountAllowlistStore,
+      sessionStore: new InMemoryConsoleSessionStore(),
+      oauthGrantRevocationService: oauthGrantRevocationService(),
+      runtimeSessionControlStore: runtimeStore,
+      runtimeTerminationAcknowledgementTimeoutMs: 1,
+      enableAccountAllowlistRoutes: true,
+      accountAdminMutationTransactionRunner: new InMemoryAccountAdminMutationTransactionRunner({
+        accountAdminStore,
+        accountAllowlistStore,
+        securityInvalidationStore: invalidationStore,
+        adminAuditWriter,
+      }),
+      now: () => NOW,
+    });
+    const revokeAll = findRoute(module.routes, ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH);
+
+    await expect(revokeAll.handler(consoleRequest({ params: { user_id: USER_ID } }))).resolves.toMatchObject({
+      status: 503,
+      body: {
+        revocation_summary: {
+          mcp_sessions_termination_requested: 1,
+          mcp_sessions_termination_acknowledged: 0,
+          mcp_sessions_termination_timed_out: 1,
+        },
+      },
+    });
+    await expect(runtimeStore.listPendingCommandsForReplica(RUNTIME_REPLICA_ID)).resolves.toHaveLength(1);
+    expect(adminAuditWriter.getEvents()[2]).toMatchObject({
+      operation: AUDIT_USERS_CREDENTIALS_REVOKE_ALL,
+      result: 'failed',
+      errorCode: 'runtime_termination_ack_timeout',
+      argsRedacted: { operation: 'credentials_revoke_all', phase: 'post_commit_runtime_termination' },
+    });
   });
 
   it('fails credential revoke-all closed when OAuth grant revocation is unavailable', async () => {
@@ -1505,7 +1875,7 @@ describe('AccountAdminModule', () => {
       kind: 'principal_credentials_revoked',
       authzVersion: 4,
     }]);
-    expect(adminAuditWriter.getEvents()).toHaveLength(2);
+    expect(adminAuditWriter.getEvents()).toHaveLength(3);
   });
 
   it('returns service_unavailable when post-commit browser-session revocation fails after invalidating credentials', async () => {
