@@ -300,3 +300,7 @@ function validateAckResult(result: RuntimeTerminationAckResult): void {
 export function isRuntimeSessionStatus(value: string): value is RuntimeSessionStatus {
   return STATUSES.some(candidate => candidate === value);
 }
+
+export function isRuntimeTerminationReason(value: string): value is RuntimeTerminationReason {
+  return TERMINATION_REASONS.some(candidate => candidate === value);
+}

@@ -30,6 +30,7 @@ import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAc
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
@@ -129,6 +130,11 @@ export class WebConsoleRegistrar {
       oauthGrantRevocationService,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
+      now: this.options.now,
+    }));
+    registry.register(createRuntimeSessionModule({
+      runtimeStore: stores.runtimeSessionControlStore,
+      accountAdminStore: stores.accountAdminStore,
       now: this.options.now,
     }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
