@@ -34,6 +34,7 @@ import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryR
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
+import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
@@ -150,6 +151,9 @@ export class WebConsoleRegistrar {
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
       now: this.options.now,
+    }));
+    registry.register(createSelfSecurityModule({
+      factorStore: stores.factorStore,
     }));
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);

@@ -567,12 +567,15 @@ describe('PostgresConsoleFactorStore', () => {
   });
 
   it('returns status-only active factor projection', async () => {
-    transaction.select = jest.fn(() => selectingChain([{
-      factorType: 'totp',
-      enrolledAt: NOW,
-      disabledAt: null,
-      lastUsedAt: FIVE_MINUTES,
-    }]));
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([{
+        factorId: '22222222-2222-4222-8222-222222222222',
+        factorType: 'totp',
+        enrolledAt: NOW,
+        disabledAt: null,
+        lastUsedAt: FIVE_MINUTES,
+      }]))
+      .mockReturnValueOnce(selectingChain([{ count: 2 }]));
     const store = new PostgresConsoleFactorStore({} as DatabaseInstance);
 
     await expect(store.getTotpStatus(USER_ID)).resolves.toEqual({
@@ -581,6 +584,7 @@ describe('PostgresConsoleFactorStore', () => {
       enrolledAt: NOW,
       disabledAt: null,
       lastUsedAt: FIVE_MINUTES,
+      backupCodesRemaining: 2,
     });
   });
 
@@ -603,6 +607,7 @@ describe('PostgresConsoleFactorStore', () => {
       enrolledAt: NOW,
       disabledAt: FIVE_MINUTES,
       lastUsedAt: FOUR_MINUTES,
+      backupCodesRemaining: 0,
     });
     expect(disabledChain.orderBy).toHaveBeenCalledWith(desc(accountFactors.disabledAt));
   });
@@ -619,6 +624,7 @@ describe('PostgresConsoleFactorStore', () => {
       enrolledAt: null,
       disabledAt: null,
       lastUsedAt: null,
+      backupCodesRemaining: 0,
     });
   });
 

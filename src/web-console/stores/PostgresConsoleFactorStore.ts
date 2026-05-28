@@ -60,6 +60,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
     assertUuid(userId, 'userId');
     const activeRows = await withSystemContext(this.db, tx =>
       tx.select({
+        factorId: accountFactors.factorId,
         factorType: accountFactors.factorType,
         enrolledAt: accountFactors.enrolledAt,
         disabledAt: accountFactors.disabledAt,
@@ -71,12 +72,14 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
       )).limit(1),
     );
     if (activeRows[0]) {
+      const backupCodesRemaining = await this.countUnusedBackupCodes(activeRows[0].factorId);
       return cloneFactorStatus({
         enrolled: true,
         factorType: 'totp',
         enrolledAt: activeRows[0].enrolledAt,
         disabledAt: null,
         lastUsedAt: activeRows[0].lastUsedAt,
+        backupCodesRemaining,
       });
     }
 
@@ -99,6 +102,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
         enrolledAt: null,
         disabledAt: null,
         lastUsedAt: null,
+        backupCodesRemaining: 0,
       });
     }
     const disabled = disabledRows[0];
@@ -108,6 +112,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
       enrolledAt: disabled.enrolledAt,
       disabledAt: disabled.disabledAt,
       lastUsedAt: disabled.lastUsedAt,
+      backupCodesRemaining: 0,
     });
   }
 
@@ -203,6 +208,18 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
       )).returning({ factorId: accountFactors.factorId }),
     );
     return rows.length === 1;
+  }
+
+  private async countUnusedBackupCodes(factorId: string): Promise<number> {
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select({
+        count: sql<number>`count(*)::int`,
+      }).from(accountFactorBackupCodes).where(and(
+        eq(accountFactorBackupCodes.factorId, factorId),
+        isNull(accountFactorBackupCodes.usedAt),
+      )).limit(1),
+    );
+    return rows[0]?.count ?? 0;
   }
 }
 

@@ -58,6 +58,7 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
         enrolledAt: active.enrolledAt,
         disabledAt: null,
         lastUsedAt: active.lastUsedAt,
+        backupCodesRemaining: this.countUnusedBackupCodes(active.factorId),
       });
     }
     const disabled = this.findLatestDisabledTotp(userId);
@@ -68,6 +69,7 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
         enrolledAt: null,
         disabledAt: null,
         lastUsedAt: null,
+        backupCodesRemaining: 0,
       });
     }
     return cloneFactorStatus({
@@ -76,6 +78,7 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
       enrolledAt: disabled.enrolledAt,
       disabledAt: disabled.disabledAt,
       lastUsedAt: disabled.lastUsedAt,
+      backupCodesRemaining: 0,
     });
   }
 
@@ -170,5 +173,9 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
       }
     }
     return latest;
+  }
+
+  private countUnusedBackupCodes(factorId: string): number {
+    return (this.backupCodes.get(factorId) ?? []).filter(code => !code.usedAt).length;
   }
 }

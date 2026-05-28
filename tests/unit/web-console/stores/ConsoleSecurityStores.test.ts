@@ -390,6 +390,7 @@ describe('InMemoryConsoleFactorStore', () => {
       enrolledAt: NOW,
       disabledAt: null,
       lastUsedAt: null,
+      backupCodesRemaining: 2,
     });
 
     const asRecord = await store.getActiveTotpFactorForAs(USER_ID);
@@ -411,6 +412,7 @@ describe('InMemoryConsoleFactorStore', () => {
       enrolledAt: NOW,
       disabledAt: FOUR_MINUTES,
       lastUsedAt: null,
+      backupCodesRemaining: 0,
     });
 
     await expect(store.createTotpFactor(totpFactor({

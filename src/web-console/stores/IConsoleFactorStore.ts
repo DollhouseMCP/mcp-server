@@ -25,6 +25,7 @@ export interface ConsoleFactorStatus {
   readonly enrolledAt: Date | null;
   readonly disabledAt: Date | null;
   readonly lastUsedAt: Date | null;
+  readonly backupCodesRemaining: number;
 }
 
 export interface IConsoleFactorStore {
@@ -75,5 +76,6 @@ export function cloneFactorStatus(status: ConsoleFactorStatus): ConsoleFactorSta
     enrolledAt: cloneDate(status.enrolledAt),
     disabledAt: cloneDate(status.disabledAt),
     lastUsedAt: cloneDate(status.lastUsedAt),
+    backupCodesRemaining: status.backupCodesRemaining,
   };
 }

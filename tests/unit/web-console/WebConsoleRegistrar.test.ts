@@ -102,6 +102,11 @@ describe('WebConsoleRegistrar', () => {
         path: '/api/v1/admin/accounts/users',
         requiredCapability: 'console:admin:accounts',
       }),
+      expect.objectContaining({
+        moduleId: 'selfSecurity',
+        path: '/api/v1/me/security/factors',
+        requiredCapability: 'console:self',
+      }),
     ]));
     expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -247,6 +252,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.routesMounted).toBe(false);
     expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
       expect.objectContaining({ moduleId: 'accountAdmin' }),
+      expect.objectContaining({ moduleId: 'selfSecurity' }),
     ]));
     expect(composition.sessionStore.constructor.name).toBe('PostgresConsoleSessionStore');
     expect(composition.loginTransactionStore.constructor.name).toBe('PostgresLoginTransactionStore');
