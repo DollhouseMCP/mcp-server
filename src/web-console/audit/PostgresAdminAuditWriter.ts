@@ -1,11 +1,10 @@
-import { createHmac } from 'node:crypto';
-
 import { sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
 import type { AuditHmacKeyMaterial } from '../../security/auditHmacKey.js';
+import { computeAdminAuditChainHmac } from './AdminAuditChain.js';
 import {
   stringifyBoundedAdminAuditJson,
   validateConsoleAdminAuditEvent,
@@ -15,6 +14,7 @@ import {
 
 export interface AdminAuditHmacKeyResolver {
   resolve(): Promise<AuditHmacKeyMaterial>;
+  resolveForKeyId?(keyId: string): Promise<AuditHmacKeyMaterial | null>;
 }
 
 interface ChainHeadRow {
@@ -68,7 +68,7 @@ export async function appendConsoleAdminAuditEventWithTx(
     throw new Error('admin audit chain head is unavailable');
   }
   const chainPrev = head.last_chain_hmac ? Buffer.from(head.last_chain_hmac) : null;
-  const chainHmac = computeChainHmac(event, keyMaterial.key, chainPrev);
+  const chainHmac = computeAdminAuditChainHmac(event, keyMaterial.key, chainPrev);
   const rows = await tx.execute(sql`
         INSERT INTO admin_audit_events (
           occurred_at,
@@ -137,33 +137,4 @@ export async function appendConsoleAdminAuditEventWithTx(
             updated_at = NOW()
         WHERE stream_id = ${ADMIN_AUDIT_STREAM_ID}
       `);
-}
-
-function computeChainHmac(event: ConsoleAdminAuditEvent, key: Buffer, chainPrev: Buffer | null): Buffer {
-  const canonical = JSON.stringify({
-    occurredAt: event.occurredAt.toISOString(),
-    actorUserId: event.actorUserId,
-    actorSub: event.actorSub,
-    actorRole: event.actorRole,
-    actorCapabilityRole: event.actorCapabilityRole,
-    actorConsoleSessionHash: event.actorConsoleSessionHash.toString('hex'),
-    capability: event.capability,
-    elevationAcr: event.elevationAcr,
-    elevationAmr: [...event.elevationAmr],
-    elevationAuthTime: event.elevationAuthTime ? event.elevationAuthTime.toISOString() : null,
-    endpoint: event.endpoint,
-    operation: event.operation,
-    resourceKind: event.resourceKind,
-    resourceId: event.resourceId,
-    targetUserId: event.targetUserId,
-    argsRedacted: event.argsRedacted,
-    result: event.result,
-    errorCode: event.errorCode,
-    resultDetailRedacted: event.resultDetailRedacted,
-    correlationId: event.correlationId,
-    clientIp: event.clientIp,
-    userAgent: event.userAgent,
-    chainPrev: chainPrev ? chainPrev.toString('hex') : null,
-  });
-  return createHmac('sha256', key).update(canonical).digest();
 }

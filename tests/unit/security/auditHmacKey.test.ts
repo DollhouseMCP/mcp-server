@@ -19,6 +19,8 @@ jest.unstable_mockModule('../../../src/security/securityMonitor.js', () => ({
 
 const { AuditHmacKeyResolver, StaticAuditHmacKeyResolver } = await import('../../../src/security/auditHmacKey.js');
 
+const STATIC_KEY_ID = 'audit-hmac-fixture';
+
 describe('StaticAuditHmacKeyResolver', () => {
   it('rejects weak or malformed keys', () => {
     expect(() => new StaticAuditHmacKeyResolver('not-hex')).toThrow(/hex/);
@@ -34,11 +36,21 @@ describe('StaticAuditHmacKeyResolver', () => {
   });
 
   it('honours an explicit keyId override', async () => {
-    const resolver = new StaticAuditHmacKeyResolver('aa'.repeat(32), 'audit-hmac-fixture');
+    const resolver = new StaticAuditHmacKeyResolver('aa'.repeat(32), STATIC_KEY_ID);
     await expect(resolver.resolve()).resolves.toEqual({
-      keyId: 'audit-hmac-fixture',
+      keyId: STATIC_KEY_ID,
       key: Buffer.alloc(32, 0xaa),
     });
+  });
+
+  it('resolves explicit key IDs only when they match the retained static key', async () => {
+    const resolver = new StaticAuditHmacKeyResolver('aa'.repeat(32), STATIC_KEY_ID);
+
+    await expect(resolver.resolveForKeyId(STATIC_KEY_ID)).resolves.toEqual({
+      keyId: STATIC_KEY_ID,
+      key: Buffer.alloc(32, 0xaa),
+    });
+    await expect(resolver.resolveForKeyId('other-key')).resolves.toBeNull();
   });
 });
 
@@ -213,5 +225,26 @@ describe('AuditHmacKeyResolver — DB mode race', () => {
 
     const resolver = new AuditHmacKeyResolver({ database: {} as DatabaseInstance });
     await expect(resolver.resolve()).rejects.toThrow(/connection refused/);
+  });
+
+  it('looks up retained historical DB keys by key ID for audit verification', async () => {
+    const historicalKid = 'audit-hmac-previous';
+    const historicalSecret = Buffer.alloc(32, 0x66).toString('base64');
+    const rowsFn = () => [{ kid: historicalKid, secret: historicalSecret, active: false }];
+    const valuesFn = () => Promise.resolve();
+
+    withSystemContextMock.mockImplementation((_db, cb) => Promise.resolve(cb(makeDrizzleTx({ rowsFn, valuesFn }))));
+
+    const resolver = new AuditHmacKeyResolver({ database: {} as DatabaseInstance });
+
+    await expect(resolver.resolveForKeyId(historicalKid)).resolves.toEqual({
+      keyId: historicalKid,
+      key: Buffer.alloc(32, 0x66),
+    });
+    await expect(resolver.resolveForKeyId(historicalKid)).resolves.toEqual({
+      keyId: historicalKid,
+      key: Buffer.alloc(32, 0x66),
+    });
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
   });
 });

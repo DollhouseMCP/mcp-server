@@ -55,6 +55,16 @@ import {
   type SessionApprovalStore,
 } from './modules/approvals/index.js';
 import {
+  InMemoryAdminAuditQuery,
+  InMemoryApprovalAuditQuery,
+  InMemoryAuthenticationAuditQuery,
+  PostgresAdminAuditQuery,
+  createAuditModule,
+  type IAdminAuditQuery,
+  type IApprovalAuditQuery,
+  type IAuthenticationAuditQuery,
+} from './modules/audit/index.js';
+import {
   EmptySessionGatekeeperReader,
   GatekeeperSessionStateReader,
   InMemorySessionExecutionReader,
@@ -104,6 +114,9 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   opaqueValues: 'WebConsoleOpaqueValueService',
   secretEncryption: 'WebConsoleSecretEncryptionService',
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
+  adminAuditQuery: 'WebConsoleAdminAuditQuery',
+  approvalAuditQuery: 'WebConsoleApprovalAuditQuery',
+  authenticationAuditQuery: 'WebConsoleAuthenticationAuditQuery',
   accountAdminMutationTransactionRunner: 'WebConsoleAccountAdminMutationTransactionRunner',
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
   sessionActivationStateAdapter: 'WebConsoleSessionActivationStateAdapter',
@@ -142,6 +155,9 @@ export interface WebConsoleRegistrarOptions {
   readonly executionReader?: SessionExecutionReader | null;
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
+  readonly adminAuditQuery?: IAdminAuditQuery | null;
+  readonly approvalAuditQuery?: IApprovalAuditQuery | null;
+  readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -162,6 +178,9 @@ export interface WebConsoleComposition {
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService | null;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly adminAuditQuery: IAdminAuditQuery;
+  readonly approvalAuditQuery: IApprovalAuditQuery;
+  readonly authenticationAuditQuery: IAuthenticationAuditQuery;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly sessionActivationStateAdapter: ISessionActivationStateAdapter;
@@ -192,6 +211,9 @@ export class WebConsoleRegistrar {
       portfolioSyncJobStore: resolvePortfolioSyncJobStore(container, this.options, baseStores.portfolioSyncJobStore),
     };
     const adminAuditWriter = resolveAdminAuditWriter(database, container);
+    const adminAuditQuery = resolveAdminAuditQuery(database, container, this.options);
+    const approvalAuditQuery = resolveApprovalAuditQuery(container, this.options);
+    const authenticationAuditQuery = resolveAuthenticationAuditQuery(container, this.options);
     const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
       database,
       container,
@@ -230,6 +252,11 @@ export class WebConsoleRegistrar {
         routesMounted: false,
       }),
       now: this.options.now,
+    }));
+    registry.register(createAuditModule({
+      adminAuditQuery,
+      approvalAuditQuery,
+      authenticationAuditQuery,
     }));
     registry.register(createOperationsModule({
       healthChecks: operationHealthChecks,
@@ -306,6 +333,9 @@ export class WebConsoleRegistrar {
       opaqueValues,
       secretEncryption,
       adminAuditWriter,
+      adminAuditQuery,
+      approvalAuditQuery,
+      authenticationAuditQuery,
       accountAdminMutationTransactionRunner,
       protectedCorrelationRateLimiter,
       sessionActivationStateAdapter,
@@ -343,6 +373,9 @@ export class WebConsoleRegistrar {
       container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => secretEncryption);
     }
     container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery, () => adminAuditQuery);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery, () => approvalAuditQuery);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery, () => authenticationAuditQuery);
     container.register(
       WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
       () => accountAdminMutationTransactionRunner,
@@ -546,6 +579,50 @@ function resolveAdminAuditWriter(
     throw new Error('Web console PostgreSQL admin audit requires AuditHmacResolver');
   }
   return new PostgresAdminAuditWriter(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'));
+}
+
+function resolveAdminAuditQuery(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IAdminAuditQuery {
+  if (options.adminAuditQuery !== undefined) return options.adminAuditQuery ?? new InMemoryAdminAuditQuery();
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery)) {
+    return container.resolve<IAdminAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery);
+  }
+  if (database) {
+    if (!container.hasRegistration('AuditHmacResolver')) {
+      throw new Error('Web console PostgreSQL admin audit query requires AuditHmacResolver');
+    }
+    return new PostgresAdminAuditQuery(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'));
+  }
+  return new InMemoryAdminAuditQuery();
+}
+
+function resolveApprovalAuditQuery(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IApprovalAuditQuery {
+  if (options.approvalAuditQuery !== undefined) {
+    return options.approvalAuditQuery ?? new InMemoryApprovalAuditQuery();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery)) {
+    return container.resolve<IApprovalAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery);
+  }
+  return new InMemoryApprovalAuditQuery();
+}
+
+function resolveAuthenticationAuditQuery(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IAuthenticationAuditQuery {
+  if (options.authenticationAuditQuery !== undefined) {
+    return options.authenticationAuditQuery ?? new InMemoryAuthenticationAuditQuery();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery)) {
+    return container.resolve<IAuthenticationAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery);
+  }
+  return new InMemoryAuthenticationAuditQuery();
 }
 
 function resolveAccountAdminMutationTransactionRunner(options: {

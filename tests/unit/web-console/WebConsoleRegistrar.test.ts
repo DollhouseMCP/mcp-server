@@ -81,6 +81,9 @@ describe('WebConsoleRegistrar', () => {
       WebConsoleRegistrar,
       HmacConsoleOpaqueValueService,
       InMemoryAdminAuditWriter,
+      InMemoryAdminAuditQuery,
+      InMemoryApprovalAuditQuery,
+      InMemoryAuthenticationAuditQuery,
       InMemoryConsoleIdentityResolver,
       InMemoryConsoleSessionStore,
       InMemoryConsoleFactorStore,
@@ -124,6 +127,11 @@ describe('WebConsoleRegistrar', () => {
         moduleId: 'operations',
         path: '/api/v1/admin/operate/health',
         requiredCapability: 'console:admin:operate',
+      }),
+      expect.objectContaining({
+        moduleId: 'audit',
+        path: '/api/v1/admin/audit/admin',
+        requiredCapability: 'console:admin:audit',
       }),
       expect.objectContaining({
         moduleId: 'selfSecurity',
@@ -174,6 +182,9 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.userConfigStore).toBeInstanceOf(InMemoryUserConfigStore);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
     expect(composition.adminAuditWriter).toBeInstanceOf(InMemoryAdminAuditWriter);
+    expect(composition.adminAuditQuery).toBeInstanceOf(InMemoryAdminAuditQuery);
+    expect(composition.approvalAuditQuery).toBeInstanceOf(InMemoryApprovalAuditQuery);
+    expect(composition.authenticationAuditQuery).toBeInstanceOf(InMemoryAuthenticationAuditQuery);
     expect(lifecycle.registerPeriodicTask).toHaveBeenCalledWith(
       expect.any(Number),
       expect.any(Function),
@@ -197,6 +208,10 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader))
       .toBe(composition.sessionGatekeeperReader);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery)).toBe(composition.telemetryQuery);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery)).toBe(composition.adminAuditQuery);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery)).toBe(composition.approvalAuditQuery);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery))
+      .toBe(composition.authenticationAuditQuery);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
@@ -372,6 +387,7 @@ describe('WebConsoleRegistrar', () => {
       expect.objectContaining({ moduleId: 'accountAdmin' }),
       expect.objectContaining({ moduleId: 'integrations' }),
       expect.objectContaining({ moduleId: 'operations' }),
+      expect.objectContaining({ moduleId: 'audit' }),
       expect.objectContaining({ moduleId: 'portfolio' }),
       expect.objectContaining({ moduleId: 'selfSecurity' }),
     ]));
@@ -385,6 +401,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.portfolioStore.constructor.name).toBe('InMemoryPortfolioElementStore');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
+    expect(composition.adminAuditQuery.constructor.name).toBe('PostgresAdminAuditQuery');
   });
 
   it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {

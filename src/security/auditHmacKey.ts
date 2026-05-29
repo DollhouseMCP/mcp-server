@@ -36,8 +36,9 @@ export class AuditHmacKeyResolver {
    * a DI singleton, so all consumers share this cache. Intentionally not
    * invalidated at runtime — rotating `DOLLHOUSE_AUDIT_HMAC_SECRET` or
    * inserting a new `audit_hmac_keys` row requires a process restart.
-   */
+  */
   private cached?: AuditHmacKeyMaterial;
+  private readonly cachedByKeyId = new Map<string, AuditHmacKeyMaterial>();
 
   /**
    * In-flight resolve promise. Coalesces concurrent first-resolves onto
@@ -56,6 +57,21 @@ export class AuditHmacKeyResolver {
       this.pending = undefined;
     });
     return this.pending;
+  }
+
+  async resolveForKeyId(keyId: string): Promise<AuditHmacKeyMaterial | null> {
+    if (this.cached?.keyId === keyId) return this.cached;
+    const cached = this.cachedByKeyId.get(keyId);
+    if (cached) return cached;
+    if (env.DOLLHOUSE_AUDIT_HMAC_SECRET || !this.options.database) {
+      const current = await this.resolve();
+      return current.keyId === keyId ? current : null;
+    }
+    const material = await readKeyById(this.options.database, keyId);
+    if (material) {
+      this.cachedByKeyId.set(keyId, material);
+    }
+    return material;
   }
 
   private async doResolve(): Promise<AuditHmacKeyMaterial> {
@@ -141,24 +157,37 @@ async function readActiveKey(database: DatabaseInstance): Promise<AuditHmacKeyMa
   );
   const row = rows.at(0);
   if (!row) return null;
-  const key = Buffer.from(row.secret, 'base64');
+  return decodeAuditHmacDbKey(row.kid, row.secret);
+}
+
+async function readKeyById(database: DatabaseInstance, keyId: string): Promise<AuditHmacKeyMaterial | null> {
+  const rows = await withSystemContext(database, (tx) =>
+    tx.select().from(auditHmacKeys).where(eq(auditHmacKeys.kid, keyId)).limit(1),
+  );
+  const row = rows.at(0);
+  if (!row) return null;
+  return decodeAuditHmacDbKey(row.kid, row.secret);
+}
+
+function decodeAuditHmacDbKey(kid: string, secret: string): AuditHmacKeyMaterial {
+  const key = Buffer.from(secret, 'base64');
   // Same length thresholds parseHexSecret enforces on env/file paths. An
   // operator who manually inserts a rotation row with a truncated or empty
   // `secret` would otherwise yield a silently weak buffer that createHmac
   // accepts — every audit hash would collapse into one value space.
   if (key.length < MIN_KEY_BYTES) {
     throw new Error(
-      `audit_hmac_keys row kid=${row.kid} decodes to ${key.length} bytes; ` +
+      `audit_hmac_keys row kid=${kid} decodes to ${key.length} bytes; ` +
       `expected at least ${MIN_KEY_BYTES}. Rotate or re-seed the active row.`,
     );
   }
   if (key.length > MAX_KEY_BYTES) {
     throw new Error(
-      `audit_hmac_keys row kid=${row.kid} decodes to ${key.length} bytes; ` +
+      `audit_hmac_keys row kid=${kid} decodes to ${key.length} bytes; ` +
       `cap is ${MAX_KEY_BYTES}. Likely misconfigured row.`,
     );
   }
-  return { keyId: row.kid, key };
+  return { keyId: kid, key };
 }
 
 export class StaticAuditHmacKeyResolver {
@@ -172,6 +201,10 @@ export class StaticAuditHmacKeyResolver {
 
   resolve(): Promise<AuditHmacKeyMaterial> {
     return Promise.resolve({ keyId: this.keyId, key: this.key });
+  }
+
+  resolveForKeyId(keyId: string): Promise<AuditHmacKeyMaterial | null> {
+    return Promise.resolve(keyId === this.keyId ? { keyId: this.keyId, key: this.key } : null);
   }
 }
 
