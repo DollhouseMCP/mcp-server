@@ -16,6 +16,11 @@ export interface AuditListQuery {
   readonly cursor: string | null;
 }
 
+export interface AuditExportQuery {
+  readonly cursor: string | null;
+  readonly batchSize: number;
+}
+
 export interface AdminAuditRow extends ConsoleAdminAuditEvent {
   readonly id: string;
   readonly sequenceId: number;
@@ -27,6 +32,7 @@ export interface AdminAuditRow extends ConsoleAdminAuditEvent {
 export interface IAdminAuditQuery {
   listAdminAudit(query: AuditListQuery): Promise<AuditPageDto<AdminAuditEventDto>>;
   getAdminAudit(id: string): Promise<AdminAuditEventDto | null>;
+  streamAdminAudit(query: AuditExportQuery): AsyncIterable<AdminAuditEventDto>;
 }
 
 export interface IApprovalAuditQuery {
@@ -51,6 +57,12 @@ export class InMemoryAdminAuditQuery implements IAdminAuditQuery {
 
   getAdminAudit(id: string): Promise<AdminAuditEventDto | null> {
     return Promise.resolve(this.rows.find(row => row.id === id) ?? null);
+  }
+
+  async *streamAdminAudit(query: AuditExportQuery): AsyncIterable<AdminAuditEventDto> {
+    await Promise.resolve();
+    const start = query.cursor ? decodeCursor(query.cursor) : 0;
+    for (const row of this.rows.slice(start)) yield row;
   }
 }
 

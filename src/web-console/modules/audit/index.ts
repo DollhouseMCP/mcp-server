@@ -9,6 +9,7 @@ export {
 export { PostgresAdminAuditQuery } from './PostgresAdminAuditQuery.js';
 export type {
   AdminAuditRow,
+  AuditExportQuery,
   AuditListQuery,
   IAdminAuditQuery,
   IApprovalAuditQuery,

@@ -162,4 +162,36 @@ describe('PostgresAdminAuditQuery', () => {
     });
     expect(resolveForKeyId).toHaveBeenCalledWith(OLD_KEY_MATERIAL.keyId);
   });
+
+  it('streams export rows with continuous chain verification across batches', async () => {
+    const first = row();
+    const second = row({
+      id: '018f3d47-73ae-7f10-a0de-0742618d4fb3',
+      sequenceId: 2,
+      chainPrev: first.chainHmac,
+    });
+    transaction.execute
+      .mockResolvedValueOnce([dbRow(first)])
+      .mockResolvedValueOnce([dbRow(second)])
+      .mockResolvedValueOnce([]);
+    const query = new PostgresAdminAuditQuery({} as DatabaseInstance, {
+      resolve: () => Promise.resolve(KEY_MATERIAL),
+    });
+
+    const rows = [];
+    for await (const item of query.streamAdminAudit({ cursor: null, batchSize: 1 })) rows.push(item);
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        id: first.id,
+        integrity: { status: 'verified', reason: null },
+      }),
+      expect.objectContaining({
+        id: second.id,
+        sequence_id: 2,
+        integrity: { status: 'verified', reason: null },
+      }),
+    ]);
+    expect(transaction.execute).toHaveBeenCalledTimes(3);
+  });
 });

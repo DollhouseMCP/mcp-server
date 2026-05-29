@@ -10,6 +10,7 @@ import type {
   AuditPageDto,
 } from './AuditDtos.js';
 import type {
+  AuditExportQuery,
   AuditListQuery,
   IAdminAuditQuery,
 } from './AuditQueries.js';
@@ -86,7 +87,7 @@ export class PostgresAdminAuditQuery implements IAdminAuditQuery {
         LIMIT ${query.limit + 1}
         OFFSET ${offset}
       `)) as unknown as AdminAuditDbRow[];
-    const items = await verifyAndProjectRows(rows.slice(0, query.limit), this.hmacKeyResolver);
+    const items = (await verifyAndProjectRows(rows.slice(0, query.limit), this.hmacKeyResolver)).items;
     return {
       items,
       page: {
@@ -136,14 +137,43 @@ export class PostgresAdminAuditQuery implements IAdminAuditQuery {
     const keyMaterial = await resolveAuditKey(this.hmacKeyResolver, row.chain_key_id);
     return toDto(row, verifyAdminAuditRow(toChainMaterial(row), keyMaterial));
   }
+
+  async *streamAdminAudit(query: AuditExportQuery): AsyncIterable<AdminAuditEventDto> {
+    let offset = query.cursor ? decodeCursor(query.cursor) : 0;
+    let previous: Buffer | null = null;
+    let previousSequenceId: number | null = null;
+    if (offset > 0) {
+      const previousRow = await fetchAdminAuditRows(this.db, 1, offset - 1);
+      const row = previousRow.at(0);
+      if (row) {
+        previous = Buffer.from(row.chain_hmac);
+        previousSequenceId = Number(row.sequence_id);
+      }
+    }
+    for (;;) {
+      const rows = await fetchAdminAuditRows(this.db, query.batchSize, offset);
+      if (rows.length === 0) return;
+      const result = await verifyAndProjectRows(rows, this.hmacKeyResolver, previous, previousSequenceId);
+      previous = result.previous;
+      previousSequenceId = result.previousSequenceId;
+      for (const item of result.items) yield item;
+      offset += rows.length;
+    }
+  }
 }
 
 async function verifyAndProjectRows(
   rows: readonly AdminAuditDbRow[],
   hmacKeyResolver: AdminAuditHmacKeyResolver,
-): Promise<readonly AdminAuditEventDto[]> {
-  let previous: Buffer | null = null;
-  let previousSequenceId: number | null = null;
+  initialPrevious: Buffer | null = null,
+  initialPreviousSequenceId: number | null = null,
+): Promise<{
+  readonly items: readonly AdminAuditEventDto[];
+  readonly previous: Buffer | null;
+  readonly previousSequenceId: number | null;
+}> {
+  let previous = initialPrevious;
+  let previousSequenceId = initialPreviousSequenceId;
   const projected: AdminAuditEventDto[] = [];
   for (const row of rows) {
     const material = toChainMaterial(row);
@@ -153,7 +183,48 @@ async function verifyAndProjectRows(
     previousSequenceId = Number(row.sequence_id);
     projected.push(toDto(row, integrity));
   }
-  return projected;
+  return { items: projected, previous, previousSequenceId };
+}
+
+async function fetchAdminAuditRows(
+  db: DatabaseInstance,
+  limit: number,
+  offset: number,
+): Promise<readonly AdminAuditDbRow[]> {
+  return await withSystemContext(db, tx => tx.execute(sql`
+      SELECT
+        id,
+        sequence_id,
+        occurred_at,
+        actor_user_id,
+        actor_sub,
+        actor_role,
+        actor_capability_role,
+        actor_console_session_hash,
+        capability,
+        elevation_acr,
+        elevation_amr,
+        elevation_auth_time,
+        endpoint,
+        operation,
+        resource_kind,
+        resource_id,
+        target_user_id,
+        args_redacted,
+        result,
+        error_code,
+        result_detail_redacted,
+        correlation_id,
+        client_ip,
+        user_agent,
+        chain_key_id,
+        chain_prev,
+        chain_hmac
+      FROM admin_audit_events
+      ORDER BY sequence_id ASC
+      LIMIT ${limit}
+      OFFSET ${offset}
+    `)) as unknown as AdminAuditDbRow[];
 }
 
 async function resolveAuditKey(

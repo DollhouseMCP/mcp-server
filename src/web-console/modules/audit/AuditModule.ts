@@ -2,7 +2,10 @@ import type {
   ConsoleHandlerResult,
   ConsoleModuleDescriptor,
   ConsoleRequest,
+  ConsoleSseEvent,
 } from '../../platform/ConsolePlatformTypes.js';
+import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
+import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import {
   projectAdminAuditEvent,
   projectAdminAuditPage,
@@ -11,15 +14,25 @@ import {
   projectAuthenticationAuditPage,
 } from './AuditPrivacyProjectors.js';
 import type {
+  AuditExportQuery,
   AuditListQuery,
   IAdminAuditQuery,
   IApprovalAuditQuery,
   IAuthenticationAuditQuery,
 } from './AuditQueries.js';
+import type { AdminAuditEventDto } from './AuditDtos.js';
 
 const AUDIT_CAPABILITY = 'console:admin:audit';
 const AUDIT_FIND_OPERATION = 'audit.find';
 const AUDIT_SHOW_OPERATION = 'audit.show';
+const AUDIT_EXPORT_OPERATION = 'audit.export';
+const AUDIT_STREAM_POLICY = {
+  lastEventId: 'unsupported',
+  heartbeatMs: 15_000,
+  revalidateMs: 15_000,
+  maxEventBytes: 64 * 1024,
+  maxLastEventIdBytes: 512,
+} as const;
 
 export interface AuditModuleOptions {
   readonly adminAuditQuery: IAdminAuditQuery;
@@ -35,6 +48,7 @@ export function createAuditModule(options: AuditModuleOptions): ConsoleModuleDes
     auditOperations: [
       { id: AUDIT_FIND_OPERATION },
       { id: AUDIT_SHOW_OPERATION },
+      { id: AUDIT_EXPORT_OPERATION },
     ],
     routes: [
       {
@@ -48,6 +62,25 @@ export function createAuditModule(options: AuditModuleOptions): ConsoleModuleDes
         auditOperation: AUDIT_FIND_OPERATION,
         privacyProjector: projectAdminAuditPage,
         handler: req => listAdminAudit(req, options.adminAuditQuery),
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/admin/audit/admin/export',
+        audience: 'admin',
+        requiredCapability: AUDIT_CAPABILITY,
+        elevation: 'admin_5m',
+        privacyClass: 'admin_audit',
+        idempotency: 'not_applicable',
+        auditOperation: AUDIT_EXPORT_OPERATION,
+        responseKind: 'sse',
+        streamPolicy: AUDIT_STREAM_POLICY,
+        privacyProjector: projectAdminAuditEvent,
+        streamEventProjectors: {
+          init: projectAdminAuditExportInit,
+          update: projectAdminAuditEvent,
+          end: projectAdminAuditExportEnd,
+        },
+        handler: req => exportAdminAudit(req, options.adminAuditQuery),
       },
       {
         method: 'GET',
@@ -114,6 +147,27 @@ async function getAdminAudit(req: ConsoleRequest, query: IAdminAuditQuery): Prom
   return body ? { status: 200, body } : notFound('Admin audit event was not found.');
 }
 
+function exportAdminAudit(req: ConsoleRequest, query: IAdminAuditQuery): ConsoleHandlerResult {
+  const lastEventId = parseConsoleLastEventId(req, AUDIT_STREAM_POLICY);
+  if (!lastEventId.ok) {
+    throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
+  }
+  const exportQuery = parseExportQuery(req);
+  return {
+    status: 200,
+    stream: {
+      init: {
+        stream_id: 'admin.audit.admin.export',
+        stream_type: 'admin_audit_export',
+        resume_supported: false,
+        cursor: exportQuery.cursor,
+        batch_size: exportQuery.batchSize,
+      },
+      events: streamAdminAuditEvents(query.streamAdminAudit(exportQuery)),
+    },
+  };
+}
+
 async function listApprovalAudit(req: ConsoleRequest, query: IApprovalAuditQuery): Promise<ConsoleHandlerResult> {
   return { status: 200, body: await query.listApprovalAudit(parseListQuery(req)) };
 }
@@ -130,6 +184,47 @@ function parseListQuery(req: ConsoleRequest): AuditListQuery {
     limit: boundedLimit(firstQueryValue(req.query.limit), 100),
     cursor: boundedString(firstQueryValue(req.query.cursor), 256),
   };
+}
+
+function parseExportQuery(req: ConsoleRequest): AuditExportQuery {
+  return {
+    cursor: boundedString(firstQueryValue(req.query.cursor), 256),
+    batchSize: boundedLimit(firstQueryValue(req.query.batch_size), 100),
+  };
+}
+
+async function* streamAdminAuditEvents(rows: AsyncIterable<AdminAuditEventDto>): AsyncIterable<ConsoleSseEvent> {
+  for await (const row of rows) {
+    yield {
+      event: 'update',
+      data: row,
+    };
+  }
+  yield {
+    event: 'end',
+    data: {
+      status: 'complete',
+    },
+  };
+}
+
+function projectAdminAuditExportInit(value: unknown): unknown {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    connected_at: typeof record.connected_at === 'string' ? record.connected_at : null,
+    stream_id: 'admin.audit.admin.export',
+    stream_type: 'admin_audit_export',
+    resume_supported: record.resume_supported === true,
+    cursor: typeof record.cursor === 'string' ? record.cursor : null,
+    batch_size: typeof record.batch_size === 'number' && Number.isSafeInteger(record.batch_size)
+      ? record.batch_size
+      : 100,
+  };
+}
+
+function projectAdminAuditExportEnd(value: unknown): unknown {
+  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
+  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function boundedLimit(value: string | null, fallback: number): number {

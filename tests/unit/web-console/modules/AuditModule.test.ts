@@ -6,6 +6,7 @@ import {
   InMemoryAuthenticationAuditQuery,
   computeAdminAuditChainHmac,
   createAuditModule,
+  executeConsoleRoute,
   projectAdminAuditEvent,
   projectAdminAuditPage,
   projectApprovalAuditEvent,
@@ -28,7 +29,9 @@ const APPROVAL_PRIVACY = 'approval_metadata';
 const MUST_NOT_LEAK = 'must-not-leak';
 const AUDIT_FIND = 'audit.find';
 const AUDIT_SHOW = 'audit.show';
+const AUDIT_EXPORT = 'audit.export';
 const ADMIN_AUDIT_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const ADMIN_AUDIT_EXPORT_PATH = '/api/v1/admin/audit/admin/export';
 
 function adminRow(overrides: Partial<AdminAuditRow> = {}): AdminAuditRow {
   const row = {
@@ -128,6 +131,13 @@ function findRoute(routes: readonly ConsoleRouteDefinition[], method: string, pa
   return route;
 }
 
+async function collectEvents<T>(events: AsyncIterable<T> | undefined): Promise<T[]> {
+  if (!events) throw new Error('missing stream events');
+  const collected: T[] = [];
+  for await (const event of events) collected.push(event);
+  return collected;
+}
+
 describe('AuditModule', () => {
   it('declares audited administrator read descriptors with selected freshness policies', () => {
     const module = createModule();
@@ -136,7 +146,7 @@ describe('AuditModule', () => {
       id: 'audit',
       apiVersion: 'v1',
       capabilities: [AUDIT_CAPABILITY],
-      auditOperations: [{ id: AUDIT_FIND }, { id: AUDIT_SHOW }],
+      auditOperations: [{ id: AUDIT_FIND }, { id: AUDIT_SHOW }, { id: AUDIT_EXPORT }],
     });
     expect(module.routes).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -154,6 +164,20 @@ describe('AuditModule', () => {
         elevation: 'admin_5m',
         privacyClass: ADMIN_AUDIT_PRIVACY,
         auditOperation: AUDIT_SHOW,
+      }),
+      expect.objectContaining({
+        method: 'GET',
+        path: ADMIN_AUDIT_EXPORT_PATH,
+        requiredCapability: AUDIT_CAPABILITY,
+        elevation: 'admin_5m',
+        privacyClass: ADMIN_AUDIT_PRIVACY,
+        auditOperation: AUDIT_EXPORT,
+        responseKind: 'sse',
+        streamPolicy: expect.objectContaining({
+          lastEventId: 'unsupported',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+        }),
       }),
       expect.objectContaining({
         method: 'GET',
@@ -177,7 +201,6 @@ describe('AuditModule', () => {
         auditOperation: AUDIT_FIND,
       }),
     ]));
-    expect(module.routes.map(route => route.path)).not.toContain('/api/v1/admin/audit/admin/export');
   });
 
   it('lists admin audit rows with chain metadata and bounded paging', async () => {
@@ -218,6 +241,60 @@ describe('AuditModule', () => {
       args_redacted: { reason_present: true },
       result_detail_redacted: { runtime_commands: 1 },
     });
+  });
+
+  it('streams admin audit export rows through SSE update events with allowlisted payloads', async () => {
+    const route = findRoute(createModule().routes, 'GET', ADMIN_AUDIT_EXPORT_PATH);
+
+    const result = await executeConsoleRoute(route, {
+      query: { batch_size: '1' },
+      params: {},
+      headers: {},
+    } as never);
+
+    expect(result.stream?.init).toEqual({
+      stream_id: 'admin.audit.admin.export',
+      stream_type: 'admin_audit_export',
+      resume_supported: false,
+      cursor: null,
+      batch_size: 1,
+    });
+    const events = await collectEvents(result.stream?.events);
+    expect(events).toEqual([
+      {
+        event: 'update',
+        data: expect.objectContaining({
+          id: ADMIN_AUDIT_ID,
+          sequence_id: 1,
+          actor_console_session_hash: SESSION_HASH.toString('hex'),
+          chain_key_id: AUDIT_KEY_ID,
+          integrity: { status: 'verified', reason: null },
+        }),
+      },
+      {
+        event: 'update',
+        data: expect.objectContaining({
+          id: '018f3d47-73ae-7f10-a0de-0742618d4fb3',
+          sequence_id: 2,
+          integrity: { status: 'verified', reason: null },
+        }),
+      },
+      {
+        event: 'end',
+        data: { status: 'complete' },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(MUST_NOT_LEAK);
+  });
+
+  it('rejects Last-Event-ID on admin audit export until real resume is implemented', () => {
+    const route = findRoute(createModule().routes, 'GET', ADMIN_AUDIT_EXPORT_PATH);
+
+    expect(() => route.handler({
+      query: {},
+      params: {},
+      headers: { 'last-event-id': 'admin-audit:1' },
+    } as never)).toThrow('Invalid Last-Event-ID');
   });
 
   it('marks rows failed without failing the whole read when chain linkage is inconsistent', async () => {
