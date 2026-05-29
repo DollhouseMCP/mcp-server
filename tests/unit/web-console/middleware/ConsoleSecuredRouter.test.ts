@@ -33,6 +33,7 @@ const SELF_CAPABILITY = 'console:self' as const;
 const AUDIT_CAPABILITY = 'console:admin:audit' as const;
 const CONTEXT_PATH = '/api/v1/me/context';
 const CHANGE_PATH = '/api/v1/me/change';
+const HEALTH_PATH = '/api/v1/health/ready';
 const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
@@ -56,6 +57,28 @@ function fixtureModules(
   onProtectedCorrelation?: () => void,
 ): readonly ConsoleModuleDescriptor[] {
   return [{
+    id: 'health_fixture',
+    apiVersion: 'v1',
+    capabilities: [],
+    routes: [{
+      method: 'GET',
+      path: HEALTH_PATH,
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      elevation: 'none',
+      privacyClass: 'operational_allowlist',
+      idempotency: 'not_applicable',
+      handler: () => ({
+        status: 503,
+        body: {
+          status: 'not_ready',
+          ready: false,
+          checked_at: NOW.toISOString(),
+        },
+      }),
+    }],
+  }, {
     id: 'me_fixture',
     apiVersion: 'v1',
     capabilities: [SELF_CAPABILITY],
@@ -334,6 +357,22 @@ function adminTransactionMutationRequest(app: express.Express, key: string = IDE
 }
 
 describe('secured console router authentication', () => {
+  it('serves public readiness without browser authentication', async () => {
+    const { app, sessionStore } = await buildApp(null);
+    const lookup = jest.spyOn(sessionStore, 'findActiveByIdHash');
+
+    const response = await request(app).get(HEALTH_PATH);
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      status: 'not_ready',
+      ready: false,
+      checked_at: NOW.toISOString(),
+    });
+    expect(lookup).not.toHaveBeenCalled();
+    expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  });
+
   it('resolves an opaque session to canonical user context and sets security headers', async () => {
     const { app, sessionStore, adminAuditWriter } = await buildApp();
     const touch = jest.spyOn(sessionStore, 'touch');

@@ -32,6 +32,7 @@ import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAc
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -129,6 +130,15 @@ export class WebConsoleRegistrar {
     const authStorage = resolveAuthStorage(container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     const userConfigStore = resolveUserConfigStore(database, container);
+    registry.register(createHealthModule({
+      readiness: createHealthReadinessInputs({
+        database,
+        stores,
+        authStorage,
+        routesMounted: false,
+      }),
+      now: this.options.now,
+    }));
     registry.register(createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
@@ -258,6 +268,26 @@ interface ConsoleStoreSet {
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
+}
+
+function createHealthReadinessInputs(options: {
+  readonly database: DatabaseInstance | undefined;
+  readonly stores: ConsoleStoreSet;
+  readonly authStorage: IAuthStorageLayer | null;
+  readonly routesMounted: false;
+}): HealthReadinessChecks {
+  return {
+    sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
+    identityResolutionAvailable: () => Boolean(options.stores.identityResolver),
+    // TODO(web-console-readiness): replace this stub when the security
+    // invalidation processor/listener/cursor readiness runtime is wired.
+    securityInvalidationReady: () => false,
+    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
+    databaseAvailable: () => Boolean(options.database),
+    authServerAvailable: () => Boolean(options.authStorage),
+    // TODO(web-console-mount): flip through the M7 production mount gate.
+    apiV1Mounted: () => options.routesMounted,
+  };
 }
 
 async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {

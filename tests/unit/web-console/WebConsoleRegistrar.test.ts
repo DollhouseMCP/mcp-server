@@ -98,6 +98,11 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.registry).toBeInstanceOf(ConsoleModuleRegistry);
     expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        moduleId: 'health',
+        path: '/api/v1/health/ready',
+        requiredCapability: 'none',
+      }),
+      expect.objectContaining({
         moduleId: 'accountAdmin',
         path: '/api/v1/admin/accounts/users',
         requiredCapability: 'console:admin:accounts',

@@ -26,6 +26,7 @@ const MUTATING_METHODS = new Set<ConsoleHttpMethod>(['POST', 'PUT', 'PATCH', 'DE
 const SELF_PRIVACY_CLASSES = new Set<ConsolePrivacyClass>(['self_private', 'self_security']);
 const SELF_PATH_PATTERN = /^\/api\/v1\/(me|auth)(\/|$)/;
 const PUBLIC_AUTH_PATH_PATTERN = /^\/api\/v1\/auth(\/|$)/;
+const PUBLIC_HEALTH_PATH_PATTERN = /^\/api\/v1\/health(\/ready)?$/;
 
 type ValidatedConsoleRouteDefinition = ConsoleRouteDefinition & {
   readonly elevation: ConsoleElevationPolicy;
@@ -318,13 +319,25 @@ export class ConsoleModuleRegistry {
     module: ConsoleModuleDescriptor,
     route: ConsoleRouteDefinition,
   ): void {
-    if (!PUBLIC_AUTH_PATH_PATTERN.test(route.path) ||
-        route.requiredCapability !== 'none' ||
-        route.elevation !== 'none' ||
-        route.ownership !== 'flow_transaction' ||
-        route.privacyClass !== 'self_security') {
-      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has inconsistent public auth policy`);
+    if (!this.isValidPublicAuthRoute(route) && !this.isValidPublicHealthRoute(route)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has inconsistent public policy`);
     }
+  }
+
+  private isValidPublicAuthRoute(route: ConsoleRouteDefinition): boolean {
+    return PUBLIC_AUTH_PATH_PATTERN.test(route.path) &&
+      route.requiredCapability === 'none' &&
+      route.elevation === 'none' &&
+      route.ownership === 'flow_transaction' &&
+      route.privacyClass === 'self_security';
+  }
+
+  private isValidPublicHealthRoute(route: ConsoleRouteDefinition): boolean {
+    return PUBLIC_HEALTH_PATH_PATTERN.test(route.path) &&
+      route.requiredCapability === 'none' &&
+      route.elevation === 'none' &&
+      route.ownership === 'none' &&
+      route.privacyClass === 'operational_allowlist';
   }
 
   private validateAdminRoutePolicy(

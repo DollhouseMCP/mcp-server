@@ -59,6 +59,26 @@ function publicAuthModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}):
   };
 }
 
+function publicHealthModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'health',
+    apiVersion: 'v1',
+    capabilities: [],
+    routes: [{
+      method: 'GET',
+      path: '/api/v1/health/ready',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      elevation: 'none',
+      privacyClass: 'operational_allowlist',
+      idempotency: 'not_applicable',
+      handler: () => ({ status: 503, body: { status: 'not_ready' } }),
+      ...routeOverrides,
+    }],
+  };
+}
+
 function adminModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
   return {
     id: 'operations',
@@ -132,6 +152,21 @@ describe('ConsoleModuleRegistry', () => {
     }));
   });
 
+  it('registers a public health route without auth-flow ownership', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(publicHealthModule());
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      moduleId: 'health',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      elevation: 'none',
+      privacyClass: 'operational_allowlist',
+    }));
+  });
+
   it.each([
     ['an unsupported API version', selfModule({
       apiVersion: 'v2' as never,
@@ -187,12 +222,18 @@ describe('ConsoleModuleRegistry', () => {
     ['a self-service route outside me or auth', selfModule({
       routes: [selfRoute({ path: '/api/v1/profile' })],
     }), /inconsistent self-service policy/],
-    ['a public route outside auth', publicAuthModule({
+    ['a public route outside auth or health', publicAuthModule({
       path: '/api/v1/me/public-login',
-    }), /inconsistent public auth policy/],
+    }), /inconsistent public policy/],
     ['a public auth route with a capability', publicAuthModule({
       requiredCapability: SELF_CAPABILITY,
-    }), /inconsistent public auth policy/],
+    }), /inconsistent public policy/],
+    ['a public health route with auth-flow ownership', publicHealthModule({
+      ownership: 'flow_transaction',
+    }), /inconsistent public policy/],
+    ['a public health route with self-security privacy', publicHealthModule({
+      privacyClass: 'self_security',
+    }), /inconsistent public policy/],
   ])('rejects %s', (_label, descriptor, expected) => {
     const registry = new ConsoleModuleRegistry();
 
