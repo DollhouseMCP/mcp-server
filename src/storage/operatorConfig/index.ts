@@ -8,6 +8,7 @@ export {
   type IOperatorConfigStore,
   type OperatorConfig,
   DEFAULT_OPERATOR_CONFIG,
+  OperatorConfigConflictError,
 } from './IOperatorConfigStore.js';
 export { InMemoryOperatorConfigStore } from './InMemoryOperatorConfigStore.js';
 export { FilesystemOperatorConfigStore } from './FilesystemOperatorConfigStore.js';

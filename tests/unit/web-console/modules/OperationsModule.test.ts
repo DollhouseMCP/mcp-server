@@ -1,8 +1,12 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { InMemoryOperatorConfigStore } from '../../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import type { OperatorConfig } from '../../../../src/storage/operatorConfig/IOperatorConfigStore.js';
 import {
   InMemoryConsoleTelemetryQuery,
   createOperationsModule,
+  projectOperatorConfigList,
+  projectOperatorConfigSetting,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
   projectOperationalLogs,
@@ -19,6 +23,30 @@ const RUNTIME_HEARTBEAT_EVENT = 'runtime.session.heartbeat';
 const GATEKEEPER_DECISION_EVENT = 'gatekeeper.decision';
 const RUNTIME_ERRORS_METRIC = 'runtime.session.errors';
 const OPERATE_LOGS_PATH = '/api/v1/admin/operate/logs';
+const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
+const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
+const CONSOLE_PORT_KEY = 'console.port';
+
+class RacingOperatorConfigStore extends InMemoryOperatorConfigStore {
+  private raceInjected = false;
+
+  override async save(
+    config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
+  ): Promise<void> {
+    if (options.expectedUpdatedAt !== undefined && !this.raceInjected) {
+      this.raceInjected = true;
+      await super.save({
+        enhancedIndexConfig: { enabled: false },
+        consoleConfig: { port: 3200 },
+        licenseConfig: {},
+        defaultsConfig: {},
+        configVersion: 1,
+      });
+    }
+    return super.save(config, options);
+  }
+}
 
 const HEALTH_CHECKS: OperationsHealthChecks = {
   database: () => true,
@@ -46,6 +74,7 @@ function createModule(
   return createOperationsModule({
     healthChecks,
     telemetry,
+    operatorConfigStore: new InMemoryOperatorConfigStore(),
     now: () => NOW,
   });
 }
@@ -113,6 +142,34 @@ describe('OperationsModule', () => {
     expect(module.routes).toEqual(expect.arrayContaining([
       expect.objectContaining({
         method: 'GET',
+        path: OPERATE_CONFIG_PATH,
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: OPERATIONAL_PRIVACY,
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.config.list',
+      }),
+      expect.objectContaining({
+        method: 'GET',
+        path: '/api/v1/admin/operate/config/:key',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: OPERATIONAL_PRIVACY,
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.config.show',
+      }),
+      expect.objectContaining({
+        method: 'PUT',
+        path: '/api/v1/admin/operate/config/:key',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_5m',
+        privacyClass: OPERATIONAL_PRIVACY,
+        idempotency: 'required',
+        auditOperation: 'operate.config.update',
+      }),
+      expect.objectContaining({
+        method: 'GET',
         path: '/api/v1/admin/operate/health',
         audience: 'admin',
         requiredCapability: OPERATE_CAPABILITY,
@@ -163,6 +220,9 @@ describe('OperationsModule', () => {
       }),
     ]));
     expect(module.auditOperations).toEqual(expect.arrayContaining([
+      { id: 'operate.config.list' },
+      { id: 'operate.config.show' },
+      { id: 'operate.config.update' },
       { id: 'operate.health.show' },
       { id: 'operate.health.database' },
       { id: 'operate.health.auth_server' },
@@ -197,6 +257,198 @@ describe('OperationsModule', () => {
           failure_codes: ['security_invalidation_processor_not_ready'],
         },
       ]),
+    });
+  });
+
+  it('lists schema-registered operator config without disclosing write-only secrets', async () => {
+    const store = new InMemoryOperatorConfigStore();
+    await store.save({
+      enhancedIndexConfig: { enabled: true },
+      consoleConfig: { port: 3100 },
+      licenseConfig: { key: 'license-secret' },
+      defaultsConfig: {},
+      configVersion: 1,
+    });
+    const route = findRoute(createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: store,
+      now: () => NOW,
+    }).routes, 'GET', OPERATE_CONFIG_PATH);
+
+    const result = await route.handler({ query: {}, params: {} } as never);
+    const projected = projectOperatorConfigList(result.body);
+
+    expect(projected.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'enhanced_index.enabled',
+        sensitivity: 'public_admin',
+        value: true,
+      }),
+      expect.objectContaining({
+        key: 'license.key',
+        sensitivity: 'secret_write_only',
+        configured: true,
+      }),
+    ]));
+    expect(JSON.stringify(projected)).not.toContain('license-secret');
+  });
+
+  it('returns one operator config setting with an ETag header', async () => {
+    const route = findRoute(createModule().routes, 'GET', LICENSE_KEY_PATH);
+
+    const result = await route.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+    } as never);
+    const projected = projectOperatorConfigSetting(result.body);
+
+    expect(result.headers).toEqual({ ETag: projected.etag });
+    expect(projected).toMatchObject({
+      key: CONSOLE_PORT_KEY,
+      value: 3000,
+      sensitivity: 'public_admin',
+      mutability: 'restart_required',
+      value_schema: { type: 'integer', minimum: 1, maximum: 65535 },
+    });
+  });
+
+  it('updates operator config with If-Match, validation, idempotency policy, and restart metadata', async () => {
+    const store = new InMemoryOperatorConfigStore();
+    const module = createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: store,
+      now: () => NOW,
+    });
+    const getRoute = findRoute(module.routes, 'GET', LICENSE_KEY_PATH);
+    const putRoute = findRoute(module.routes, 'PUT', LICENSE_KEY_PATH);
+    const before = await getRoute.handler({ query: {}, params: { key: CONSOLE_PORT_KEY } } as never);
+    const etag = projectOperatorConfigSetting(before.body).etag;
+
+    const result = await putRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+      headers: { 'if-match': etag },
+      body: { value: 3100 },
+    } as never);
+
+    const projected = projectOperatorConfigSetting(result.body);
+    expect(result.status).toBe(200);
+    expect(result.headers).toEqual({ ETag: projected.etag });
+    expect(projected).toMatchObject({
+      key: CONSOLE_PORT_KEY,
+      value: 3100,
+      pending_restart: true,
+      effective_at: null,
+    });
+    expect(await store.load()).toMatchObject({
+      consoleConfig: { port: 3100 },
+    });
+  });
+
+  it('rejects operator config updates without current ETag or valid schema', async () => {
+    const module = createModule();
+    const putRoute = findRoute(module.routes, 'PUT', LICENSE_KEY_PATH);
+
+    await expect(putRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+      headers: {},
+      body: { value: 3100 },
+    } as never)).resolves.toMatchObject({ status: 428, body: { code: 'precondition_required' } });
+
+    await expect(putRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+      headers: { 'if-match': 'W/"stale"' },
+      body: { value: 3100 },
+    } as never)).resolves.toMatchObject({ status: 412, body: { code: 'precondition_failed' } });
+
+    const getRoute = findRoute(module.routes, 'GET', LICENSE_KEY_PATH);
+    const etag = projectOperatorConfigSetting((await getRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+    } as never)).body).etag;
+    await expect(putRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+      headers: { 'if-match': etag },
+      body: { value: 70000 },
+    } as never)).resolves.toMatchObject({ status: 422, body: { code: 'validation_failed' } });
+  });
+
+  it('maps store-level operator config compare-and-swap races to precondition failures', async () => {
+    const store = new RacingOperatorConfigStore();
+    const module = createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: store,
+      now: () => NOW,
+    });
+    const getRoute = findRoute(module.routes, 'GET', LICENSE_KEY_PATH);
+    const putRoute = findRoute(module.routes, 'PUT', LICENSE_KEY_PATH);
+    const etag = projectOperatorConfigSetting((await getRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+    } as never)).body).etag;
+
+    await expect(putRoute.handler({
+      query: {},
+      params: { key: CONSOLE_PORT_KEY },
+      headers: { 'if-match': etag },
+      body: { value: 3100 },
+    } as never)).resolves.toMatchObject({
+      status: 412,
+      body: { code: 'precondition_failed' },
+    });
+    await expect(store.load()).resolves.toMatchObject({ consoleConfig: { port: 3200 } });
+  });
+
+  it('rejects operator config definitions that use reserved internal path segments', () => {
+    expect(() => createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      operatorConfigDefinitions: [{
+        key: 'defaults.reserved',
+        section: 'defaultsConfig',
+        path: ['__operator_config_status'],
+        schema: { type: 'object' },
+        schemaVersion: 1,
+        sensitivity: 'public_admin',
+        mutability: 'dynamic',
+        requiredCapability: OPERATE_CAPABILITY,
+      }],
+      now: () => NOW,
+    })).toThrow(/reserved path segment/);
+  });
+
+  it('projects operator config by allowlist rather than source object shape', () => {
+    const projected = projectOperatorConfigSetting({
+      key: 'license.key',
+      schema_version: 1,
+      sensitivity: 'secret_write_only',
+      mutability: 'restart_required',
+      value_schema: { type: 'string', min_length: 1, max_length: 4096, secret_hint: MUST_NOT_LEAK },
+      effective_at: null,
+      pending_restart: true,
+      etag: 'W/"operator-config:license.key:fixture"',
+      configured: true,
+      value: MUST_NOT_LEAK,
+      raw_secret: MUST_NOT_LEAK,
+    });
+
+    expect(projected).toEqual({
+      key: 'license.key',
+      schema_version: 1,
+      sensitivity: 'secret_write_only',
+      mutability: 'restart_required',
+      value_schema: { type: 'string', min_length: 1, max_length: 4096 },
+      effective_at: null,
+      pending_restart: true,
+      etag: 'W/"operator-config:license.key:fixture"',
+      configured: true,
     });
   });
 

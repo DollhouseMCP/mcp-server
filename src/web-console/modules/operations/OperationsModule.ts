@@ -3,6 +3,12 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
+import {
+  DEFAULT_OPERATOR_CONFIG_DEFINITIONS,
+  OperatorConfigurationService,
+  type OperatorConfigSettingDefinition,
+} from './OperationsConfig.js';
 import { OperationsService } from './OperationsService.js';
 import type { OperationsHealthChecks } from './OperationsHealth.js';
 import type {
@@ -11,6 +17,8 @@ import type {
   OperationalMetricQuery,
 } from './OperationsTelemetry.js';
 import {
+  projectOperatorConfigList,
+  projectOperatorConfigSetting,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
   projectOperationalLogs,
@@ -19,6 +27,9 @@ import {
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
 const OPERATION_AUDIT_IDS = [
+  'operate.config.list',
+  'operate.config.show',
+  'operate.config.update',
   'operate.health.show',
   'operate.health.database',
   'operate.health.auth_server',
@@ -30,16 +41,63 @@ const OPERATION_AUDIT_IDS = [
 export interface OperationsModuleOptions {
   readonly healthChecks: OperationsHealthChecks;
   readonly telemetry: IConsoleTelemetryQuery;
+  readonly operatorConfigStore: IOperatorConfigStore;
+  readonly operatorConfigDefinitions?: readonly OperatorConfigSettingDefinition[];
   readonly now?: () => Date;
 }
 
 export function createOperationsModule(options: OperationsModuleOptions): ConsoleModuleDescriptor {
   const service = new OperationsService(options.healthChecks, options.telemetry, options.now);
+  const configService = new OperatorConfigurationService(
+    options.operatorConfigStore,
+    options.operatorConfigDefinitions ?? DEFAULT_OPERATOR_CONFIG_DEFINITIONS,
+    options.now,
+  );
   return {
     id: 'operations',
     apiVersion: 'v1',
     capabilities: [OPERATE_CAPABILITY],
     routes: [
+      {
+        method: 'GET',
+        path: '/api/v1/admin/operate/config',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.config.list',
+        privacyProjector: projectOperatorConfigList,
+        handler: () => configService.listConfig(),
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/admin/operate/config/:key',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.config.show',
+        privacyProjector: projectOperatorConfigSetting,
+        handler: req => configService.getConfig(firstString(req.params.key) ?? ''),
+      },
+      {
+        method: 'PUT',
+        path: '/api/v1/admin/operate/config/:key',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_5m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'required',
+        auditOperation: 'operate.config.update',
+        privacyProjector: projectOperatorConfigSetting,
+        handler: req => configService.updateConfig({
+          key: firstString(req.params.key) ?? '',
+          ifMatch: firstString(req.headers['if-match']),
+          body: req.body,
+        }),
+      },
       {
         method: 'GET',
         path: '/api/v1/admin/operate/health',
@@ -119,18 +177,18 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
 
 function parseLogQuery(req: ConsoleRequest): OperationalLogQuery {
   return {
-    limit: boundedLimit(firstQueryValue(req.query.limit), 100),
-    cursor: boundedString(firstQueryValue(req.query.cursor), 256),
-    level: boundedString(firstQueryValue(req.query.level), 16),
-    subsystem: boundedString(firstQueryValue(req.query.subsystem), 64),
-    event: boundedString(firstQueryValue(req.query.event), 128),
+    limit: boundedLimit(firstString(req.query.limit), 100),
+    cursor: boundedString(firstString(req.query.cursor), 256),
+    level: boundedString(firstString(req.query.level), 16),
+    subsystem: boundedString(firstString(req.query.subsystem), 64),
+    event: boundedString(firstString(req.query.event), 128),
   };
 }
 
 function parseMetricQuery(req: ConsoleRequest): OperationalMetricQuery {
   return {
-    subsystem: boundedString(firstQueryValue(req.query.subsystem), 64),
-    name: boundedString(firstQueryValue(req.query.name), 128),
+    subsystem: boundedString(firstString(req.query.subsystem), 64),
+    name: boundedString(firstString(req.query.name), 128),
   };
 }
 
@@ -147,7 +205,7 @@ function boundedString(value: string | null, maxLength: number): string | null {
   return trimmed.slice(0, maxLength);
 }
 
-function firstQueryValue(value: ConsoleRequest['query'][string]): string | null {
+function firstString(value: ConsoleRequest['query'][string] | string | readonly string[] | undefined): string | null {
   if (Array.isArray(value)) {
     const first = value[0];
     return typeof first === 'string' ? first : null;

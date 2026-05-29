@@ -21,6 +21,7 @@ import { sql } from 'drizzle-orm';
 import {
   InMemoryOperatorConfigStore,
   FilesystemOperatorConfigStore,
+  OperatorConfigConflictError,
   type IOperatorConfigStore,
   type OperatorConfig,
 } from '../../../src/storage/operatorConfig/index.js';
@@ -70,9 +71,9 @@ function runContractSuite(
 
     it('returns a fresh copy each call (mutating one does not leak to the next)', async () => {
       const first = await store.load();
-      (first.enhancedIndexConfig as Record<string, unknown>).poisoned = true;
+      first.enhancedIndexConfig.poisoned = true;
       const second = await store.load();
-      expect((second.enhancedIndexConfig as Record<string, unknown>).poisoned).toBeUndefined();
+      expect(second.enhancedIndexConfig.poisoned).toBeUndefined();
     });
   });
 
@@ -101,7 +102,20 @@ function runContractSuite(
       await store.save(makeConfig({ consoleConfig: { port: 1111 } }));
       await store.save(makeConfig({ consoleConfig: { port: 2222 } }));
       const loaded = await store.load();
-      expect((loaded.consoleConfig as Record<string, unknown>).port).toBe(2222);
+      expect(loaded.consoleConfig.port).toBe(2222);
+    });
+
+    it('honours expectedUpdatedAt compare-and-swap preconditions', async () => {
+      await store.save(makeConfig({ consoleConfig: { port: 1111 } }));
+      const first = await store.load();
+      await store.save(makeConfig({ consoleConfig: { port: 2222 } }), { expectedUpdatedAt: first.updatedAt });
+      const second = await store.load();
+
+      await expect(store.save(
+        makeConfig({ consoleConfig: { port: 3333 } }),
+        { expectedUpdatedAt: first.updatedAt },
+      )).rejects.toThrow(OperatorConfigConflictError);
+      expect(second.consoleConfig.port).toBe(2222);
     });
 
     it('preserves nested structures in jsonb sections', async () => {
@@ -144,9 +158,9 @@ function runContractSuite(
     it('mutating a loaded copy does not affect the stored row', async () => {
       await store.save(makeConfig({ consoleConfig: { port: 3000 } }));
       const a = await store.load();
-      (a.consoleConfig as Record<string, unknown>).port = 9999;
+      a.consoleConfig.port = 9999;
       const b = await store.load();
-      expect((b.consoleConfig as Record<string, unknown>).port).toBe(3000);
+      expect(b.consoleConfig.port).toBe(3000);
     });
   });
 }
@@ -155,7 +169,7 @@ function runContractSuite(
 
 describe('IOperatorConfigStore contract: InMemoryOperatorConfigStore', () => {
   runContractSuite(
-    async () => new InMemoryOperatorConfigStore(),
+    () => Promise.resolve(new InMemoryOperatorConfigStore()),
     async () => { /* GC'd with the instance. */ },
   );
 });
@@ -245,7 +259,7 @@ describe('FilesystemOperatorConfigStore — durable across instances', () => {
 
     const b = new FilesystemOperatorConfigStore({ rootDir: dir });
     const found = await b.load();
-    expect((found.consoleConfig as Record<string, unknown>).port).toBe(41715);
+    expect(found.consoleConfig.port).toBe(41715);
   });
 
   it('tolerates ENOENT on first load (returns default)', async () => {

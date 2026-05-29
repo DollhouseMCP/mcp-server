@@ -1,6 +1,8 @@
 import type {
   OperationHealthComponentDto,
   OperationHealthSummaryDto,
+  OperatorConfigListDto,
+  OperatorConfigSettingDto,
   OperationalLogDto,
   OperationalLogPageDto,
   OperationalMetricDto,
@@ -57,6 +59,38 @@ export function projectOperationalMetrics(value: unknown): OperationalMetricResp
   };
 }
 
+export function projectOperatorConfigList(value: unknown): OperatorConfigListDto {
+  const record = objectValue(value);
+  return {
+    items: arrayValue(record.items).map(item => projectOperatorConfigSetting(item)),
+  };
+}
+
+export function projectOperatorConfigSetting(value: unknown): OperatorConfigSettingDto {
+  const record = objectValue(value);
+  const sensitivity = configSensitivityField(record, 'sensitivity');
+  const base = {
+    key: stringField(record, 'key'),
+    schema_version: numberField(record, 'schema_version'),
+    sensitivity,
+    mutability: configMutabilityField(record, 'mutability'),
+    value_schema: projectValueSchema(record.value_schema),
+    effective_at: nullableStringField(record, 'effective_at'),
+    pending_restart: record.pending_restart === true,
+    etag: stringField(record, 'etag'),
+  };
+  if (sensitivity === 'secret_write_only') {
+    return {
+      ...base,
+      configured: record.configured === true,
+    };
+  }
+  return {
+    ...base,
+    value: cloneAllowedValue(record.value),
+  };
+}
+
 function projectOperationalLog(value: unknown): OperationalLogDto {
   const record = objectValue(value);
   return {
@@ -95,8 +129,24 @@ function projectOperationalMetric(value: unknown): OperationalMetricDto {
   };
 }
 
+function projectValueSchema(value: unknown): OperatorConfigSettingDto['value_schema'] {
+  const record = objectValue(value);
+  return {
+    type: schemaTypeField(record, 'type'),
+    ...optionalNumber(record, 'minimum'),
+    ...optionalNumber(record, 'maximum'),
+    ...optionalNumber(record, 'min_length'),
+    ...optionalNumber(record, 'max_length'),
+  };
+}
+
 function optionalString(record: UnknownRecord, key: string): Record<string, string> {
   return optionalStringField(record, key);
+}
+
+function optionalNumber(record: UnknownRecord, key: string): Record<string, number> {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? { [key]: value } : {};
 }
 
 function componentField(record: UnknownRecord, key: string): OperationHealthComponentDto['component'] {
@@ -130,4 +180,30 @@ function metricKindField(record: UnknownRecord, key: string): OperationalMetricD
   const value = record[key];
   if (value === 'counter' || value === 'gauge' || value === 'histogram') return value;
   return 'gauge';
+}
+
+function configSensitivityField(record: UnknownRecord, key: string): OperatorConfigSettingDto['sensitivity'] {
+  const value = record[key];
+  return value === 'secret_write_only' ? value : 'public_admin';
+}
+
+function configMutabilityField(record: UnknownRecord, key: string): OperatorConfigSettingDto['mutability'] {
+  const value = record[key];
+  if (value === 'dynamic' || value === 'restart_required' || value === 'read_only') return value;
+  return 'read_only';
+}
+
+function schemaTypeField(record: UnknownRecord, key: string): OperatorConfigSettingDto['value_schema']['type'] {
+  const value = record[key];
+  if (value === 'boolean' || value === 'integer' || value === 'number' || value === 'string' || value === 'object') {
+    return value;
+  }
+  return 'object';
+}
+
+function cloneAllowedValue(value: unknown): unknown {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (Array.isArray(value)) return value.map(cloneAllowedValue);
+  if (value && typeof value === 'object') return JSON.parse(JSON.stringify(value));
+  return null;
 }

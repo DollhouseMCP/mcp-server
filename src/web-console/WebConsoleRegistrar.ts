@@ -30,6 +30,9 @@ import type { IConsoleSecurityInvalidationStore } from './services/invalidation/
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
 import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js';
+import type { IOperatorConfigStore } from '../storage/operatorConfig/IOperatorConfigStore.js';
+import { InMemoryOperatorConfigStore } from '../storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import { PostgresOperatorConfigStore } from '../storage/operatorConfig/PostgresOperatorConfigStore.js';
 import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfigStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
@@ -129,6 +132,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
+  operatorConfigStore: 'WebConsoleOperatorConfigStore',
   userConfigStore: 'WebConsoleUserConfigStore',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -155,6 +159,7 @@ export interface WebConsoleRegistrarOptions {
   readonly executionReader?: SessionExecutionReader | null;
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
+  readonly operatorConfigStore?: IOperatorConfigStore | null;
   readonly adminAuditQuery?: IAdminAuditQuery | null;
   readonly approvalAuditQuery?: IApprovalAuditQuery | null;
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
@@ -193,6 +198,7 @@ export interface WebConsoleComposition {
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
+  readonly operatorConfigStore: IOperatorConfigStore;
   readonly userConfigStore: IUserConfigStore;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -238,6 +244,7 @@ export class WebConsoleRegistrar {
     const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
+    const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const operationHealthChecks = createOperationHealthChecks({
       database,
       stores,
@@ -261,6 +268,7 @@ export class WebConsoleRegistrar {
     registry.register(createOperationsModule({
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
+      operatorConfigStore,
       now: this.options.now,
     }));
     registry.register(createAccountAdminModule({
@@ -348,6 +356,7 @@ export class WebConsoleRegistrar {
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
+      operatorConfigStore,
       userConfigStore,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -401,6 +410,9 @@ export class WebConsoleRegistrar {
     }
     if (accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => accountInviteIssuer);
+    }
+    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore, () => operatorConfigStore);
     }
     if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => userConfigStore);
@@ -795,6 +807,21 @@ function resolveUserConfigStore(
     throw new Error('Web console PostgreSQL self-service settings require UserConfigStore');
   }
   return new InMemoryUserConfigStore();
+}
+
+function resolveOperatorConfigStore(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IOperatorConfigStore {
+  if (options.operatorConfigStore !== undefined) return options.operatorConfigStore ?? new InMemoryOperatorConfigStore();
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore)) {
+    return container.resolve<IOperatorConfigStore>(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore);
+  }
+  if (container.hasRegistration('OperatorConfigStore')) {
+    return container.resolve<IOperatorConfigStore>('OperatorConfigStore');
+  }
+  return database ? new PostgresOperatorConfigStore({ db: database }) : new InMemoryOperatorConfigStore();
 }
 
 function resolveOAuthGrantRevocationService(

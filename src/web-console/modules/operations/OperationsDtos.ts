@@ -69,3 +69,32 @@ export interface OperationalMetricResponseDto {
   readonly checked_at: string;
   readonly metrics: readonly OperationalMetricDto[];
 }
+
+export type OperatorConfigSensitivity = 'public_admin' | 'secret_write_only';
+export type OperatorConfigMutability = 'dynamic' | 'restart_required' | 'read_only';
+export type OperatorConfigSchemaType = 'boolean' | 'integer' | 'number' | 'string' | 'object';
+
+export interface OperatorConfigValueSchemaDto {
+  readonly type: OperatorConfigSchemaType;
+  readonly minimum?: number;
+  readonly maximum?: number;
+  readonly min_length?: number;
+  readonly max_length?: number;
+}
+
+export interface OperatorConfigSettingDto {
+  readonly key: string;
+  readonly schema_version: number;
+  readonly sensitivity: OperatorConfigSensitivity;
+  readonly mutability: OperatorConfigMutability;
+  readonly value_schema: OperatorConfigValueSchemaDto;
+  readonly effective_at: string | null;
+  readonly pending_restart: boolean;
+  readonly etag: string;
+  readonly value?: unknown;
+  readonly configured?: boolean;
+}
+
+export interface OperatorConfigListDto {
+  readonly items: readonly OperatorConfigSettingDto[];
+}
