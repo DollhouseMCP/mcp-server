@@ -35,6 +35,7 @@ import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidatio
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
+import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
@@ -87,6 +88,8 @@ export interface WebConsoleRegistrarOptions {
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
+  readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
+  readonly publicBaseUrl?: string;
 }
 
 export interface WebConsoleComposition {
@@ -135,6 +138,10 @@ export class WebConsoleRegistrar {
     const authStorage = resolveAuthStorage(container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     const userConfigStore = resolveUserConfigStore(database, container);
+    const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
+    const secretEncryption = resolveSecretEncryption(container, this.options);
+    const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
+    const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
@@ -164,6 +171,12 @@ export class WebConsoleRegistrar {
     }));
     registry.register(createIntegrationModule({
       integrationStore: stores.integrationStore,
+      loginTransactions: stores.loginTransactionStore,
+      opaqueValues,
+      secretEncryption,
+      githubProvider: githubIntegrationProvider,
+      publicBaseUrl: integrationPublicBaseUrl,
+      now: this.options.now,
     }));
     registry.register(createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
@@ -175,8 +188,6 @@ export class WebConsoleRegistrar {
       sessionStore: stores.sessionStore,
       now: this.options.now,
     }));
-    const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
-    const secretEncryption = resolveSecretEncryption(container, this.options);
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
@@ -488,6 +499,28 @@ function resolveAccountInviteIssuer(
   if (options.accountInviteIssuer !== undefined) return options.accountInviteIssuer;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
     return container.resolve<IConsoleAccountInviteIssuer>(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer);
+  }
+  return null;
+}
+
+function resolveGitHubIntegrationProvider(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IGitHubIntegrationProvider | null {
+  if (options.githubIntegrationProvider !== undefined) return options.githubIntegrationProvider;
+  if (container.hasRegistration('WebConsoleGitHubIntegrationProvider')) {
+    return container.resolve<IGitHubIntegrationProvider>('WebConsoleGitHubIntegrationProvider');
+  }
+  return null;
+}
+
+function resolveIntegrationPublicBaseUrl(
+  options: WebConsoleRegistrarOptions,
+  githubIntegrationProvider: IGitHubIntegrationProvider | null,
+): string | null {
+  if (options.publicBaseUrl) return options.publicBaseUrl;
+  if (githubIntegrationProvider) {
+    throw new Error('Web console GitHub integration provider requires publicBaseUrl');
   }
   return null;
 }

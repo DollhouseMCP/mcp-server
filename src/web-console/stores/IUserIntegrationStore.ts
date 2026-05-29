@@ -8,6 +8,11 @@ import {
 
 export type UserIntegrationProvider = 'github';
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
+export type UserIntegrationErrorReason =
+  | 'token_exchange_failed'
+  | 'revocation_failed'
+  | 'scope_denied'
+  | 'provider_unavailable';
 
 export interface UserIntegrationRecord {
   readonly id: string;
@@ -20,6 +25,7 @@ export interface UserIntegrationRecord {
   readonly refreshTokenCiphertext: Buffer | null;
   readonly credentialKeyVersion: string | null;
   readonly status: UserIntegrationStatus;
+  readonly errorReason: UserIntegrationErrorReason | null;
   readonly connectedAt: Date | null;
   readonly lastSyncAt: Date | null;
   readonly revokedAt: Date | null;
@@ -28,6 +34,33 @@ export interface UserIntegrationRecord {
 export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
+  connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
+  disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
+}
+
+export interface UserIntegrationConnectInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly externalAccountLabel: string | null;
+  readonly externalInstallationId: string | null;
+  readonly authorizedPermissions: Readonly<Record<string, unknown>>;
+  readonly accessTokenCiphertext: Buffer;
+  readonly refreshTokenCiphertext: Buffer | null;
+  readonly connectedAt: Date;
+}
+
+export interface UserIntegrationDisconnectInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly revokedAt: Date;
+}
+
+export interface UserIntegrationErrorInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly errorReason: UserIntegrationErrorReason;
+  readonly occurredAt: Date;
 }
 
 export function validateUserIntegrationRecord(record: UserIntegrationRecord): void {
@@ -35,6 +68,9 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   assertUuid(record.userId, 'userId');
   if (!['connected', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);
+  }
+  if (record.errorReason !== null && !isIntegrationErrorReason(record.errorReason)) {
+    throw new ConsoleStoreValidationError(`unsupported integration error reason '${record.errorReason}'`);
   }
   assertNullableDisplayString(record.externalAccountLabel, 'externalAccountLabel', 200);
   assertNullableDisplayString(record.externalInstallationId, 'externalInstallationId', 200);
@@ -44,6 +80,12 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   if (record.refreshTokenCiphertext) assertNonEmptyBuffer(record.refreshTokenCiphertext, 'refreshTokenCiphertext');
   if (record.status === 'revoked' && !record.revokedAt) {
     throw new ConsoleStoreValidationError('revoked integration requires revokedAt');
+  }
+  if (record.status !== 'error' && record.errorReason !== null) {
+    throw new ConsoleStoreValidationError('integration error reason requires error status');
+  }
+  if (record.status === 'error' && record.errorReason === null) {
+    throw new ConsoleStoreValidationError('error integration requires errorReason');
   }
 }
 
@@ -128,6 +170,13 @@ function assertNoUnsafePermissionKeys(value: Readonly<Record<string, unknown>>):
       throw new ConsoleStoreValidationError(`authorizedPermissions contains unsafe key '${key}'`);
     }
   }
+}
+
+function isIntegrationErrorReason(value: string): value is UserIntegrationErrorReason {
+  return value === 'token_exchange_failed' ||
+    value === 'revocation_failed' ||
+    value === 'scope_denied' ||
+    value === 'provider_unavailable';
 }
 
 function containsControlCharacter(value: string): boolean {

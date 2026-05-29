@@ -1,4 +1,8 @@
-import type { UserIntegrationRecord, UserIntegrationStatus } from '../../stores/IUserIntegrationStore.js';
+import type {
+  UserIntegrationErrorReason,
+  UserIntegrationRecord,
+  UserIntegrationStatus,
+} from '../../stores/IUserIntegrationStore.js';
 
 export type GitHubRepositorySelection = 'selected' | 'all' | 'unknown';
 export type GitHubContentsPermission = 'none' | 'read' | 'write';
@@ -14,6 +18,7 @@ export interface GitHubIntegrationStatusDto {
     readonly contents: GitHubContentsPermission;
   };
   readonly sync_directions: readonly PortfolioSyncDirection[];
+  readonly error_reason: UserIntegrationErrorReason | null;
   readonly connected_at: string | null;
   readonly last_sync_at: string | null;
 }
@@ -42,6 +47,7 @@ export function serializeGitHubIntegrationStatus(record: UserIntegrationRecord |
       contents: permissions.contents,
     },
     sync_directions: syncDirectionsForContents(permissions.contents),
+    error_reason: record.errorReason,
     connected_at: record.connectedAt?.toISOString() ?? null,
     last_sync_at: record.lastSyncAt?.toISOString() ?? null,
   };
@@ -57,6 +63,7 @@ function disconnectedGitHubStatus(): GitHubIntegrationStatusDto {
       contents: 'none',
     },
     sync_directions: [],
+    error_reason: null,
     connected_at: null,
     last_sync_at: null,
   };

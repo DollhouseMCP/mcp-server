@@ -130,6 +130,11 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
 
 export type UserIntegrationProvider = 'github';
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
+export type UserIntegrationErrorReason =
+  | 'token_exchange_failed'
+  | 'revocation_failed'
+  | 'scope_denied'
+  | 'provider_unavailable';
 
 export const userIntegrations = pgTable('user_integrations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -145,6 +150,7 @@ export const userIntegrations = pgTable('user_integrations', {
   refreshTokenCiphertext: bytea('refresh_token_ciphertext'),
   credentialKeyVersion: text('credential_key_version'),
   status: text('status').$type<UserIntegrationStatus>().notNull(),
+  errorReason: text('error_reason').$type<UserIntegrationErrorReason>(),
   connectedAt: timestamp('connected_at', { withTimezone: true }),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
@@ -194,6 +200,16 @@ export const userIntegrations = pgTable('user_integrations', {
     AND (
       (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
       OR (${table.status} <> 'revoked')
+    )
+    AND (
+      (${table.status} = 'error'
+        AND ${table.errorReason} IN (
+          'token_exchange_failed',
+          'revocation_failed',
+          'scope_denied',
+          'provider_unavailable'
+        ))
+      OR (${table.status} <> 'error' AND ${table.errorReason} IS NULL)
     )
   `),
   uniqueIndex('idx_user_integrations_active_provider_unique')

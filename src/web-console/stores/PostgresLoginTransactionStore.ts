@@ -62,6 +62,16 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
     return rows[0] ? fromRow(rows[0]) : null;
   }
 
+  async findByIdHash(idHash: Buffer): Promise<ConsoleLoginTransaction | null> {
+    assertHash(idHash, 'idHash');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(consoleLoginTransactions).where(
+        eq(consoleLoginTransactions.idHash, idHash),
+      ).limit(1),
+    );
+    return rows[0] ? fromRow(rows[0]) : null;
+  }
+
   async sweepExpired(before: Date = new Date()): Promise<number> {
     const rows = await withSystemContext(this.db, tx =>
       tx.delete(consoleLoginTransactions).where(or(

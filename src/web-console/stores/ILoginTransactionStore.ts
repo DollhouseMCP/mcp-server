@@ -27,6 +27,7 @@ export interface ConsoleLoginTransaction {
 
 export interface ILoginTransactionStore {
   create(transaction: ConsoleLoginTransaction): Promise<void>;
+  findByIdHash(idHash: Buffer): Promise<ConsoleLoginTransaction | null>;
   consume(idHash: Buffer, stateHash: Buffer, consumedAt?: Date): Promise<ConsoleLoginTransaction | null>;
   sweepExpired(before?: Date): Promise<number>;
 }

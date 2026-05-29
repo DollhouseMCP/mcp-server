@@ -24,6 +24,7 @@ export function projectGitHubIntegrationStatus(value: unknown): GitHubIntegratio
       contents: contentsPermission(asRecord(input.permissions).contents),
     },
     sync_directions: syncDirections(input.sync_directions),
+    error_reason: errorReason(input.error_reason),
     connected_at: nullableStringField(input, 'connected_at'),
     last_sync_at: nullableStringField(input, 'last_sync_at'),
   };
@@ -56,4 +57,14 @@ function syncDirections(value: unknown): readonly PortfolioSyncDirection[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is PortfolioSyncDirection =>
     item === 'pull' || item === 'push' || item === 'bidirectional');
+}
+
+function errorReason(value: unknown): GitHubIntegrationStatusDto['error_reason'] {
+  if (value === 'token_exchange_failed' ||
+      value === 'revocation_failed' ||
+      value === 'scope_denied' ||
+      value === 'provider_unavailable') {
+    return value;
+  }
+  return null;
 }

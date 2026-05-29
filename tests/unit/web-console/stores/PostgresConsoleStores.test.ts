@@ -145,6 +145,7 @@ function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
     refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
     credentialKeyVersion: 'integration-key-v1',
     status: 'connected',
+    errorReason: null,
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,

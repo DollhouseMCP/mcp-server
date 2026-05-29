@@ -241,6 +241,28 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(new TestContainer())).rejects.toThrow('reportCleanupError');
   });
 
+  it('fails clearly when GitHub integration writes are configured without publicBaseUrl', async () => {
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 25),
+      registerCleanup: false,
+      githubIntegrationProvider: {
+        createAuthorizationUrl: () => 'https://github.example/install',
+        exchangeAuthorizationCode: () => Promise.resolve({
+          accountLabel: 'alice',
+          installationId: 'installation-1',
+          repositorySelection: 'selected',
+          contentsPermission: 'read',
+          accessToken: 'access-token',
+          refreshToken: null,
+        }),
+        revokeCredentials: () => Promise.resolve(),
+      },
+    }).bootstrapAndRegister(new TestContainer())).rejects
+      .toThrow('GitHub integration provider requires publicBaseUrl');
+  });
+
   it('fails clearly when cleanup is requested without LifecycleService', async () => {
     const container = new TestContainer();
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');

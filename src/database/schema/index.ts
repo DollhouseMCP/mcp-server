@@ -51,6 +51,7 @@ export type {
   ConsoleAdminRole,
   ConsoleLoginFlowKind,
   UserIntegrationProvider,
+  UserIntegrationErrorReason,
   UserIntegrationStatus,
   ConsoleSecurityInvalidationKind,
   ConsoleSecurityInvalidationUrgency,
