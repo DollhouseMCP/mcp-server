@@ -5,8 +5,11 @@ import type {
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IPortfolioElementStore } from '../../stores/IPortfolioElementStore.js';
 import {
+  projectPortfolioElementDelete,
   projectPortfolioElementDetail,
   projectPortfolioElementList,
+  projectPortfolioElementRender,
+  projectPortfolioElementValidation,
   projectPortfolioSummary,
 } from './PortfolioPrivacyProjectors.js';
 import { PortfolioService } from './PortfolioService.js';
@@ -15,16 +18,79 @@ const SELF_CAPABILITY = 'console:self';
 
 export interface PortfolioModuleOptions {
   readonly portfolioStore: IPortfolioElementStore;
+  readonly now?: () => Date;
 }
 
 export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleModuleDescriptor {
-  const service = new PortfolioService(options.portfolioStore);
+  const service = new PortfolioService(options.portfolioStore, options.now);
   return {
     id: 'portfolio',
     apiVersion: 'v1',
     capabilities: [SELF_CAPABILITY],
     events: [],
     routes: [
+      {
+        method: 'POST',
+        path: '/api/v1/me/portfolio/elements/:type',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: projectPortfolioElementDetail,
+        handler: req => withTypeParam(req, type => service.createElement(req, type)),
+      },
+      {
+        method: 'PATCH',
+        path: '/api/v1/me/portfolio/elements/:type/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: projectPortfolioElementDetail,
+        handler: req => withElementParams(req, (type, name) => service.updateElement(req, type, name)),
+      },
+      {
+        method: 'DELETE',
+        path: '/api/v1/me/portfolio/elements/:type/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: projectPortfolioElementDelete,
+        handler: req => withElementParams(req, (type, name) => service.deleteElement(req, type, name)),
+      },
+      {
+        method: 'POST',
+        path: '/api/v1/me/portfolio/elements/:type/:name/validate',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        // The v1 checklist requires Idempotency-Key coverage for these side-effect-free POSTs.
+        idempotency: 'required',
+        privacyProjector: projectPortfolioElementValidation,
+        handler: req => withElementParams(req, (type, name) => service.validateElement(req, type, name)),
+      },
+      {
+        method: 'POST',
+        path: '/api/v1/me/portfolio/elements/:type/:name/render',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        // The v1 checklist requires Idempotency-Key coverage for these side-effect-free POSTs.
+        idempotency: 'required',
+        privacyProjector: projectPortfolioElementRender,
+        handler: req => withElementParams(req, (type, name) => service.renderElement(req, type, name)),
+      },
       {
         method: 'GET',
         path: '/api/v1/me/portfolio',
@@ -63,6 +129,26 @@ export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleM
       },
     ],
   };
+}
+
+function withTypeParam(
+  req: ConsoleRequest,
+  action: (type: string) => Promise<ConsoleHandlerResult>,
+): Promise<ConsoleHandlerResult> | ConsoleHandlerResult {
+  const type = req.params.type;
+  if (typeof type !== 'string' || type.trim() === '') {
+    return {
+      status: 400,
+      body: {
+        type: 'about:blank',
+        title: 'Invalid request',
+        status: 400,
+        code: 'invalid_request',
+        detail: 'type path parameter is required.',
+      },
+    };
+  }
+  return action(type);
 }
 
 function withElementParams(

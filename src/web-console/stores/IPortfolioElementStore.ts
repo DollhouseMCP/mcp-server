@@ -48,6 +48,54 @@ export interface IPortfolioElementStore {
     type: ConsolePortfolioElementType,
     canonicalName: string,
   ): Promise<ConsolePortfolioElementDetailRecord | null>;
+  create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord>;
+  update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null>;
+  delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null>;
+}
+
+export interface ConsolePortfolioElementCreateInput {
+  readonly userId: string;
+  readonly type: ConsolePortfolioElementType;
+  readonly name: string;
+  readonly displayName: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly content: string;
+  readonly tags: readonly string[];
+  readonly now: Date;
+}
+
+export interface ConsolePortfolioElementUpdateInput {
+  readonly userId: string;
+  readonly type: ConsolePortfolioElementType;
+  readonly canonicalName: string;
+  readonly expectedVersion: number;
+  readonly displayName?: string | null;
+  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly content?: string;
+  readonly tags?: readonly string[];
+  readonly now: Date;
+}
+
+export interface ConsolePortfolioElementDeleteInput {
+  readonly userId: string;
+  readonly type: ConsolePortfolioElementType;
+  readonly canonicalName: string;
+  readonly expectedVersion: number;
+  readonly now: Date;
+}
+
+export class PortfolioElementAlreadyExistsError extends Error {
+  constructor(message = 'portfolio element already exists') {
+    super(message);
+    this.name = 'PortfolioElementAlreadyExistsError';
+  }
+}
+
+export class PortfolioElementVersionConflictError extends Error {
+  constructor(message = 'portfolio element version conflict') {
+    super(message);
+    this.name = 'PortfolioElementVersionConflictError';
+  }
 }
 
 export const CONSOLE_PORTFOLIO_ELEMENT_TYPES = [
@@ -58,6 +106,10 @@ export const CONSOLE_PORTFOLIO_ELEMENT_TYPES = [
   'memories',
   'ensembles',
 ] as const satisfies readonly ConsolePortfolioElementType[];
+
+export const PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES = 1_048_576;
+export const PORTFOLIO_ELEMENT_METADATA_MAX_BYTES = 65_536;
+export const PORTFOLIO_ELEMENT_TAGS_MAX = 50;
 
 export function isConsolePortfolioElementType(value: string): value is ConsolePortfolioElementType {
   return CONSOLE_PORTFOLIO_ELEMENT_TYPES.includes(value as ConsolePortfolioElementType);
@@ -85,6 +137,9 @@ export function validatePortfolioElementSummaryRecord(record: ConsolePortfolioEl
   if (!['valid', 'invalid', 'unknown'].includes(record.validationStatus)) {
     throw new ConsoleStoreValidationError(`unsupported validation status '${record.validationStatus}'`);
   }
+  if (record.tags.length > PORTFOLIO_ELEMENT_TAGS_MAX) {
+    throw new ConsoleStoreValidationError(`tags must contain at most ${PORTFOLIO_ELEMENT_TAGS_MAX} entries`);
+  }
   for (const tag of record.tags) {
     assertDisplayString(tag, 'tag', 80);
   }
@@ -95,9 +150,20 @@ export function validatePortfolioElementDetailRecord(record: ConsolePortfolioEle
   if (typeof record.metadata !== 'object' || Array.isArray(record.metadata)) {
     throw new ConsoleStoreValidationError('metadata must be a JSON object');
   }
-  JSON.stringify(record.metadata);
+  let serializedMetadata: string;
+  try {
+    serializedMetadata = JSON.stringify(record.metadata);
+  } catch {
+    throw new ConsoleStoreValidationError('metadata must be JSON-serializable');
+  }
+  if (Buffer.byteLength(serializedMetadata, 'utf8') > PORTFOLIO_ELEMENT_METADATA_MAX_BYTES) {
+    throw new ConsoleStoreValidationError(`metadata must be at most ${PORTFOLIO_ELEMENT_METADATA_MAX_BYTES} bytes`);
+  }
   if (typeof record.content !== 'string') {
     throw new ConsoleStoreValidationError('content must be a string');
+  }
+  if (Buffer.byteLength(record.content, 'utf8') > PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES) {
+    throw new ConsoleStoreValidationError('content must be at most 1 MiB');
   }
 }
 

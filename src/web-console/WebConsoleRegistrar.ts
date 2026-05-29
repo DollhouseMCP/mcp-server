@@ -190,6 +190,7 @@ export class WebConsoleRegistrar {
     }));
     registry.register(createPortfolioModule({
       portfolioStore: stores.portfolioStore,
+      now: this.options.now,
     }));
     registry.register(createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,

@@ -5,8 +5,11 @@ import type {
 } from '../../stores/IPortfolioElementStore.js';
 import type {
   PortfolioElementDetailDto,
+  PortfolioElementDeleteDto,
   PortfolioElementListDto,
+  PortfolioElementRenderDto,
   PortfolioElementSummaryDto,
+  PortfolioElementValidationDto,
   PortfolioSummaryDto,
 } from './PortfolioDtos.js';
 
@@ -63,6 +66,44 @@ export function projectPortfolioElementDetail(value: unknown): PortfolioElementD
   if ('metadata' in input) projected.metadata = asRecord(input.metadata);
   if ('content' in input) projected.content = stringField(input.content);
   return projected as PortfolioElementDetailDto;
+}
+
+export function projectPortfolioElementValidation(value: unknown): PortfolioElementValidationDto {
+  const input = asRecord(value);
+  const issues = Array.isArray(input.issues)
+    ? input.issues.map(issue => {
+      const issueRecord = asRecord(issue);
+      return {
+        path: stringField(issueRecord.path),
+        code: stringField(issueRecord.code),
+        message: stringField(issueRecord.message),
+      };
+    })
+    : [];
+  return {
+    valid: input.valid === true,
+    issues,
+  };
+}
+
+export function projectPortfolioElementRender(value: unknown): PortfolioElementRenderDto {
+  const input = asRecord(value);
+  return {
+    type: portfolioType(input.type) ?? 'skills',
+    name: stringField(input.name),
+    preview: stringField(input.preview),
+  };
+}
+
+export function projectPortfolioElementDelete(value: unknown): PortfolioElementDeleteDto {
+  const input = asRecord(value);
+  return {
+    deleted: true,
+    type: portfolioType(input.type) ?? 'skills',
+    name: stringField(input.name),
+    version: positiveInteger(input.version),
+    deleted_at: stringField(input.deleted_at),
+  };
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

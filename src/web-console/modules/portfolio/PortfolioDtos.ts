@@ -27,6 +27,31 @@ export interface PortfolioElementDetailDto extends PortfolioElementSummaryDto {
   readonly content: string;
 }
 
+export interface PortfolioElementValidationIssueDto {
+  readonly path: string;
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface PortfolioElementValidationDto {
+  readonly valid: boolean;
+  readonly issues: readonly PortfolioElementValidationIssueDto[];
+}
+
+export interface PortfolioElementRenderDto {
+  readonly type: ConsolePortfolioElementType;
+  readonly name: string;
+  readonly preview: string;
+}
+
+export interface PortfolioElementDeleteDto {
+  readonly deleted: true;
+  readonly type: ConsolePortfolioElementType;
+  readonly name: string;
+  readonly version: number;
+  readonly deleted_at: string;
+}
+
 export interface PortfolioElementListDto {
   readonly elements: readonly Partial<PortfolioElementSummaryDto>[];
 }
@@ -83,6 +108,10 @@ export function serializePortfolioElementDetail(
     metadata: record.metadata,
     content: record.content,
   }, fields);
+}
+
+export function portfolioElementEtag(record: ConsolePortfolioElementSummaryRecord): string {
+  return `W/"portfolio:${record.type}:${record.canonicalName}:v${record.version}"`;
 }
 
 function applyFields<T extends object>(

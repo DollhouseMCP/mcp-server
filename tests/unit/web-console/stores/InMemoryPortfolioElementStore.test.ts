@@ -3,6 +3,11 @@ import { describe, expect, it } from '@jest/globals';
 import {
   ConsoleStoreValidationError,
   InMemoryPortfolioElementStore,
+  PortfolioElementAlreadyExistsError,
+  PortfolioElementVersionConflictError,
+  PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
+  PORTFOLIO_ELEMENT_TAGS_MAX,
+  validatePortfolioElementDetailRecord,
   validatePortfolioElementSummaryRecord,
   type ConsolePortfolioElementDetailRecord,
 } from '../../../../src/web-console/index.js';
@@ -104,5 +109,91 @@ describe('InMemoryPortfolioElementStore', () => {
     expect(() => validatePortfolioElementSummaryRecord(portfolioElement({
       canonicalName: 'different-name',
     }))).toThrow('canonicalName must match canonicalized name');
+  });
+
+  it('validates metadata byte and tag count caps for store adapters', () => {
+    expect(() => validatePortfolioElementDetailRecord(portfolioElement({
+      metadata: { value: 'x'.repeat(PORTFOLIO_ELEMENT_METADATA_MAX_BYTES) },
+    }))).toThrow(ConsoleStoreValidationError);
+    expect(() => validatePortfolioElementSummaryRecord(portfolioElement({
+      tags: Array.from({ length: PORTFOLIO_ELEMENT_TAGS_MAX + 1 }, (_, index) => `tag-${index}`),
+    }))).toThrow(ConsoleStoreValidationError);
+  });
+
+  it('creates, updates, and deletes active elements with version checks', async () => {
+    const store = new InMemoryPortfolioElementStore();
+    const created = await store.create({
+      userId: USER_ID,
+      type: 'skills',
+      name: REVIEW_HELPER_NAME,
+      displayName: 'Review Helper',
+      metadata: { description: 'Review helper' },
+      content: '# Review Helper',
+      tags: ['review'],
+      now: NOW,
+    });
+
+    expect(created).toMatchObject({ version: 1, canonicalName: REVIEW_HELPER_NAME });
+    await expect(store.create({
+      userId: USER_ID,
+      type: 'skills',
+      name: `${REVIEW_HELPER_NAME}.md`,
+      displayName: 'Duplicate',
+      metadata: {},
+      content: '# Duplicate',
+      tags: [],
+      now: NOW,
+    })).rejects.toThrow(PortfolioElementAlreadyExistsError);
+
+    const updated = await store.update({
+      userId: USER_ID,
+      type: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      expectedVersion: 1,
+      content: '# Updated',
+      now: new Date(NOW.getTime() + 1000),
+    });
+    expect(updated).toMatchObject({ version: 2, content: '# Updated' });
+    await expect(store.update({
+      userId: USER_ID,
+      type: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      expectedVersion: 1,
+      content: '# Stale',
+      now: NOW,
+    })).rejects.toThrow(PortfolioElementVersionConflictError);
+
+    const deleted = await store.delete({
+      userId: USER_ID,
+      type: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      expectedVersion: 2,
+      now: new Date(NOW.getTime() + 2000),
+    });
+    expect(deleted).toMatchObject({ version: 3 });
+    await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toBeNull();
+
+    await expect(store.delete({
+      userId: USER_ID,
+      type: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      expectedVersion: 3,
+      now: new Date(NOW.getTime() + 3000),
+    })).resolves.toBeNull();
+  });
+
+  it('rejects stale delete versions before changing the active element', async () => {
+    const store = new InMemoryPortfolioElementStore([portfolioElement()]);
+
+    await expect(store.delete({
+      userId: USER_ID,
+      type: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      expectedVersion: 2,
+      now: NOW,
+    })).rejects.toThrow(PortfolioElementVersionConflictError);
+    await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toMatchObject({
+      version: 1,
+    });
   });
 });
