@@ -4,6 +4,7 @@ import type { DatabaseInstance } from '../../../../src/database/connection.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
 import type { UserIntegrationRecord } from '../../../../src/web-console/stores/IUserIntegrationStore.js';
+import type { PortfolioSyncJobRecord } from '../../../../src/web-console/stores/IPortfolioSyncJobStore.js';
 import type {
   IdempotencyClaim,
   IdempotencyRecord,
@@ -29,6 +30,9 @@ const { PostgresLoginTransactionStore } = await import(
 );
 const { PostgresUserIntegrationStore } = await import(
   '../../../../src/web-console/stores/PostgresUserIntegrationStore.js'
+);
+const { PostgresPortfolioSyncJobStore } = await import(
+  '../../../../src/web-console/stores/PostgresPortfolioSyncJobStore.js'
 );
 const { PostgresIdempotencyStore } = await import(
   '../../../../src/web-console/stores/PostgresIdempotencyStore.js'
@@ -62,6 +66,9 @@ const { accountFactors } = await import('../../../../src/database/schema/index.j
 const { ConsoleStoreConflictError, ConsoleStoreValidationError } = await import(
   '../../../../src/web-console/stores/ConsoleStoreValidation.js'
 );
+const { PortfolioSyncAlreadyPendingError } = await import(
+  '../../../../src/web-console/stores/IPortfolioSyncJobStore.js'
+);
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
@@ -77,6 +84,7 @@ const ALICE_EMAIL = 'alice@example.test';
 const ALICE_DISPLAY_EMAIL = 'Alice@Example.Test';
 const ACCOUNT_CORRELATION_ID = '7d0e5e89-52d0-4f88-a7bc-8f2f65a708b8';
 const ALLOWLIST_ID = 'f0a8d9e6-b1a1-4d94-b600-bef99c8d4ed1';
+const INTEGRATION_ID = '35e22a52-dc56-4cd0-9d13-b2802524fbd3';
 const RUNTIME_SESSION_ID = 'mcp-session-1';
 const RUNTIME_COMMAND_ID = '9f8a54b9-f195-41f0-802d-d0ec2fdfb30f';
 const SELF_CAPABILITY = 'console:self';
@@ -132,7 +140,7 @@ function loginTransaction(): ConsoleLoginTransaction {
 
 function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
   return {
-    id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+    id: INTEGRATION_ID,
     userId: USER_ID,
     provider: 'github',
     externalAccountLabel: 'alice',
@@ -149,6 +157,27 @@ function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
+    ...overrides,
+  };
+}
+
+function portfolioSyncJobRow(overrides: Partial<PortfolioSyncJobRecord> = {}) {
+  return {
+    id: '90dc6b61-d6d8-455a-adb1-a227e7fdbf77',
+    userId: USER_ID,
+    integrationId: INTEGRATION_ID,
+    direction: 'pull',
+    conflictPolicy: 'fail',
+    status: 'queued',
+    claimVersion: 0,
+    claimedByWorkerId: null,
+    leaseUntil: null,
+    attemptCount: 0,
+    resultSummary: null,
+    operationalErrorCode: null,
+    createdAt: NOW,
+    startedAt: null,
+    completedAt: null,
     ...overrides,
   };
 }
@@ -532,6 +561,143 @@ describe('PostgresUserIntegrationStore', () => {
       userId: USER_ID,
     });
     expect(chain.limit).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('PostgresPortfolioSyncJobStore', () => {
+  it('creates and finds owner-scoped portfolio sync jobs', async () => {
+    const row = portfolioSyncJobRow();
+    transaction.insert = jest.fn(() => insertChain([row]));
+    transaction.select = jest.fn(() => selectingChain([row]));
+    const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
+
+    await expect(store.create({
+      userId: USER_ID,
+      integrationId: row.integrationId,
+      direction: 'pull',
+      conflictPolicy: 'fail',
+      createdAt: NOW,
+    })).resolves.toMatchObject({
+      id: row.id,
+      userId: USER_ID,
+      status: 'queued',
+    });
+    await expect(store.findById(USER_ID, row.id)).resolves.toMatchObject({
+      id: row.id,
+      userId: USER_ID,
+    });
+  });
+
+  it('maps pending-job unique violations to an already-pending error', async () => {
+    transaction.insert = jest.fn(() => {
+      throw { code: '23505' };
+    });
+    const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
+
+    await expect(store.create({
+      userId: USER_ID,
+      integrationId: INTEGRATION_ID,
+      direction: 'pull',
+      conflictPolicy: 'fail',
+      createdAt: NOW,
+    })).rejects.toThrow(PortfolioSyncAlreadyPendingError);
+  });
+
+  it('claims queued jobs with one atomic skip-locked update', async () => {
+    const running = portfolioSyncJobRow({
+      status: 'running',
+      claimVersion: 1,
+      claimedByWorkerId: 'worker-1',
+      leaseUntil: FIVE_MINUTES,
+      attemptCount: 1,
+      startedAt: NOW,
+    });
+    transaction.execute = jest.fn(() => Promise.resolve([running]));
+    const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
+
+    await expect(store.claimNext({
+      workerId: 'worker-1',
+      leaseUntil: FIVE_MINUTES,
+      now: NOW,
+    })).resolves.toMatchObject({
+      status: 'running',
+      claimVersion: 1,
+      claimedByWorkerId: 'worker-1',
+    });
+    expect(transaction.execute).toHaveBeenCalledWith(expect.objectContaining({
+      queryChunks: expect.any(Array),
+    }));
+  });
+
+  it('returns null when atomic claim finds no eligible job', async () => {
+    transaction.execute = jest.fn(() => Promise.resolve([]));
+    const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
+
+    await expect(store.claimNext({
+      workerId: 'worker-1',
+      leaseUntil: FIVE_MINUTES,
+      now: NOW,
+    })).resolves.toBeNull();
+  });
+
+  it('rejects stale completion and updates renew/fail rows through fenced predicates', async () => {
+    const queued = portfolioSyncJobRow();
+    const running = portfolioSyncJobRow({
+      status: 'running',
+      claimVersion: 1,
+      claimedByWorkerId: 'worker-1',
+      leaseUntil: FIVE_MINUTES,
+      attemptCount: 1,
+      startedAt: NOW,
+    });
+    const failed = portfolioSyncJobRow({
+      ...running,
+      status: 'failed',
+      claimedByWorkerId: null,
+      leaseUntil: null,
+      resultSummary: { failed: 1 },
+      operationalErrorCode: 'provider_unavailable',
+      completedAt: FIVE_MINUTES,
+    });
+    transaction.update = jest.fn(() => returningChain([]));
+    const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.complete({
+      jobId: queued.id,
+      claimVersion: 0,
+      resultSummary: { imported: 1 },
+      completedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+
+    transaction.update = jest.fn(() => returningChain([running]));
+    await expect(store.renewLease({
+      jobId: queued.id,
+      claimVersion: 1,
+      workerId: 'worker-1',
+      leaseUntil: THIRTY_MINUTES,
+      now: NOW,
+    })).resolves.toBe(true);
+
+    transaction.update = jest.fn(() => returningChain([]));
+    await expect(store.renewLease({
+      jobId: queued.id,
+      claimVersion: 1,
+      workerId: 'worker-1',
+      leaseUntil: THIRTY_MINUTES,
+      now: FIVE_MINUTES,
+    })).resolves.toBe(false);
+
+    transaction.update = jest.fn(() => returningChain([failed]));
+    await expect(store.fail({
+      jobId: queued.id,
+      claimVersion: 1,
+      operationalErrorCode: 'provider_unavailable',
+      resultSummary: { failed: 1 },
+      completedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({
+      status: 'failed',
+      operationalErrorCode: 'provider_unavailable',
+    });
   });
 });
 

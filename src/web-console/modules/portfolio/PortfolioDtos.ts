@@ -5,6 +5,7 @@ import type {
   ConsolePortfolioValidationStatus,
 } from '../../stores/IPortfolioElementStore.js';
 import { CONSOLE_PORTFOLIO_ELEMENT_TYPES } from '../../stores/IPortfolioElementStore.js';
+import type { PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
 
 export interface PortfolioSummaryDto {
   readonly total_elements: number;
@@ -54,6 +55,19 @@ export interface PortfolioElementDeleteDto {
 
 export interface PortfolioElementListDto {
   readonly elements: readonly Partial<PortfolioElementSummaryDto>[];
+}
+
+export interface PortfolioSyncJobDto {
+  readonly job_id: string;
+  readonly status: PortfolioSyncJobRecord['status'];
+  readonly direction: PortfolioSyncJobRecord['direction'];
+  readonly conflict_policy: PortfolioSyncJobRecord['conflictPolicy'];
+  readonly status_url: string;
+  readonly created_at: string;
+  readonly started_at: string | null;
+  readonly completed_at: string | null;
+  readonly result_summary: Readonly<Record<string, unknown>> | null;
+  readonly error_code: string | null;
 }
 
 export type PortfolioElementFields = ReadonlySet<string> | null;
@@ -112,6 +126,21 @@ export function serializePortfolioElementDetail(
 
 export function portfolioElementEtag(record: ConsolePortfolioElementSummaryRecord): string {
   return `W/"portfolio:${record.type}:${record.canonicalName}:v${record.version}"`;
+}
+
+export function serializePortfolioSyncJob(record: PortfolioSyncJobRecord): PortfolioSyncJobDto {
+  return {
+    job_id: record.id,
+    status: record.status,
+    direction: record.direction,
+    conflict_policy: record.conflictPolicy,
+    status_url: `/api/v1/me/portfolio/sync/${record.id}`,
+    created_at: record.createdAt.toISOString(),
+    started_at: record.startedAt?.toISOString() ?? null,
+    completed_at: record.completedAt?.toISOString() ?? null,
+    result_summary: record.resultSummary,
+    error_code: record.operationalErrorCode,
+  };
 }
 
 function applyFields<T extends object>(

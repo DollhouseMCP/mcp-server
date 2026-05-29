@@ -3,6 +3,8 @@ import { describe, expect, it } from '@jest/globals';
 import {
   createPortfolioModule,
   InMemoryPortfolioElementStore,
+  InMemoryPortfolioSyncJobStore,
+  InMemoryUserIntegrationStore,
   PortfolioElementVersionConflictError,
   PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
   PORTFOLIO_ELEMENT_TAGS_MAX,
@@ -11,8 +13,10 @@ import {
   type ConsolePortfolioElementUpdateInput,
   type ConsoleHandlerResult,
   type IPortfolioElementStore,
+  type IPortfolioSyncJobStore,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
+  type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -25,8 +29,11 @@ const ELEMENTS_PATH = '/api/v1/me/portfolio/elements';
 const ELEMENT_DETAIL_PATH = '/api/v1/me/portfolio/elements/:type/:name';
 const ELEMENT_VALIDATE_PATH = '/api/v1/me/portfolio/elements/:type/:name/validate';
 const ELEMENT_RENDER_PATH = '/api/v1/me/portfolio/elements/:type/:name/render';
+const SYNC_PATH = '/api/v1/me/portfolio/sync';
+const SYNC_STATUS_PATH = '/api/v1/me/portfolio/sync/:job_id';
 const REVIEW_HELPER_NAME = 'review-helper';
 const REVIEW_HELPER_V3_ETAG = 'W/"portfolio:skills:review-helper:v3"';
+const INTEGRATION_ID = '35e22a52-dc56-4cd0-9d13-b2802524fbd3';
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -72,9 +79,41 @@ function portfolioElement(
   };
 }
 
-function moduleFixtureWithStore(store: IPortfolioElementStore) {
-  const module = createPortfolioModule({ portfolioStore: store, now: () => NOW });
-  return { module, store };
+function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIntegrationRecord {
+  return {
+    id: INTEGRATION_ID,
+    userId: USER_ID,
+    provider: 'github',
+    externalAccountLabel: 'alice',
+    externalInstallationId: 'installation-123',
+    authorizedPermissions: {
+      repository_selection: 'selected',
+      permissions: { contents: 'read' },
+    },
+    accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    refreshTokenCiphertext: null,
+    credentialKeyVersion: null,
+    status: 'connected',
+    errorReason: null,
+    connectedAt: NOW,
+    lastSyncAt: null,
+    revokedAt: null,
+    ...overrides,
+  };
+}
+
+function moduleFixtureWithStore(
+  store: IPortfolioElementStore,
+  integrationStore = new InMemoryUserIntegrationStore([userIntegration()]),
+  syncJobStore: IPortfolioSyncJobStore = new InMemoryPortfolioSyncJobStore(),
+) {
+  const module = createPortfolioModule({
+    portfolioStore: store,
+    integrationStore,
+    syncJobStore,
+    now: () => NOW,
+  });
+  return { module, store, integrationStore, syncJobStore };
 }
 
 function moduleFixture(records: readonly ConsolePortfolioElementDetailRecord[] = [portfolioElement()]) {
@@ -166,6 +205,20 @@ describe('PortfolioModule', () => {
         method: 'POST',
         path: ELEMENT_RENDER_PATH,
         idempotency: 'required',
+      }),
+      expect.objectContaining({
+        method: 'POST',
+        path: SYNC_PATH,
+        ownership: 'authenticated_user',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+      }),
+      expect.objectContaining({
+        method: 'GET',
+        path: SYNC_STATUS_PATH,
+        ownership: 'authenticated_user',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
       }),
     ]));
   });
@@ -658,6 +711,192 @@ describe('PortfolioModule', () => {
     await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toMatchObject({
       version: 3,
       content: '# Review Helper\nOwner private content.',
+    });
+  });
+
+  it('starts portfolio sync jobs only for connected integrations with sufficient permissions', async () => {
+    const { module, syncJobStore } = moduleFixture();
+    const sync = findRoute(module.routes, SYNC_PATH, 'POST');
+
+    const result = await sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'pull',
+      },
+    }));
+
+    expect(result).toMatchObject({
+      status: 202,
+      body: {
+        status: 'queued',
+        direction: 'pull',
+        conflict_policy: 'fail',
+        status_url: expect.stringMatching(/^\/api\/v1\/me\/portfolio\/sync\//u),
+        result_summary: null,
+        error_code: null,
+      },
+    });
+    const jobId = (result.body as { job_id: string }).job_id;
+    await expect(syncJobStore.findById(USER_ID, jobId)).resolves.toMatchObject({
+      userId: USER_ID,
+      integrationId: INTEGRATION_ID,
+      direction: 'pull',
+      status: 'queued',
+    });
+    await expect(sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'pull',
+      },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'sync_already_pending' },
+    });
+    expect(sync.privacyProjector?.({
+      ...(result.body as Record<string, unknown>),
+      integration_id: INTEGRATION_ID,
+      access_token: 'leak',
+      worker_id: 'replica-1',
+    })).toEqual(result.body);
+  });
+
+  it('rejects portfolio sync requests without integration permission or valid input', async () => {
+    const readOnly = moduleFixture();
+    const sync = findRoute(readOnly.module.routes, SYNC_PATH, 'POST');
+
+    await expect(sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'push',
+      },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_permission_required' },
+    });
+    const noContents = moduleFixtureWithStore(
+      new InMemoryPortfolioElementStore(),
+      new InMemoryUserIntegrationStore([userIntegration({
+        authorizedPermissions: {
+          repository_selection: 'selected',
+          permissions: { contents: 'none' },
+        },
+      })]),
+    );
+    await expect(findRoute(noContents.module.routes, SYNC_PATH, 'POST').handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'pull',
+      },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_permission_required' },
+    });
+
+    const disconnected = moduleFixtureWithStore(
+      new InMemoryPortfolioElementStore(),
+      new InMemoryUserIntegrationStore(),
+    );
+    const disconnectedSync = findRoute(disconnected.module.routes, SYNC_PATH, 'POST');
+    await expect(disconnectedSync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'pull',
+      },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_required' },
+    });
+    await expect(sync.handler(consoleRequest({
+      body: {
+        provider: 'gitlab',
+        direction: 'pull',
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'provider' })],
+      },
+    });
+    await expect(sync.handler(consoleRequest({
+      body: [],
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request' },
+    });
+    await expect(sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'direction' })],
+      },
+    });
+    await expect(sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'pull',
+        conflict_policy: 'prefer_newer',
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'conflict_policy' })],
+      },
+    });
+  });
+
+  it('allows write-granted integrations to start push sync and read owned job status only', async () => {
+    const { module } = moduleFixtureWithStore(
+      new InMemoryPortfolioElementStore(),
+      new InMemoryUserIntegrationStore([userIntegration({
+        authorizedPermissions: {
+          repository_selection: 'selected',
+          permissions: { contents: 'write' },
+        },
+      })]),
+    );
+    const sync = findRoute(module.routes, SYNC_PATH, 'POST');
+    const status = findRoute(module.routes, SYNC_STATUS_PATH);
+
+    const created = await sync.handler(consoleRequest({
+      body: {
+        provider: 'github',
+        direction: 'bidirectional',
+        conflict_policy: 'prefer_local',
+      },
+    }));
+    expect(created).toMatchObject({
+      status: 202,
+      body: {
+        direction: 'bidirectional',
+        conflict_policy: 'prefer_local',
+      },
+    });
+    const jobId = (created.body as { job_id: string }).job_id;
+
+    await expect(status.handler(consoleRequest({
+      params: { job_id: jobId },
+    }))).resolves.toEqual({
+      status: 200,
+      body: created.body,
+    });
+    await expect(status.handler(consoleRequest({
+      params: { job_id: jobId },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }))).resolves.toMatchObject({
+      status: 404,
+      body: { code: 'portfolio_sync_job_not_found' },
+    });
+    await expect(status.handler(consoleRequest({
+      params: { job_id: 'not-a-uuid' },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request' },
     });
   });
 });

@@ -15,9 +15,19 @@ import {
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
+import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import {
+  isPortfolioSyncJobConflictPolicy,
+  isPortfolioSyncJobDirection,
+  type IPortfolioSyncJobStore,
+  PortfolioSyncAlreadyPendingError,
+  type PortfolioSyncJobConflictPolicy,
+  type PortfolioSyncJobDirection,
+} from '../../stores/IPortfolioSyncJobStore.js';
 import {
   portfolioElementEtag,
   type PortfolioElementValidationIssueDto,
+  serializePortfolioSyncJob,
   serializePortfolioElementDetail,
   serializePortfolioElementList,
   serializePortfolioSummary,
@@ -39,6 +49,8 @@ const PORTFOLIO_ELEMENT_FIELDS = new Set([
 export class PortfolioService {
   constructor(
     private readonly store: IPortfolioElementStore,
+    private readonly integrationStore: IUserIntegrationStore,
+    private readonly syncJobStore: IPortfolioSyncJobStore,
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -293,6 +305,56 @@ export class PortfolioService {
       },
     };
   }
+
+  async startSync(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const auth = requireConsoleAuthentication(req);
+    const parsed = parseSyncBody(req.body);
+    if (parsed.kind === 'problem') return parsed.result;
+    const integration = await this.integrationStore.findByProvider(auth.userId, parsed.value.provider);
+    if (integration?.status !== 'connected') {
+      return problem(409, 'integration_required', 'Conflict', 'A connected GitHub integration is required for portfolio sync.');
+    }
+    if (!syncDirectionAllowed(integration, parsed.value.direction)) {
+      return problem(
+        409,
+        'integration_permission_required',
+        'Conflict',
+        'The connected GitHub integration does not grant the requested portfolio sync direction.',
+      );
+    }
+    let record;
+    try {
+      record = await this.syncJobStore.create({
+        userId: auth.userId,
+        integrationId: integration.id,
+        direction: parsed.value.direction,
+        conflictPolicy: parsed.value.conflictPolicy,
+        createdAt: this.now(),
+      });
+    } catch (error) {
+      if (error instanceof PortfolioSyncAlreadyPendingError) {
+        return problem(409, 'sync_already_pending', 'Conflict', 'A portfolio sync job is already queued or running.');
+      }
+      throw error;
+    }
+    return {
+      status: 202,
+      body: serializePortfolioSyncJob(record),
+    };
+  }
+
+  async getSyncJob(req: ConsoleRequest, jobId: string): Promise<ConsoleHandlerResult> {
+    const auth = requireConsoleAuthentication(req);
+    if (!looksLikeUuid(jobId)) return invalidRequest('job_id path parameter must be a UUID.');
+    const record = await this.syncJobStore.findById(auth.userId, jobId);
+    if (!record) {
+      return problem(404, 'portfolio_sync_job_not_found', 'Not found', 'Portfolio sync job was not found.');
+    }
+    return {
+      status: 200,
+      body: serializePortfolioSyncJob(record),
+    };
+  }
 }
 
 interface ParsedElementBody {
@@ -302,6 +364,12 @@ interface ParsedElementBody {
   readonly content?: string;
   readonly tags?: readonly string[];
   readonly hasMutationField: boolean;
+}
+
+interface ParsedSyncBody {
+  readonly provider: 'github';
+  readonly direction: PortfolioSyncJobDirection;
+  readonly conflictPolicy: PortfolioSyncJobConflictPolicy;
 }
 
 function optionalPortfolioType(value: unknown):
@@ -377,6 +445,36 @@ function parseElementBody(
     return { kind: 'problem', result: validationFailed([issue('tags', 'invalid_type', 'tags must be an array of strings.')]) };
   }
   return { kind: 'valid', value: parsed };
+}
+
+function parseSyncBody(body: unknown):
+  | { readonly kind: 'valid'; readonly value: ParsedSyncBody }
+  | { readonly kind: 'problem'; readonly result: ConsoleHandlerResult } {
+  if (!isRecord(body)) return { kind: 'problem', result: invalidRequest('Request body must be a JSON object.') };
+  if (body.provider !== 'github') {
+    return { kind: 'problem', result: validationFailed([issue('provider', 'unsupported', 'provider must be github.')]) };
+  }
+  if (typeof body.direction !== 'string' || !isPortfolioSyncJobDirection(body.direction)) {
+    return {
+      kind: 'problem',
+      result: validationFailed([issue('direction', 'unsupported', 'direction must be pull, push, or bidirectional.')]),
+    };
+  }
+  const conflictPolicy = typeof body.conflict_policy === 'string' ? body.conflict_policy : 'fail';
+  if (!isPortfolioSyncJobConflictPolicy(conflictPolicy)) {
+    return {
+      kind: 'problem',
+      result: validationFailed([issue('conflict_policy', 'unsupported', 'conflict_policy must be fail, prefer_local, or prefer_remote.')]),
+    };
+  }
+  return {
+    kind: 'valid',
+    value: {
+      provider: body.provider,
+      direction: body.direction,
+      conflictPolicy,
+    },
+  };
 }
 
 function validateElementPayload(input: {
@@ -521,4 +619,24 @@ function singleHeader(value: string | readonly string[] | undefined): string | n
   if (typeof value === 'string') return value;
   if (Array.isArray(value) && value.length === 1) return value[0] ?? null;
   return null;
+}
+
+function syncDirectionAllowed(
+  integration: UserIntegrationRecord,
+  direction: PortfolioSyncJobDirection,
+): boolean {
+  const contents = integrationContentsPermission(integration);
+  if (direction === 'pull') return contents === 'read' || contents === 'write';
+  return contents === 'write';
+}
+
+function integrationContentsPermission(integration: UserIntegrationRecord): 'none' | 'read' | 'write' {
+  const rawPermissions = integration.authorizedPermissions.permissions;
+  const contents = isRecord(rawPermissions) ? rawPermissions.contents : null;
+  if (contents === 'read' || contents === 'write') return contents;
+  return 'none';
+}
+
+function looksLikeUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(value);
 }

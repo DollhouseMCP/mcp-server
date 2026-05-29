@@ -10,6 +10,7 @@ import type {
   PortfolioElementRenderDto,
   PortfolioElementSummaryDto,
   PortfolioElementValidationDto,
+  PortfolioSyncJobDto,
   PortfolioSummaryDto,
 } from './PortfolioDtos.js';
 
@@ -106,6 +107,22 @@ export function projectPortfolioElementDelete(value: unknown): PortfolioElementD
   };
 }
 
+export function projectPortfolioSyncJob(value: unknown): PortfolioSyncJobDto {
+  const input = asRecord(value);
+  return {
+    job_id: stringField(input.job_id),
+    status: syncJobStatus(input.status),
+    direction: syncDirection(input.direction),
+    conflict_policy: conflictPolicy(input.conflict_policy),
+    status_url: stringField(input.status_url),
+    created_at: stringField(input.created_at),
+    started_at: nullableString(input.started_at),
+    completed_at: nullableString(input.completed_at),
+    result_summary: nullableRecord(input.result_summary),
+    error_code: nullableString(input.error_code),
+  };
+}
+
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -126,12 +143,33 @@ function validationStatus(value: unknown): ConsolePortfolioValidationStatus {
   return 'unknown';
 }
 
+function syncJobStatus(value: unknown): PortfolioSyncJobDto['status'] {
+  if (value === 'running' || value === 'succeeded' || value === 'failed' || value === 'cancelled') return value;
+  return 'queued';
+}
+
+function syncDirection(value: unknown): PortfolioSyncJobDto['direction'] {
+  if (value === 'push' || value === 'bidirectional') return value;
+  return 'pull';
+}
+
+function conflictPolicy(value: unknown): PortfolioSyncJobDto['conflict_policy'] {
+  if (value === 'prefer_local' || value === 'prefer_remote') return value;
+  return 'fail';
+}
+
 function stringField(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
 function nullableString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function nullableRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function stringArray(value: unknown): readonly string[] {

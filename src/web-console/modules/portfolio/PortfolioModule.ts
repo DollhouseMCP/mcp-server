@@ -4,12 +4,15 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { IPortfolioElementStore } from '../../stores/IPortfolioElementStore.js';
+import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
+import type { IPortfolioSyncJobStore } from '../../stores/IPortfolioSyncJobStore.js';
 import {
   projectPortfolioElementDelete,
   projectPortfolioElementDetail,
   projectPortfolioElementList,
   projectPortfolioElementRender,
   projectPortfolioElementValidation,
+  projectPortfolioSyncJob,
   projectPortfolioSummary,
 } from './PortfolioPrivacyProjectors.js';
 import { PortfolioService } from './PortfolioService.js';
@@ -18,17 +21,43 @@ const SELF_CAPABILITY = 'console:self';
 
 export interface PortfolioModuleOptions {
   readonly portfolioStore: IPortfolioElementStore;
+  readonly integrationStore: IUserIntegrationStore;
+  readonly syncJobStore: IPortfolioSyncJobStore;
   readonly now?: () => Date;
 }
 
 export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleModuleDescriptor {
-  const service = new PortfolioService(options.portfolioStore, options.now);
+  const service = new PortfolioService(options.portfolioStore, options.integrationStore, options.syncJobStore, options.now);
   return {
     id: 'portfolio',
     apiVersion: 'v1',
     capabilities: [SELF_CAPABILITY],
     events: [],
     routes: [
+      {
+        method: 'POST',
+        path: '/api/v1/me/portfolio/sync',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: projectPortfolioSyncJob,
+        handler: req => service.startSync(req),
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/me/portfolio/sync/:job_id',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        privacyProjector: projectPortfolioSyncJob,
+        handler: req => withJobIdParam(req, jobId => service.getSyncJob(req, jobId)),
+      },
       {
         method: 'POST',
         path: '/api/v1/me/portfolio/elements/:type',
@@ -129,6 +158,26 @@ export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleM
       },
     ],
   };
+}
+
+function withJobIdParam(
+  req: ConsoleRequest,
+  action: (jobId: string) => Promise<ConsoleHandlerResult>,
+): Promise<ConsoleHandlerResult> | ConsoleHandlerResult {
+  const jobId = req.params.job_id;
+  if (typeof jobId !== 'string' || jobId.trim() === '') {
+    return {
+      status: 400,
+      body: {
+        type: 'about:blank',
+        title: 'Invalid request',
+        status: 400,
+        code: 'invalid_request',
+        detail: 'job_id path parameter is required.',
+      },
+    };
+  }
+  return action(jobId);
 }
 
 function withTypeParam(

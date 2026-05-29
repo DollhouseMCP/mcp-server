@@ -218,6 +218,71 @@ export const userIntegrations = pgTable('user_integrations', {
   index('idx_user_integrations_user').on(table.userId, table.revokedAt),
 ]);
 
+export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
+export type PortfolioSyncConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
+export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  integrationId: uuid('integration_id').notNull().references(() => userIntegrations.id, { onDelete: 'restrict' }),
+  direction: text('direction').$type<PortfolioSyncDirection>().notNull(),
+  conflictPolicy: text('conflict_policy').$type<PortfolioSyncConflictPolicy>().notNull(),
+  status: text('status').$type<PortfolioSyncJobStatus>().notNull(),
+  claimVersion: bigint('claim_version', { mode: 'number' }).notNull().default(0),
+  claimedByWorkerId: text('claimed_by_worker_id'),
+  leaseUntil: timestamp('lease_until', { withTimezone: true }),
+  attemptCount: integer('attempt_count').notNull().default(0),
+  resultSummary: jsonb('result_summary'),
+  operationalErrorCode: text('operational_error_code'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  startedAt: timestamp('started_at', { withTimezone: true }),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+}, (table) => [
+  check('portfolio_sync_jobs_direction_check', sql`${table.direction} IN ('pull', 'push', 'bidirectional')`),
+  check('portfolio_sync_jobs_conflict_policy_check', sql`${table.conflictPolicy} IN ('fail', 'prefer_local', 'prefer_remote')`),
+  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
+  check('portfolio_sync_jobs_shape_check', sql`
+    ${table.claimVersion} >= 0
+    AND ${table.attemptCount} >= 0
+    AND (${table.claimedByWorkerId} IS NULL OR (
+      btrim(${table.claimedByWorkerId}) <> ''
+      AND char_length(${table.claimedByWorkerId}) <= 128
+    ))
+    AND (${table.operationalErrorCode} IS NULL OR (
+      btrim(${table.operationalErrorCode}) <> ''
+      AND char_length(${table.operationalErrorCode}) <= 100
+    ))
+    AND (${table.resultSummary} IS NULL OR (
+      jsonb_typeof(${table.resultSummary}) = 'object'
+      AND char_length(${table.resultSummary}::text) <= 4096
+    ))
+    AND (
+      (${table.status} = 'running'
+        AND ${table.claimedByWorkerId} IS NOT NULL
+        AND ${table.leaseUntil} IS NOT NULL
+        AND ${table.completedAt} IS NULL)
+      OR (${table.status} <> 'running'
+        AND ${table.claimedByWorkerId} IS NULL
+        AND ${table.leaseUntil} IS NULL)
+    )
+    AND (
+      (${table.status} IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NULL)
+    )
+    AND (
+      (${table.status} = 'failed' AND ${table.operationalErrorCode} IS NOT NULL)
+      OR (${table.status} <> 'failed' AND ${table.operationalErrorCode} IS NULL)
+    )
+  `),
+  index('idx_portfolio_sync_jobs_user').on(table.userId, table.createdAt),
+  uniqueIndex('idx_portfolio_sync_jobs_user_pending_unique')
+    .on(table.userId)
+    .where(sql`${table.status} IN ('queued', 'running')`),
+  index('idx_portfolio_sync_jobs_claimable').on(table.status, table.leaseUntil, table.createdAt),
+  index('idx_portfolio_sync_jobs_integration').on(table.integrationId),
+]);
+
 export const idempotencyRecords = pgTable('idempotency_records', {
   consoleSessionIdHash: bytea('console_session_id_hash').notNull(),
   idempotencyKey: uuid('idempotency_key').notNull(),
