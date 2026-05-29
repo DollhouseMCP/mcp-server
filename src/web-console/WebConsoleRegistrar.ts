@@ -37,7 +37,16 @@ import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElement
 import { InMemoryPortfolioSyncJobStore } from './stores/InMemoryPortfolioSyncJobStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
+import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
+import {
+  InMemorySessionActivationStateAdapter,
+  InMemorySessionActivationEventSink,
+  RegistrySessionActivationStateAdapter,
+  type ISessionActivationEventSink,
+  type ISessionActivationStateAdapter,
+} from './modules/activations/index.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
+import { createActivationModule } from './modules/activations/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
@@ -74,6 +83,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   adminAuditWriter: 'WebConsoleAdminAuditWriter',
   accountAdminMutationTransactionRunner: 'WebConsoleAccountAdminMutationTransactionRunner',
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
+  sessionActivationStateAdapter: 'WebConsoleSessionActivationStateAdapter',
+  sessionActivationEventSink: 'WebConsoleSessionActivationEventSink',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -120,6 +131,8 @@ export interface WebConsoleComposition {
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly sessionActivationStateAdapter: ISessionActivationStateAdapter;
+  readonly sessionActivationEventSink: ISessionActivationEventSink;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -158,6 +171,8 @@ export class WebConsoleRegistrar {
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
+    const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container);
+    const sessionActivationEventSink = resolveSessionActivationEventSink(container);
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
@@ -183,6 +198,13 @@ export class WebConsoleRegistrar {
     registry.register(createRuntimeSessionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       accountAdminStore: stores.accountAdminStore,
+      now: this.options.now,
+    }));
+    registry.register(createActivationModule({
+      runtimeStore: stores.runtimeSessionControlStore,
+      portfolioStore: stores.portfolioStore,
+      activationState: sessionActivationStateAdapter,
+      eventSink: sessionActivationEventSink,
       now: this.options.now,
     }));
     registry.register(createIntegrationModule({
@@ -220,6 +242,8 @@ export class WebConsoleRegistrar {
       adminAuditWriter,
       accountAdminMutationTransactionRunner,
       protectedCorrelationRateLimiter,
+      sessionActivationStateAdapter,
+      sessionActivationEventSink,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -258,6 +282,8 @@ export class WebConsoleRegistrar {
         () => protectedCorrelationRateLimiter,
       );
     }
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter, () => sessionActivationStateAdapter);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink, () => sessionActivationEventSink);
     if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
     }
@@ -485,6 +511,29 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   });
+}
+
+function resolveSessionActivationStateAdapter(container: DiContainerFacade): ISessionActivationStateAdapter {
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter)) {
+    return container.resolve<ISessionActivationStateAdapter>(
+      WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter,
+    );
+  }
+  if (container.hasRegistration('SessionActivationRegistry')) {
+    return new RegistrySessionActivationStateAdapter(
+      container.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+    );
+  }
+  return new InMemorySessionActivationStateAdapter();
+}
+
+function resolveSessionActivationEventSink(container: DiContainerFacade): ISessionActivationEventSink {
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink)) {
+    return container.resolve<ISessionActivationEventSink>(
+      WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink,
+    );
+  }
+  return new InMemorySessionActivationEventSink();
 }
 
 function resolveUserConfigStore(
