@@ -67,6 +67,12 @@ import { createActivationModule } from './modules/activations/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import {
+  InMemoryConsoleTelemetryQuery,
+  createOperationsModule,
+  type IConsoleTelemetryQuery,
+  type OperationsHealthChecks,
+} from './modules/operations/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
@@ -106,6 +112,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   sessionApprovalEventSink: 'WebConsoleSessionApprovalEventSink',
   sessionExecutionReader: 'WebConsoleSessionExecutionReader',
   sessionGatekeeperReader: 'WebConsoleSessionGatekeeperReader',
+  telemetryQuery: 'WebConsoleTelemetryQuery',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -134,6 +141,7 @@ export interface WebConsoleRegistrarOptions {
   readonly approvalEventSink?: ISessionApprovalEventSink | null;
   readonly executionReader?: SessionExecutionReader | null;
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
+  readonly telemetryQuery?: IConsoleTelemetryQuery | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -162,6 +170,7 @@ export interface WebConsoleComposition {
   readonly sessionApprovalEventSink: ISessionApprovalEventSink;
   readonly sessionExecutionReader: SessionExecutionReader;
   readonly sessionGatekeeperReader: SessionGatekeeperReader;
+  readonly telemetryQuery: IConsoleTelemetryQuery;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -206,6 +215,13 @@ export class WebConsoleRegistrar {
     const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, this.options);
     const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
+    const telemetryQuery = resolveTelemetryQuery(container, this.options);
+    const operationHealthChecks = createOperationHealthChecks({
+      database,
+      stores,
+      authStorage,
+      container,
+    });
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
@@ -213,6 +229,11 @@ export class WebConsoleRegistrar {
         authStorage,
         routesMounted: false,
       }),
+      now: this.options.now,
+    }));
+    registry.register(createOperationsModule({
+      healthChecks: operationHealthChecks,
+      telemetry: telemetryQuery,
       now: this.options.now,
     }));
     registry.register(createAccountAdminModule({
@@ -293,6 +314,7 @@ export class WebConsoleRegistrar {
       sessionApprovalEventSink,
       sessionExecutionReader,
       sessionGatekeeperReader,
+      telemetryQuery,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -337,6 +359,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink, () => sessionApprovalEventSink);
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader, () => sessionExecutionReader);
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader, () => sessionGatekeeperReader);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery, () => telemetryQuery);
     if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
     }
@@ -413,6 +436,32 @@ function createHealthReadinessInputs(options: {
     authServerAvailable: () => Boolean(options.authStorage),
     // TODO(web-console-mount): flip through the M7 production mount gate.
     apiV1Mounted: () => options.routesMounted,
+  };
+}
+
+function createOperationHealthChecks(options: {
+  readonly database: DatabaseInstance | undefined;
+  readonly stores: ConsoleStoreSet;
+  readonly authStorage: IAuthStorageLayer | null;
+  readonly container: DiContainerFacade;
+}): OperationsHealthChecks {
+  return {
+    database: () => Boolean(options.database),
+    authServer: () => Boolean(options.authStorage),
+    gatekeeper: () => options.container.hasRegistration('gatekeeper'),
+    runtimeControl: () => Boolean(options.stores.runtimeSessionControlStore),
+    securityInvalidation: () => ({
+      component: 'security_invalidation',
+      status: 'not_ready',
+      checked_at: new Date(0).toISOString(),
+      failure_codes: ['security_invalidation_processor_not_ready'],
+    }),
+    apiMount: () => ({
+      component: 'api_mount',
+      status: 'not_ready',
+      checked_at: new Date(0).toISOString(),
+      failure_codes: ['api_v1_not_mounted'],
+    }),
   };
 }
 
@@ -643,6 +692,19 @@ function resolveSessionGatekeeperReader(
     return new GatekeeperSessionStateReader(container.resolve<Gatekeeper>('gatekeeper'));
   }
   return new EmptySessionGatekeeperReader();
+}
+
+function resolveTelemetryQuery(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IConsoleTelemetryQuery {
+  if (options.telemetryQuery !== undefined) {
+    return options.telemetryQuery ?? new InMemoryConsoleTelemetryQuery();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery)) {
+    return container.resolve<IConsoleTelemetryQuery>(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery);
+  }
+  return new InMemoryConsoleTelemetryQuery();
 }
 
 function resolveUserConfigStore(

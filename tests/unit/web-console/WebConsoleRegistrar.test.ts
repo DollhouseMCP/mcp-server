@@ -92,6 +92,7 @@ describe('WebConsoleRegistrar', () => {
       InMemorySessionApprovalStore,
       InMemorySessionApprovalEventSink,
       InMemorySessionExecutionReader,
+      InMemoryConsoleTelemetryQuery,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
       WEB_CONSOLE_SERVICE_NAMES,
@@ -118,6 +119,11 @@ describe('WebConsoleRegistrar', () => {
         moduleId: 'accountAdmin',
         path: '/api/v1/admin/accounts/users',
         requiredCapability: 'console:admin:accounts',
+      }),
+      expect.objectContaining({
+        moduleId: 'operations',
+        path: '/api/v1/admin/operate/health',
+        requiredCapability: 'console:admin:operate',
       }),
       expect.objectContaining({
         moduleId: 'selfSecurity',
@@ -163,6 +169,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.sessionApprovalStore).toBeInstanceOf(InMemorySessionApprovalStore);
     expect(composition.sessionApprovalEventSink).toBeInstanceOf(InMemorySessionApprovalEventSink);
     expect(composition.sessionExecutionReader).toBeInstanceOf(InMemorySessionExecutionReader);
+    expect(composition.telemetryQuery).toBeInstanceOf(InMemoryConsoleTelemetryQuery);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.userConfigStore).toBeInstanceOf(InMemoryUserConfigStore);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
@@ -189,6 +196,7 @@ describe('WebConsoleRegistrar', () => {
       .toBe(composition.sessionExecutionReader);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader))
       .toBe(composition.sessionGatekeeperReader);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery)).toBe(composition.telemetryQuery);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
@@ -363,6 +371,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
       expect.objectContaining({ moduleId: 'accountAdmin' }),
       expect.objectContaining({ moduleId: 'integrations' }),
+      expect.objectContaining({ moduleId: 'operations' }),
       expect.objectContaining({ moduleId: 'portfolio' }),
       expect.objectContaining({ moduleId: 'selfSecurity' }),
     ]));

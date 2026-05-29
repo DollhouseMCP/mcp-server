@@ -1,5 +1,6 @@
 export * from './ConsoleModuleRegistry.js';
 export * from './ConsolePlatformTypes.js';
+export * from './ConsoleProjectorHelpers.js';
 export * from './ConsoleRequestContext.js';
 export * from './ConsoleRouterAssembler.js';
 export * from './ConsoleRouteExecution.js';
