@@ -75,6 +75,7 @@ export class InMemoryConsoleTelemetryQuery implements IConsoleTelemetryQuery {
     const response = await this.queryOperationalMetrics(query);
     for (const item of response.metrics) yield item;
   }
+
 }
 
 function matchesLog(log: OperationalLogDto, query: OperationalLogQuery): boolean {

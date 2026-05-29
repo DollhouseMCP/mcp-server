@@ -11,3 +11,4 @@ export * from './runtime-sessions/index.js';
 export * from './security-admin/index.js';
 export * from './self-service/index.js';
 export * from './self-security/index.js';
+export * from './session-telemetry/index.js';

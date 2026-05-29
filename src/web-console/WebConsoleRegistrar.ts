@@ -95,6 +95,11 @@ import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSe
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
 import { createSecurityAdminModule } from './modules/security-admin/index.js';
+import {
+  InMemoryOwnedActivityQuery,
+  createSessionTelemetryModule,
+  type IOwnedActivityQuery,
+} from './modules/session-telemetry/index.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
@@ -134,6 +139,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   sessionExecutionReader: 'WebConsoleSessionExecutionReader',
   sessionGatekeeperReader: 'WebConsoleSessionGatekeeperReader',
   telemetryQuery: 'WebConsoleTelemetryQuery',
+  ownedActivityQuery: 'WebConsoleOwnedActivityQuery',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -166,6 +172,7 @@ export interface WebConsoleRegistrarOptions {
   readonly executionReader?: SessionExecutionReader | null;
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
+  readonly ownedActivityQuery?: IOwnedActivityQuery | null;
   readonly operatorConfigStore?: IOperatorConfigStore | null;
   readonly signingKeyStore?: ISigningKeyStore | null;
   readonly authPolicyStore?: IConsoleAuthPolicyStore | null;
@@ -204,6 +211,7 @@ export interface WebConsoleComposition {
   readonly sessionExecutionReader: SessionExecutionReader;
   readonly sessionGatekeeperReader: SessionGatekeeperReader;
   readonly telemetryQuery: IConsoleTelemetryQuery;
+  readonly ownedActivityQuery: IOwnedActivityQuery;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -255,6 +263,7 @@ export class WebConsoleRegistrar {
     const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
+    const ownedActivityQuery = resolveOwnedActivityQuery(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
@@ -328,6 +337,11 @@ export class WebConsoleRegistrar {
       gatekeeperReader: sessionGatekeeperReader,
       now: this.options.now,
     }));
+    registry.register(createSessionTelemetryModule({
+      runtimeStore: stores.runtimeSessionControlStore,
+      ownedActivityQuery,
+      now: this.options.now,
+    }));
     registry.register(createIntegrationModule({
       integrationStore: stores.integrationStore,
       loginTransactions: stores.loginTransactionStore,
@@ -373,6 +387,7 @@ export class WebConsoleRegistrar {
       sessionExecutionReader,
       sessionGatekeeperReader,
       telemetryQuery,
+      ownedActivityQuery,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -822,6 +837,19 @@ function resolveTelemetryQuery(
     return container.resolve<IConsoleTelemetryQuery>(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery);
   }
   return new InMemoryConsoleTelemetryQuery();
+}
+
+function resolveOwnedActivityQuery(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IOwnedActivityQuery {
+  if (options.ownedActivityQuery !== undefined) {
+    return options.ownedActivityQuery ?? new InMemoryOwnedActivityQuery();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery)) {
+    return container.resolve<IOwnedActivityQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery);
+  }
+  return new InMemoryOwnedActivityQuery();
 }
 
 function resolveUserConfigStore(
