@@ -3,6 +3,8 @@ import { describe, expect, it, jest } from '@jest/globals';
 import type { DiContainerFacade } from '../../../src/di/DiContainerFacade.js';
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 
+const CONSOLE_SELF_CAPABILITY = 'console:self';
+
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleSessionStore.js', () => ({
   PostgresConsoleSessionStore: class PostgresConsoleSessionStore {
     constructor(readonly database: unknown) {}
@@ -89,6 +91,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryRuntimeSessionControlStore,
       InMemorySessionApprovalStore,
       InMemorySessionApprovalEventSink,
+      InMemorySessionExecutionReader,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
       WEB_CONSOLE_SERVICE_NAMES,
@@ -119,22 +122,27 @@ describe('WebConsoleRegistrar', () => {
       expect.objectContaining({
         moduleId: 'selfSecurity',
         path: '/api/v1/me/security/factors',
-        requiredCapability: 'console:self',
+        requiredCapability: CONSOLE_SELF_CAPABILITY,
       }),
       expect.objectContaining({
         moduleId: 'integrations',
         path: '/api/v1/me/integrations/github',
-        requiredCapability: 'console:self',
+        requiredCapability: CONSOLE_SELF_CAPABILITY,
       }),
       expect.objectContaining({
         moduleId: 'portfolio',
         path: '/api/v1/me/portfolio/elements',
-        requiredCapability: 'console:self',
+        requiredCapability: CONSOLE_SELF_CAPABILITY,
       }),
       expect.objectContaining({
         moduleId: 'approvals',
         path: '/api/v1/me/sessions/:session_id/approvals',
-        requiredCapability: 'console:self',
+        requiredCapability: CONSOLE_SELF_CAPABILITY,
+      }),
+      expect.objectContaining({
+        moduleId: 'executions',
+        path: '/api/v1/me/sessions/:session_id/executions',
+        requiredCapability: CONSOLE_SELF_CAPABILITY,
       }),
     ]));
     expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
@@ -154,6 +162,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.runtimeSessionControlStore).toBeInstanceOf(InMemoryRuntimeSessionControlStore);
     expect(composition.sessionApprovalStore).toBeInstanceOf(InMemorySessionApprovalStore);
     expect(composition.sessionApprovalEventSink).toBeInstanceOf(InMemorySessionApprovalEventSink);
+    expect(composition.sessionExecutionReader).toBeInstanceOf(InMemorySessionExecutionReader);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.userConfigStore).toBeInstanceOf(InMemoryUserConfigStore);
     expect(composition.opaqueValues).toBeInstanceOf(HmacConsoleOpaqueValueService);
@@ -176,6 +185,10 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore)).toBe(composition.sessionApprovalStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink))
       .toBe(composition.sessionApprovalEventSink);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader))
+      .toBe(composition.sessionExecutionReader);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader))
+      .toBe(composition.sessionGatekeeperReader);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
@@ -193,9 +206,10 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.opaqueValues.createOpaqueValue()).toEqual(expect.any(String));
   });
 
-  it('auto-wires approvals to the lowercase live Gatekeeper registration', async () => {
+  it('auto-wires approvals and Gatekeeper state to the lowercase live Gatekeeper registration', async () => {
     const container = new TestContainer();
     const {
+      GatekeeperSessionStateReader,
       GatekeeperSessionApprovalStore,
       WebConsoleRegistrar,
       WEB_CONSOLE_SERVICE_NAMES,
@@ -209,7 +223,10 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     expect(composition.sessionApprovalStore).toBeInstanceOf(GatekeeperSessionApprovalStore);
+    expect(composition.sessionGatekeeperReader).toBeInstanceOf(GatekeeperSessionStateReader);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore)).toBe(composition.sessionApprovalStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader))
+      .toBe(composition.sessionGatekeeperReader);
   });
 
   it('accepts an injected portfolio store without assuming a storage backend', async () => {

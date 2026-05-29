@@ -54,6 +54,14 @@ import {
   type ISessionApprovalEventSink,
   type SessionApprovalStore,
 } from './modules/approvals/index.js';
+import {
+  EmptySessionGatekeeperReader,
+  GatekeeperSessionStateReader,
+  InMemorySessionExecutionReader,
+  createExecutionModule,
+  type SessionExecutionReader,
+  type SessionGatekeeperReader,
+} from './modules/executions/index.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
@@ -96,6 +104,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   sessionActivationEventSink: 'WebConsoleSessionActivationEventSink',
   sessionApprovalStore: 'WebConsoleSessionApprovalStore',
   sessionApprovalEventSink: 'WebConsoleSessionApprovalEventSink',
+  sessionExecutionReader: 'WebConsoleSessionExecutionReader',
+  sessionGatekeeperReader: 'WebConsoleSessionGatekeeperReader',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -122,6 +132,8 @@ export interface WebConsoleRegistrarOptions {
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly approvalStore?: SessionApprovalStore | null;
   readonly approvalEventSink?: ISessionApprovalEventSink | null;
+  readonly executionReader?: SessionExecutionReader | null;
+  readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -148,6 +160,8 @@ export interface WebConsoleComposition {
   readonly sessionActivationEventSink: ISessionActivationEventSink;
   readonly sessionApprovalStore: SessionApprovalStore;
   readonly sessionApprovalEventSink: ISessionApprovalEventSink;
+  readonly sessionExecutionReader: SessionExecutionReader;
+  readonly sessionGatekeeperReader: SessionGatekeeperReader;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -190,6 +204,8 @@ export class WebConsoleRegistrar {
     const sessionActivationEventSink = resolveSessionActivationEventSink(container);
     const sessionApprovalStore = resolveSessionApprovalStore(container, this.options);
     const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, this.options);
+    const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
+    const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
@@ -228,6 +244,12 @@ export class WebConsoleRegistrar {
       runtimeStore: stores.runtimeSessionControlStore,
       approvalStore: sessionApprovalStore,
       eventSink: sessionApprovalEventSink,
+      now: this.options.now,
+    }));
+    registry.register(createExecutionModule({
+      runtimeStore: stores.runtimeSessionControlStore,
+      executionReader: sessionExecutionReader,
+      gatekeeperReader: sessionGatekeeperReader,
       now: this.options.now,
     }));
     registry.register(createIntegrationModule({
@@ -269,6 +291,8 @@ export class WebConsoleRegistrar {
       sessionActivationEventSink,
       sessionApprovalStore,
       sessionApprovalEventSink,
+      sessionExecutionReader,
+      sessionGatekeeperReader,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -311,6 +335,8 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink, () => sessionActivationEventSink);
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore, () => sessionApprovalStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink, () => sessionApprovalEventSink);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader, () => sessionExecutionReader);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader, () => sessionGatekeeperReader);
     if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
     }
@@ -588,6 +614,35 @@ function resolveSessionApprovalEventSink(
     return container.resolve<ISessionApprovalEventSink>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink);
   }
   return new InMemorySessionApprovalEventSink();
+}
+
+function resolveSessionExecutionReader(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): SessionExecutionReader {
+  if (options.executionReader !== undefined) {
+    return options.executionReader ?? new InMemorySessionExecutionReader();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader)) {
+    return container.resolve<SessionExecutionReader>(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader);
+  }
+  return new InMemorySessionExecutionReader();
+}
+
+function resolveSessionGatekeeperReader(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): SessionGatekeeperReader {
+  if (options.gatekeeperReader !== undefined) {
+    return options.gatekeeperReader ?? new EmptySessionGatekeeperReader();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader)) {
+    return container.resolve<SessionGatekeeperReader>(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader);
+  }
+  if (container.hasRegistration('gatekeeper')) {
+    return new GatekeeperSessionStateReader(container.resolve<Gatekeeper>('gatekeeper'));
+  }
+  return new EmptySessionGatekeeperReader();
 }
 
 function resolveUserConfigStore(
