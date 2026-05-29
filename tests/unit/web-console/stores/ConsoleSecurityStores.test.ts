@@ -8,6 +8,7 @@ import {
   InMemoryConsoleAccountAdminStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
+  InMemoryUserIntegrationStore,
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
 import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/index.js';
@@ -15,6 +16,7 @@ import { InMemoryRuntimeSessionControlStore } from '../../../../src/web-console/
 import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/index.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
+import type { UserIntegrationRecord } from '../../../../src/web-console/stores/IUserIntegrationStore.js';
 import type { ConsoleTotpFactorRecord } from '../../../../src/web-console/stores/IConsoleFactorStore.js';
 import type {
   IdempotencyCompletion,
@@ -76,6 +78,28 @@ function loginTransaction(
     createdAt: NOW,
     expiresAt: FIVE_MINUTES,
     consumedAt: null,
+    ...overrides,
+  };
+}
+
+function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIntegrationRecord {
+  return {
+    id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+    userId: USER_ID,
+    provider: 'github',
+    externalAccountLabel: 'alice',
+    externalInstallationId: 'installation-123',
+    authorizedPermissions: {
+      repository_selection: 'selected',
+      permissions: { contents: 'read' },
+    },
+    accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+    credentialKeyVersion: 'integration-key-v1',
+    status: 'connected',
+    connectedAt: NOW,
+    lastSyncAt: null,
+    revokedAt: null,
     ...overrides,
   };
 }
@@ -318,6 +342,66 @@ describe('InMemoryLoginTransactionStore', () => {
     await store.consume(hash(6), hash(4), FOUR_MINUTES);
 
     expect(await store.sweepExpired(FIVE_MINUTES)).toBe(2);
+  });
+});
+
+describe('InMemoryUserIntegrationStore', () => {
+  it('lists only active integrations owned by the requested user and clones credential fields', async () => {
+    const active = userIntegration();
+    const store = new InMemoryUserIntegrationStore([
+      active,
+      userIntegration({
+        id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+        userId: SECOND_USER_ID,
+      }),
+      userIntegration({
+        id: '55e22a52-dc56-4cd0-9d13-b2802524fbd5',
+        status: 'revoked',
+        revokedAt: FIVE_MINUTES,
+      }),
+    ]);
+
+    const rows = await store.listByUser(USER_ID);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: active.id,
+      userId: USER_ID,
+      provider: 'github',
+      externalAccountLabel: 'alice',
+    });
+    rows[0]?.accessTokenCiphertext?.fill(0);
+    expect((await store.findByProvider(USER_ID, 'github'))?.accessTokenCiphertext)
+      .toEqual(Buffer.from('encrypted-access-token'));
+  });
+
+  it('validates integration records before storing them', () => {
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+        unsafe_padding: 'x'.repeat(5000),
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read', administration: 'write' },
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+        accessToken: 'plaintext-token',
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      accessTokenCiphertext: Buffer.alloc(0),
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      status: 'revoked',
+      revokedAt: null,
+    })])).toThrow(ConsoleStoreValidationError);
   });
 });
 

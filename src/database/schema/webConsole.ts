@@ -128,6 +128,80 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
 ]);
 
+export type UserIntegrationProvider = 'github';
+export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
+
+export const userIntegrations = pgTable('user_integrations', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  provider: text('provider').$type<UserIntegrationProvider>().notNull(),
+  externalAccountLabel: text('external_account_label'),
+  externalInstallationId: text('external_installation_id'),
+  authorizedPermissions: jsonb('authorized_permissions').notNull().default({
+    repository_selection: 'unknown',
+    permissions: { contents: 'none' },
+  }),
+  accessTokenCiphertext: bytea('access_token_ciphertext'),
+  refreshTokenCiphertext: bytea('refresh_token_ciphertext'),
+  credentialKeyVersion: text('credential_key_version'),
+  status: text('status').$type<UserIntegrationStatus>().notNull(),
+  connectedAt: timestamp('connected_at', { withTimezone: true }),
+  lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, (table) => [
+  check('user_integrations_provider_check', sql`${table.provider} IN ('github')`),
+  check('user_integrations_status_check', sql`${table.status} IN ('connected', 'revoked', 'error')`),
+  check('user_integrations_shape_check', sql`
+    (${table.externalAccountLabel} IS NULL OR (
+      btrim(${table.externalAccountLabel}) <> ''
+      AND char_length(${table.externalAccountLabel}) <= 200
+    ))
+    AND (${table.externalInstallationId} IS NULL OR (
+      btrim(${table.externalInstallationId}) <> ''
+      AND char_length(${table.externalInstallationId}) <= 200
+    ))
+    AND (${table.credentialKeyVersion} IS NULL OR (
+      btrim(${table.credentialKeyVersion}) <> ''
+      AND char_length(${table.credentialKeyVersion}) <= 128
+    ))
+    AND jsonb_typeof(${table.authorizedPermissions}) = 'object'
+    AND char_length(${table.authorizedPermissions}::text) <= 4096
+    AND (${table.authorizedPermissions} ?& array['repository_selection', 'permissions'])
+    AND (${table.authorizedPermissions} - 'repository_selection' - 'permissions') = '{}'::jsonb
+    AND NOT (${table.authorizedPermissions} ?| array[
+      'access_token',
+      'accessToken',
+      'refresh_token',
+      'refreshToken',
+      'token',
+      'token_hash',
+      'tokenHash',
+      'ciphertext',
+      'credential_key_version',
+      'credentialKeyVersion'
+    ])
+    AND (${table.authorizedPermissions}->>'repository_selection') IN ('selected', 'all', 'unknown')
+    AND jsonb_typeof(${table.authorizedPermissions}->'permissions') = 'object'
+    AND ((${table.authorizedPermissions}->'permissions') - 'contents') = '{}'::jsonb
+    AND (${table.authorizedPermissions}->'permissions'->>'contents') IN ('none', 'read', 'write')
+    AND NOT (${table.authorizedPermissions}->'permissions' ?| array[
+      'administration',
+      'actions',
+      'workflows',
+      'secrets',
+      'metadata'
+    ])
+    AND (
+      (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
+      OR (${table.status} <> 'revoked')
+    )
+  `),
+  uniqueIndex('idx_user_integrations_active_provider_unique')
+    .on(table.userId, table.provider)
+    .where(sql`${table.revokedAt} IS NULL`),
+  index('idx_user_integrations_user').on(table.userId, table.revokedAt),
+]);
+
 export const idempotencyRecords = pgTable('idempotency_records', {
   consoleSessionIdHash: bytea('console_session_id_hash').notNull(),
   idempotencyKey: uuid('idempotency_key').notNull(),

@@ -22,6 +22,7 @@ import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransaction
 import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
+import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
@@ -29,10 +30,12 @@ import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js
 import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfigStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
+import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
+import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -54,6 +57,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   factorStore: 'WebConsoleFactorStore',
   accountAdminStore: 'WebConsoleAccountAdminStore',
   accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
+  integrationStore: 'WebConsoleIntegrationStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
   identityResolver: 'WebConsoleIdentityResolver',
@@ -93,6 +97,7 @@ export interface WebConsoleComposition {
   readonly factorStore: IConsoleFactorStore;
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
+  readonly integrationStore: IUserIntegrationStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
@@ -157,6 +162,9 @@ export class WebConsoleRegistrar {
       accountAdminStore: stores.accountAdminStore,
       now: this.options.now,
     }));
+    registry.register(createIntegrationModule({
+      integrationStore: stores.integrationStore,
+    }));
     registry.register(createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
@@ -196,6 +204,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => stores.factorStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => stores.accountAllowlistStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => stores.integrationStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore, () => stores.runtimeSessionControlStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
@@ -265,6 +274,7 @@ interface ConsoleStoreSet {
   readonly factorStore: IConsoleFactorStore;
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
+  readonly integrationStore: IUserIntegrationStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
@@ -299,6 +309,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleFactorStore },
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
+      { PostgresUserIntegrationStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresRuntimeSessionControlStore },
       { PostgresConsoleIdentityResolver },
@@ -309,6 +320,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleFactorStore.js'),
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
+      import('./stores/PostgresUserIntegrationStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
       import('./identity/PostgresConsoleIdentityResolver.js'),
@@ -320,6 +332,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       factorStore: new PostgresConsoleFactorStore(database),
       accountAdminStore: new PostgresConsoleAccountAdminStore(database),
       accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
+      integrationStore: new PostgresUserIntegrationStore(database),
       securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
       runtimeSessionControlStore: new PostgresRuntimeSessionControlStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
@@ -333,6 +346,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     factorStore: new InMemoryConsoleFactorStore(),
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+    integrationStore: new InMemoryUserIntegrationStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
     runtimeSessionControlStore: new InMemoryRuntimeSessionControlStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),

@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto';
 import type { DatabaseInstance } from '../../../../src/database/connection.js';
 import type { ConsoleSessionRecord } from '../../../../src/web-console/stores/IConsoleSessionStore.js';
 import type { ConsoleLoginTransaction } from '../../../../src/web-console/stores/ILoginTransactionStore.js';
+import type { UserIntegrationRecord } from '../../../../src/web-console/stores/IUserIntegrationStore.js';
 import type {
   IdempotencyClaim,
   IdempotencyRecord,
@@ -25,6 +26,9 @@ const { PostgresConsoleSessionStore } = await import(
 );
 const { PostgresLoginTransactionStore } = await import(
   '../../../../src/web-console/stores/PostgresLoginTransactionStore.js'
+);
+const { PostgresUserIntegrationStore } = await import(
+  '../../../../src/web-console/stores/PostgresUserIntegrationStore.js'
 );
 const { PostgresIdempotencyStore } = await import(
   '../../../../src/web-console/stores/PostgresIdempotencyStore.js'
@@ -123,6 +127,28 @@ function loginTransaction(): ConsoleLoginTransaction {
     createdAt: NOW,
     expiresAt: FIVE_MINUTES,
     consumedAt: null,
+  };
+}
+
+function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
+  return {
+    id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+    userId: USER_ID,
+    provider: 'github',
+    externalAccountLabel: 'alice',
+    externalInstallationId: 'installation-123',
+    authorizedPermissions: {
+      repository_selection: 'selected',
+      permissions: { contents: 'read' },
+    },
+    accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+    refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+    credentialKeyVersion: 'integration-key-v1',
+    status: 'connected',
+    connectedAt: NOW,
+    lastSyncAt: null,
+    revokedAt: null,
+    ...overrides,
   };
 }
 
@@ -471,6 +497,40 @@ describe('PostgresLoginTransactionStore', () => {
     const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
 
     await expect(store.sweepExpired(FIVE_MINUTES)).resolves.toBe(1);
+  });
+});
+
+describe('PostgresUserIntegrationStore', () => {
+  it('lists active user integrations and clones credential ciphertext', async () => {
+    const row = userIntegrationRow();
+    const chain = selectingChain([row]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    const rows = await store.listByUser(USER_ID);
+    rows[0]?.accessTokenCiphertext?.fill(0);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: row.id,
+      userId: USER_ID,
+      provider: 'github',
+      externalAccountLabel: 'alice',
+    });
+    expect(row.accessTokenCiphertext).toEqual(Buffer.from('encrypted-access-token'));
+    expect(chain.limit).toHaveBeenCalledWith(25);
+  });
+
+  it('finds one active provider integration for a user', async () => {
+    const chain = selectingChain([userIntegrationRow()]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({
+      provider: 'github',
+      userId: USER_ID,
+    });
+    expect(chain.limit).toHaveBeenCalledWith(1);
   });
 });
 
