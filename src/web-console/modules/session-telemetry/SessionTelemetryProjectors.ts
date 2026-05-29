@@ -6,7 +6,12 @@ import {
   stringField,
   type UnknownRecord,
 } from '../../platform/ConsoleProjectorHelpers.js';
-import type { UserActivityDto, UserActivityPageDto } from './SessionTelemetryDtos.js';
+import type {
+  UserActivityDto,
+  UserActivityPageDto,
+  UserMetricDto,
+  UserMetricResponseDto,
+} from './SessionTelemetryDtos.js';
 
 export function projectUserActivityPage(value: unknown): UserActivityPageDto {
   const record = objectValue(value);
@@ -35,8 +40,46 @@ export function projectUserActivity(value: unknown): UserActivityDto {
   };
 }
 
+export function projectUserMetrics(value: unknown): UserMetricResponseDto {
+  const record = objectValue(value);
+  return {
+    checked_at: stringField(record, 'checked_at'),
+    metrics: arrayValue(record.metrics).map(item => projectUserMetric(item)),
+  };
+}
+
+export function projectUserMetric(value: unknown): UserMetricDto {
+  const record = objectValue(value);
+  const dimensions = objectValue(record.dimensions);
+  return {
+    name: stringField(record, 'name'),
+    kind: metricKindField(record, 'kind'),
+    value: numberField(record, 'value'),
+    unit: stringField(record, 'unit'),
+    dimensions: {
+      ...optionalString(dimensions, 'subsystem'),
+      ...optionalString(dimensions, 'event'),
+      ...optionalString(dimensions, 'status_family'),
+      ...optionalString(dimensions, 'error_code'),
+      ...optionalString(dimensions, 'transport'),
+      ...optionalString(dimensions, 'latency_bucket'),
+    },
+  };
+}
+
 function userActivityLevelField(record: UnknownRecord, key: string): UserActivityDto['level'] {
   const value = record[key];
   if (value === 'debug' || value === 'info' || value === 'warn' || value === 'error') return value;
   return 'info';
+}
+
+function metricKindField(record: UnknownRecord, key: string): UserMetricDto['kind'] {
+  const value = record[key];
+  if (value === 'counter' || value === 'gauge' || value === 'histogram') return value;
+  return 'gauge';
+}
+
+function optionalString(record: UnknownRecord, key: string): Record<string, string> {
+  const value = record[key];
+  return typeof value === 'string' ? { [key]: value } : {};
 }

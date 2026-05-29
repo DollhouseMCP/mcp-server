@@ -7,9 +7,12 @@ import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { ActivityQuery, IOwnedActivityQuery } from './OwnedActivityQuery.js';
+import type { IOwnedMetricQuery, MetricQuery } from './OwnedMetricQuery.js';
 import {
   projectUserActivity,
   projectUserActivityPage,
+  projectUserMetric,
+  projectUserMetrics,
 } from './SessionTelemetryProjectors.js';
 import { SessionTelemetryService } from './SessionTelemetryService.js';
 
@@ -25,6 +28,7 @@ const SESSION_TELEMETRY_STREAM_POLICY = {
 export interface SessionTelemetryModuleOptions {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly ownedActivityQuery: IOwnedActivityQuery;
+  readonly ownedMetricQuery: IOwnedMetricQuery;
   readonly now?: () => Date;
 }
 
@@ -83,6 +87,53 @@ export function createSessionTelemetryModule(options: SessionTelemetryModuleOpti
           });
         }),
       },
+      {
+        method: 'GET',
+        path: '/api/v1/me/sessions/:session_id/metrics',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        privacyProjector: projectUserMetrics,
+        handler: req => withSessionId(req, sessionId => service.queryMetrics(req, sessionId, parseMetricQuery(req))),
+      },
+      {
+        method: 'GET',
+        path: '/api/v1/me/sessions/:session_id/metrics/stream',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
+        streamPolicy: SESSION_TELEMETRY_STREAM_POLICY,
+        privacyProjector: projectUserMetric,
+        streamEventProjectors: {
+          init: projectMetricStreamInit,
+          update: projectUserMetric,
+          end: projectStreamEnd,
+        },
+        handler: req => withSessionId(req, sessionId => {
+          const lastEventId = parseConsoleLastEventId(req, SESSION_TELEMETRY_STREAM_POLICY);
+          if (!lastEventId.ok) {
+            throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
+          }
+          const query = parseMetricQuery(req);
+          return service.streamMetrics(req, sessionId, query, {
+            stream_id: `me.sessions.${sessionId}.metrics`,
+            stream_type: 'session_metrics',
+            resume_supported: false,
+            session_id: sessionId,
+            filters: {
+              subsystem: query.subsystem,
+              name: query.name,
+            },
+          });
+        }),
+      },
     ],
   };
 }
@@ -96,6 +147,18 @@ function projectLogStreamInit(value: unknown): unknown {
     resume_supported: record.resume_supported === true,
     session_id: typeof record.session_id === 'string' ? record.session_id : '',
     filters: projectStreamFilters(record.filters),
+  };
+}
+
+function projectMetricStreamInit(value: unknown): unknown {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    connected_at: typeof record.connected_at === 'string' ? record.connected_at : null,
+    stream_id: typeof record.stream_id === 'string' ? record.stream_id : '',
+    stream_type: 'session_metrics',
+    resume_supported: record.resume_supported === true,
+    session_id: typeof record.session_id === 'string' ? record.session_id : '',
+    filters: projectMetricStreamFilters(record.filters),
   };
 }
 
@@ -113,6 +176,14 @@ function projectStreamFilters(value: unknown): unknown {
   };
 }
 
+function projectMetricStreamFilters(value: unknown): unknown {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    subsystem: typeof record.subsystem === 'string' ? record.subsystem : null,
+    name: typeof record.name === 'string' ? record.name : null,
+  };
+}
+
 function parseActivityQuery(req: ConsoleRequest): ActivityQuery {
   return {
     limit: boundedLimit(firstString(req.query.limit), 100),
@@ -120,6 +191,13 @@ function parseActivityQuery(req: ConsoleRequest): ActivityQuery {
     level: boundedString(firstString(req.query.level), 16),
     subsystem: boundedString(firstString(req.query.subsystem), 64),
     event: boundedString(firstString(req.query.event), 128),
+  };
+}
+
+function parseMetricQuery(req: ConsoleRequest): MetricQuery {
+  return {
+    subsystem: boundedString(firstString(req.query.subsystem), 64),
+    name: boundedString(firstString(req.query.name), 128),
   };
 }
 

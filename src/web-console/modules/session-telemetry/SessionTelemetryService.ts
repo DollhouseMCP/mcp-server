@@ -2,12 +2,17 @@ import type { ConsoleHandlerResult, ConsoleRequest, ConsoleSseEvent } from '../.
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { ActivityQuery, IOwnedActivityQuery } from './OwnedActivityQuery.js';
-import { projectUserActivityPage } from './SessionTelemetryProjectors.js';
+import type { IOwnedMetricQuery, MetricQuery } from './OwnedMetricQuery.js';
+import {
+  projectUserActivityPage,
+  projectUserMetrics,
+} from './SessionTelemetryProjectors.js';
 
 export class SessionTelemetryService {
   constructor(private readonly options: {
     readonly runtimeStore: IRuntimeSessionControlStore;
     readonly ownedActivityQuery: IOwnedActivityQuery;
+    readonly ownedMetricQuery: IOwnedMetricQuery;
     readonly now?: () => Date;
   }) {}
 
@@ -38,6 +43,33 @@ export class SessionTelemetryService {
     };
   }
 
+  async queryMetrics(req: ConsoleRequest, sessionId: string, query: MetricQuery): Promise<ConsoleHandlerResult> {
+    const actor = requireConsoleAuthentication(req);
+    if (!await this.isOwnedActiveSession(actor.userId, sessionId)) return notFound();
+    return {
+      status: 200,
+      body: projectUserMetrics(await this.options.ownedMetricQuery.queryOwnedMetrics(actor.userId, sessionId, query)),
+    };
+  }
+
+  async streamMetrics(
+    req: ConsoleRequest,
+    sessionId: string,
+    query: MetricQuery,
+    init: unknown,
+  ): Promise<ConsoleHandlerResult> {
+    const actor = requireConsoleAuthentication(req);
+    if (!await this.isOwnedActiveSession(actor.userId, sessionId)) return notFound();
+    return {
+      status: 200,
+      stream: {
+        init,
+        events: streamTelemetryEvents(this.options.ownedMetricQuery.streamOwnedMetrics(actor.userId, sessionId, query)),
+        revalidate: () => this.isOwnedActiveSession(actor.userId, sessionId),
+      },
+    };
+  }
+
   private async isOwnedActiveSession(userId: string, sessionId: string): Promise<boolean> {
     const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
     return session?.userId === userId;
@@ -49,7 +81,11 @@ export class SessionTelemetryService {
 }
 
 async function* streamActivityEvents(activity: AsyncIterable<unknown>): AsyncIterable<ConsoleSseEvent> {
-  for await (const item of activity) {
+  yield* streamTelemetryEvents(activity);
+}
+
+async function* streamTelemetryEvents(items: AsyncIterable<unknown>): AsyncIterable<ConsoleSseEvent> {
+  for await (const item of items) {
     yield {
       event: 'update',
       data: item,

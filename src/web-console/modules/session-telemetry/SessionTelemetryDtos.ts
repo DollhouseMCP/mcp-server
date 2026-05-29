@@ -19,3 +19,25 @@ export interface UserActivityPageDto {
     readonly next_cursor: string | null;
   };
 }
+
+export type UserMetricKind = 'counter' | 'gauge' | 'histogram';
+
+export interface UserMetricDto {
+  readonly name: string;
+  readonly kind: UserMetricKind;
+  readonly value: number;
+  readonly unit: string;
+  readonly dimensions: {
+    readonly subsystem?: string;
+    readonly event?: string;
+    readonly status_family?: string;
+    readonly error_code?: string;
+    readonly transport?: string;
+    readonly latency_bucket?: string;
+  };
+}
+
+export interface UserMetricResponseDto {
+  readonly checked_at: string;
+  readonly metrics: readonly UserMetricDto[];
+}

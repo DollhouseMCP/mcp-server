@@ -97,8 +97,10 @@ import { createSelfSecurityModule } from './modules/self-security/SelfSecurityMo
 import { createSecurityAdminModule } from './modules/security-admin/index.js';
 import {
   InMemoryOwnedActivityQuery,
+  InMemoryOwnedMetricQuery,
   createSessionTelemetryModule,
   type IOwnedActivityQuery,
+  type IOwnedMetricQuery,
 } from './modules/session-telemetry/index.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
@@ -140,6 +142,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   sessionGatekeeperReader: 'WebConsoleSessionGatekeeperReader',
   telemetryQuery: 'WebConsoleTelemetryQuery',
   ownedActivityQuery: 'WebConsoleOwnedActivityQuery',
+  ownedMetricQuery: 'WebConsoleOwnedMetricQuery',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -173,6 +176,7 @@ export interface WebConsoleRegistrarOptions {
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
   readonly ownedActivityQuery?: IOwnedActivityQuery | null;
+  readonly ownedMetricQuery?: IOwnedMetricQuery | null;
   readonly operatorConfigStore?: IOperatorConfigStore | null;
   readonly signingKeyStore?: ISigningKeyStore | null;
   readonly authPolicyStore?: IConsoleAuthPolicyStore | null;
@@ -212,6 +216,7 @@ export interface WebConsoleComposition {
   readonly sessionGatekeeperReader: SessionGatekeeperReader;
   readonly telemetryQuery: IConsoleTelemetryQuery;
   readonly ownedActivityQuery: IOwnedActivityQuery;
+  readonly ownedMetricQuery: IOwnedMetricQuery;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -264,6 +269,7 @@ export class WebConsoleRegistrar {
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
     const ownedActivityQuery = resolveOwnedActivityQuery(container, this.options);
+    const ownedMetricQuery = resolveOwnedMetricQuery(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
@@ -340,6 +346,7 @@ export class WebConsoleRegistrar {
     registry.register(createSessionTelemetryModule({
       runtimeStore: stores.runtimeSessionControlStore,
       ownedActivityQuery,
+      ownedMetricQuery,
       now: this.options.now,
     }));
     registry.register(createIntegrationModule({
@@ -388,6 +395,7 @@ export class WebConsoleRegistrar {
       sessionGatekeeperReader,
       telemetryQuery,
       ownedActivityQuery,
+      ownedMetricQuery,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -850,6 +858,19 @@ function resolveOwnedActivityQuery(
     return container.resolve<IOwnedActivityQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery);
   }
   return new InMemoryOwnedActivityQuery();
+}
+
+function resolveOwnedMetricQuery(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IOwnedMetricQuery {
+  if (options.ownedMetricQuery !== undefined) {
+    return options.ownedMetricQuery ?? new InMemoryOwnedMetricQuery({ now: options.now });
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery)) {
+    return container.resolve<IOwnedMetricQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery);
+  }
+  return new InMemoryOwnedMetricQuery({ now: options.now });
 }
 
 function resolveUserConfigStore(

@@ -3,28 +3,38 @@ import { describe, expect, it } from '@jest/globals';
 import {
   ConsoleModuleRegistry,
   InMemoryOwnedActivityQuery,
+  InMemoryOwnedMetricQuery,
   InMemoryRuntimeSessionControlStore,
   createSessionTelemetryModule,
   executeConsoleRoute,
   projectUserActivity,
   projectUserActivityPage,
+  projectUserMetric,
+  projectUserMetrics,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type UserActivityDto,
+  type UserMetricDto,
 } from '../../../../src/web-console/index.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
+const SELF_CAPABILITY = 'console:self';
 const SESSION_ID = 'mcp-session-1';
 const SECOND_SESSION_ID = 'mcp-session-2';
 const LOGS_PATH = '/api/v1/me/sessions/:session_id/logs';
 const LOGS_STREAM_PATH = '/api/v1/me/sessions/:session_id/logs/stream';
+const METRICS_PATH = '/api/v1/me/sessions/:session_id/metrics';
+const METRICS_STREAM_PATH = '/api/v1/me/sessions/:session_id/metrics/stream';
 const NOW = new Date('2026-05-29T15:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-29T15:05:00.000Z');
 const MUST_NOT_LEAK = 'must-not-leak';
 const RUNTIME_STARTED_EVENT = 'runtime.session.started';
 const RUNTIME_HEARTBEAT_EVENT = 'runtime.session.heartbeat';
 const GATEKEEPER_APPROVAL_EVENT = 'gatekeeper.approval.requested';
+const RUNTIME_ERRORS_METRIC = 'runtime.session.errors';
+const RUNTIME_LATENCY_METRIC = 'runtime.session.latency';
+const GATEKEEPER_DECISIONS_METRIC = 'gatekeeper.decisions';
 
 async function fixture() {
   const runtimeStore = new InMemoryRuntimeSessionControlStore();
@@ -60,9 +70,45 @@ async function fixture() {
       message: MUST_NOT_LEAK,
     }),
   ]);
+  const ownedMetricQuery = new InMemoryOwnedMetricQuery({ now: () => NOW });
+  ownedMetricQuery.seedOwnedMetrics(USER_ID, SESSION_ID, {
+    checked_at: NOW.toISOString(),
+    metrics: [
+      withExtraMetricFields(metricRecord({
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 2,
+        unit: 'count',
+        dimensions: { subsystem: 'runtime', error_code: 'transport_closed' },
+      })),
+      metricRecord({
+        name: RUNTIME_LATENCY_METRIC,
+        kind: 'histogram',
+        value: 120,
+        unit: 'ms',
+        dimensions: { subsystem: 'runtime', latency_bucket: '100_250ms' },
+      }),
+      metricRecord({
+        name: GATEKEEPER_DECISIONS_METRIC,
+        kind: 'counter',
+        value: 1,
+        unit: 'count',
+        dimensions: { subsystem: 'gatekeeper', event: GATEKEEPER_APPROVAL_EVENT },
+      }),
+    ],
+  });
+  ownedMetricQuery.seedOwnedMetrics(SECOND_USER_ID, SECOND_SESSION_ID, {
+    checked_at: NOW.toISOString(),
+    metrics: [metricRecord({
+      name: RUNTIME_ERRORS_METRIC,
+      value: 99,
+      dimensions: { subsystem: 'runtime' },
+    })],
+  });
   const module = createSessionTelemetryModule({
     runtimeStore,
     ownedActivityQuery,
+    ownedMetricQuery,
     now: () => NOW,
   });
   return { module, runtimeStore };
@@ -88,6 +134,31 @@ function activityRecord(index: number, overrides: Partial<UserActivityDto> = {})
     stable_error_code: null,
     ...overrides,
   };
+}
+
+function metricRecord(overrides: Partial<UserMetricDto> = {}): UserMetricDto {
+  return {
+    name: RUNTIME_ERRORS_METRIC,
+    kind: 'counter',
+    value: 1,
+    unit: 'count',
+    dimensions: {
+      subsystem: 'runtime',
+    },
+    ...overrides,
+  };
+}
+
+function withExtraMetricFields(record: UserMetricDto): UserMetricDto {
+  return {
+    ...record,
+    dimensions: {
+      ...record.dimensions,
+      account_correlation_id: MUST_NOT_LEAK,
+      user_id: MUST_NOT_LEAK,
+    },
+    raw_labels: MUST_NOT_LEAK,
+  } as UserMetricDto;
 }
 
 function findRoute(
@@ -116,7 +187,7 @@ function request(overrides: Partial<ConsoleRequest> = {}): ConsoleRequest {
       userId: USER_ID,
       authSub: 'sub-user',
       authzVersion: 1,
-      grantedCapabilities: ['console:self'],
+      grantedCapabilities: [SELF_CAPABILITY],
       elevation: null,
     },
     ...overrides,
@@ -140,7 +211,7 @@ describe('SessionTelemetryModule', () => {
         moduleId: 'session-telemetry',
         method: 'GET',
         path: LOGS_PATH,
-        requiredCapability: 'console:self',
+        requiredCapability: SELF_CAPABILITY,
         ownership: 'owned_session',
         elevation: 'none',
         privacyClass: 'self_private',
@@ -150,7 +221,28 @@ describe('SessionTelemetryModule', () => {
         moduleId: 'session-telemetry',
         method: 'GET',
         path: LOGS_STREAM_PATH,
-        requiredCapability: 'console:self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
+      }),
+      expect.objectContaining({
+        moduleId: 'session-telemetry',
+        method: 'GET',
+        path: METRICS_PATH,
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+      }),
+      expect.objectContaining({
+        moduleId: 'session-telemetry',
+        method: 'GET',
+        path: METRICS_STREAM_PATH,
+        requiredCapability: SELF_CAPABILITY,
         ownership: 'owned_session',
         elevation: 'none',
         privacyClass: 'self_private',
@@ -357,6 +449,172 @@ describe('SessionTelemetryModule', () => {
     })).toEqual(expect.not.objectContaining({
       tool_input: MUST_NOT_LEAK,
       account_correlation_id: MUST_NOT_LEAK,
+    }));
+  });
+
+  it('queries only owner-visible session metrics with fixed self-private projection', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_PATH);
+
+    await expect(route.handler(request({ params: { session_id: SECOND_SESSION_ID } })))
+      .resolves.toMatchObject({ status: 404 });
+
+    const result = await executeConsoleRoute(route, request({
+      params: { session_id: SESSION_ID },
+      query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
+    }));
+
+    expect(result.body).toEqual({
+      checked_at: NOW.toISOString(),
+      metrics: [{
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 2,
+        unit: 'count',
+        dimensions: {
+          subsystem: 'runtime',
+          error_code: 'transport_closed',
+        },
+      }],
+    });
+    expect(JSON.stringify(result.body)).not.toContain(MUST_NOT_LEAK);
+  });
+
+  it('excludes user metrics that do not match filters', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_PATH);
+
+    const result = await executeConsoleRoute(route, request({
+      params: { session_id: SESSION_ID },
+      query: { subsystem: 'gatekeeper', name: RUNTIME_ERRORS_METRIC },
+    }));
+
+    expect(projectUserMetrics(result.body)).toEqual({
+      checked_at: NOW.toISOString(),
+      metrics: [],
+    });
+  });
+
+  it('streams owner-visible session metrics with projection and owned-session revalidation', async () => {
+    const { module, runtimeStore } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_STREAM_PATH);
+
+    const result = await executeConsoleRoute(route, request({
+      params: { session_id: SESSION_ID },
+      query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
+      headers: {},
+    }));
+
+    expect(result.stream?.init).toEqual({
+      stream_id: `me.sessions.${SESSION_ID}.metrics`,
+      stream_type: 'session_metrics',
+      resume_supported: false,
+      session_id: SESSION_ID,
+      filters: {
+        subsystem: 'runtime',
+        name: RUNTIME_ERRORS_METRIC,
+      },
+    });
+    const events = await collectEvents(result.stream?.events);
+    expect(events).toEqual([
+      {
+        event: 'update',
+        data: expect.objectContaining({
+          name: RUNTIME_ERRORS_METRIC,
+          value: 2,
+        }),
+      },
+      {
+        event: 'end',
+        data: { status: 'complete' },
+      },
+    ]);
+    expect(result.stream?.projectEvent?.({
+      event: 'update',
+      data: withExtraMetricFields(metricRecord()),
+    })).toEqual({
+      event: 'update',
+      data: expect.not.objectContaining({ raw_labels: MUST_NOT_LEAK }),
+    });
+    expect(result.stream?.projectEvent?.({
+      event: 'init',
+      data: {
+        connected_at: NOW.toISOString(),
+        stream_id: `me.sessions.${SESSION_ID}.metrics`,
+        stream_type: 'wrong',
+        resume_supported: true,
+        session_id: SESSION_ID,
+        filters: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC, secret: MUST_NOT_LEAK },
+      },
+    })).toEqual({
+      event: 'init',
+      data: {
+        connected_at: NOW.toISOString(),
+        stream_id: `me.sessions.${SESSION_ID}.metrics`,
+        stream_type: 'session_metrics',
+        resume_supported: true,
+        session_id: SESSION_ID,
+        filters: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
+      },
+    });
+    expect(result.stream?.projectEvent?.({
+      event: 'end',
+      data: { status: 'interrupted', secret: MUST_NOT_LEAK },
+    })).toEqual({
+      event: 'end',
+      data: { status: 'closed' },
+    });
+
+    await runtimeStore.markPresenceClosing(SESSION_ID, NOW);
+    await expect(result.stream?.revalidate?.()).resolves.toBe(false);
+  });
+
+  it('streams multiple matching session metrics', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_STREAM_PATH);
+
+    const result = await executeConsoleRoute(route, request({
+      params: { session_id: SESSION_ID },
+      query: { subsystem: 'runtime' },
+      headers: {},
+    }));
+
+    expect((await collectEvents(result.stream?.events)).map(event => event.event === 'update'
+      ? (event.data as UserMetricDto).name
+      : event.event)).toEqual([
+      RUNTIME_ERRORS_METRIC,
+      RUNTIME_LATENCY_METRIC,
+      'end',
+    ]);
+  });
+
+  it('denies session metric streams for non-owned sessions', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_STREAM_PATH);
+
+    await expect(route.handler(request({
+      params: { session_id: SECOND_SESSION_ID },
+      headers: {},
+    }))).resolves.toMatchObject({ status: 404 });
+  });
+
+  it('rejects Last-Event-ID on session metric streams until real resume is implemented', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', METRICS_STREAM_PATH);
+
+    expect(() => route.handler(request({
+      params: { session_id: SESSION_ID },
+      headers: { 'last-event-id': 'session-metric:1' },
+    }))).toThrow('Invalid Last-Event-ID');
+  });
+
+  it('privacy projectors allowlist user metric DTO fields and dimensions', () => {
+    const projected = projectUserMetric(withExtraMetricFields(metricRecord()));
+
+    expect(projected).toEqual(expect.not.objectContaining({ raw_labels: MUST_NOT_LEAK }));
+    expect(projected.dimensions).toEqual(expect.not.objectContaining({
+      account_correlation_id: MUST_NOT_LEAK,
+      user_id: MUST_NOT_LEAK,
     }));
   });
 });
