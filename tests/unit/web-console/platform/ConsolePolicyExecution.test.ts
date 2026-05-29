@@ -75,12 +75,74 @@ describe('console route policy execution', () => {
     expect(result).toEqual({ status: 200, body: { visible: true } });
   });
 
-  it('does not apply administrative projection to self-service results', async () => {
-    const projector = jest.fn(value => value);
+  it('leaves administrative problem bodies unprojected', async () => {
+    const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
+    const problem = {
+      type: 'about:blank',
+      title: 'Not found',
+      status: 404,
+      code: 'not_found',
+      detail: 'The requested resource was not found.',
+    };
 
-    const result = await executeConsoleRoute(route({ privacyProjector: projector }), {} as never);
+    const result = await executeConsoleRoute(route({
+      path: '/api/v1/admin/audit/missing',
+      audience: 'admin',
+      requiredCapability: 'console:admin:audit',
+      elevation: 'admin_30m',
+      privacyClass: 'admin_audit',
+      auditOperation: 'admin.audit.read',
+      privacyProjector: projector,
+      handler: () => ({ status: 404, body: problem }),
+    }), {} as never);
+
+    expect(result).toEqual({ status: 404, body: problem });
+    expect(projector).not.toHaveBeenCalled();
+  });
+
+  it('applies self-service privacy projection before returning a route result', async () => {
+    const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
+
+    const result = await executeConsoleRoute(route({
+      privacyProjector: projector,
+      handler: () => ({ status: 200, body: { visible: true, rawPrivate: 'hidden' } }),
+    }), {} as never);
 
     expect(result.body).toEqual({ visible: true });
+    expect(projector).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves self-service problem bodies unprojected', async () => {
+    const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
+    const problem = {
+      type: 'about:blank',
+      title: 'Validation failed',
+      status: 422,
+      code: 'validation_failed',
+      detail: 'goal_id is invalid',
+    };
+
+    const result = await executeConsoleRoute(route({
+      privacyProjector: projector,
+      handler: () => ({ status: 422, body: problem }),
+    }), {} as never);
+
+    expect(result).toEqual({ status: 422, body: problem });
+    expect(projector).not.toHaveBeenCalled();
+  });
+
+  it('leaves public non-stream route results unprojected', async () => {
+    const projector = jest.fn(value => value);
+
+    const result = await executeConsoleRoute(route({
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      privacyProjector: projector,
+      handler: () => ({ status: 200, body: { visible: true, publicValue: 'kept' } }),
+    }), {} as never);
+
+    expect(result.body).toEqual({ visible: true, publicValue: 'kept' });
     expect(projector).not.toHaveBeenCalled();
   });
 

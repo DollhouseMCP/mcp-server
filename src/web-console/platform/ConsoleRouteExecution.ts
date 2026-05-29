@@ -23,20 +23,15 @@ export async function executeConsoleRoute(
 ): Promise<ConsoleHandlerResult> {
   const result = await route.handler(req);
   validateResult(result);
-  if (route.audience !== 'admin') return attachSelfRoutePolicy(result, route);
+  if (route.audience === 'self') return attachSelfRoutePolicy(result, route);
+  if (route.audience === 'public') return attachStreamPolicy(result, route);
   if (!route.privacyProjector) {
     throw new Error('Validated administrative route is missing its privacy projector');
   }
   if (result.stream) {
-    return {
-      ...result,
-      stream: {
-        ...result.stream,
-        policy: route.streamPolicy,
-        projectEvent: projectStreamEvent(route.privacyProjector, route.streamEventProjectors),
-      },
-    };
+    return attachStreamPolicy(result, route, route.privacyProjector);
   }
+  if (result.body === undefined || !isSuccessStatus(result.status)) return result;
   return {
     ...result,
     body: route.privacyProjector(result.body),
@@ -47,8 +42,23 @@ function attachSelfRoutePolicy(
   result: ConsoleHandlerResult,
   route: ConsoleRouteDefinition,
 ): ConsoleHandlerResult {
+  if (!result.stream) {
+    if (!route.privacyProjector || result.body === undefined || !isSuccessStatus(result.status)) return result;
+    return {
+      ...result,
+      body: route.privacyProjector(result.body),
+    };
+  }
+  return attachStreamPolicy(result, route, route.privacyProjector);
+}
+
+function attachStreamPolicy(
+  result: ConsoleHandlerResult,
+  route: ConsoleRouteDefinition,
+  projector?: ConsoleRouteDefinition['privacyProjector'],
+): ConsoleHandlerResult {
   if (!result.stream) return result;
-  if (!route.privacyProjector) {
+  if (!projector) {
     return {
       ...result,
       stream: {
@@ -62,9 +72,13 @@ function attachSelfRoutePolicy(
     stream: {
       ...result.stream,
       policy: route.streamPolicy,
-      projectEvent: projectStreamEvent(route.privacyProjector, route.streamEventProjectors),
+      projectEvent: projectStreamEvent(projector, route.streamEventProjectors),
     },
   };
+}
+
+function isSuccessStatus(status: number): boolean {
+  return status >= 200 && status < 300;
 }
 
 export function sendConsoleHandlerResult(response: Response, result: ConsoleHandlerResult, request?: ConsoleRequest): void {

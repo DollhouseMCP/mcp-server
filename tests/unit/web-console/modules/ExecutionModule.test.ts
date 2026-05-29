@@ -193,8 +193,8 @@ describe('ExecutionModule', () => {
     const listRoute = findRoute(module.routes, 'GET', EXECUTION_LIST_PATH);
     const detailRoute = findRoute(module.routes, 'GET', EXECUTION_DETAIL_PATH);
 
-    await expect(listRoute.handler(request({ params: { session_id: SECOND_SESSION_ID } })))
-      .resolves.toMatchObject({ status: 404 });
+    await expect(executeConsoleRoute(listRoute, request({ params: { session_id: SECOND_SESSION_ID } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
     await expect(listRoute.handler(request({ params: { session_id: SESSION_ID } })))
       .resolves.toMatchObject({
         status: 200,
@@ -216,12 +216,12 @@ describe('ExecutionModule', () => {
         output: [expect.objectContaining({ message: 'Reviewed auth module' })],
       },
     });
-    await expect(detailRoute.handler(request({
+    await expect(executeConsoleRoute(detailRoute, request({
       params: { session_id: SESSION_ID, goal_id: 'bad goal id' },
-    }))).resolves.toMatchObject({ status: 422 });
-    await expect(detailRoute.handler(request({
+    }))).resolves.toMatchObject({ status: 422, body: { code: 'validation_failed' } });
+    await expect(executeConsoleRoute(detailRoute, request({
       params: { session_id: SESSION_ID, goal_id: 'goal-missing' },
-    }))).resolves.toMatchObject({ status: 404 });
+    }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
   it('streams owner-private execution updates with projection and owned-session revalidation', async () => {

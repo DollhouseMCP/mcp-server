@@ -256,8 +256,8 @@ describe('SessionTelemetryModule', () => {
     const { module } = await fixture();
     const route = findRoute(module.routes, 'GET', LOGS_PATH);
 
-    await expect(route.handler(request({ params: { session_id: SECOND_SESSION_ID } })))
-      .resolves.toMatchObject({ status: 404 });
+    await expect(executeConsoleRoute(route, request({ params: { session_id: SECOND_SESSION_ID } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
 
     const result = await executeConsoleRoute(route, request({
       params: { session_id: SESSION_ID },
@@ -425,10 +425,10 @@ describe('SessionTelemetryModule', () => {
     const { module } = await fixture();
     const route = findRoute(module.routes, 'GET', LOGS_STREAM_PATH);
 
-    await expect(route.handler(request({
+    await expect(executeConsoleRoute(route, request({
       params: { session_id: SECOND_SESSION_ID },
       headers: {},
-    }))).resolves.toMatchObject({ status: 404 });
+    }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
   it('rejects Last-Event-ID on session log streams until real resume is implemented', async () => {
@@ -456,8 +456,8 @@ describe('SessionTelemetryModule', () => {
     const { module } = await fixture();
     const route = findRoute(module.routes, 'GET', METRICS_PATH);
 
-    await expect(route.handler(request({ params: { session_id: SECOND_SESSION_ID } })))
-      .resolves.toMatchObject({ status: 404 });
+    await expect(executeConsoleRoute(route, request({ params: { session_id: SECOND_SESSION_ID } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
 
     const result = await executeConsoleRoute(route, request({
       params: { session_id: SESSION_ID },
@@ -592,10 +592,10 @@ describe('SessionTelemetryModule', () => {
     const { module } = await fixture();
     const route = findRoute(module.routes, 'GET', METRICS_STREAM_PATH);
 
-    await expect(route.handler(request({
+    await expect(executeConsoleRoute(route, request({
       params: { session_id: SECOND_SESSION_ID },
       headers: {},
-    }))).resolves.toMatchObject({ status: 404 });
+    }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
   it('rejects Last-Event-ID on session metric streams until real resume is implemented', async () => {

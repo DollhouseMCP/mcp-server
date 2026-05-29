@@ -6,6 +6,7 @@ import { InMemoryConsoleFactorStore } from '../../../../src/web-console/stores/I
 import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import {
   createSecurityAdminModule,
+  executeConsoleRoute,
   projectSecurityAuthPolicy,
   projectSecuritySigningKeyJob,
   projectSecuritySigningKeyKind,
@@ -213,7 +214,7 @@ describe('SecurityAdminModule', () => {
     const before = await getRoute.handler({ query: {}, params: {} } as never);
     const etag = projectSecurityAuthPolicy(before.body).etag;
 
-    await expect(putRoute.handler({
+    await expect(executeConsoleRoute(putRoute, {
       query: {},
       params: {},
       headers: {},
