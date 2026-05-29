@@ -25,6 +25,7 @@ import {
   projectOperationHealthSummary,
   projectOperationalLog,
   projectOperationalLogs,
+  projectOperationalMetric,
   projectOperationalMetrics,
 } from './OperationsPrivacyProjectors.js';
 
@@ -40,7 +41,16 @@ const OPERATION_AUDIT_IDS = [
   'operate.logs.list',
   'operate.logs.stream',
   'operate.metrics.show',
+  'operate.metrics.stream',
 ] as const;
+
+const OPERATIONS_STREAM_POLICY = {
+  lastEventId: 'unsupported',
+  heartbeatMs: 15_000,
+  revalidateMs: 15_000,
+  maxEventBytes: 64 * 1024,
+  maxLastEventIdBytes: 512,
+} as const;
 
 export interface OperationsModuleOptions {
   readonly healthChecks: OperationsHealthChecks;
@@ -172,13 +182,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         idempotency: 'not_applicable',
         auditOperation: 'operate.logs.stream',
         responseKind: 'sse',
-        streamPolicy: {
-          lastEventId: 'unsupported',
-          heartbeatMs: 15_000,
-          revalidateMs: 15_000,
-          maxEventBytes: 64 * 1024,
-          maxLastEventIdBytes: 512,
-        },
+        streamPolicy: OPERATIONS_STREAM_POLICY,
         privacyProjector: projectOperationalLogStreamData,
         streamEventProjectors: {
           init: projectOperationalLogStreamInit,
@@ -186,13 +190,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
           end: projectOperationalLogStreamEnd,
         },
         handler: req => {
-          const lastEventId = parseConsoleLastEventId(req, {
-            lastEventId: 'unsupported',
-            heartbeatMs: 15_000,
-            revalidateMs: 15_000,
-            maxEventBytes: 64 * 1024,
-            maxLastEventIdBytes: 512,
-          });
+          const lastEventId = parseConsoleLastEventId(req, OPERATIONS_STREAM_POLICY);
           if (!lastEventId.ok) {
             throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
           }
@@ -221,6 +219,40 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         privacyProjector: projectOperationalMetrics,
         handler: req => service.queryMetrics(parseMetricQuery(req)),
       },
+      {
+        method: 'GET',
+        path: '/api/v1/admin/operate/metrics/stream',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.metrics.stream',
+        responseKind: 'sse',
+        streamPolicy: OPERATIONS_STREAM_POLICY,
+        privacyProjector: projectOperationalMetricStreamData,
+        streamEventProjectors: {
+          init: projectOperationalMetricStreamInit,
+          update: projectOperationalMetric,
+          end: projectOperationalStreamEnd,
+        },
+        handler: req => {
+          const lastEventId = parseConsoleLastEventId(req, OPERATIONS_STREAM_POLICY);
+          if (!lastEventId.ok) {
+            throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
+          }
+          const query = parseMetricQuery(req);
+          return service.streamMetrics(query, {
+            stream_id: 'admin.operate.metrics',
+            stream_type: 'operational_metrics',
+            resume_supported: false,
+            filters: {
+              subsystem: query.subsystem,
+              name: query.name,
+            },
+          });
+        },
+      },
     ],
     auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
   };
@@ -242,11 +274,40 @@ function projectOperationalLogStreamInit(value: unknown): unknown {
 }
 
 function projectOperationalLogStreamEnd(value: unknown): unknown {
+  return projectOperationalStreamEnd(value);
+}
+
+function projectOperationalMetricStreamData(value: unknown): unknown {
+  return projectOperationalMetric(value);
+}
+
+function projectOperationalMetricStreamInit(value: unknown): unknown {
+  const init = asOperationalMetricStreamInit(value);
+  return {
+    connected_at: typeof init.connected_at === 'string' ? init.connected_at : null,
+    stream_id: 'admin.operate.metrics',
+    stream_type: 'operational_metrics',
+    resume_supported: init.resume_supported === true,
+    filters: projectMetricStreamFilters(init.filters),
+  };
+}
+
+function projectOperationalStreamEnd(value: unknown): unknown {
   const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
   return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function asOperationalLogStreamInit(value: unknown): {
+  readonly connected_at?: unknown;
+  readonly stream_id?: unknown;
+  readonly stream_type?: unknown;
+  readonly resume_supported?: unknown;
+  readonly filters?: unknown;
+} {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function asOperationalMetricStreamInit(value: unknown): {
   readonly connected_at?: unknown;
   readonly stream_id?: unknown;
   readonly stream_type?: unknown;
@@ -262,6 +323,14 @@ function projectStreamFilters(value: unknown): Record<string, string | null> {
     level: typeof record.level === 'string' ? record.level : null,
     subsystem: typeof record.subsystem === 'string' ? record.subsystem : null,
     event: typeof record.event === 'string' ? record.event : null,
+  };
+}
+
+function projectMetricStreamFilters(value: unknown): Record<string, string | null> {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    subsystem: typeof record.subsystem === 'string' ? record.subsystem : null,
+    name: typeof record.name === 'string' ? record.name : null,
   };
 }
 

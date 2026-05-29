@@ -108,7 +108,7 @@ export function projectOperationalLog(value: unknown): OperationalLogDto {
   };
 }
 
-function projectOperationalMetric(value: unknown): OperationalMetricDto {
+export function projectOperationalMetric(value: unknown): OperationalMetricDto {
   const record = objectValue(value);
   const dimensions = objectValue(record.dimensions);
   return {

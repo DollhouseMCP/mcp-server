@@ -1,6 +1,7 @@
 import type {
   OperationalLogDto,
   OperationalLogPageDto,
+  OperationalMetricDto,
   OperationalMetricResponseDto,
 } from './OperationsDtos.js';
 
@@ -21,6 +22,7 @@ export interface IConsoleTelemetryQuery {
   queryOperationalLogs(query: OperationalLogQuery): Promise<OperationalLogPageDto>;
   streamOperationalLogs(query: OperationalLogQuery): AsyncIterable<OperationalLogDto>;
   queryOperationalMetrics(query: OperationalMetricQuery): Promise<OperationalMetricResponseDto>;
+  streamOperationalMetrics(query: OperationalMetricQuery): AsyncIterable<OperationalMetricDto>;
 }
 
 export class InMemoryConsoleTelemetryQuery implements IConsoleTelemetryQuery {
@@ -67,6 +69,11 @@ export class InMemoryConsoleTelemetryQuery implements IConsoleTelemetryQuery {
   async *streamOperationalLogs(query: OperationalLogQuery): AsyncIterable<OperationalLogDto> {
     const page = await this.queryOperationalLogs(query);
     for (const item of page.items) yield item;
+  }
+
+  async *streamOperationalMetrics(query: OperationalMetricQuery): AsyncIterable<OperationalMetricDto> {
+    const response = await this.queryOperationalMetrics(query);
+    for (const item of response.metrics) yield item;
   }
 }
 

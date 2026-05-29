@@ -21,6 +21,7 @@ export {
   projectOperatorConfigSetting,
   projectOperationalLogs,
   projectOperationalLog,
+  projectOperationalMetric,
   projectOperationalMetrics,
 } from './OperationsPrivacyProjectors.js';
 export type {

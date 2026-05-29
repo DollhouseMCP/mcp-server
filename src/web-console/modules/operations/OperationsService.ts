@@ -76,6 +76,16 @@ export class OperationsService {
     };
   }
 
+  streamMetrics(query: OperationalMetricQuery, init: unknown): ConsoleHandlerResult {
+    return {
+      status: 200,
+      stream: {
+        init,
+        events: streamMetricEvents(this.telemetry.streamOperationalMetrics(query)),
+      },
+    };
+  }
+
   private async getSingleHealthComponent(component: OperationHealthComponent): Promise<ConsoleHandlerResult> {
     const checkedAt = this.now();
     const body = await this.getHealthComponent(component, checkedAt);
@@ -111,6 +121,21 @@ async function* streamLogEvents(logs: AsyncIterable<unknown>): AsyncIterable<Con
     yield {
       event: 'update',
       data: log,
+    };
+  }
+  yield {
+    event: 'end',
+    data: {
+      status: 'complete',
+    },
+  };
+}
+
+async function* streamMetricEvents(metrics: AsyncIterable<unknown>): AsyncIterable<ConsoleSseEvent> {
+  for await (const metric of metrics) {
+    yield {
+      event: 'update',
+      data: metric,
     };
   }
   yield {

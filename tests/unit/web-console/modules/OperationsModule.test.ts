@@ -25,6 +25,8 @@ const GATEKEEPER_DECISION_EVENT = 'gatekeeper.decision';
 const RUNTIME_ERRORS_METRIC = 'runtime.session.errors';
 const OPERATE_LOGS_PATH = '/api/v1/admin/operate/logs';
 const OPERATE_LOGS_STREAM_PATH = '/api/v1/admin/operate/logs/stream';
+const OPERATE_METRICS_PATH = '/api/v1/admin/operate/metrics';
+const OPERATE_METRICS_STREAM_PATH = '/api/v1/admin/operate/metrics/stream';
 const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
@@ -235,11 +237,25 @@ describe('OperationsModule', () => {
       }),
       expect.objectContaining({
         method: 'GET',
-        path: '/api/v1/admin/operate/metrics',
+        path: OPERATE_METRICS_PATH,
         requiredCapability: OPERATE_CAPABILITY,
         elevation: 'admin_30m',
         privacyClass: OPERATIONAL_PRIVACY,
         auditOperation: 'operate.metrics.show',
+      }),
+      expect.objectContaining({
+        method: 'GET',
+        path: OPERATE_METRICS_STREAM_PATH,
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: OPERATIONAL_PRIVACY,
+        auditOperation: 'operate.metrics.stream',
+        responseKind: 'sse',
+        streamPolicy: expect.objectContaining({
+          lastEventId: 'unsupported',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+        }),
       }),
     ]));
     expect(module.auditOperations).toEqual(expect.arrayContaining([
@@ -253,8 +269,8 @@ describe('OperationsModule', () => {
       { id: 'operate.logs.list' },
       { id: 'operate.logs.stream' },
       { id: 'operate.metrics.show' },
+      { id: 'operate.metrics.stream' },
     ]));
-    expect(module.routes.map(route => route.path)).not.toContain('/api/v1/admin/operate/metrics/stream');
   });
 
   it('returns detailed operator health with stable failure codes', async () => {
@@ -677,7 +693,7 @@ describe('OperationsModule', () => {
   });
 
   it('queries operational metrics through the allowlisted telemetry boundary', async () => {
-    const route = findRoute(createModule().routes, 'GET', '/api/v1/admin/operate/metrics');
+    const route = findRoute(createModule().routes, 'GET', OPERATE_METRICS_PATH);
 
     const result = await route.handler({
       query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
@@ -698,6 +714,58 @@ describe('OperationsModule', () => {
         },
       }],
     });
+  });
+
+  it('streams operational metrics through SSE update events with allowlisted payloads', async () => {
+    const route = findRoute(createModule().routes, 'GET', OPERATE_METRICS_STREAM_PATH);
+
+    const result = await executeConsoleRoute(route, {
+      query: { subsystem: 'runtime', name: RUNTIME_ERRORS_METRIC },
+      params: {},
+      headers: {},
+    } as never);
+
+    expect(result.stream?.init).toMatchObject({
+      stream_id: 'admin.operate.metrics',
+      stream_type: 'operational_metrics',
+      resume_supported: false,
+      filters: {
+        subsystem: 'runtime',
+        name: RUNTIME_ERRORS_METRIC,
+      },
+    });
+    const events = await collectEvents(result.stream?.events);
+    expect(events).toEqual([
+      {
+        event: 'update',
+        data: {
+          name: RUNTIME_ERRORS_METRIC,
+          kind: 'counter',
+          value: 2,
+          unit: 'count',
+          dimensions: {
+            subsystem: 'runtime',
+            error_code: 'transport_closed',
+            replica: 'replica-a',
+          },
+        },
+      },
+      {
+        event: 'end',
+        data: { status: 'complete' },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(MUST_NOT_LEAK);
+  });
+
+  it('rejects Last-Event-ID on operational metric streams until real resume is implemented', () => {
+    const route = findRoute(createModule().routes, 'GET', OPERATE_METRICS_STREAM_PATH);
+
+    expect(() => route.handler({
+      query: {},
+      params: {},
+      headers: { 'last-event-id': 'operational-metric:0' },
+    } as never)).toThrow('Invalid Last-Event-ID');
   });
 
   it('projects logs and metrics by allowlist rather than source object shape', () => {
