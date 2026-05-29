@@ -55,6 +55,7 @@ export function assembleSecuredConsoleRouter(
         registerSecuredRoute(router, route, [createSecuredHandler(route, options)]);
       } else {
         registerSecuredRoute(router, route, [
+          ...(route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(route, options)] : []),
           authenticate,
           csrf,
           createConsoleAuthorizationMiddleware(route, options),
@@ -89,6 +90,57 @@ export function assembleSecuredConsoleRouter(
   };
   router.use(sendInternalProblem);
   return router;
+}
+
+function createConsoleStreamRequestProtectionMiddleware(
+  route: ConsoleRouteDefinition,
+  options: SecuredConsoleRouterOptions,
+): RequestHandler {
+  return (request, response, next): void => {
+    const req = request as ConsoleRequest;
+    if (!streamOriginAllowed(req, options.consoleOrigin) || hasForbiddenStreamCredential(req)) {
+      sendProblemResponse(response, {
+        status: 403,
+        code: 'csrf_failed',
+        title: 'CSRF validation failed',
+        detail: 'The stream request did not satisfy browser request protections.',
+      }, requireConsoleRequestContext(req).correlationId);
+      return;
+    }
+    if (route.method !== 'GET') {
+      sendProblemResponse(response, {
+        status: 500,
+        code: 'internal_error',
+        title: 'Internal error',
+        detail: 'Stream routes must use GET.',
+      }, requireConsoleRequestContext(req).correlationId);
+      return;
+    }
+    next();
+  };
+}
+
+function streamOriginAllowed(req: ConsoleRequest, consoleOrigin: string): boolean {
+  const rawOrigin = req.headers.origin;
+  if (rawOrigin !== undefined && typeof rawOrigin !== 'string') return false;
+  if (rawOrigin === consoleOrigin) return true;
+  if (rawOrigin !== undefined) return false;
+  return singleHeader(req.headers['sec-fetch-site']) === 'same-origin';
+}
+
+function hasForbiddenStreamCredential(req: ConsoleRequest): boolean {
+  return firstQueryString(req.query.token) !== null ||
+    firstQueryString(req.query.access_token) !== null ||
+    firstQueryString(req.query.bearer) !== null;
+}
+
+function firstQueryString(value: ConsoleRequest['query'][string]): string | null {
+  if (Array.isArray(value)) return typeof value[0] === 'string' ? value[0] : null;
+  return typeof value === 'string' ? value : null;
+}
+
+function singleHeader(value: string | string[] | undefined): string | undefined {
+  return typeof value === 'string' ? value : undefined;
 }
 
 /**

@@ -103,7 +103,7 @@ describe('console route policy execution', () => {
     }), {} as never)).rejects.toThrow('projection rejected input');
   });
 
-  it('attaches administrative privacy projection to stream init and event data', async () => {
+  it('projects administrative streams by SSE event name before serialization', async () => {
     const result = await executeConsoleRoute(route({
       path: '/api/v1/admin/operate/logs/stream',
       audience: 'admin',
@@ -119,7 +119,12 @@ describe('console route policy execution', () => {
         maxEventBytes: 65_536,
         maxLastEventIdBytes: 512,
       },
-      privacyProjector: value => ({ visible: (value as { visible: boolean }).visible }),
+      privacyProjector: value => ({ fallback_visible: (value as { visible: boolean }).visible }),
+      streamEventProjectors: {
+        init: value => ({ init_visible: (value as { visible: boolean }).visible }),
+        update: value => ({ update_visible: (value as { visible: boolean }).visible }),
+        end: value => ({ end_status: (value as { status: string }).status }),
+      },
       handler: () => ({
         status: 200,
         stream: {
@@ -135,14 +140,28 @@ describe('console route policy execution', () => {
       data: { visible: true, rawPrivate: 'hidden' },
     })).toEqual({
       event: 'update',
-      data: { visible: true },
+      data: { update_visible: true },
     });
     expect(projector?.({
       event: 'init',
       data: { visible: true, rawPrivate: 'hidden' },
     })).toEqual({
       event: 'init',
-      data: { visible: true },
+      data: { init_visible: true },
+    });
+    expect(projector?.({
+      event: 'end',
+      data: { status: 'complete', rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'end',
+      data: { end_status: 'complete' },
+    });
+    expect(projector?.({
+      event: 'custom',
+      data: { visible: true, rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'custom',
+      data: { fallback_visible: true },
     });
   });
 

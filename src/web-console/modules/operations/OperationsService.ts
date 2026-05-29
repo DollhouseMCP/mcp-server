@@ -1,4 +1,4 @@
-import type { ConsoleHandlerResult } from '../../platform/ConsolePlatformTypes.js';
+import type { ConsoleHandlerResult, ConsoleSseEvent } from '../../platform/ConsolePlatformTypes.js';
 import type {
   OperationHealthComponent,
   OperationHealthComponentDto,
@@ -66,6 +66,16 @@ export class OperationsService {
     return { status: 200, body: await this.telemetry.queryOperationalMetrics(query) };
   }
 
+  streamLogs(query: OperationalLogQuery, init: unknown): ConsoleHandlerResult {
+    return {
+      status: 200,
+      stream: {
+        init,
+        events: streamLogEvents(this.telemetry.streamOperationalLogs(query)),
+      },
+    };
+  }
+
   private async getSingleHealthComponent(component: OperationHealthComponent): Promise<ConsoleHandlerResult> {
     const checkedAt = this.now();
     const body = await this.getHealthComponent(component, checkedAt);
@@ -94,6 +104,21 @@ export class OperationsService {
         return evaluateOperationHealthComponent(component, this.healthChecks.apiMount, checkedAt);
     }
   }
+}
+
+async function* streamLogEvents(logs: AsyncIterable<unknown>): AsyncIterable<ConsoleSseEvent> {
+  for await (const log of logs) {
+    yield {
+      event: 'update',
+      data: log,
+    };
+  }
+  yield {
+    event: 'end',
+    data: {
+      status: 'complete',
+    },
+  };
 }
 
 function summarizeStatus(components: readonly OperationHealthComponentDto[]): OperationHealthStatus {

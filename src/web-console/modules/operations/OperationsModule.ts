@@ -3,7 +3,9 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
+import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import {
   DEFAULT_OPERATOR_CONFIG_DEFINITIONS,
   OperatorConfigurationService,
@@ -21,6 +23,7 @@ import {
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
   projectOperationHealthSummary,
+  projectOperationalLog,
   projectOperationalLogs,
   projectOperationalMetrics,
 } from './OperationsPrivacyProjectors.js';
@@ -35,6 +38,7 @@ const OPERATION_AUDIT_IDS = [
   'operate.health.auth_server',
   'operate.health.gatekeeper',
   'operate.logs.list',
+  'operate.logs.stream',
   'operate.metrics.show',
 ] as const;
 
@@ -160,6 +164,53 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
       },
       {
         method: 'GET',
+        path: '/api/v1/admin/operate/logs/stream',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.logs.stream',
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'unsupported',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 64 * 1024,
+          maxLastEventIdBytes: 512,
+        },
+        privacyProjector: projectOperationalLogStreamData,
+        streamEventProjectors: {
+          init: projectOperationalLogStreamInit,
+          update: projectOperationalLog,
+          end: projectOperationalLogStreamEnd,
+        },
+        handler: req => {
+          const lastEventId = parseConsoleLastEventId(req, {
+            lastEventId: 'unsupported',
+            heartbeatMs: 15_000,
+            revalidateMs: 15_000,
+            maxEventBytes: 64 * 1024,
+            maxLastEventIdBytes: 512,
+          });
+          if (!lastEventId.ok) {
+            throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
+          }
+          const query = parseLogQuery(req);
+          return service.streamLogs(query, {
+            stream_id: 'admin.operate.logs',
+            stream_type: 'operational_logs',
+            resume_supported: false,
+            filters: {
+              level: query.level,
+              subsystem: query.subsystem,
+              event: query.event,
+            },
+          });
+        },
+      },
+      {
+        method: 'GET',
         path: '/api/v1/admin/operate/metrics',
         audience: 'admin',
         requiredCapability: OPERATE_CAPABILITY,
@@ -172,6 +223,45 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
       },
     ],
     auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
+  };
+}
+
+function projectOperationalLogStreamData(value: unknown): unknown {
+  return projectOperationalLog(value);
+}
+
+function projectOperationalLogStreamInit(value: unknown): unknown {
+  const init = asOperationalLogStreamInit(value);
+  return {
+    connected_at: typeof init.connected_at === 'string' ? init.connected_at : null,
+    stream_id: 'admin.operate.logs',
+    stream_type: 'operational_logs',
+    resume_supported: init.resume_supported === true,
+    filters: projectStreamFilters(init.filters),
+  };
+}
+
+function projectOperationalLogStreamEnd(value: unknown): unknown {
+  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
+  return { status: end.status === 'complete' ? 'complete' : 'closed' };
+}
+
+function asOperationalLogStreamInit(value: unknown): {
+  readonly connected_at?: unknown;
+  readonly stream_id?: unknown;
+  readonly stream_type?: unknown;
+  readonly resume_supported?: unknown;
+  readonly filters?: unknown;
+} {
+  return value && typeof value === 'object' ? value : {};
+}
+
+function projectStreamFilters(value: unknown): Record<string, string | null> {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    level: typeof record.level === 'string' ? record.level : null,
+    subsystem: typeof record.subsystem === 'string' ? record.subsystem : null,
+    event: typeof record.event === 'string' ? record.event : null,
   };
 }
 

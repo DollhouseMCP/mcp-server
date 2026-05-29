@@ -91,7 +91,7 @@ export function projectOperatorConfigSetting(value: unknown): OperatorConfigSett
   };
 }
 
-function projectOperationalLog(value: unknown): OperationalLogDto {
+export function projectOperationalLog(value: unknown): OperationalLogDto {
   const record = objectValue(value);
   return {
     ts: stringField(record, 'ts'),

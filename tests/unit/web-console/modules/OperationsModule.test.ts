@@ -5,6 +5,7 @@ import type { OperatorConfig } from '../../../../src/storage/operatorConfig/IOpe
 import {
   InMemoryConsoleTelemetryQuery,
   createOperationsModule,
+  executeConsoleRoute,
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationHealthComponent,
@@ -23,6 +24,7 @@ const RUNTIME_HEARTBEAT_EVENT = 'runtime.session.heartbeat';
 const GATEKEEPER_DECISION_EVENT = 'gatekeeper.decision';
 const RUNTIME_ERRORS_METRIC = 'runtime.session.errors';
 const OPERATE_LOGS_PATH = '/api/v1/admin/operate/logs';
+const OPERATE_LOGS_STREAM_PATH = '/api/v1/admin/operate/logs/stream';
 const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
@@ -130,6 +132,13 @@ function findRoute(routes: readonly ConsoleRouteDefinition[], method: string, pa
   return route;
 }
 
+async function collectEvents<T>(events: AsyncIterable<T> | undefined): Promise<T[]> {
+  if (!events) throw new Error('missing stream events');
+  const collected: T[] = [];
+  for await (const event of events) collected.push(event);
+  return collected;
+}
+
 describe('OperationsModule', () => {
   it('declares authenticated operator read descriptors', () => {
     const module = createModule();
@@ -212,6 +221,20 @@ describe('OperationsModule', () => {
       }),
       expect.objectContaining({
         method: 'GET',
+        path: OPERATE_LOGS_STREAM_PATH,
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: OPERATIONAL_PRIVACY,
+        auditOperation: 'operate.logs.stream',
+        responseKind: 'sse',
+        streamPolicy: expect.objectContaining({
+          lastEventId: 'unsupported',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+        }),
+      }),
+      expect.objectContaining({
+        method: 'GET',
         path: '/api/v1/admin/operate/metrics',
         requiredCapability: OPERATE_CAPABILITY,
         elevation: 'admin_30m',
@@ -228,9 +251,9 @@ describe('OperationsModule', () => {
       { id: 'operate.health.auth_server' },
       { id: 'operate.health.gatekeeper' },
       { id: 'operate.logs.list' },
+      { id: 'operate.logs.stream' },
       { id: 'operate.metrics.show' },
     ]));
-    expect(module.routes.map(route => route.path)).not.toContain('/api/v1/admin/operate/logs/stream');
     expect(module.routes.map(route => route.path)).not.toContain('/api/v1/admin/operate/metrics/stream');
   });
 
@@ -596,6 +619,61 @@ describe('OperationsModule', () => {
       expect.objectContaining({ level: 'info', event: GATEKEEPER_DECISION_EVENT, session_id: 'session-2' }),
       expect.objectContaining({ level: 'info', event: GATEKEEPER_DECISION_EVENT, session_id: 'session-4' }),
     ]);
+  });
+
+  it('streams operational logs through SSE update events with allowlisted payloads', async () => {
+    const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(3)).routes, 'GET', OPERATE_LOGS_STREAM_PATH);
+
+    const result = await executeConsoleRoute(route, {
+      query: { subsystem: 'runtime', limit: '10' },
+      params: {},
+      headers: {},
+    } as never);
+
+    expect(result.stream?.init).toMatchObject({
+      stream_id: 'admin.operate.logs',
+      stream_type: 'operational_logs',
+      resume_supported: false,
+      filters: {
+        level: null,
+        subsystem: 'runtime',
+        event: null,
+      },
+    });
+    const events = await collectEvents(result.stream?.events);
+    expect(events).toEqual([
+      {
+        event: 'update',
+        data: {
+          ts: NOW.toISOString(),
+          level: 'warn',
+          subsystem: 'runtime',
+          event: RUNTIME_HEARTBEAT_EVENT,
+          correlation_id: 'correlation-1',
+          account_correlation_id: 'account-correlation-1',
+          session_id: 'session-1',
+          replica: 'replica-a',
+          duration_ms: 12,
+          status_code: 200,
+          error_code: null,
+        },
+      },
+      {
+        event: 'end',
+        data: { status: 'complete' },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(MUST_NOT_LEAK);
+  });
+
+  it('rejects Last-Event-ID on operational log streams until real resume is implemented', () => {
+    const route = findRoute(createModule().routes, 'GET', OPERATE_LOGS_STREAM_PATH);
+
+    expect(() => route.handler({
+      query: {},
+      params: {},
+      headers: { 'last-event-id': 'operational-log:0' },
+    } as never)).toThrow('Invalid Last-Event-ID');
   });
 
   it('queries operational metrics through the allowlisted telemetry boundary', async () => {

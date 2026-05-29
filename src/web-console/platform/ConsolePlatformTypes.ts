@@ -135,6 +135,7 @@ export type ConsoleHandler = (
  * never their response contract. Feature modules implement its allowlist.
  */
 export type ConsolePrivacyProjector = (value: unknown) => unknown;
+export type ConsoleStreamEventProjectors = Readonly<Record<string, ConsolePrivacyProjector>>;
 
 export interface ConsoleRouteDefinition {
   readonly method: ConsoleHttpMethod;
@@ -154,6 +155,7 @@ export interface ConsoleRouteDefinition {
   readonly auditExecution?: ConsoleAuditExecutionPolicy;
   readonly responseKind?: ConsoleResponseKind;
   readonly streamPolicy?: ConsoleStreamPolicy;
+  readonly streamEventProjectors?: ConsoleStreamEventProjectors;
   readonly privacyProjector?: ConsolePrivacyProjector;
   readonly handler: ConsoleHandler;
 }

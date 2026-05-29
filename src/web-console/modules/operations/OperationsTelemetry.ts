@@ -19,6 +19,7 @@ export interface OperationalMetricQuery {
 
 export interface IConsoleTelemetryQuery {
   queryOperationalLogs(query: OperationalLogQuery): Promise<OperationalLogPageDto>;
+  streamOperationalLogs(query: OperationalLogQuery): AsyncIterable<OperationalLogDto>;
   queryOperationalMetrics(query: OperationalMetricQuery): Promise<OperationalMetricResponseDto>;
 }
 
@@ -61,6 +62,11 @@ export class InMemoryConsoleTelemetryQuery implements IConsoleTelemetryQuery {
         (!query.subsystem || metric.dimensions.subsystem === query.subsystem),
       ),
     });
+  }
+
+  async *streamOperationalLogs(query: OperationalLogQuery): AsyncIterable<OperationalLogDto> {
+    const page = await this.queryOperationalLogs(query);
+    for (const item of page.items) yield item;
   }
 }
 

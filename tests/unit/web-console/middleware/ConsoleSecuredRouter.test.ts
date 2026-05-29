@@ -644,6 +644,52 @@ describe('secured console router browser protections', () => {
     expect(response.status).toBe(200);
   });
 
+  it.each([
+    ['wrong origin', 'https://evil.example', ''],
+    ['query bearer token', ORIGIN, '?token=secret'],
+  ])('rejects SSE stream requests with %s', async (_label, origin, suffix) => {
+    const { app } = await buildApp(freshlyElevatedAuditSession());
+    let call = request(app).get(`${ADMIN_STREAM_PATH}${suffix}`).set('Cookie', sessionCookie());
+    if (origin) call = call.set('Origin', origin);
+
+    const response = await call;
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('accepts SSE stream requests without Origin only for same-origin fetch metadata', async () => {
+    const { app } = await buildApp(freshlyElevatedAuditSession());
+
+    const response = await request(app).get(ADMIN_STREAM_PATH)
+      .set('Cookie', sessionCookie())
+      .set('Sec-Fetch-Site', 'same-origin');
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+  });
+
+  it('rejects SSE stream requests without Origin and same-origin fetch metadata', async () => {
+    const { app } = await buildApp(freshlyElevatedAuditSession());
+
+    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
+  it('rejects folded multiple Origin values on SSE stream requests', async () => {
+    const { app } = await buildApp(freshlyElevatedAuditSession());
+
+    const response = await request(app).get(ADMIN_STREAM_PATH)
+      .set('Cookie', sessionCookie())
+      .set('Origin', [ORIGIN, ORIGIN])
+      .set('Sec-Fetch-Site', 'same-origin');
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('csrf_failed');
+  });
+
   it('rejects duplicate session cookie values during authentication', async () => {
     const { app } = await buildApp();
     const response = await request(app).get(CONTEXT_PATH)
@@ -777,7 +823,7 @@ describe('secured console router elevation', () => {
   it('projects administrative SSE init and event payloads through the route allowlist', async () => {
     const { app } = await buildApp(freshlyElevatedAuditSession());
 
-    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie());
+    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie()).set('Origin', ORIGIN);
 
     expect(response.status).toBe(200);
     expect(response.headers['content-type']).toContain('text/event-stream');
@@ -792,7 +838,7 @@ describe('secured console router elevation', () => {
       void sessionStore.revoke(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
     }, 5);
 
-    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie());
+    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie()).set('Origin', ORIGIN);
 
     expect(response.status).toBe(200);
     expect(response.text).toContain('event: error');

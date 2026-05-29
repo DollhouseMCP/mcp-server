@@ -20,6 +20,7 @@ export {
   projectOperatorConfigList,
   projectOperatorConfigSetting,
   projectOperationalLogs,
+  projectOperationalLog,
   projectOperationalMetrics,
 } from './OperationsPrivacyProjectors.js';
 export type {

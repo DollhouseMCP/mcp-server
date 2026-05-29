@@ -33,7 +33,7 @@ export async function executeConsoleRoute(
       stream: {
         ...result.stream,
         policy: route.streamPolicy,
-        projectEvent: projectStreamEvent(route.privacyProjector),
+        projectEvent: projectStreamEvent(route.privacyProjector, route.streamEventProjectors),
       },
     };
   }
@@ -90,13 +90,16 @@ export function sendConsoleHandlerResult(response: Response, result: ConsoleHand
 
 function projectStreamEvent(
   projector: NonNullable<ConsoleRouteDefinition['privacyProjector']>,
+  eventProjectors: ConsoleRouteDefinition['streamEventProjectors'] = {},
 ): (event: ConsoleSseEvent) => ConsoleSseEvent {
-  return event => event.data === undefined || event.event === 'error'
-    ? event
-    : {
-        ...event,
-        data: projector(event.data),
-      };
+  return event => {
+    if (event.data === undefined || event.event === 'error') return event;
+    const selectedProjector = eventProjectors[event.event] ?? projector;
+    return {
+      ...event,
+      data: selectedProjector(event.data),
+    };
+  };
 }
 
 function validateResult(result: ConsoleHandlerResult): void {
