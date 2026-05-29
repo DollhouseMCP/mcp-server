@@ -37,6 +37,7 @@ const CHANGE_PATH = '/api/v1/me/change';
 const HEALTH_PATH = '/api/v1/health/ready';
 const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
+const ADMIN_STREAM_PATH = '/api/v1/admin/audit/stream';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
 const ADMIN_TRANSACTION_MUTATION_PATH = '/api/v1/admin/audit/transaction-retry';
@@ -143,6 +144,7 @@ function fixtureModules(
     auditOperations: [
       { id: 'admin.audit.read' },
       { id: 'admin.audit.export' },
+      { id: 'admin.audit.stream' },
       { id: 'admin.audit.failure' },
       { id: 'admin.audit.mutate' },
       { id: 'admin.audit.transaction_mutate' },
@@ -170,6 +172,31 @@ function fixtureModules(
       auditOperation: 'admin.audit.export',
       privacyProjector: value => value,
       handler: () => ({ status: 200, body: { exported: true } }),
+    }, {
+      method: 'GET',
+      path: ADMIN_STREAM_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_5m',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      auditOperation: 'admin.audit.stream',
+      responseKind: 'sse',
+      streamPolicy: {
+        lastEventId: 'bounded',
+        heartbeatMs: 60_000,
+        revalidateMs: 10,
+        maxEventBytes: 65_536,
+        maxLastEventIdBytes: 512,
+      },
+      privacyProjector: value => ({ visible: (value as { visible: boolean }).visible }),
+      handler: () => ({
+        status: 200,
+        stream: {
+          init: { visible: true, rawPrivate: 'hidden' },
+          events: delayedStreamEvents([{ event: 'update', data: { visible: true, rawPrivate: 'hidden' } }], 50),
+        },
+      }),
     }, {
       method: 'GET',
       path: ADMIN_FAILURE_PATH,
@@ -304,6 +331,14 @@ function sessionCookie(): string {
 
 function csrfCookies(): string[] {
   return [sessionCookie(), `dh_csrf=${CSRF_VALUE}`];
+}
+
+async function* delayedStreamEvents(
+  events: readonly { readonly event: string; readonly data: unknown }[],
+  delayMs: number,
+): AsyncIterable<{ readonly event: string; readonly data: unknown }> {
+  await new Promise(resolve => setTimeout(resolve, delayMs));
+  for (const event of events) yield event;
 }
 
 function elevatedAuditSession(): ConsoleSessionRecord {
@@ -737,6 +772,32 @@ describe('secured console router elevation', () => {
     })]);
     expect(adminAuditWriter.getEvents()[0]?.actorConsoleSessionHash)
       .toEqual(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE));
+  });
+
+  it('projects administrative SSE init and event payloads through the route allowlist', async () => {
+    const { app } = await buildApp(freshlyElevatedAuditSession());
+
+    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('text/event-stream');
+    expect(response.text).toContain('event: init');
+    expect(response.text).toContain('data: {"visible":true}');
+    expect(response.text).not.toContain('rawPrivate');
+  });
+
+  it('closes administrative SSE streams when periodic revalidation fails', async () => {
+    const { app, sessionStore } = await buildApp(freshlyElevatedAuditSession());
+    setTimeout(() => {
+      void sessionStore.revoke(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
+    }, 5);
+
+    const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.text).toContain('event: error');
+    expect(response.text).toContain('"code":"unauthenticated"');
+    expect(response.text).not.toContain('"rawPrivate"');
   });
 
   it('audit-writes an administrative idempotency replay without executing twice', async () => {

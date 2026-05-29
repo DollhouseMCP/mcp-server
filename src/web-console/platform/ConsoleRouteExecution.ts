@@ -5,8 +5,10 @@ import type {
   ConsoleRequest,
   ConsoleResponseHeaders,
   ConsoleRouteDefinition,
+  ConsoleSseEvent,
 } from './ConsolePlatformTypes.js';
 import { serializeConsoleCookie, validateConsoleCookieDirectives } from '../middleware/ConsoleCookies.js';
+import { sendConsoleSseStream } from './ConsoleSseStream.js';
 
 const ALLOWED_HANDLER_HEADERS = new Set<keyof ConsoleResponseHeaders>([
   'ETag',
@@ -21,9 +23,19 @@ export async function executeConsoleRoute(
 ): Promise<ConsoleHandlerResult> {
   const result = await route.handler(req);
   validateResult(result);
-  if (route.audience !== 'admin') return result;
+  if (route.audience !== 'admin') return attachStreamPolicy(result, route);
   if (!route.privacyProjector) {
     throw new Error('Validated administrative route is missing its privacy projector');
+  }
+  if (result.stream) {
+    return {
+      ...result,
+      stream: {
+        ...result.stream,
+        policy: route.streamPolicy,
+        projectEvent: projectStreamEvent(route.privacyProjector),
+      },
+    };
   }
   return {
     ...result,
@@ -31,7 +43,21 @@ export async function executeConsoleRoute(
   };
 }
 
-export function sendConsoleHandlerResult(response: Response, result: ConsoleHandlerResult): void {
+function attachStreamPolicy(
+  result: ConsoleHandlerResult,
+  route: ConsoleRouteDefinition,
+): ConsoleHandlerResult {
+  if (!result.stream) return result;
+  return {
+    ...result,
+    stream: {
+      ...result.stream,
+      policy: route.streamPolicy,
+    },
+  };
+}
+
+export function sendConsoleHandlerResult(response: Response, result: ConsoleHandlerResult, request?: ConsoleRequest): void {
   validateResult(result);
   for (const [name, value] of Object.entries(result.headers ?? {})) {
     response.setHeader(name, value);
@@ -42,11 +68,35 @@ export function sendConsoleHandlerResult(response: Response, result: ConsoleHand
   if (result.redirectTo) {
     response.location(result.redirectTo);
   }
+  if (result.stream) {
+    void sendConsoleSseStream(response, result.stream.events, result.stream.init, {
+      request,
+      policy: result.stream.policy,
+      projectEvent: result.stream.projectEvent,
+      revalidate: result.stream.revalidate,
+      reportStreamError: result.stream.reportStreamError,
+    })
+      .catch(() => {
+        if (!response.writableEnded) response.end();
+      });
+    return;
+  }
   if (result.body === undefined) {
     response.status(result.status).end();
     return;
   }
   response.status(result.status).json(result.body);
+}
+
+function projectStreamEvent(
+  projector: NonNullable<ConsoleRouteDefinition['privacyProjector']>,
+): (event: ConsoleSseEvent) => ConsoleSseEvent {
+  return event => event.data === undefined || event.event === 'error'
+    ? event
+    : {
+        ...event,
+        data: projector(event.data),
+      };
 }
 
 function validateResult(result: ConsoleHandlerResult): void {
@@ -55,6 +105,9 @@ function validateResult(result: ConsoleHandlerResult): void {
   }
   if (result.cookies && !Array.isArray(result.cookies)) {
     throw new Error('Console route handler returned invalid cookie directives');
+  }
+  if (result.stream && (result.status !== 200 || result.body !== undefined || result.redirectTo !== undefined)) {
+    throw new Error('Console route handler returned an invalid SSE result');
   }
   validateHeaders(result.headers);
   validateConsoleCookieDirectives(result.cookies);

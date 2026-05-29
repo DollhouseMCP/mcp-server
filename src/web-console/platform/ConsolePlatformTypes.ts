@@ -50,6 +50,7 @@ export type ConsoleAudience = 'public' | 'self' | 'admin';
 export type ConsoleOwnershipPolicy = 'none' | 'flow_transaction' | 'authenticated_user' | 'owned_session';
 export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
 export type ConsoleAuditExecutionPolicy = 'kernel' | 'handler_transaction';
+export type ConsoleResponseKind = 'json' | 'sse';
 
 export interface ConsoleRequestContext {
   readonly correlationId: string;
@@ -88,6 +89,30 @@ export interface ConsoleHandlerResult {
   readonly headers?: ConsoleResponseHeaders;
   readonly cookies?: readonly ConsoleCookieDirective[];
   readonly redirectTo?: string;
+  readonly stream?: ConsoleSseStream;
+}
+
+export interface ConsoleSseEvent {
+  readonly id?: string;
+  readonly event: string;
+  readonly data?: unknown;
+}
+
+export interface ConsoleSseStream {
+  readonly events: AsyncIterable<ConsoleSseEvent>;
+  readonly init?: unknown;
+  readonly policy?: ConsoleStreamPolicy;
+  readonly projectEvent?: (event: ConsoleSseEvent) => ConsoleSseEvent;
+  readonly revalidate?: () => Promise<boolean>;
+  readonly reportStreamError?: (error: unknown) => void;
+}
+
+export interface ConsoleStreamPolicy {
+  readonly lastEventId: 'unsupported' | 'bounded';
+  readonly heartbeatMs: number;
+  readonly revalidateMs: number;
+  readonly maxEventBytes: number;
+  readonly maxLastEventIdBytes: number;
 }
 
 export interface ConsoleResponseHeaders {
@@ -127,6 +152,8 @@ export interface ConsoleRouteDefinition {
   readonly rateLimit?: ConsoleRateLimitPolicy;
   readonly auditOperation?: string;
   readonly auditExecution?: ConsoleAuditExecutionPolicy;
+  readonly responseKind?: ConsoleResponseKind;
+  readonly streamPolicy?: ConsoleStreamPolicy;
   readonly privacyProjector?: ConsolePrivacyProjector;
   readonly handler: ConsoleHandler;
 }
@@ -175,6 +202,7 @@ export interface ConsoleRouteManifestEntry {
   readonly idempotency: ConsoleIdempotencyPolicy;
   readonly rateLimit?: ConsoleRateLimitPolicy;
   readonly auditOperation?: string;
+  readonly responseKind?: ConsoleResponseKind;
 }
 
 export interface ConsoleRouteManifest {

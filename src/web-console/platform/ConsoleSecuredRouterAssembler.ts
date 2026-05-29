@@ -17,12 +17,13 @@ import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
-import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
+import type { ConsoleAuthenticatedContext, ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
 import type { ConsoleRequest } from './ConsolePlatformTypes.js';
+import { requireConsoleAuthentication } from '../middleware/ConsoleAuthentication.js';
 
 export interface SecuredConsoleRouterOptions {
   readonly sessionStore: IConsoleSessionStore;
@@ -129,7 +130,7 @@ function createSecuredHandler(
           );
           return;
         }
-        sendConsoleHandlerResult(response, execution.result);
+        sendConsoleHandlerResult(response, execution.result, req);
       } catch (error) {
         next(error);
       }
@@ -169,7 +170,62 @@ async function executeAuditedConsoleRoute(
   if (route.audience === 'admin' && route.auditExecution !== 'handler_transaction') {
     await writeConsoleAdminAudit(options.adminAuditWriter, route, req, 'approved', null, occurredAt);
   }
-  return result;
+  if (!result.stream || !route.streamPolicy) return result;
+  const correlationId = requireConsoleRequestContext(req).correlationId;
+  return {
+    ...result,
+    stream: {
+      ...result.stream,
+      revalidate: () => revalidateConsoleStream(route, req, options),
+      reportStreamError: (error: unknown) => options.reportInternalError?.(error, correlationId),
+    },
+  };
+}
+
+async function revalidateConsoleStream(
+  route: ConsoleRouteDefinition,
+  req: ConsoleRequest,
+  options: SecuredConsoleRouterOptions,
+): Promise<boolean> {
+  const authentication = requireConsoleAuthentication(req);
+  const now = options.now?.() ?? new Date();
+  const session = await options.sessionStore.findActiveByIdHash(authentication.sessionIdHash, now);
+  if (session === null) return false;
+  if (session.userId !== authentication.userId || session.authSub !== authentication.authSub) return false;
+  const principal = await options.identityResolver.resolveEnabledPrincipal(session.authSub);
+  if (principal?.userId !== session.userId || principal.authzVersion !== authentication.authzVersion) return false;
+  if (route.requiredCapability === 'none') return false;
+  const requiredCapability = route.requiredCapability;
+  if (!session.grantedCapabilities.includes(requiredCapability)) return false;
+  if (!authentication.grantedCapabilities.includes(requiredCapability)) return false;
+  if (route.audience !== 'admin') return true;
+  const authPolicy = options.authPolicyStore ? await options.authPolicyStore.load() : null;
+  return hasValidStreamElevation(authentication, route, now, authPolicy?.maxAdminElevationSeconds);
+}
+
+function hasValidStreamElevation(
+  authentication: ConsoleAuthenticatedContext,
+  route: ConsoleRouteDefinition,
+  now: Date,
+  maxAdminElevationSeconds?: number,
+): boolean {
+  const elevation = authentication.elevation;
+  const freshnessSeconds = elevationPolicySeconds(route.elevation, maxAdminElevationSeconds);
+  if (route.requiredCapability === 'none') return false;
+  return !!elevation &&
+    elevation.capabilities.includes(route.requiredCapability) &&
+    elevation.expiresAt > now &&
+    elevation.acr === 'urn:dollhouse:acr:admin-stepup' &&
+    elevation.amr.includes('otp') &&
+    elevation.authTime.getTime() + freshnessSeconds * 1000 > now.getTime();
+}
+
+function elevationPolicySeconds(
+  policy: ConsoleRouteDefinition['elevation'],
+  maxAdminElevationSeconds = 300,
+): number {
+  const boundedMax = Math.max(60, Math.min(300, Math.trunc(maxAdminElevationSeconds)));
+  return policy === 'admin_5m' ? Math.min(300, boundedMax) : 1800;
 }
 
 function registerSecuredRoute(

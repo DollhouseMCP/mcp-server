@@ -6,4 +6,5 @@ export * from './ConsoleRouterAssembler.js';
 export * from './ConsoleRouteExecution.js';
 export * from './ConsoleReturnPaths.js';
 export * from './ConsoleSecuredRouterAssembler.js';
+export * from './ConsoleSseStream.js';
 export * from './ProblemResponses.js';

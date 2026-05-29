@@ -7,6 +7,7 @@ import {
   sendConsoleHandlerResult,
   type ConsoleAdminAuditEvent,
   type ConsoleRouteDefinition,
+  type ConsoleSseEvent,
 } from '../../../../src/web-console/index.js';
 import {
   CONSOLE_CSRF_COOKIE,
@@ -102,6 +103,49 @@ describe('console route policy execution', () => {
     }), {} as never)).rejects.toThrow('projection rejected input');
   });
 
+  it('attaches administrative privacy projection to stream init and event data', async () => {
+    const result = await executeConsoleRoute(route({
+      path: '/api/v1/admin/operate/logs/stream',
+      audience: 'admin',
+      requiredCapability: 'console:admin:operate',
+      elevation: 'admin_30m',
+      privacyClass: 'operational_allowlist',
+      auditOperation: 'operate.logs.stream',
+      responseKind: 'sse',
+      streamPolicy: {
+        lastEventId: 'bounded',
+        heartbeatMs: 15_000,
+        revalidateMs: 15_000,
+        maxEventBytes: 65_536,
+        maxLastEventIdBytes: 512,
+      },
+      privacyProjector: value => ({ visible: (value as { visible: boolean }).visible }),
+      handler: () => ({
+        status: 200,
+        stream: {
+          init: { visible: true, rawPrivate: 'hidden' },
+          events: emptySseEvents(),
+        },
+      }),
+    }), {} as never);
+
+    const projector = result.stream?.projectEvent;
+    expect(projector?.({
+      event: 'update',
+      data: { visible: true, rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'update',
+      data: { visible: true },
+    });
+    expect(projector?.({
+      event: 'init',
+      data: { visible: true, rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'init',
+      data: { visible: true },
+    });
+  });
+
   it('serializes body results as JSON and completes bodyless results without JSON output', () => {
     const json = jest.fn();
     const end = jest.fn();
@@ -182,7 +226,40 @@ describe('console route policy execution', () => {
     })).toThrow('non-redirect status');
     expect(response.location).not.toHaveBeenCalled();
   });
+
+  it('rejects invalid SSE result shapes before writing response headers', () => {
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      end: jest.fn(),
+    } as unknown as Response;
+
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 204,
+      stream: { events: emptySseEvents() },
+    })).toThrow('invalid SSE result');
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 200,
+      body: { ok: true },
+      stream: { events: emptySseEvents() },
+    })).toThrow('invalid SSE result');
+    expect(() => sendConsoleHandlerResult(response, {
+      status: 302,
+      redirectTo: '/elsewhere',
+      stream: { events: emptySseEvents() },
+    })).toThrow('invalid SSE result');
+    expect(response.status).not.toHaveBeenCalled();
+  });
 });
+
+const EMPTY_SSE_EVENTS: AsyncIterable<ConsoleSseEvent> = {
+  [Symbol.asyncIterator]: () => ({
+    next: () => Promise.resolve({ done: true, value: undefined as never }),
+  }),
+};
+
+function emptySseEvents(): AsyncIterable<ConsoleSseEvent> {
+  return EMPTY_SSE_EVENTS;
+}
 
 describe('console cookie directives', () => {
   it('serializes fixed BFF cookie policies from the API contract', () => {

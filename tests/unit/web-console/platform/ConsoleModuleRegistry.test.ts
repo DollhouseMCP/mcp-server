@@ -9,6 +9,12 @@ import {
 const ADMIN_AUDIT_OPERATION = 'operations.health.read';
 const PROFILE_UPDATED_EVENT = 'profile.updated.v1';
 const SELF_CAPABILITY = 'console:self';
+const SELF_STREAM_PATH = '/api/v1/me/example/stream';
+const EMPTY_SSE_EVENTS: AsyncIterable<never> = {
+  [Symbol.asyncIterator]: () => ({
+    next: () => Promise.resolve({ done: true, value: undefined as never }),
+  }),
+};
 
 function selfRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
   return {
@@ -167,6 +173,29 @@ describe('ConsoleModuleRegistry', () => {
     }));
   });
 
+  it('registers stream descriptors with explicit SSE policy metadata', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(adminModule({
+      path: '/api/v1/admin/operate/logs/stream',
+      auditOperation: ADMIN_AUDIT_OPERATION,
+      responseKind: 'sse',
+      streamPolicy: {
+        lastEventId: 'bounded',
+        heartbeatMs: 15_000,
+        revalidateMs: 15_000,
+        maxEventBytes: 65_536,
+        maxLastEventIdBytes: 512,
+      },
+      handler: () => ({ status: 200, stream: { events: EMPTY_SSE_EVENTS } }),
+    }));
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      path: '/api/v1/admin/operate/logs/stream',
+      responseKind: 'sse',
+    }));
+  });
+
   it.each([
     ['an unsupported API version', selfModule({
       apiVersion: 'v2' as never,
@@ -207,6 +236,91 @@ describe('ConsoleModuleRegistry', () => {
     ['an invalid rate-limit policy', selfModule({
       routes: [selfRoute({ rateLimit: 'sometimes' as never })],
     }), /invalid rate-limit policy/],
+    ['an invalid response kind', selfModule({
+      routes: [selfRoute({ responseKind: 'xml' as never })],
+    }), /invalid response kind/],
+    ['an SSE route without stream policy', selfModule({
+      routes: [selfRoute({ path: SELF_STREAM_PATH, responseKind: 'sse' })],
+    }), /missing stream policy/],
+    ['a non-GET SSE route', selfModule({
+      routes: [selfRoute({
+        method: 'POST',
+        path: SELF_STREAM_PATH,
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /must use GET/],
+    ['an SSE route requiring idempotency', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        idempotency: 'required',
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /cannot require idempotency/],
+    ['an SSE route with invalid Last-Event-ID policy', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'raw' as never,
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid Last-Event-ID policy/],
+    ['an SSE route with non-positive stream limits', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 0,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid stream limits/],
+    ['an SSE route with excessive stream limits', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: Number.MAX_SAFE_INTEGER,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid stream limits/],
+    ['a JSON route with stream policy', selfModule({
+      routes: [selfRoute({
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /non-stream route/],
     ['a non-mutating route requiring idempotency', selfModule({
       routes: [selfRoute({ idempotency: 'required' })],
     }), /cannot require idempotency/],

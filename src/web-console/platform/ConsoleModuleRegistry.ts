@@ -10,6 +10,7 @@ import {
   type ConsoleModuleDescriptor,
   type ConsolePrivacyClass,
   type ConsoleRateLimitPolicy,
+  type ConsoleResponseKind,
   type ConsoleRouteDefinition,
   type ConsoleRouteManifest,
   type ConsoleRouteManifestEntry,
@@ -22,17 +23,22 @@ const HTTP_METHODS = new Set<string>(CONSOLE_HTTP_METHODS);
 const RATE_LIMIT_POLICIES = new Set<string>(CONSOLE_RATE_LIMIT_POLICIES);
 const IDEMPOTENCY_POLICIES = new Set<string>(['not_applicable', 'required']);
 const OWNERSHIP_POLICIES = new Set<string>(['none', 'flow_transaction', 'authenticated_user', 'owned_session']);
+const RESPONSE_KINDS = new Set<string>(['json', 'sse']);
 const MUTATING_METHODS = new Set<ConsoleHttpMethod>(['POST', 'PUT', 'PATCH', 'DELETE']);
 const SELF_PRIVACY_CLASSES = new Set<ConsolePrivacyClass>(['self_private', 'self_security']);
 const SELF_PATH_PATTERN = /^\/api\/v1\/(me|auth)(\/|$)/;
 const PUBLIC_AUTH_PATH_PATTERN = /^\/api\/v1\/auth(\/|$)/;
 const PUBLIC_HEALTH_PATH_PATTERN = /^\/api\/v1\/health(\/ready)?$/;
+const MAX_STREAM_EVENT_BYTES = 1024 * 1024;
+const MAX_STREAM_LAST_EVENT_ID_BYTES = 4096;
+const MAX_STREAM_INTERVAL_MS = 60_000;
 
 type ValidatedConsoleRouteDefinition = ConsoleRouteDefinition & {
   readonly elevation: ConsoleElevationPolicy;
   readonly privacyClass: ConsolePrivacyClass;
   readonly idempotency: ConsoleIdempotencyPolicy;
   readonly rateLimit: ConsoleRateLimitPolicy;
+  readonly responseKind: ConsoleResponseKind;
 };
 
 type RegisteredConsoleModuleDescriptor = Omit<ConsoleModuleDescriptor, 'routes'> & {
@@ -52,6 +58,10 @@ function routeKey(route: Pick<ConsoleRouteDefinition, 'method' | 'path'>): strin
 
 function isAdminCapability(capability: string): boolean {
   return capability.startsWith('console:admin:');
+}
+
+function isBoundedPositiveInteger(value: number, max: number): boolean {
+  return Number.isSafeInteger(value) && value > 0 && value <= max;
 }
 
 function assertIdentifier(value: string, label: string): void {
@@ -76,7 +86,8 @@ function manifestEntry(
     idempotency: route.idempotency,
     ...(route.auditOperation ? { auditOperation: route.auditOperation } : {}),
   };
-  return route.rateLimit === 'none' ? entry : { ...entry, rateLimit: route.rateLimit };
+  const withRateLimit = route.rateLimit === 'none' ? entry : { ...entry, rateLimit: route.rateLimit };
+  return route.responseKind === 'json' ? withRateLimit : { ...withRateLimit, responseKind: route.responseKind };
 }
 
 function freezeDescriptor(
@@ -258,6 +269,7 @@ export class ConsoleModuleRegistry {
       privacyClass,
       idempotency: route.idempotency ?? 'not_applicable',
       rateLimit: route.rateLimit ?? 'none',
+      responseKind: route.responseKind ?? 'json',
     };
   }
 
@@ -285,6 +297,7 @@ export class ConsoleModuleRegistry {
     if (route.rateLimit && !RATE_LIMIT_POLICIES.has(route.rateLimit)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid rate-limit policy`);
     }
+    this.validateRouteResponsePolicy(module, route);
     if (MUTATING_METHODS.has(route.method) && !route.idempotency) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" mutating route ${routeKey(route)} is missing an idempotency decision`);
     }
@@ -293,6 +306,45 @@ export class ConsoleModuleRegistry {
     }
     if (route.ownership && !OWNERSHIP_POLICIES.has(route.ownership)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid ownership policy`);
+    }
+  }
+
+  private validateRouteResponsePolicy(
+    module: ConsoleModuleDescriptor,
+    route: ConsoleRouteDefinition,
+  ): void {
+    if (route.responseKind && !RESPONSE_KINDS.has(route.responseKind)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} has an invalid response kind`);
+    }
+    if (route.responseKind === 'sse') {
+      this.validateStreamRoutePolicy(module, route);
+    } else if (route.streamPolicy) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" route ${routeKey(route)} declares stream policy for a non-stream route`);
+    }
+  }
+
+  private validateStreamRoutePolicy(
+    module: ConsoleModuleDescriptor,
+    route: ConsoleRouteDefinition,
+  ): void {
+    if (route.method !== 'GET') {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} must use GET`);
+    }
+    if (!route.streamPolicy) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} is missing stream policy`);
+    }
+    if (route.idempotency && route.idempotency !== 'not_applicable') {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} cannot require idempotency`);
+    }
+    const lastEventId = route.streamPolicy.lastEventId as string;
+    if (lastEventId !== 'bounded' && lastEventId !== 'unsupported') {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} has an invalid Last-Event-ID policy`);
+    }
+    if (!isBoundedPositiveInteger(route.streamPolicy.heartbeatMs, MAX_STREAM_INTERVAL_MS) ||
+        !isBoundedPositiveInteger(route.streamPolicy.revalidateMs, MAX_STREAM_INTERVAL_MS) ||
+        !isBoundedPositiveInteger(route.streamPolicy.maxEventBytes, MAX_STREAM_EVENT_BYTES) ||
+        !isBoundedPositiveInteger(route.streamPolicy.maxLastEventIdBytes, MAX_STREAM_LAST_EVENT_ID_BYTES)) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} has invalid stream limits`);
     }
   }
 

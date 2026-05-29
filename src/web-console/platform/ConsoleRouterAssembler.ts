@@ -9,8 +9,9 @@ import { requireConsoleRequestContext } from './ConsoleRequestContext.js';
 
 function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
   const handler: RequestHandler = (request, response, next): void => {
-    void executeConsoleRoute(route, request as ConsoleRequest)
-      .then(result => sendConsoleHandlerResult(response, result))
+    const consoleRequest = request as ConsoleRequest;
+    void executeConsoleRoute(route, consoleRequest)
+      .then(result => sendConsoleHandlerResult(response, result, consoleRequest))
       .catch(next);
   };
   const method: ConsoleHttpMethod = route.method;
