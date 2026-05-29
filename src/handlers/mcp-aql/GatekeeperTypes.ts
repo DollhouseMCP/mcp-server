@@ -206,6 +206,12 @@ export interface CliApprovalRecord {
   requestedAt: string;
   /** When the request was approved (undefined if pending) */
   approvedAt?: string;
+  /** When the request was denied by the owner through a console approval surface */
+  deniedAt?: string;
+  /** When the pending request became terminal due to TTL expiry */
+  expiredAt?: string;
+  /** When the request was cancelled because its owning session terminated */
+  cancelledAt?: string;
   /** Whether this approval has been consumed */
   consumed: boolean;
   /** Approval scope */

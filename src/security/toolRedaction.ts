@@ -16,7 +16,7 @@ export interface ToolRedactionSpec {
   digestFields?: string[];
 }
 
-export const TOOL_REDACTION: Record<string, ToolRedactionSpec> = {
+export const TOOL_REDACTION: Partial<Record<string, ToolRedactionSpec>> = {
   Bash: { keepFields: ['description'], digestFields: ['command'] },
   Write: { keepFields: ['file_path'], digestFields: ['content'] },
   Edit: { keepFields: ['file_path', 'replace_all'], digestFields: ['old_string', 'new_string'] },
@@ -122,8 +122,11 @@ export async function normalizeCliApprovalRecord<T extends {
   toolInputDetail?: Record<string, unknown>;
 }> {
   if (record.toolInputDigest && record.toolInputHash) {
-    const { toolInput: _ignored, ...rest } = record;
-    return rest as Omit<T, 'toolInput'> & {
+    const { toolInput: _ignored, toolInputDetail: detail, ...rest } = record;
+    return {
+      ...rest,
+      ...(retainRaw && detail ? { toolInputDetail: detail } : {}),
+    } as Omit<T, 'toolInput'> & {
       toolInputDigest: Record<string, unknown>;
       toolInputHash: string;
       toolInputDetail?: Record<string, unknown>;
@@ -242,11 +245,11 @@ function redactWithSpec(raw: Record<string, unknown>, spec: ToolRedactionSpec): 
 const MAX_REDACTION_DEPTH = 10;
 // Frozen so a future caller can't mutate the marker and have the change
 // propagate to every depth-capped subtree in every digest in the process.
-const DEPTH_TRUNCATED: Record<string, unknown> = Object.freeze({
+const DEPTH_TRUNCATED: Readonly<Record<string, unknown>> = Object.freeze({
   redacted: true,
   type: 'object',
   reason: 'depth_cap',
-}) as Record<string, unknown>;
+});
 
 function genericRedact(input: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth >= MAX_REDACTION_DEPTH) return DEPTH_TRUNCATED;
@@ -432,7 +435,7 @@ function digestMarker(value: unknown): Record<string, unknown> {
   return {
     redacted: true,
     type: Array.isArray(value) ? 'array' : typeof value,
-    length: serialized?.length ?? 0,
+    length: serialized.length,
   };
 }
 

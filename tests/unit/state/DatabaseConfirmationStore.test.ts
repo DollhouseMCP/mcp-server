@@ -3,7 +3,7 @@ import { describe, expect, it, beforeEach, jest } from '@jest/globals';
 let mockRows: unknown[] = [];
 
 jest.unstable_mockModule('../../../src/database/admin.js', () => ({
-  withSystemContext: jest.fn(async () => mockRows),
+  withSystemContext: jest.fn(() => Promise.resolve(mockRows)),
 }));
 
 const { StaticAuditHmacKeyResolver } = await import('../../../src/security/auditHmacKey.js');

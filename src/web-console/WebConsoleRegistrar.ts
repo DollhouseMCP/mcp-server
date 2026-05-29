@@ -1,6 +1,7 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
 import { InMemoryAdminAuditWriter } from './audit/InMemoryAdminAuditWriter.js';
 import { PostgresAdminAuditWriter, type AdminAuditHmacKeyResolver } from './audit/PostgresAdminAuditWriter.js';
 import { InMemoryConsoleIdentityResolver } from './identity/InMemoryConsoleIdentityResolver.js';
@@ -45,6 +46,14 @@ import {
   type ISessionActivationEventSink,
   type ISessionActivationStateAdapter,
 } from './modules/activations/index.js';
+import {
+  InMemorySessionApprovalEventSink,
+  InMemorySessionApprovalStore,
+  GatekeeperSessionApprovalStore,
+  createApprovalModule,
+  type ISessionApprovalEventSink,
+  type SessionApprovalStore,
+} from './modules/approvals/index.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
@@ -85,6 +94,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   protectedCorrelationRateLimiter: 'WebConsoleProtectedCorrelationRateLimiter',
   sessionActivationStateAdapter: 'WebConsoleSessionActivationStateAdapter',
   sessionActivationEventSink: 'WebConsoleSessionActivationEventSink',
+  sessionApprovalStore: 'WebConsoleSessionApprovalStore',
+  sessionApprovalEventSink: 'WebConsoleSessionApprovalEventSink',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
@@ -109,6 +120,8 @@ export interface WebConsoleRegistrarOptions {
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
+  readonly approvalStore?: SessionApprovalStore | null;
+  readonly approvalEventSink?: ISessionApprovalEventSink | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -133,6 +146,8 @@ export interface WebConsoleComposition {
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly sessionActivationStateAdapter: ISessionActivationStateAdapter;
   readonly sessionActivationEventSink: ISessionActivationEventSink;
+  readonly sessionApprovalStore: SessionApprovalStore;
+  readonly sessionApprovalEventSink: ISessionApprovalEventSink;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
@@ -173,6 +188,8 @@ export class WebConsoleRegistrar {
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
     const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container);
     const sessionActivationEventSink = resolveSessionActivationEventSink(container);
+    const sessionApprovalStore = resolveSessionApprovalStore(container, this.options);
+    const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, this.options);
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
@@ -205,6 +222,12 @@ export class WebConsoleRegistrar {
       portfolioStore: stores.portfolioStore,
       activationState: sessionActivationStateAdapter,
       eventSink: sessionActivationEventSink,
+      now: this.options.now,
+    }));
+    registry.register(createApprovalModule({
+      runtimeStore: stores.runtimeSessionControlStore,
+      approvalStore: sessionApprovalStore,
+      eventSink: sessionApprovalEventSink,
       now: this.options.now,
     }));
     registry.register(createIntegrationModule({
@@ -244,6 +267,8 @@ export class WebConsoleRegistrar {
       protectedCorrelationRateLimiter,
       sessionActivationStateAdapter,
       sessionActivationEventSink,
+      sessionApprovalStore,
+      sessionApprovalEventSink,
       oauthGrantRevocationService,
       authStorage,
       accountInviteIssuer,
@@ -284,6 +309,8 @@ export class WebConsoleRegistrar {
     }
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter, () => sessionActivationStateAdapter);
     container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink, () => sessionActivationEventSink);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore, () => sessionApprovalStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink, () => sessionApprovalEventSink);
     if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
     }
@@ -534,6 +561,33 @@ function resolveSessionActivationEventSink(container: DiContainerFacade): ISessi
     );
   }
   return new InMemorySessionActivationEventSink();
+}
+
+function resolveSessionApprovalStore(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): SessionApprovalStore {
+  if (options.approvalStore !== undefined) return options.approvalStore ?? new InMemorySessionApprovalStore();
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore)) {
+    return container.resolve<SessionApprovalStore>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore);
+  }
+  if (container.hasRegistration('gatekeeper')) {
+    return new GatekeeperSessionApprovalStore(container.resolve<Gatekeeper>('gatekeeper'));
+  }
+  return new InMemorySessionApprovalStore();
+}
+
+function resolveSessionApprovalEventSink(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ISessionApprovalEventSink {
+  if (options.approvalEventSink !== undefined) {
+    return options.approvalEventSink ?? new InMemorySessionApprovalEventSink();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink)) {
+    return container.resolve<ISessionApprovalEventSink>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink);
+  }
+  return new InMemorySessionApprovalEventSink();
 }
 
 function resolveUserConfigStore(

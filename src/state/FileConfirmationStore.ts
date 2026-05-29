@@ -31,6 +31,7 @@ import { fireAndForgetPersist, handleInitializeError } from './persistence-utils
 // ── Constants ───────────────────────────────────────────────────────
 
 const STORE_NAME = 'FileConfirmationStore';
+const TERMINAL_APPROVAL_RETENTION_MS = 86_400_000;
 
 // ── Persisted File Format ───────────────────────────────────────────
 
@@ -107,38 +108,43 @@ export class FileConfirmationStore implements IConfirmationStore {
     }
   }
 
-  private restoreConfirmations(entries: Array<[string, ConfirmationRecord]> | undefined): void {
+  private restoreConfirmations(entries: unknown): void {
     if (!Array.isArray(entries)) return;
-    for (const [key, record] of entries) {
-      if (key && record && typeof record.operation === 'string') {
+    for (const entry of entries) {
+      if (isEntry(entry)) {
+        const [key, record] = entry as [string, ConfirmationRecord];
         this.confirmations.set(key, record);
       }
     }
   }
 
-  private async restoreCliApprovals(entries: Array<[string, PersistedCliApprovalRecord]> | undefined): Promise<void> {
+  private async restoreCliApprovals(entries: unknown): Promise<void> {
     if (!Array.isArray(entries)) return;
     const now = Date.now();
-    for (const [requestId, record] of entries) {
-      if (!requestId || !record) continue;
+    for (const entry of entries) {
+      if (!isEntry(entry)) continue;
+      const [requestId, record] = entry as [string, PersistedCliApprovalRecord];
       const age = now - new Date(record.requestedAt).getTime();
       const ttl = record.ttlMs ?? 300_000;
-      if (age > ttl && (!record.approvedAt || record.consumed)) continue;
+      if (age > ttl && record.consumed) continue;
+      if (isExpiredTerminal(record, now)) continue;
       this.cliApprovals.set(requestId, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
     }
   }
 
-  private async restoreCliSessionApprovals(entries: Array<[string, PersistedCliApprovalRecord]> | undefined): Promise<void> {
+  private async restoreCliSessionApprovals(entries: unknown): Promise<void> {
     if (!Array.isArray(entries)) return;
-    for (const [toolName, record] of entries) {
-      if (toolName && record) {
-        this.cliSessionApprovals.set(toolName, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
-      }
+    for (const entry of entries) {
+      if (!isEntry(entry)) continue;
+      const [toolName, record] = entry as [string, PersistedCliApprovalRecord];
+      if (isExpiredTerminal(record, Date.now())) continue;
+      this.cliSessionApprovals.set(toolName, await normalizeCliApprovalRecord(record, env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT, this.auditHmacResolver));
     }
   }
 
-  async persist(): Promise<void> {
+  persist(): Promise<void> {
     this.persistAsync();
+    return Promise.resolve();
   }
 
   // ── Confirmation Records ──────────────────────────────────────────
@@ -291,3 +297,16 @@ export class FileConfirmationStore implements IConfirmationStore {
   }
 }
 
+function isEntry(value: unknown): value is [string, unknown] {
+  return Array.isArray(value) && value.length === 2 && typeof value[0] === 'string' && Boolean(value[1]);
+}
+
+function isExpiredTerminal(record: {
+  deniedAt?: string;
+  expiredAt?: string;
+  cancelledAt?: string;
+}, now: number): boolean {
+  const terminalTimestamp = record.deniedAt ?? record.expiredAt ?? record.cancelledAt ?? undefined;
+  if (!terminalTimestamp) return false;
+  return now - new Date(terminalTimestamp).getTime() > TERMINAL_APPROVAL_RETENTION_MS;
+}

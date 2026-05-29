@@ -30,7 +30,7 @@ jest.unstable_mockModule('../../../src/security/securityMonitor.js', () => ({
   },
 }));
 
-const mockMkdir = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+const mockMkdir = jest.fn<() => Promise<void>>().mockResolvedValue();
 const mockReaddir = jest.fn<() => Promise<string[]>>().mockResolvedValue([]);
 jest.unstable_mockModule('fs/promises', () => ({
   default: { mkdir: mockMkdir, readdir: mockReaddir },
@@ -59,7 +59,7 @@ function createMockFileOps(options?: {
   }
   return {
     readFile: readFileMock,
-    writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    writeFile: jest.fn<() => Promise<void>>().mockResolvedValue(),
   } as ReturnType<typeof createMockFileOps>;
 }
 
@@ -108,7 +108,7 @@ describe('FileConfirmationStore', () => {
       expect(store.getPermissionPromptActive()).toBe(true);
     });
 
-    it('should drop expired CLI approvals on load', async () => {
+    it('should retain expired pending CLI approvals for stable terminal responses on load', async () => {
       const now = Date.now();
       const persisted = {
         version: 1,
@@ -153,10 +153,11 @@ describe('FileConfirmationStore', () => {
 
       await store.initialize();
 
-      // Expired one should be dropped, fresh one should survive
-      expect(store.getAllCliApprovals()).toHaveLength(1);
+      // Both survive; Gatekeeper/web-console decision paths mark stale pending
+      // approvals terminal so retries can return stable responses.
+      expect(store.getAllCliApprovals()).toHaveLength(2);
       expect(store.getCliApproval('cli-fresh')?.toolName).toBe('Edit');
-      expect(store.getCliApproval('cli-expired')).toBeUndefined();
+      expect(store.getCliApproval('cli-expired')?.toolName).toBe('Bash');
     });
 
     it('should handle corrupt JSON gracefully', async () => {
@@ -382,7 +383,9 @@ describe('FileConfirmationStore', () => {
       await store.persist();
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const writtenContent = mockFileOps.writeFile.mock.calls.at(-1)![1];
+      const lastWrite = mockFileOps.writeFile.mock.calls.at(-1);
+      if (!lastWrite) throw new Error('expected persisted confirmation write');
+      const writtenContent = lastWrite[1];
 
       const readMockFileOps = createMockFileOps({ readFileResult: writtenContent });
       const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
@@ -446,6 +449,40 @@ describe('FileConfirmationStore', () => {
       );
       // Raw toolInput must NOT survive into the in-memory record:
       expect((restored as unknown as { toolInput?: unknown }).toolInput).toBeUndefined();
+    });
+
+    it('strips retained raw tool input detail from new-shape records when retain-raw is disabled', async () => {
+      const persisted = {
+        version: 1,
+        sessionId: TEST_SESSION_ID,
+        lastUpdated: new Date().toISOString(),
+        confirmations: [],
+        cliApprovals: [[
+          CLI_RETAINED,
+          {
+            requestId: CLI_RETAINED,
+            toolName: 'Bash',
+            toolInputDigest: { command: { redacted: true, hmac: 'abc' } },
+            toolInputHash: 'static:hash',
+            toolInputDetail: { command: 'npm test' },
+            riskLevel: 'moderate',
+            riskScore: 50,
+            irreversible: false,
+            requestedAt: new Date().toISOString(),
+            consumed: false,
+            scope: 'single',
+            denyReason: 'test',
+          },
+        ]],
+        cliSessionApprovals: [],
+        permissionPromptActive: false,
+      };
+      const readMockFileOps = createMockFileOps({ readFileResult: JSON.stringify(persisted) });
+      const store2 = new FileConfirmationStore(readMockFileOps, TEST_STATE_DIR, TEST_SESSION_ID, auditResolver);
+
+      await store2.initialize();
+
+      expect(store2.getCliApproval(CLI_RETAINED)?.toolInputDetail).toBeUndefined();
     });
   });
 });

@@ -1,4 +1,5 @@
 export * from './activations/index.js';
+export * from './approvals/index.js';
 export * from './account-admin/index.js';
 export * from './health/index.js';
 export * from './integrations/index.js';
