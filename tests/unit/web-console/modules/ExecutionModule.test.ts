@@ -6,6 +6,7 @@ import {
   InMemoryRuntimeSessionControlStore,
   InMemorySessionExecutionReader,
   createExecutionModule,
+  executeConsoleRoute,
   projectSessionExecution,
   projectSessionExecutionList,
   projectSessionGatekeeper,
@@ -25,7 +26,9 @@ const SECOND_SESSION_ID = 'mcp-session-2';
 const GOAL_ID = 'goal-018f3d47';
 const EXECUTION_LIST_PATH = '/api/v1/me/sessions/:session_id/executions';
 const EXECUTION_DETAIL_PATH = '/api/v1/me/sessions/:session_id/executions/:goal_id';
+const EXECUTION_STREAM_PATH = '/api/v1/me/sessions/:session_id/executions/:goal_id/stream';
 const GATEKEEPER_PATH = '/api/v1/me/sessions/:session_id/gatekeeper';
+const EXECUTION_STEP = 'Reviewed auth module';
 const NOW = new Date('2026-05-29T14:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-29T14:05:00.000Z');
 
@@ -81,7 +84,7 @@ async function fixture() {
     gatekeeperReader: new GatekeeperSessionStateReader(gatekeeper),
     now: () => NOW,
   });
-  return { module };
+  return { module, runtimeStore };
 }
 
 function executionRecord(overrides: Partial<SessionExecutionDetailDto> = {}): SessionExecutionDetailDto {
@@ -94,11 +97,11 @@ function executionRecord(overrides: Partial<SessionExecutionDetailDto> = {}): Se
     started_at: '2026-05-29T13:55:00.000Z',
     updated_at: '2026-05-29T13:59:00.000Z',
     completed_at: null,
-    current_step: 'Reviewed auth module',
+    current_step: EXECUTION_STEP,
     stable_error_code: null,
     output: [{
       kind: 'progress',
-      message: 'Reviewed auth module',
+      message: EXECUTION_STEP,
       occurred_at: '2026-05-29T13:58:00.000Z',
     }],
     ...overrides,
@@ -138,6 +141,13 @@ function request(overrides: Partial<ConsoleRequest> = {}): ConsoleRequest {
   } as ConsoleRequest;
 }
 
+async function collectEvents<T>(events: AsyncIterable<T> | undefined): Promise<T[]> {
+  if (!events) throw new Error('missing stream events');
+  const collected: T[] = [];
+  for await (const event of events) collected.push(event);
+  return collected;
+}
+
 describe('ExecutionModule', () => {
   it('registers descriptor-driven execution and gatekeeper routes with expected policies', async () => {
     const registry = new ConsoleModuleRegistry();
@@ -158,6 +168,17 @@ describe('ExecutionModule', () => {
         moduleId: 'executions',
         method: 'GET',
         path: EXECUTION_DETAIL_PATH,
+      }),
+      expect.objectContaining({
+        moduleId: 'executions',
+        method: 'GET',
+        path: EXECUTION_STREAM_PATH,
+        requiredCapability: 'console:self',
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
       }),
       expect.objectContaining({
         moduleId: 'executions',
@@ -201,6 +222,121 @@ describe('ExecutionModule', () => {
     await expect(detailRoute.handler(request({
       params: { session_id: SESSION_ID, goal_id: 'goal-missing' },
     }))).resolves.toMatchObject({ status: 404 });
+  });
+
+  it('streams owner-private execution updates with projection and owned-session revalidation', async () => {
+    const { module, runtimeStore } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+
+    const result = await executeConsoleRoute(route, request({
+      params: { session_id: SESSION_ID, goal_id: GOAL_ID },
+      query: {},
+      headers: {},
+    }));
+
+    expect(result.stream?.init).toEqual({
+      stream_id: `me.sessions.${SESSION_ID}.executions.${GOAL_ID}`,
+      stream_type: 'session_execution',
+      resume_supported: false,
+      session_id: SESSION_ID,
+      goal_id: GOAL_ID,
+    });
+    const events = await collectEvents(result.stream?.events);
+    expect(events).toEqual([
+      {
+        event: 'update',
+        data: expect.objectContaining({
+          goal_id: GOAL_ID,
+          session_id: SESSION_ID,
+          status: 'running',
+          output: [expect.objectContaining({ message: 'Reviewed auth module' })],
+        }),
+      },
+      {
+        event: 'end',
+        data: { status: 'complete' },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('tool_input');
+    expect(result.stream?.projectEvent?.({
+      event: 'update',
+      data: { ...executionRecord(), secret: 'drop' },
+    })).toEqual({
+      event: 'update',
+      data: expect.not.objectContaining({ secret: 'drop' }),
+    });
+    expect(result.stream?.projectEvent?.({
+      event: 'init',
+      data: {
+        connected_at: NOW.toISOString(),
+        stream_id: `me.sessions.${SESSION_ID}.executions.${GOAL_ID}`,
+        stream_type: 'wrong',
+        resume_supported: true,
+        session_id: SESSION_ID,
+        goal_id: GOAL_ID,
+        secret: 'drop',
+      },
+    })).toEqual({
+      event: 'init',
+      data: {
+        connected_at: NOW.toISOString(),
+        stream_id: `me.sessions.${SESSION_ID}.executions.${GOAL_ID}`,
+        stream_type: 'session_execution',
+        resume_supported: true,
+        session_id: SESSION_ID,
+        goal_id: GOAL_ID,
+      },
+    });
+    expect(result.stream?.projectEvent?.({
+      event: 'end',
+      data: { status: 'interrupted', secret: 'drop' },
+    })).toEqual({
+      event: 'end',
+      data: { status: 'closed' },
+    });
+
+    await runtimeStore.markPresenceClosing(SESSION_ID, NOW);
+    await expect(result.stream?.revalidate?.()).resolves.toBe(false);
+  });
+
+  it('denies execution streams for non-owned sessions', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+
+    await expect(route.handler(request({
+      params: { session_id: SECOND_SESSION_ID, goal_id: GOAL_ID },
+      headers: {},
+    }))).resolves.toMatchObject({ status: 404 });
+  });
+
+  it('validates execution stream goal IDs before opening a stream', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+
+    await expect(route.handler(request({
+      params: { session_id: SESSION_ID, goal_id: 'bad goal id' },
+      headers: {},
+    }))).resolves.toMatchObject({ status: 422 });
+  });
+
+  it('returns not found when the execution stream target does not exist', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+
+    await expect(route.handler(request({
+      params: { session_id: SESSION_ID, goal_id: 'goal-missing' },
+      headers: {},
+    }))).resolves.toMatchObject({ status: 404 });
+  });
+
+  it('rejects Last-Event-ID on execution streams until real resume is implemented', async () => {
+    const { module } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+
+    expect(() => route.handler(request({
+      params: { session_id: SESSION_ID, goal_id: GOAL_ID },
+      headers: { 'last-event-id': 'execution:1' },
+    }))).toThrow('Invalid Last-Event-ID');
   });
 
   it('projects live Gatekeeper state without exposing raw approval input', async () => {

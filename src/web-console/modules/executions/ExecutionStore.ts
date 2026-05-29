@@ -17,6 +17,7 @@ const DEFAULT_APPROVAL_TTL_MS = 300_000;
 export interface SessionExecutionReader {
   list(userId: string, sessionId: string): Promise<readonly SessionExecutionSummaryDto[]>;
   find(userId: string, sessionId: string, goalId: string): Promise<SessionExecutionDetailDto | null>;
+  stream(userId: string, sessionId: string, goalId: string): AsyncIterable<SessionExecutionDetailDto>;
 }
 
 export interface SessionGatekeeperReader {
@@ -40,6 +41,12 @@ export class InMemorySessionExecutionReader implements SessionExecutionReader {
 
   find(userId: string, sessionId: string, goalId: string): Promise<SessionExecutionDetailDto | null> {
     return Promise.resolve(cloneExecution(this.records.get(this.key(userId, sessionId, goalId)) ?? null));
+  }
+
+  async *stream(userId: string, sessionId: string, goalId: string): AsyncIterable<SessionExecutionDetailDto> {
+    await Promise.resolve();
+    const record = cloneExecution(this.records.get(this.key(userId, sessionId, goalId)) ?? null);
+    if (record) yield record;
   }
 
   private prefix(userId: string, sessionId: string): string {

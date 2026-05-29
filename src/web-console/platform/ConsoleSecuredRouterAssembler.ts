@@ -224,11 +224,14 @@ async function executeAuditedConsoleRoute(
   }
   if (!result.stream || !route.streamPolicy) return result;
   const correlationId = requireConsoleRequestContext(req).correlationId;
+  const routeRevalidate = result.stream.revalidate;
   return {
     ...result,
     stream: {
       ...result.stream,
-      revalidate: () => revalidateConsoleStream(route, req, options),
+      revalidate: async () =>
+        await revalidateConsoleStream(route, req, options) &&
+        (routeRevalidate ? await routeRevalidate() : true),
       reportStreamError: (error: unknown) => options.reportInternalError?.(error, correlationId),
     },
   };

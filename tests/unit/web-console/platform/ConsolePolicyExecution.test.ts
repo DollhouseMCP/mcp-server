@@ -84,6 +84,46 @@ describe('console route policy execution', () => {
     expect(projector).not.toHaveBeenCalled();
   });
 
+  it('projects self-service streams by SSE event name when a projector is declared', async () => {
+    const result = await executeConsoleRoute(route({
+      responseKind: 'sse',
+      streamPolicy: {
+        lastEventId: 'unsupported',
+        heartbeatMs: 15_000,
+        revalidateMs: 15_000,
+        maxEventBytes: 65_536,
+        maxLastEventIdBytes: 512,
+      },
+      privacyProjector: value => ({ fallback_visible: (value as { visible: boolean }).visible }),
+      streamEventProjectors: {
+        init: value => ({ init_visible: (value as { visible: boolean }).visible }),
+        update: value => ({ update_visible: (value as { visible: boolean }).visible }),
+      },
+      handler: () => ({
+        status: 200,
+        stream: {
+          init: { visible: true, rawPrivate: 'hidden' },
+          events: emptySseEvents(),
+        },
+      }),
+    }), {} as never);
+
+    expect(result.stream?.projectEvent?.({
+      event: 'update',
+      data: { visible: true, rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'update',
+      data: { update_visible: true },
+    });
+    expect(result.stream?.projectEvent?.({
+      event: 'custom',
+      data: { visible: true, rawPrivate: 'hidden' },
+    })).toEqual({
+      event: 'custom',
+      data: { fallback_visible: true },
+    });
+  });
+
   it.each([Number.NaN, -1, 600])('rejects invalid route status %s', async status => {
     await expect(executeConsoleRoute(route({
       handler: () => ({ status }),

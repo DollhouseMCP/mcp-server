@@ -1,7 +1,7 @@
-import type { ConsoleHandlerResult, ConsoleRequest } from '../../platform/ConsolePlatformTypes.js';
+import type { ConsoleHandlerResult, ConsoleRequest, ConsoleSseEvent } from '../../platform/ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
-import type { SessionExecutionListDto } from './ExecutionDtos.js';
+import type { SessionExecutionDetailDto, SessionExecutionListDto } from './ExecutionDtos.js';
 import type { SessionExecutionReader, SessionGatekeeperReader } from './ExecutionStore.js';
 
 export class ExecutionService {
@@ -29,6 +29,22 @@ export class ExecutionService {
     return { status: 200, body: execution };
   }
 
+  async stream(req: ConsoleRequest, sessionId: string, goalId: string, init: unknown): Promise<ConsoleHandlerResult> {
+    const actor = requireConsoleAuthentication(req);
+    if (!await this.isOwnedActiveSession(actor.userId, sessionId)) return notFound();
+    if (!isGoalId(goalId)) return validationProblem('goal_id path parameter is invalid.');
+    const execution = await this.options.executionReader.find(actor.userId, sessionId, goalId);
+    if (!execution) return notFound('Execution was not found.');
+    return {
+      status: 200,
+      stream: {
+        init,
+        events: streamExecutionEvents(this.options.executionReader.stream(actor.userId, sessionId, goalId)),
+        revalidate: () => this.isOwnedActiveSession(actor.userId, sessionId),
+      },
+    };
+  }
+
   async gatekeeper(req: ConsoleRequest, sessionId: string): Promise<ConsoleHandlerResult> {
     const actor = requireConsoleAuthentication(req);
     if (!await this.isOwnedActiveSession(actor.userId, sessionId)) return notFound();
@@ -47,6 +63,23 @@ export class ExecutionService {
 
 function isGoalId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(value);
+}
+
+async function* streamExecutionEvents(
+  executions: AsyncIterable<SessionExecutionDetailDto>,
+): AsyncIterable<ConsoleSseEvent> {
+  for await (const execution of executions) {
+    yield {
+      event: 'update',
+      data: execution,
+    };
+  }
+  yield {
+    event: 'end',
+    data: {
+      status: 'complete',
+    },
+  };
 }
 
 function notFound(detail = 'Runtime session was not found.'): ConsoleHandlerResult {

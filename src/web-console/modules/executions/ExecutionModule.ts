@@ -3,6 +3,8 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
+import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import { ExecutionService } from './ExecutionService.js';
 import type { SessionExecutionReader, SessionGatekeeperReader } from './ExecutionStore.js';
@@ -13,6 +15,13 @@ import {
 } from './ExecutionPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
+const EXECUTION_STREAM_POLICY = {
+  lastEventId: 'unsupported',
+  heartbeatMs: 15_000,
+  revalidateMs: 15_000,
+  maxEventBytes: 64 * 1024,
+  maxLastEventIdBytes: 512,
+} as const;
 
 export interface ExecutionModuleOptions {
   readonly runtimeStore: IRuntimeSessionControlStore;
@@ -54,6 +63,37 @@ export function createExecutionModule(options: ExecutionModuleOptions): ConsoleM
       },
       {
         method: 'GET',
+        path: '/api/v1/me/sessions/:session_id/executions/:goal_id/stream',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'owned_session',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
+        streamPolicy: EXECUTION_STREAM_POLICY,
+        privacyProjector: projectSessionExecution,
+        streamEventProjectors: {
+          init: projectExecutionStreamInit,
+          update: projectSessionExecution,
+          end: projectExecutionStreamEnd,
+        },
+        handler: req => withExecutionParams(req, (sessionId, goalId) => {
+          const lastEventId = parseConsoleLastEventId(req, EXECUTION_STREAM_POLICY);
+          if (!lastEventId.ok) {
+            throw new ConsoleStoreValidationError('Invalid Last-Event-ID header for this stream.');
+          }
+          return service.stream(req, sessionId, goalId, {
+            stream_id: `me.sessions.${sessionId}.executions.${goalId}`,
+            stream_type: 'session_execution',
+            resume_supported: false,
+            session_id: sessionId,
+            goal_id: goalId,
+          });
+        }),
+      },
+      {
+        method: 'GET',
         path: '/api/v1/me/sessions/:session_id/gatekeeper',
         audience: 'self',
         requiredCapability: SELF_CAPABILITY,
@@ -66,6 +106,23 @@ export function createExecutionModule(options: ExecutionModuleOptions): ConsoleM
       },
     ],
   };
+}
+
+function projectExecutionStreamInit(value: unknown): unknown {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    connected_at: typeof record.connected_at === 'string' ? record.connected_at : null,
+    stream_id: typeof record.stream_id === 'string' ? record.stream_id : '',
+    stream_type: 'session_execution',
+    resume_supported: record.resume_supported === true,
+    session_id: typeof record.session_id === 'string' ? record.session_id : '',
+    goal_id: typeof record.goal_id === 'string' ? record.goal_id : '',
+  };
+}
+
+function projectExecutionStreamEnd(value: unknown): unknown {
+  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
+  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function withSessionId(

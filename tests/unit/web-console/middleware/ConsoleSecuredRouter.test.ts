@@ -836,7 +836,7 @@ describe('secured console router elevation', () => {
     const { app, sessionStore } = await buildApp(freshlyElevatedAuditSession());
     setTimeout(() => {
       void sessionStore.revoke(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
-    }, 5);
+    }, 25);
 
     const response = await request(app).get(ADMIN_STREAM_PATH).set('Cookie', sessionCookie()).set('Origin', ORIGIN);
 

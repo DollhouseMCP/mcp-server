@@ -23,7 +23,7 @@ export async function executeConsoleRoute(
 ): Promise<ConsoleHandlerResult> {
   const result = await route.handler(req);
   validateResult(result);
-  if (route.audience !== 'admin') return attachStreamPolicy(result, route);
+  if (route.audience !== 'admin') return attachSelfRoutePolicy(result, route);
   if (!route.privacyProjector) {
     throw new Error('Validated administrative route is missing its privacy projector');
   }
@@ -43,16 +43,26 @@ export async function executeConsoleRoute(
   };
 }
 
-function attachStreamPolicy(
+function attachSelfRoutePolicy(
   result: ConsoleHandlerResult,
   route: ConsoleRouteDefinition,
 ): ConsoleHandlerResult {
   if (!result.stream) return result;
+  if (!route.privacyProjector) {
+    return {
+      ...result,
+      stream: {
+        ...result.stream,
+        policy: route.streamPolicy,
+      },
+    };
+  }
   return {
     ...result,
     stream: {
       ...result.stream,
       policy: route.streamPolicy,
+      projectEvent: projectStreamEvent(route.privacyProjector, route.streamEventProjectors),
     },
   };
 }
