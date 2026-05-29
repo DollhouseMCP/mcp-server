@@ -9,6 +9,7 @@ import type {
   ConsoleHandlerResult,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import { normalizeConsoleReturnPath } from '../../platform/ConsoleReturnPaths.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
@@ -47,8 +48,7 @@ export class IntegrationService {
   }) {}
 
   async list(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    const auth = req.consoleAuthentication;
-    if (!auth) throw new Error('authentication middleware did not populate console context');
+    const auth = requireConsoleAuthentication(req);
     const records = await this.options.store.listByUser(auth.userId);
     return {
       status: 200,
@@ -57,8 +57,7 @@ export class IntegrationService {
   }
 
   async getGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    const auth = req.consoleAuthentication;
-    if (!auth) throw new Error('authentication middleware did not populate console context');
+    const auth = requireConsoleAuthentication(req);
     const record = await this.options.store.findByProvider(auth.userId, 'github');
     return {
       status: 200,
@@ -67,7 +66,7 @@ export class IntegrationService {
   }
 
   async connectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    const auth = requireAuthentication(req);
+    const auth = requireConsoleAuthentication(req);
     const deps = this.writeDependencies();
     if (!deps) return serviceUnavailable('GitHub integration linking is not configured.');
     const now = this.now();
@@ -107,7 +106,7 @@ export class IntegrationService {
   }
 
   async completeGitHubCallback(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    const auth = requireAuthentication(req);
+    const auth = requireConsoleAuthentication(req);
     const deps = this.writeDependencies();
     if (!deps) return failedIntegrationCallback();
     const transactionId = readCookie(req.headers.cookie, CONSOLE_INTEGRATION_STATE_COOKIE);
@@ -200,7 +199,7 @@ export class IntegrationService {
   }
 
   async disconnectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    const auth = requireAuthentication(req);
+    const auth = requireConsoleAuthentication(req);
     const deps = this.writeDependencies();
     if (!deps) return serviceUnavailable('GitHub integration disconnect is not configured.');
     const active = await this.options.store.findByProvider(auth.userId, 'github');
@@ -390,13 +389,6 @@ function serviceUnavailable(detail: string): ConsoleHandlerResult {
       detail,
     },
   };
-}
-
-function requireAuthentication(req: ConsoleRequest): ConsoleAuthenticatedContext {
-  if (!req.consoleAuthentication) {
-    throw new Error('authentication middleware did not populate console context');
-  }
-  return req.consoleAuthentication;
 }
 
 function buffersEqual(left: Buffer, right: Buffer): boolean {

@@ -58,6 +58,20 @@ export function assertUuid(value: string, name: string): void {
   }
 }
 
+export function assertDisplayString(value: string, name: string, maxLength: number): void {
+  if (typeof value !== 'string' ||
+      value.trim() === '' ||
+      value.length > maxLength ||
+      containsControlCharacter(value)) {
+    throw new ConsoleStoreValidationError(`${name} must be a printable non-empty string up to ${maxLength} characters`);
+  }
+}
+
+export function assertNullableDisplayString(value: string | null, name: string, maxLength: number): void {
+  if (value === null) return;
+  assertDisplayString(value, name, maxLength);
+}
+
 export function assertCapability(value: string, name: string): asserts value is ConsoleCapability {
   if (!CONSOLE_CAPABILITIES.some(capability => capability === value)) {
     throw new ConsoleStoreValidationError(`${name} contains unknown capability '${value}'`);
@@ -78,4 +92,12 @@ export function cloneBuffer(value: Buffer): Buffer {
 
 export function cloneDate(value: Date | null): Date | null {
   return value ? new Date(value.getTime()) : null;
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.codePointAt(index) ?? 0;
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }

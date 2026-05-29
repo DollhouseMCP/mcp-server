@@ -1,5 +1,6 @@
 import {
   ConsoleStoreValidationError,
+  assertNullableDisplayString,
   assertNonEmptyBuffer,
   assertUuid,
   cloneBuffer,
@@ -101,16 +102,6 @@ export function cloneUserIntegrationRecord(record: UserIntegrationRecord): UserI
   };
 }
 
-function assertNullableDisplayString(value: string | null, name: string, maxLength: number): void {
-  if (value === null) return;
-  if (typeof value !== 'string'
-      || value.trim() === ''
-      || value.length > maxLength
-      || containsControlCharacter(value)) {
-    throw new ConsoleStoreValidationError(`${name} must be a printable non-empty string up to ${maxLength} characters`);
-  }
-}
-
 function assertAuthorizedPermissions(
   provider: UserIntegrationProvider,
   value: Readonly<Record<string, unknown>>,
@@ -177,14 +168,6 @@ function isIntegrationErrorReason(value: string): value is UserIntegrationErrorR
     value === 'revocation_failed' ||
     value === 'scope_denied' ||
     value === 'provider_unavailable';
-}
-
-function containsControlCharacter(value: string): boolean {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.codePointAt(index) ?? 0;
-    if (code <= 0x1f || code === 0x7f) return true;
-  }
-  return false;
 }
 
 function cloneJsonRecord(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {

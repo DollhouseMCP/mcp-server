@@ -23,6 +23,7 @@ import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
+import type { IPortfolioElementStore } from './stores/IPortfolioElementStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
@@ -31,12 +32,14 @@ import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfi
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
+import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElementStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -59,6 +62,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   accountAdminStore: 'WebConsoleAccountAdminStore',
   accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
   integrationStore: 'WebConsoleIntegrationStore',
+  portfolioStore: 'WebConsolePortfolioStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
   identityResolver: 'WebConsoleIdentityResolver',
@@ -89,6 +93,7 @@ export interface WebConsoleRegistrarOptions {
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
+  readonly portfolioStore?: IPortfolioElementStore | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -101,6 +106,7 @@ export interface WebConsoleComposition {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly portfolioStore: IPortfolioElementStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
@@ -123,7 +129,11 @@ export class WebConsoleRegistrar {
 
   async bootstrapAndRegister(container: DiContainerFacade): Promise<WebConsoleComposition> {
     const database = resolveConsoleDatabase(container);
-    const stores = await createConsoleStores(database);
+    const baseStores = await createConsoleStores(database);
+    const stores = {
+      ...baseStores,
+      portfolioStore: resolvePortfolioElementStore(container, this.options, baseStores.portfolioStore),
+    };
     const adminAuditWriter = resolveAdminAuditWriter(database, container);
     const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
       database,
@@ -178,6 +188,9 @@ export class WebConsoleRegistrar {
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
+    registry.register(createPortfolioModule({
+      portfolioStore: stores.portfolioStore,
+    }));
     registry.register(createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
@@ -216,6 +229,7 @@ export class WebConsoleRegistrar {
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => stores.accountAllowlistStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => stores.integrationStore);
+    container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioStore, () => stores.portfolioStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore, () => stores.runtimeSessionControlStore);
     container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
@@ -286,6 +300,7 @@ interface ConsoleStoreSet {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly portfolioStore: IPortfolioElementStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
   readonly identityResolver: IConsoleIdentityResolver;
@@ -344,6 +359,10 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       accountAdminStore: new PostgresConsoleAccountAdminStore(database),
       accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
       integrationStore: new PostgresUserIntegrationStore(database),
+      // Portfolio persistence is intentionally behind a typed reader boundary:
+      // the production adapter may be filesystem-, database-, or manager-backed.
+      // That adapter is deferred while /api/v1 remains unmounted.
+      portfolioStore: new InMemoryPortfolioElementStore(),
       securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
       runtimeSessionControlStore: new PostgresRuntimeSessionControlStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
@@ -358,6 +377,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
     integrationStore: new InMemoryUserIntegrationStore(),
+    portfolioStore: new InMemoryPortfolioElementStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
     runtimeSessionControlStore: new InMemoryRuntimeSessionControlStore(),
     identityResolver: new InMemoryConsoleIdentityResolver(),
@@ -512,6 +532,18 @@ function resolveGitHubIntegrationProvider(
     return container.resolve<IGitHubIntegrationProvider>('WebConsoleGitHubIntegrationProvider');
   }
   return null;
+}
+
+function resolvePortfolioElementStore(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+  fallback: IPortfolioElementStore,
+): IPortfolioElementStore {
+  if (options.portfolioStore !== undefined) return options.portfolioStore ?? fallback;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore)) {
+    return container.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore);
+  }
+  return fallback;
 }
 
 function resolveIntegrationPublicBaseUrl(

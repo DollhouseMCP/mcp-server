@@ -85,6 +85,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryConsoleAccountAllowlistStore,
       InMemoryConsoleAccountAdminStore,
       InMemoryUserIntegrationStore,
+      InMemoryPortfolioElementStore,
       InMemoryRuntimeSessionControlStore,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
@@ -123,6 +124,11 @@ describe('WebConsoleRegistrar', () => {
         path: '/api/v1/me/integrations/github',
         requiredCapability: 'console:self',
       }),
+      expect.objectContaining({
+        moduleId: 'portfolio',
+        path: '/api/v1/me/portfolio/elements',
+        requiredCapability: 'console:self',
+      }),
     ]));
     expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -137,6 +143,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAdminStore).toBeInstanceOf(InMemoryConsoleAccountAdminStore);
     expect(composition.accountAllowlistStore).toBeInstanceOf(InMemoryConsoleAccountAllowlistStore);
     expect(composition.integrationStore).toBeInstanceOf(InMemoryUserIntegrationStore);
+    expect(composition.portfolioStore).toBeInstanceOf(InMemoryPortfolioElementStore);
     expect(composition.runtimeSessionControlStore).toBeInstanceOf(InMemoryRuntimeSessionControlStore);
     expect(composition.identityResolver).toBeInstanceOf(InMemoryConsoleIdentityResolver);
     expect(composition.userConfigStore).toBeInstanceOf(InMemoryUserConfigStore);
@@ -154,6 +161,7 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore)).toBe(composition.accountAdminStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore)).toBe(composition.accountAllowlistStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.integrationStore)).toBe(composition.integrationStore);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.portfolioStore)).toBe(composition.portfolioStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore))
       .toBe(composition.runtimeSessionControlStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
@@ -171,6 +179,20 @@ describe('WebConsoleRegistrar', () => {
 
     expect(composition.cleanupScheduler).toBeNull();
     expect(composition.opaqueValues.createOpaqueValue()).toEqual(expect.any(String));
+  });
+
+  it('accepts an injected portfolio store without assuming a storage backend', async () => {
+    const container = new TestContainer();
+    const { InMemoryPortfolioElementStore, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+    const portfolioStore = new InMemoryPortfolioElementStore();
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 18),
+      portfolioStore,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(composition.portfolioStore).toBe(portfolioStore);
   });
 
   it('registers protected correlation rate limiting only with explicit shared dependencies', async () => {
@@ -293,6 +315,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
       expect.objectContaining({ moduleId: 'accountAdmin' }),
       expect.objectContaining({ moduleId: 'integrations' }),
+      expect.objectContaining({ moduleId: 'portfolio' }),
       expect.objectContaining({ moduleId: 'selfSecurity' }),
     ]));
     expect(composition.sessionStore.constructor.name).toBe('PostgresConsoleSessionStore');
@@ -302,6 +325,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.integrationStore.constructor.name).toBe('PostgresUserIntegrationStore');
+    expect(composition.portfolioStore.constructor.name).toBe('InMemoryPortfolioElementStore');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
   });
