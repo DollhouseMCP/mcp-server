@@ -10,6 +10,7 @@ import {
   InMemoryConsoleIdentityResolver,
   InMemoryAdminAuditWriter,
   InMemoryConsoleSessionStore,
+  InMemoryConsoleAuthPolicyStore,
   InMemoryIdempotencyStore,
   ConsoleStoreValidationError,
   ConsoleProtectedCorrelationRateLimitDependencyError,
@@ -259,6 +260,7 @@ async function buildApp(
   }]),
   reportInternalError?: (error: unknown, correlationId: string) => void,
   protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null = protectedCorrelationLimiter(),
+  authPolicyStore = new InMemoryConsoleAuthPolicyStore(),
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   const idempotencyStore = new InMemoryIdempotencyStore();
@@ -278,6 +280,7 @@ async function buildApp(
     consoleOrigin: ORIGIN,
     adminAuditWriter,
     idempotencyStore,
+    authPolicyStore,
     protectedCorrelationRateLimiter,
     idleTimeoutMs: 60 * 60 * 1000,
     now: () => NOW,
@@ -291,6 +294,7 @@ async function buildApp(
     onChange,
     onAdminMutation,
     onProtectedCorrelation,
+    authPolicyStore,
   };
 }
 
@@ -883,6 +887,27 @@ describe('secured console router elevation', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.max_auth_age_seconds).toBe(300);
+  });
+
+  it('enforces the configured admin elevation freshness ceiling', async () => {
+    const authPolicyStore = new InMemoryConsoleAuthPolicyStore();
+    await authPolicyStore.save({ maxAdminElevationSeconds: 120 });
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: new Date('2026-05-26T11:57:30.000Z'),
+      },
+    }), undefined, undefined, protectedCorrelationLimiter(), authPolicyStore);
+
+    const response = await request(app).get(ADMIN_EXPORT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.max_auth_age_seconds).toBe(120);
   });
 
   it('audit-writes an authorized administrative handler failure without private output', async () => {

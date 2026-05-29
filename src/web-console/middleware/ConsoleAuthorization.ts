@@ -8,11 +8,13 @@ import type {
   ConsoleRouteDefinition,
 } from '../platform/ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from './ConsoleAuthentication.js';
+import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 
 const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
 
 export interface ConsoleAuthorizationOptions {
   readonly now?: () => Date;
+  readonly authPolicyStore?: IConsoleAuthPolicyStore;
 }
 
 export function createConsoleAuthorizationMiddleware(
@@ -21,31 +23,34 @@ export function createConsoleAuthorizationMiddleware(
 ): RequestHandler {
   return (request, response, next): void => {
     const req = request as ConsoleRequest;
-    const authentication = requireConsoleAuthentication(req);
-    const now = options.now?.() ?? new Date();
-    if (route.audience === 'admin' && !hasValidElevation(authentication, route, now)) {
-      sendStepUpRequired(req, response, route);
-      return;
-    }
-    if (route.requiredCapability === 'none') {
-      sendProblemResponse(response, {
-        status: 500,
-        code: 'internal_error',
-        title: 'Internal error',
-        detail: 'Public routes must not use the authenticated authorization middleware.',
-      }, requireConsoleRequestContext(req).correlationId);
-      return;
-    }
-    if (!authentication.grantedCapabilities.includes(route.requiredCapability)) {
-      sendProblemResponse(response, {
-        status: 403,
-        code: 'forbidden',
-        title: 'Forbidden',
-        detail: 'The console session does not have the required capability.',
-      }, requireConsoleRequestContext(req).correlationId);
-      return;
-    }
-    next();
+    void (async (): Promise<void> => {
+      const authentication = requireConsoleAuthentication(req);
+      const now = options.now?.() ?? new Date();
+      const authPolicy = options.authPolicyStore ? await options.authPolicyStore.load() : null;
+      if (route.audience === 'admin' && !hasValidElevation(authentication, route, now, authPolicy?.maxAdminElevationSeconds)) {
+        sendStepUpRequired(req, response, route, authPolicy?.maxAdminElevationSeconds);
+        return;
+      }
+      if (route.requiredCapability === 'none') {
+        sendProblemResponse(response, {
+          status: 500,
+          code: 'internal_error',
+          title: 'Internal error',
+          detail: 'Public routes must not use the authenticated authorization middleware.',
+        }, requireConsoleRequestContext(req).correlationId);
+        return;
+      }
+      if (!authentication.grantedCapabilities.includes(route.requiredCapability)) {
+        sendProblemResponse(response, {
+          status: 403,
+          code: 'forbidden',
+          title: 'Forbidden',
+          detail: 'The console session does not have the required capability.',
+        }, requireConsoleRequestContext(req).correlationId);
+        return;
+      }
+      next();
+    })().catch(next);
   };
 }
 
@@ -53,10 +58,11 @@ function hasValidElevation(
   authentication: ReturnType<typeof requireConsoleAuthentication>,
   route: ConsoleRouteDefinition,
   now: Date,
+  maxAdminElevationSeconds?: number,
 ): boolean {
   if (route.requiredCapability === 'none') return false;
   const elevation = authentication.elevation;
-  const freshnessSeconds = elevationPolicySeconds(route.elevation);
+  const freshnessSeconds = elevationPolicySeconds(route.elevation, maxAdminElevationSeconds);
   return !!elevation
     && elevation.capabilities.includes(route.requiredCapability)
     && elevation.expiresAt > now
@@ -69,8 +75,9 @@ function sendStepUpRequired(
   req: ConsoleRequest,
   response: Parameters<typeof sendProblemResponse>[0],
   route: ConsoleRouteDefinition,
+  maxAdminElevationSeconds?: number,
 ): void {
-  const maxAuthAgeSeconds = elevationPolicySeconds(route.elevation);
+  const maxAuthAgeSeconds = elevationPolicySeconds(route.elevation, maxAdminElevationSeconds);
   sendProblemResponse(response, {
     status: 401,
     code: 'step_up_required',
@@ -85,6 +92,7 @@ function sendStepUpRequired(
   }, requireConsoleRequestContext(req).correlationId);
 }
 
-function elevationPolicySeconds(policy: ConsoleElevationPolicy | undefined): number {
-  return policy === 'admin_5m' ? 300 : 1800;
+function elevationPolicySeconds(policy: ConsoleElevationPolicy | undefined, maxAdminElevationSeconds = 300): number {
+  const boundedMax = Math.max(60, Math.min(300, Math.trunc(maxAdminElevationSeconds)));
+  return policy === 'admin_5m' ? Math.min(300, boundedMax) : 1800;
 }

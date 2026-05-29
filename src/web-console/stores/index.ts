@@ -13,6 +13,8 @@ export * from './IIdempotencyStore.js';
 export * from './InMemoryIdempotencyStore.js';
 export * from './IConsoleFactorStore.js';
 export * from './InMemoryConsoleFactorStore.js';
+export * from './IConsoleAuthPolicyStore.js';
+export * from './InMemoryConsoleAuthPolicyStore.js';
 export * from './IConsoleAccountAdminStore.js';
 export * from './InMemoryConsoleAccountAdminStore.js';
 export * from './IConsoleAccountAllowlistStore.js';

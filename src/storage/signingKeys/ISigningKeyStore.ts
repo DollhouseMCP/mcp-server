@@ -56,6 +56,8 @@ export interface SigningKey {
   createdAt: number;
   /** Null/undefined while active; populated when the key is rotated out. */
   rotatedAt?: number;
+  /** Populated when an operator explicitly retires the key from verification. */
+  retiredAt?: number;
 }
 
 /**
@@ -113,6 +115,19 @@ export interface ISigningKeyStore {
    * expected to generate fresh material. Rotation does not re-use kids.
    */
   rotate(write: SigningKeyWrite): Promise<SigningKey>;
+
+  /**
+   * Mark a key inactive and retired. Active keys may be retired for emergency
+   * compromise response, leaving the kind with no active key until rotation.
+   * Returns null when the kid does not exist.
+   */
+  retire(kid: string, retiredAt?: number): Promise<SigningKey | null>;
+
+  /**
+   * Permanently remove key material for a retired inactive key. Implementations
+   * MUST reject active or merely-rotated keys unless `force` is true.
+   */
+  delete(kid: string, options?: { readonly force?: boolean }): Promise<boolean>;
 
   /**
    * Permanently delete keys older than the given epoch ms. Used during

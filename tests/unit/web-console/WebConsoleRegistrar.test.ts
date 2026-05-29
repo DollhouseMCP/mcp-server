@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import type { DiContainerFacade } from '../../../src/di/DiContainerFacade.js';
+import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 
 const CONSOLE_SELF_CAPABILITY = 'console:self';
@@ -372,6 +373,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');

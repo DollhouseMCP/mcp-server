@@ -31,6 +31,7 @@ export {
   userAdminRoles,
   accountAllowlistEntries,
   consoleSessions,
+  consoleAuthPolicy,
   consoleLoginTransactions,
   userIntegrations,
   portfolioSyncJobs,

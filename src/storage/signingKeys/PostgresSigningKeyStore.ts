@@ -38,6 +38,7 @@ interface AuthSigningKeyRow {
   active: boolean;
   createdAt: Date;
   rotatedAt: Date | null;
+  retiredAt: Date | null;
 }
 
 export class PostgresSigningKeyStore implements ISigningKeyStore {
@@ -55,16 +56,16 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
         .where(and(eq(authSigningKeys.kind, kind), eq(authSigningKeys.active, true)))
         .limit(1),
     );
-    if (rows.length === 0) return null;
-    return rowToKey(rows[0] as AuthSigningKeyRow);
+    const row = rows.at(0);
+    return row ? rowToKey(row) : null;
   }
 
   async getByKid(kid: string): Promise<SigningKey | null> {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select().from(authSigningKeys).where(eq(authSigningKeys.kid, kid)).limit(1),
     );
-    if (rows.length === 0) return null;
-    return rowToKey(rows[0] as AuthSigningKeyRow);
+    const row = rows.at(0);
+    return row ? rowToKey(row) : null;
   }
 
   async listByKind(kind: SigningKeyKind): Promise<SigningKey[]> {
@@ -75,7 +76,7 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
         .where(eq(authSigningKeys.kind, kind))
         .orderBy(desc(authSigningKeys.createdAt)),
     );
-    return rows.map((r) => rowToKey(r as AuthSigningKeyRow));
+    return rows.map(rowToKey);
   }
 
   async rotate(write: SigningKeyWrite): Promise<SigningKey> {
@@ -102,7 +103,7 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
         })
         .returning();
 
-      return rowToKey(inserted[0] as AuthSigningKeyRow);
+      return rowToKey(inserted[0]);
     });
   }
 
@@ -120,6 +121,30 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
     );
     return result.length;
   }
+
+  async retire(kid: string, retiredAt: number = Date.now()): Promise<SigningKey | null> {
+    const retiredDate = new Date(retiredAt);
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx
+        .update(authSigningKeys)
+        .set({ active: false, rotatedAt: retiredDate, retiredAt: retiredDate })
+        .where(eq(authSigningKeys.kid, kid))
+        .returning(),
+    );
+    const row = rows.at(0);
+    return row ? rowToKey(row) : null;
+  }
+
+  async delete(kid: string, options: { readonly force?: boolean } = {}): Promise<boolean> {
+    return withSystemContext(this.db, async (tx) => {
+      const rows = await tx.select().from(authSigningKeys).where(eq(authSigningKeys.kid, kid)).limit(1);
+      const row = rows.at(0);
+      if (!row) return false;
+      if (!options.force && (row.active || !row.retiredAt)) return false;
+      const deleted = await tx.delete(authSigningKeys).where(eq(authSigningKeys.kid, kid)).returning({ kid: authSigningKeys.kid });
+      return deleted.length > 0;
+    });
+  }
 }
 
 function rowToKey(row: AuthSigningKeyRow): SigningKey {
@@ -130,6 +155,7 @@ function rowToKey(row: AuthSigningKeyRow): SigningKey {
     active: row.active,
     createdAt: row.createdAt.getTime(),
     rotatedAt: row.rotatedAt ? row.rotatedAt.getTime() : undefined,
+    retiredAt: row.retiredAt ? row.retiredAt.getTime() : undefined,
   };
 }
 

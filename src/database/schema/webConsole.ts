@@ -110,6 +110,18 @@ export const consoleSessions = pgTable('console_sessions', {
   index('idx_console_sessions_absolute_expiry').on(table.absoluteExpiresAt),
 ]);
 
+export const consoleAuthPolicy = pgTable('console_auth_policy', {
+  id: integer('id').primaryKey().default(1),
+  maxAdminElevationSeconds: integer('max_admin_elevation_seconds').notNull().default(300),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('console_auth_policy_singleton_check', sql`${table.id} = 1`),
+  check('console_auth_policy_max_admin_elevation_check', sql`
+    ${table.maxAdminElevationSeconds} >= 60
+    AND ${table.maxAdminElevationSeconds} <= 300
+  `),
+]);
+
 export type ConsoleLoginFlowKind = 'login' | 'step_up' | 'integration_link';
 
 export const consoleLoginTransactions = pgTable('console_login_transactions', {

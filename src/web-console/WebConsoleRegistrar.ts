@@ -21,6 +21,8 @@ import { InMemoryIdempotencyStore } from './stores/InMemoryIdempotencyStore.js';
 import type { ILoginTransactionStore } from './stores/ILoginTransactionStore.js';
 import { InMemoryLoginTransactionStore } from './stores/InMemoryLoginTransactionStore.js';
 import type { IConsoleFactorStore } from './stores/IConsoleFactorStore.js';
+import type { IConsoleAuthPolicyStore } from './stores/IConsoleAuthPolicyStore.js';
+import { InMemoryConsoleAuthPolicyStore } from './stores/InMemoryConsoleAuthPolicyStore.js';
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
@@ -33,6 +35,8 @@ import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js
 import type { IOperatorConfigStore } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import { InMemoryOperatorConfigStore } from '../storage/operatorConfig/InMemoryOperatorConfigStore.js';
 import { PostgresOperatorConfigStore } from '../storage/operatorConfig/PostgresOperatorConfigStore.js';
+import type { ISigningKeyStore } from '../storage/signingKeys/ISigningKeyStore.js';
+import { InMemorySigningKeyStore } from '../storage/signingKeys/InMemorySigningKeyStore.js';
 import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfigStore.js';
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
@@ -90,6 +94,7 @@ import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
+import { createSecurityAdminModule } from './modules/security-admin/index.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
@@ -133,6 +138,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
+  signingKeyStore: 'WebConsoleSigningKeyStore',
+  authPolicyStore: 'WebConsoleAuthPolicyStore',
   userConfigStore: 'WebConsoleUserConfigStore',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -160,6 +167,8 @@ export interface WebConsoleRegistrarOptions {
   readonly gatekeeperReader?: SessionGatekeeperReader | null;
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
   readonly operatorConfigStore?: IOperatorConfigStore | null;
+  readonly signingKeyStore?: ISigningKeyStore | null;
+  readonly authPolicyStore?: IConsoleAuthPolicyStore | null;
   readonly adminAuditQuery?: IAdminAuditQuery | null;
   readonly approvalAuditQuery?: IApprovalAuditQuery | null;
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
@@ -199,6 +208,8 @@ export interface WebConsoleComposition {
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
   readonly operatorConfigStore: IOperatorConfigStore;
+  readonly signingKeyStore: ISigningKeyStore;
+  readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly userConfigStore: IUserConfigStore;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -245,6 +256,8 @@ export class WebConsoleRegistrar {
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
+    const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
+    const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
     const operationHealthChecks = createOperationHealthChecks({
       database,
       stores,
@@ -269,6 +282,13 @@ export class WebConsoleRegistrar {
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
       operatorConfigStore,
+      now: this.options.now,
+    }));
+    registry.register(createSecurityAdminModule({
+      signingKeyStore,
+      factorStore: stores.factorStore,
+      invalidationStore: stores.securityInvalidationStore,
+      authPolicyStore,
       now: this.options.now,
     }));
     registry.register(createAccountAdminModule({
@@ -357,6 +377,8 @@ export class WebConsoleRegistrar {
       authStorage,
       accountInviteIssuer,
       operatorConfigStore,
+      signingKeyStore,
+      authPolicyStore,
       userConfigStore,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -413,6 +435,12 @@ export class WebConsoleRegistrar {
     }
     if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore, () => operatorConfigStore);
+    }
+    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore, () => signingKeyStore);
+    }
+    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore)) {
+      container.register(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore, () => authPolicyStore);
     }
     if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => userConfigStore);
@@ -822,6 +850,40 @@ function resolveOperatorConfigStore(
     return container.resolve<IOperatorConfigStore>('OperatorConfigStore');
   }
   return database ? new PostgresOperatorConfigStore({ db: database }) : new InMemoryOperatorConfigStore();
+}
+
+function resolveSigningKeyStore(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ISigningKeyStore {
+  if (options.signingKeyStore !== undefined) return options.signingKeyStore ?? new InMemorySigningKeyStore();
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore)) {
+    return container.resolve<ISigningKeyStore>(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore);
+  }
+  if (container.hasRegistration('SigningKeyStore')) {
+    return container.resolve<ISigningKeyStore>('SigningKeyStore');
+  }
+  if (database) {
+    throw new Error('Web console PostgreSQL security-admin signing keys require SigningKeyStore');
+  }
+  return new InMemorySigningKeyStore();
+}
+
+async function resolveAuthPolicyStore(
+  database: DatabaseInstance | undefined,
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): Promise<IConsoleAuthPolicyStore> {
+  if (options.authPolicyStore !== undefined) return options.authPolicyStore ?? new InMemoryConsoleAuthPolicyStore();
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore)) {
+    return container.resolve<IConsoleAuthPolicyStore>(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore);
+  }
+  if (database) {
+    const { PostgresConsoleAuthPolicyStore } = await import('./stores/PostgresConsoleAuthPolicyStore.js');
+    return new PostgresConsoleAuthPolicyStore(database);
+  }
+  return new InMemoryConsoleAuthPolicyStore();
 }
 
 function resolveOAuthGrantRevocationService(

@@ -14,6 +14,7 @@ import {
 } from '../middleware/index.js';
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
+import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
@@ -30,6 +31,7 @@ export interface SecuredConsoleRouterOptions {
   readonly consoleOrigin: string;
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly authPolicyStore?: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
   readonly idleTimeoutMs: number;
   readonly now?: () => Date;
