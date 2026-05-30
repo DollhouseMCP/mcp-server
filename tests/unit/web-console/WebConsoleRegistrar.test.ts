@@ -668,6 +668,63 @@ describe('WebConsoleRegistrar', () => {
     }
   });
 
+  it('honors explicit production adapter metadata before constructor-name checks', async () => {
+    const {
+      WebConsoleProductionActivationError,
+      assertWebConsoleProductionActivation,
+      markWebConsoleProductionAdapter,
+    } = await import('../../../src/web-console/index.js');
+    const explicitlyReadyUnknownAdapter = markWebConsoleProductionAdapter(Object.create(null) as object, {
+      productionReady: true,
+      adapterName: 'ExternallyManagedStore',
+    });
+    const explicitlyUnsafeAdapter = markWebConsoleProductionAdapter(new ProductionAdapter(), {
+      productionReady: false,
+      adapterName: 'ProcessLocalStore',
+      detail: 'ProcessLocalStore is process-local and cannot serve hosted/shared traffic.',
+    });
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: { explicitlyReadyUnknownAdapter },
+      services: {
+        ...productionActivationServices(),
+        explicitlyUnsafeAdapter,
+      },
+    })).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation({
+        activationProfile: SHARED_HOSTED_PROFILE,
+        storageBackend: 'postgres',
+        enableAccountAllowlistRoutes: false,
+        readiness: {
+          securityInvalidationProcessorReady: true,
+          portfolioSyncWorkerReady: true,
+        },
+        stores: { explicitlyReadyUnknownAdapter },
+        services: {
+          ...productionActivationServices(),
+          explicitlyUnsafeAdapter,
+        },
+      });
+    } catch (error) {
+      expect(error).toMatchObject({
+        failures: [
+          expect.objectContaining({
+            code: 'explicitlyUnsafeAdapter_not_production_ready',
+            detail: 'ProcessLocalStore is process-local and cannot serve hosted/shared traffic.',
+          }),
+        ],
+      });
+    }
+  });
+
   it('fails clearly when cleanup is requested without LifecycleService', async () => {
     const container = new TestContainer();
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');

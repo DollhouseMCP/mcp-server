@@ -4,14 +4,18 @@ export type WebConsoleActivationProfile = 'development' | 'shared-hosted';
  * M7 slice-1 activation guard.
  *
  * This intentionally catches the currently observable production hazards at
- * registrar composition time: absent required services, adapters with known
- * in-memory/empty class-name conventions, and adapters whose constructor cannot
- * be identified. It is not a complete cutover proof.
- * Before /api/v1 is mounted, the checker still needs to be driven from the
- * authoritative hosted-deployment signal and replaced with explicit adapter
- * capability metadata. It currently blocks the known process-local Gatekeeper
- * reader classes by name, but new ephemeral adapters must not rely on this
- * hand-maintained list.
+ * registrar composition time. Required dependencies must be present first. If
+ * an adapter was explicitly marked with production metadata, that metadata is
+ * authoritative: productionReady=true bypasses constructor-name heuristics, and
+ * productionReady=false fails closed with typed detail. Unmarked adapters fall
+ * back to the current constructor-name heuristic for unknown, InMemory*, Empty*,
+ * and known process-local Gatekeeper classes.
+ *
+ * This is not a complete cutover proof. The metadata mechanism is an additive,
+ * in-trust opt-in path; undeclared adapters do not yet fail closed solely
+ * because they lack metadata. Before /api/v1 is mounted, the checker still
+ * needs to be driven from the authoritative hosted-deployment signal and
+ * production-critical adapters need broad metadata adoption.
  */
 
 export interface WebConsoleProductionReadinessOptions {
@@ -23,6 +27,12 @@ export interface WebConsoleProductionReadinessOptions {
 export interface WebConsoleProductionActivationFailure {
   readonly code: string;
   readonly detail: string;
+}
+
+export interface WebConsoleProductionAdapterMetadata {
+  readonly productionReady: boolean;
+  readonly adapterName?: string;
+  readonly detail?: string;
 }
 
 export class WebConsoleProductionActivationError extends Error {
@@ -48,6 +58,16 @@ const KNOWN_PROCESS_LOCAL_ADAPTERS = new Set<string>([
   'GatekeeperSessionApprovalStore',
   'GatekeeperSessionStateReader',
 ]);
+
+const ADAPTER_METADATA = new WeakMap<object | ((...args: never[]) => unknown), WebConsoleProductionAdapterMetadata>();
+
+export function markWebConsoleProductionAdapter<T extends object | ((...args: never[]) => unknown)>(
+  adapter: T,
+  metadata: WebConsoleProductionAdapterMetadata,
+): T {
+  ADAPTER_METADATA.set(adapter, metadata);
+  return adapter;
+}
 
 export function assertWebConsoleProductionActivation(
   inputs: WebConsoleProductionActivationInputs,
@@ -110,6 +130,11 @@ function requireProductionAdapter(
 ): void {
   requirePresent(failures, name, value);
   if (!value) return;
+  const metadata = productionAdapterMetadata(value);
+  if (metadata) {
+    requireMetadataProductionAdapter(failures, name, metadata);
+    return;
+  }
   const adapter = adapterName(value);
   if (isKnownUnsafeAdapter(adapter)) {
     failures.push({
@@ -117,6 +142,26 @@ function requireProductionAdapter(
       detail: `${name} uses ${adapter}; hosted/shared activation requires a durable or externally managed production adapter.`,
     });
   }
+}
+
+function requireMetadataProductionAdapter(
+  failures: WebConsoleProductionActivationFailure[],
+  name: string,
+  metadata: WebConsoleProductionAdapterMetadata,
+): void {
+  if (metadata.productionReady) return;
+  const adapter = metadata.adapterName ?? 'explicitly-marked-adapter';
+  failures.push({
+    code: `${name}_not_production_ready`,
+    detail: metadata.detail ??
+      `${name} uses ${adapter}; hosted/shared activation requires a durable or externally managed production adapter.`,
+  });
+}
+
+function productionAdapterMetadata(value: unknown): WebConsoleProductionAdapterMetadata | null {
+  if (typeof value !== 'object' && typeof value !== 'function') return null;
+  if (value === null) return null;
+  return ADAPTER_METADATA.get(value) ?? null;
 }
 
 function requirePresent(
