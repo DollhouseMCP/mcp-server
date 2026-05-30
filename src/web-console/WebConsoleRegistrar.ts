@@ -121,6 +121,7 @@ import {
   type WebConsoleActivationProfile,
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
+import { createConsoleBffAuthModule, type IConsoleOAuthClient } from './auth/index.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -155,6 +156,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   ownedActivityQuery: 'WebConsoleOwnedActivityQuery',
   ownedMetricQuery: 'WebConsoleOwnedMetricQuery',
   oauthGrantRevocationService: 'WebConsoleOAuthGrantRevocationService',
+  consoleOAuthClient: 'WebConsoleOAuthClient',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
@@ -178,6 +180,7 @@ export interface WebConsoleRegistrarOptions {
   readonly retainedSecretEncryptionKeys?: readonly AeadSecretKey[];
   readonly protectedCorrelationSelectorHmacKey?: Buffer;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
+  readonly consoleOAuthClient?: IConsoleOAuthClient | null;
   readonly authStorage?: IAuthStorageLayer | null;
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
@@ -244,6 +247,7 @@ export interface WebConsoleComposition {
   readonly ownedActivityQuery: IOwnedActivityQuery;
   readonly ownedMetricQuery: IOwnedMetricQuery;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
+  readonly consoleOAuthClient: IConsoleOAuthClient | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
   readonly operatorConfigStore: IOperatorConfigStore;
@@ -282,6 +286,7 @@ export class WebConsoleRegistrar {
     });
     const registry = new ConsoleModuleRegistry();
     const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
+    const consoleOAuthClient = resolveConsoleOAuthClient(container, this.options);
     const authStorage = resolveAuthStorage(container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     const userConfigStore = resolveUserConfigStore(database, container);
@@ -327,6 +332,18 @@ export class WebConsoleRegistrar {
       }),
       now: this.options.now,
     }));
+    if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
+      registry.register(createConsoleBffAuthModule({
+        oauthClient: consoleOAuthClient,
+        loginTransactions: stores.loginTransactionStore,
+        sessionStore: stores.sessionStore,
+        identityResolver: stores.identityResolver,
+        opaqueValues,
+        secretEncryption,
+        publicBaseUrl: integrationPublicBaseUrl,
+        now: this.options.now,
+      }));
+    }
     registry.register(createAuditModule({
       adminAuditQuery,
       approvalAuditQuery,
@@ -427,6 +444,7 @@ export class WebConsoleRegistrar {
         protectedCorrelationRateLimiter,
         protectedCorrelationRateLimitStore,
         oauthGrantRevocationService,
+        consoleOAuthClient,
         accountInviteIssuer,
         githubIntegrationProvider,
         integrationPublicBaseUrl,
@@ -486,6 +504,7 @@ export class WebConsoleRegistrar {
       ownedActivityQuery,
       ownedMetricQuery,
       oauthGrantRevocationService,
+      consoleOAuthClient,
       authStorage,
       accountInviteIssuer,
       operatorConfigStore,
@@ -589,6 +608,9 @@ function registerOptionalWebConsoleCompositionServices(
 ): void {
   if (composition.oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
     container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => composition.oauthGrantRevocationService);
+  }
+  if (composition.consoleOAuthClient && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient)) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient, () => composition.consoleOAuthClient);
   }
   if (composition.authStorage && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
     container.register(WEB_CONSOLE_SERVICE_NAMES.authStorage, () => composition.authStorage);
@@ -1156,6 +1178,17 @@ function resolveOAuthGrantRevocationService(
   if (options.oauthGrantRevocationService !== undefined) return options.oauthGrantRevocationService;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
     return container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
+  }
+  return null;
+}
+
+function resolveConsoleOAuthClient(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IConsoleOAuthClient | null {
+  if (options.consoleOAuthClient !== undefined) return options.consoleOAuthClient;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient)) {
+    return container.resolve<IConsoleOAuthClient>(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient);
   }
   return null;
 }

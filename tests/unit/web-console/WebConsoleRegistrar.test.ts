@@ -1,4 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
+import express from 'express';
+import request from 'supertest';
 
 import type { DiContainerFacade } from '../../../src/di/DiContainerFacade.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
@@ -168,6 +170,12 @@ describe('WebConsoleRegistrar', () => {
         moduleId: 'executions',
         path: '/api/v1/me/sessions/:session_id/executions',
         requiredCapability: CONSOLE_SELF_CAPABILITY,
+      }),
+    ]));
+    expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        moduleId: 'auth',
+        path: '/api/v1/auth/login',
       }),
     ]));
     expect(composition.registry.createRouteManifest().routes).not.toEqual(expect.arrayContaining([
@@ -393,6 +401,7 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'protectedCorrelationRateLimiter_missing' }),
         expect.objectContaining({ code: 'protectedCorrelationRateLimitStore_missing' }),
         expect.objectContaining({ code: 'oauthGrantRevocationService_missing' }),
+        expect.objectContaining({ code: 'consoleOAuthClient_missing' }),
         expect.objectContaining({ code: 'accountInviteIssuer_missing' }),
         expect.objectContaining({ code: 'githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'integrationPublicBaseUrl_missing' }),
@@ -431,6 +440,7 @@ describe('WebConsoleRegistrar', () => {
       },
       authStorage: productionAdapter(),
       oauthGrantRevocationService: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
       accountInviteIssuer: productionAdapter(),
       githubIntegrationProvider: productionAdapter(),
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
@@ -455,6 +465,75 @@ describe('WebConsoleRegistrar', () => {
     composition.apiV1Mount?.markMounted();
     expect(composition.apiV1Mount?.mounted()).toBe(true);
     expect(composition.routesMounted).toBe(true);
+  });
+
+  it('serves representative public, self, and admin paths through the dormant mounted router', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
+    container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    const {
+      StaticConsoleSecurityInvalidationReadiness,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      enableApiV1Mount: true,
+      productionReadiness: {
+        portfolioSyncWorkerReady: true,
+      },
+      securityInvalidationReadiness: new StaticConsoleSecurityInvalidationReadiness(true),
+      opaqueValueHmacKey: Buffer.alloc(32, 37),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 38),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 39),
+      },
+      authStorage: productionAdapter(),
+      oauthGrantRevocationService: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      githubIntegrationProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      portfolioStore: productionAdapter(),
+      approvalStore: productionAdapter(),
+      approvalEventSink: productionAdapter(),
+      executionReader: productionAdapter(),
+      gatekeeperReader: productionAdapter(),
+      telemetryQuery: productionAdapter(),
+      ownedActivityQuery: productionAdapter(),
+      ownedMetricQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
+      registerCleanup: false,
+      now: () => new Date('2026-05-26T12:00:00.000Z'),
+    }).bootstrapAndRegister(container);
+
+    const app = express();
+    app.use(composition.apiV1Mount?.router ?? express.Router());
+    composition.apiV1Mount?.markMounted();
+
+    await expect(request(app).get('/api/v1/health/ready')).resolves.toMatchObject({
+      status: 200,
+      body: {
+        status: 'ok',
+        ready: true,
+        checked_at: '2026-05-26T12:00:00.000Z',
+      },
+    });
+    await expect(request(app).get('/api/v1/me/profile')).resolves.toMatchObject({
+      status: 401,
+      body: expect.objectContaining({ code: 'unauthenticated' }),
+    });
+    await expect(request(app).get('/api/v1/admin/operate/health')).resolves.toMatchObject({
+      status: 401,
+      body: expect.objectContaining({ code: 'unauthenticated' }),
+    });
   });
 
   it('refuses descriptor api mount outside the hosted/shared activation gate', async () => {
@@ -490,6 +569,7 @@ describe('WebConsoleRegistrar', () => {
         protectedCorrelationRateLimiter: productionAdapter(),
         protectedCorrelationRateLimitStore: productionAdapter(),
         oauthGrantRevocationService: productionAdapter(),
+        consoleOAuthClient: productionAdapter(),
         accountInviteIssuer: productionAdapter(),
         githubIntegrationProvider: productionAdapter(),
         integrationPublicBaseUrl: TEST_PUBLIC_BASE_URL,
@@ -511,6 +591,7 @@ describe('WebConsoleRegistrar', () => {
           protectedCorrelationRateLimiter: productionAdapter(),
           protectedCorrelationRateLimitStore: productionAdapter(),
           oauthGrantRevocationService: productionAdapter(),
+          consoleOAuthClient: productionAdapter(),
           accountInviteIssuer: productionAdapter(),
           githubIntegrationProvider: productionAdapter(),
           integrationPublicBaseUrl: TEST_PUBLIC_BASE_URL,
