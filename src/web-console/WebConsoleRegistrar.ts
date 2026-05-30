@@ -110,6 +110,11 @@ import {
 } from './modules/account-admin/AccountAdminMutationTransaction.js';
 import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStore.js';
 import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import {
+  assertWebConsoleProductionActivation,
+  type WebConsoleActivationProfile,
+  type WebConsoleProductionReadinessOptions,
+} from './WebConsoleProductionActivation.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -154,6 +159,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
 } as const;
 
 export interface WebConsoleRegistrarOptions {
+  readonly activationProfile?: WebConsoleActivationProfile;
+  readonly productionReadiness?: WebConsoleProductionReadinessOptions;
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
   readonly cleanupIntervalMs?: number;
@@ -375,6 +382,42 @@ export class WebConsoleRegistrar {
       now: this.options.now,
     }));
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
+    const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
+    assertWebConsoleProductionActivation({
+      activationProfile: this.options.activationProfile ?? 'development',
+      storageBackend: database ? 'postgres' : 'memory',
+      enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
+      readiness: this.options.productionReadiness,
+      stores,
+      services: {
+        authStorage,
+        secretEncryption,
+        protectedCorrelationRateLimiter,
+        protectedCorrelationRateLimitStore,
+        oauthGrantRevocationService,
+        accountInviteIssuer,
+        githubIntegrationProvider,
+        integrationPublicBaseUrl,
+        adminAuditWriter,
+        adminAuditQuery,
+        approvalAuditQuery,
+        authenticationAuditQuery,
+        accountAdminMutationTransactionRunner,
+        sessionActivationStateAdapter,
+        sessionActivationEventSink,
+        sessionApprovalStore,
+        sessionApprovalEventSink,
+        sessionExecutionReader,
+        sessionGatekeeperReader,
+        telemetryQuery,
+        ownedActivityQuery,
+        ownedMetricQuery,
+        operatorConfigStore,
+        signingKeyStore,
+        authPolicyStore,
+        userConfigStore,
+      },
+    });
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
       registry,
@@ -753,6 +796,11 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   });
+}
+
+function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | null {
+  if (!container.hasRegistration('RateLimitStore')) return null;
+  return container.resolve<IRateLimitStore>('RateLimitStore');
 }
 
 function resolveSessionActivationStateAdapter(container: DiContainerFacade): ISessionActivationStateAdapter {

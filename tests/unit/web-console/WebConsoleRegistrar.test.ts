@@ -5,6 +5,8 @@ import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemo
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 
 const CONSOLE_SELF_CAPABILITY = 'console:self';
+const SHARED_HOSTED_PROFILE = 'shared-hosted';
+const TEST_PUBLIC_BASE_URL = 'https://console.example.test';
 
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleSessionStore.js', () => ({
   PostgresConsoleSessionStore: class PostgresConsoleSessionStore {
@@ -69,6 +71,12 @@ class TestContainer implements DiContainerFacade {
   seed<T>(name: string, value: T): void {
     this.values.set(name, value);
   }
+}
+
+class ProductionAdapter {}
+
+function productionAdapter<T>(): T {
+  return new ProductionAdapter() as T;
 }
 
 describe('WebConsoleRegistrar', () => {
@@ -355,6 +363,137 @@ describe('WebConsoleRegistrar', () => {
       },
     }).bootstrapAndRegister(new TestContainer())).rejects
       .toThrow('GitHub integration provider requires publicBaseUrl');
+  });
+
+  it('fails hosted/shared activation with all production invariant failures instead of mounting', async () => {
+    const { WebConsoleProductionActivationError, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      opaqueValueHmacKey: Buffer.alloc(32, 26),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toBeInstanceOf(WebConsoleProductionActivationError);
+    await expect(new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      opaqueValueHmacKey: Buffer.alloc(32, 26),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toMatchObject({
+      failures: expect.arrayContaining([
+        expect.objectContaining({ code: 'database_required' }),
+        expect.objectContaining({ code: 'security_invalidation_processor_not_ready' }),
+        expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
+        expect.objectContaining({ code: 'sessionStore_not_production_ready' }),
+        expect.objectContaining({ code: 'authStorage_missing' }),
+        expect.objectContaining({ code: 'secretEncryption_missing' }),
+        expect.objectContaining({ code: 'protectedCorrelationRateLimiter_missing' }),
+        expect.objectContaining({ code: 'protectedCorrelationRateLimitStore_missing' }),
+        expect.objectContaining({ code: 'oauthGrantRevocationService_missing' }),
+        expect.objectContaining({ code: 'accountInviteIssuer_missing' }),
+        expect.objectContaining({ code: 'githubIntegrationProvider_missing' }),
+        expect.objectContaining({ code: 'integrationPublicBaseUrl_missing' }),
+      ]),
+    });
+  });
+
+  it('accepts hosted/shared activation only when production dependencies are explicit', async () => {
+    const container = new TestContainer();
+    const database = {};
+    container.seed('SystemDatabaseInstance', database);
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
+    container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      productionReadiness: {
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      opaqueValueHmacKey: Buffer.alloc(32, 27),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 28),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 29),
+      },
+      authStorage: productionAdapter(),
+      oauthGrantRevocationService: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      githubIntegrationProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      portfolioStore: productionAdapter(),
+      approvalStore: productionAdapter(),
+      approvalEventSink: productionAdapter(),
+      executionReader: productionAdapter(),
+      gatekeeperReader: productionAdapter(),
+      telemetryQuery: productionAdapter(),
+      ownedActivityQuery: productionAdapter(),
+      ownedMetricQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(composition.storageBackend).toBe('postgres');
+    expect(composition.routesMounted).toBe(false);
+  });
+
+  it('keeps aggregated production activation failures for null-prototype adapters', async () => {
+    const {
+      WebConsoleProductionActivationError,
+      assertWebConsoleProductionActivation,
+    } = await import('../../../src/web-console/index.js');
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: { customStore: Object.create(null) as unknown },
+      services: {
+        authStorage: productionAdapter(),
+        secretEncryption: productionAdapter(),
+        protectedCorrelationRateLimiter: productionAdapter(),
+        protectedCorrelationRateLimitStore: productionAdapter(),
+        oauthGrantRevocationService: productionAdapter(),
+        accountInviteIssuer: productionAdapter(),
+        githubIntegrationProvider: productionAdapter(),
+        integrationPublicBaseUrl: TEST_PUBLIC_BASE_URL,
+      },
+    })).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation({
+        activationProfile: SHARED_HOSTED_PROFILE,
+        storageBackend: 'postgres',
+        enableAccountAllowlistRoutes: false,
+        readiness: {
+          securityInvalidationProcessorReady: true,
+          portfolioSyncWorkerReady: true,
+        },
+        stores: { customStore: Object.create(null) as unknown },
+        services: {
+          authStorage: productionAdapter(),
+          secretEncryption: productionAdapter(),
+          protectedCorrelationRateLimiter: productionAdapter(),
+          protectedCorrelationRateLimitStore: productionAdapter(),
+          oauthGrantRevocationService: productionAdapter(),
+          accountInviteIssuer: productionAdapter(),
+          githubIntegrationProvider: productionAdapter(),
+          integrationPublicBaseUrl: TEST_PUBLIC_BASE_URL,
+        },
+      });
+    } catch (error) {
+      expect(error).toBeInstanceOf(WebConsoleProductionActivationError);
+      expect(error).toMatchObject({
+        failures: [expect.objectContaining({ code: 'customStore_not_production_ready' })],
+      });
+    }
   });
 
   it('fails clearly when cleanup is requested without LifecycleService', async () => {
