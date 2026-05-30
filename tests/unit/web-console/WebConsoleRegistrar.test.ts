@@ -76,9 +76,25 @@ class TestContainer implements DiContainerFacade {
 }
 
 class ProductionAdapter {}
+class GatekeeperSessionApprovalStore {}
+class GatekeeperSessionStateReader {}
 
 function productionAdapter<T>(): T {
   return new ProductionAdapter() as T;
+}
+
+function productionActivationServices() {
+  return {
+    authStorage: productionAdapter(),
+    secretEncryption: productionAdapter(),
+    protectedCorrelationRateLimiter: productionAdapter(),
+    protectedCorrelationRateLimitStore: productionAdapter(),
+    oauthGrantRevocationService: productionAdapter(),
+    consoleOAuthClient: productionAdapter(),
+    accountInviteIssuer: productionAdapter(),
+    githubIntegrationProvider: productionAdapter(),
+    integrationPublicBaseUrl: TEST_PUBLIC_BASE_URL,
+  };
 }
 
 describe('WebConsoleRegistrar', () => {
@@ -601,6 +617,53 @@ describe('WebConsoleRegistrar', () => {
       expect(error).toBeInstanceOf(WebConsoleProductionActivationError);
       expect(error).toMatchObject({
         failures: [expect.objectContaining({ code: 'customStore_not_production_ready' })],
+      });
+    }
+  });
+
+  it('rejects known process-local Gatekeeper readers during hosted/shared activation', async () => {
+    const {
+      WebConsoleProductionActivationError,
+      assertWebConsoleProductionActivation,
+    } = await import('../../../src/web-console/index.js');
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: {},
+      services: {
+        ...productionActivationServices(),
+        sessionApprovalStore: new GatekeeperSessionApprovalStore(),
+        sessionGatekeeperReader: new GatekeeperSessionStateReader(),
+      },
+    })).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation({
+        activationProfile: SHARED_HOSTED_PROFILE,
+        storageBackend: 'postgres',
+        enableAccountAllowlistRoutes: false,
+        readiness: {
+          securityInvalidationProcessorReady: true,
+          portfolioSyncWorkerReady: true,
+        },
+        stores: {},
+        services: {
+          ...productionActivationServices(),
+          sessionApprovalStore: new GatekeeperSessionApprovalStore(),
+          sessionGatekeeperReader: new GatekeeperSessionStateReader(),
+        },
+      });
+    } catch (error) {
+      expect(error).toMatchObject({
+        failures: expect.arrayContaining([
+          expect.objectContaining({ code: 'sessionApprovalStore_not_production_ready' }),
+          expect.objectContaining({ code: 'sessionGatekeeperReader_not_production_ready' }),
+        ]),
       });
     }
   });

@@ -9,8 +9,9 @@ export type WebConsoleActivationProfile = 'development' | 'shared-hosted';
  * be identified. It is not a complete cutover proof.
  * Before /api/v1 is mounted, the checker still needs to be driven from the
  * authoritative hosted-deployment signal and replaced with explicit adapter
- * capability metadata so process-local substrates such as live Gatekeeper
- * readers cannot pass merely because their class name is not InMemory*.
+ * capability metadata. It currently blocks the known process-local Gatekeeper
+ * reader classes by name, but new ephemeral adapters must not rely on this
+ * hand-maintained list.
  */
 
 export interface WebConsoleProductionReadinessOptions {
@@ -42,6 +43,11 @@ export interface WebConsoleProductionActivationInputs {
   readonly stores: Readonly<Record<string, unknown>>;
   readonly services: Readonly<Record<string, unknown>>;
 }
+
+const KNOWN_PROCESS_LOCAL_ADAPTERS = new Set<string>([
+  'GatekeeperSessionApprovalStore',
+  'GatekeeperSessionStateReader',
+]);
 
 export function assertWebConsoleProductionActivation(
   inputs: WebConsoleProductionActivationInputs,
@@ -148,5 +154,8 @@ function adapterName(value: unknown): string {
 }
 
 function isKnownUnsafeAdapter(adapter: string): boolean {
-  return adapter === 'unknown' || adapter.startsWith('InMemory') || adapter.startsWith('Empty');
+  return adapter === 'unknown' ||
+    adapter.startsWith('InMemory') ||
+    adapter.startsWith('Empty') ||
+    KNOWN_PROCESS_LOCAL_ADAPTERS.has(adapter);
 }
