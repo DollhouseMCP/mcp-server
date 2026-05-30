@@ -4,7 +4,10 @@ import type { Server as HttpsServer } from 'node:https';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import type { Express, Request, Response } from 'express';
+import { json } from 'express';
+import type { Express, Request, RequestHandler, Response, Router } from 'express';
+import type { AuthClaims } from '../auth/IAuthProvider.js';
+import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -42,11 +45,11 @@ export interface StreamableHttpRuntimeOptions {
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
   /** Express middleware for authentication. Mounted before MCP handlers when provided. */
-  authMiddleware?: import('express').RequestHandler;
+  authMiddleware?: RequestHandler;
   /** Embedded OAuth provider. Discovery and token routes are mounted before MCP auth middleware. */
   oauthProvider?: {
     setPublicBaseUrl?: (publicBaseUrl: string) => void;
-    createRouter: () => import('express').Router;
+    createRouter: () => Router;
     /**
      * Round 5 / H3: optional readiness predicate. /readyz returns 503
      * when this resolves to false (multi-user mode + bootstrap
@@ -67,6 +70,15 @@ export interface StreamableHttpRuntimeOptions {
   onSessionDisposed?: (sessionId: string) => void;
   /** Optional web-console runtime control-plane bridge. Dormant when omitted. */
   runtimeSessionControl?: StreamableHttpRuntimeSessionControl;
+  /**
+   * Optional descriptor-driven web-console API router. The production registrar
+   * only creates this after its activation checks pass; the HTTP runtime owns
+   * the actual Express mount and marks readiness once mounted.
+   */
+  webConsoleApiV1?: {
+    router: Router;
+    markMounted: () => void;
+  };
   /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
   runtimeCommandPollIntervalMs?: number;
   /**
@@ -75,7 +87,7 @@ export interface StreamableHttpRuntimeOptions {
    * under the `auth` key so operators can spot slow OAuth round-trips,
    * JWKS misses, etc.
    */
-  performanceMonitor?: import('../utils/PerformanceMonitor.js').PerformanceMonitor;
+  performanceMonitor?: PerformanceMonitor;
 }
 
 export interface StreamableHttpRuntimeHandle {
@@ -297,7 +309,7 @@ async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<vo
   // Destroy all active sockets so keep-alive connections don't prevent shutdown.
   // httpServer.close() only stops accepting new connections — existing sockets
   // stay alive until their keep-alive timeout expires.
-  httpServer.closeAllConnections?.();
+  httpServer.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     httpServer.close((error) => {
       if (error) {
@@ -331,7 +343,16 @@ async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<vo
  * Exported so tests can exercise the guard logic without standing up
  * an Express server.
  */
-export async function assertHostedDeploymentSafety(config: {
+export function assertHostedDeploymentSafety(config: HostedDeploymentSafetyConfig): Promise<void> {
+  try {
+    runHostedDeploymentSafetyChecks(config);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+interface HostedDeploymentSafetyConfig {
   host: string;
   methods: readonly string[] | undefined;
   authEnabled: boolean;
@@ -347,17 +368,19 @@ export async function assertHostedDeploymentSafety(config: {
    * Refusing this combination prevents the silent misconfig.
    */
   nativeTls?: boolean;
-}): Promise<void> {
+}
+
+function runHostedDeploymentSafetyChecks(config: HostedDeploymentSafetyConfig): void {
   const multiUserMethods = new Set(['github', 'local-password', 'magic-link']);
-  const hasMultiUserMethod = Array.isArray(config.methods)
-    && config.methods.some((m) => multiUserMethods.has(m));
+  const configuredMethods = Array.isArray(config.methods) ? config.methods : [];
+  const hasMultiUserMethod = configuredMethods.some((m) => multiUserMethods.has(m));
   if (!hasMultiUserMethod) return;
   if (isLoopbackHost(config.host)) return;
 
   if (!config.authEnabled) {
     throw new Error(
       `[StreamableHttpServer] Refusing to start: DOLLHOUSE_AUTH_METHODS configures ` +
-      `a multi-user identity method (${config.methods!.join(',')}) on a non-loopback ` +
+      `a multi-user identity method (${configuredMethods.join(',')}) on a non-loopback ` +
       `bind '${config.host}', but DOLLHOUSE_AUTH_ENABLED is false. The MCP endpoint ` +
       `would accept unauthenticated traffic. Set DOLLHOUSE_AUTH_ENABLED=true (and ` +
       `ensure the bootstrap-admin CLI has been run) before exposing this deployment.`,
@@ -411,7 +434,7 @@ export async function assertHostedDeploymentSafety(config: {
 }
 
 export async function createStreamableHttpRuntime(
-  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: import('../auth/IAuthProvider.js').AuthClaims) => Promise<StreamableHttpSessionAttachment>,
+  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: AuthClaims) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
   const host = normalizeUserInput(options.host ?? env.DOLLHOUSE_HTTP_HOST) ?? env.DOLLHOUSE_HTTP_HOST;
@@ -474,6 +497,7 @@ export async function createStreamableHttpRuntime(
     rateLimitedRequests: 0,
   };
   let closingPromise: Promise<void> | null = null;
+  const isShuttingDown = (): boolean => Boolean(closingPromise);
   let replenishPoolPromise: Promise<void> | null = null;
   let runtimeCommandPollTimer: NodeJS.Timeout | null = null;
   let runtimeCommandPollRunning = false;
@@ -594,7 +618,7 @@ export async function createStreamableHttpRuntime(
       sessionTelemetry.expired += 1;
       void disposeSession(sessionId);
     }, sessionIdleTimeoutMs);
-    session.expirationTimer.unref?.();
+    session.expirationTimer.unref();
   };
 
   const consumeRateLimit = (req: Request, res: Response): boolean => {
@@ -659,7 +683,7 @@ export async function createStreamableHttpRuntime(
     }
 
     replenishPoolPromise = (async () => {
-      while (!closingPromise && pooledSessions.length < sessionPoolSize) {
+      while (!isShuttingDown() && pooledSessions.length < sessionPoolSize) {
         try {
           pooledSessions.push(await prepareSession());
         } catch (error) {
@@ -676,7 +700,7 @@ export async function createStreamableHttpRuntime(
     await replenishPoolPromise;
   };
 
-  const prepareSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
+  const prepareSession = async (authClaims?: AuthClaims): Promise<PreparedSessionRecord> => {
     let attachment: StreamableHttpSessionAttachment | null = null;
 
     const transport = new StreamableHTTPServerTransport({
@@ -740,12 +764,12 @@ export async function createStreamableHttpRuntime(
         await transport.close().catch(() => {
           /* pooled transport shutdown is best-effort */
         });
-        await attachment?.dispose();
+        await attachment.dispose();
       },
     };
   };
 
-  const getOrCreatePreparedSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
+  const getOrCreatePreparedSession = async (authClaims?: AuthClaims): Promise<PreparedSessionRecord> => {
     // Pooled sessions don't carry auth claims — they were pre-created without
     // knowing who would connect. When auth is enabled, always create fresh.
     if (!authClaims) {
@@ -831,6 +855,20 @@ export async function createStreamableHttpRuntime(
       version: PACKAGE_VERSION,
     });
   });
+
+  if (options.webConsoleApiV1) {
+    const parseConsoleJson = json();
+    app.use((req, res, next) => {
+      if (req.path === '/api/v1' || req.path.startsWith('/api/v1/')) {
+        parseConsoleJson(req, res, next);
+        return;
+      }
+      next();
+    });
+    app.use(options.webConsoleApiV1.router);
+    options.webConsoleApiV1.markMounted();
+    logger.info('[StreamableHTTP] Descriptor web-console API mounted', { basePath: '/api/v1' });
+  }
 
   // Mount auth middleware on MCP path so /mcp requests are validated
   // (and 401 on missing/invalid token) before they reach the MCP handler.

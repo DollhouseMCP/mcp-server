@@ -19,7 +19,7 @@
  * true, (c) post-bootstrap subsequent calls don't hit storage.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import request from 'supertest';
 import express from 'express';
 import * as fs from 'node:fs/promises';
@@ -27,6 +27,7 @@ import * as path from 'node:path';
 import os from 'node:os';
 import {
   createStreamableHttpRuntime,
+  type StreamableHttpRuntimeOptions,
   type StreamableHttpRuntimeHandle,
 } from '../../../src/server/StreamableHttpServer.js';
 import { setHttpModeActive } from '../../../src/index.js';
@@ -41,10 +42,11 @@ import { randomBytes } from 'node:crypto';
 
 async function buildRuntime(
   isReadyForTraffic?: () => Promise<boolean>,
+  webConsoleApiV1?: StreamableHttpRuntimeOptions['webConsoleApiV1'],
 ): Promise<StreamableHttpRuntimeHandle> {
   return createStreamableHttpRuntime(
     // Session factory — never invoked for /readyz; minimal stub.
-    async () => ({ dispose: async () => undefined }),
+    () => Promise.resolve({ dispose: () => Promise.resolve() }),
     {
       host: '127.0.0.1',
       port: 0,
@@ -57,6 +59,7 @@ async function buildRuntime(
         createRouter: () => express.Router(),
         isReadyForTraffic,
       } : undefined,
+      webConsoleApiV1,
     },
   );
 }
@@ -77,7 +80,7 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
   });
 
   it('returns 200 when oauthProvider reports ready=true', async () => {
-    const runtime = await buildRuntime(async () => true);
+    const runtime = await buildRuntime(() => Promise.resolve(true));
     try {
       const res = await request(runtime.app).get('/readyz');
       expect(res.status).toBe(200);
@@ -88,7 +91,7 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
   });
 
   it('returns 503 with reason=bootstrap_required when oauthProvider reports ready=false', async () => {
-    const runtime = await buildRuntime(async () => false);
+    const runtime = await buildRuntime(() => Promise.resolve(false));
     try {
       const res = await request(runtime.app).get('/readyz');
       expect(res.status).toBe(503);
@@ -110,13 +113,31 @@ describe('/readyz — H3 bootstrap gate consultation', () => {
     // EmbeddedAuthorizationServer.isReadyForTraffic itself; that's
     // what the second describe block below covers.
     let bootstrapped = false;
-    const runtime = await buildRuntime(async () => bootstrapped);
+    const runtime = await buildRuntime(() => Promise.resolve(bootstrapped));
     try {
       let res = await request(runtime.app).get('/readyz');
       expect(res.status).toBe(503);
       bootstrapped = true;
       res = await request(runtime.app).get('/readyz');
       expect(res.status).toBe(200);
+    } finally {
+      await runtime.close();
+    }
+  });
+
+  it('mounts the descriptor web-console API router only when explicitly supplied', async () => {
+    const router = express.Router();
+    const markMounted = jest.fn();
+    router.get('/api/v1/health', (_req, res) => res.status(200).json({ ok: true }));
+    const runtime = await buildRuntime(undefined, {
+      router,
+      markMounted,
+    });
+    try {
+      expect(markMounted).toHaveBeenCalledTimes(1);
+      const res = await request(runtime.app).get('/api/v1/health');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
     } finally {
       await runtime.close();
     }
@@ -292,9 +313,7 @@ describe('EmbeddedAuthorizationServer.isReadyForTraffic — Round 6 latch covera
 
   it('storage read failure pre-bootstrap → false (fail closed)', async () => {
     const storage = new InMemoryAuthStorageLayer();
-    storage.getBootstrapState = async () => {
-      throw new Error('simulated storage outage');
-    };
+    storage.getBootstrapState = () => Promise.reject(new Error('simulated storage outage'));
     const invites = new InviteTokenStore(randomBytes(32), storage);
     const rateLimiter = new LocalLoginRateLimiter({ storage, store: new InMemoryRateLimitStore(), storeBackend: 'memory' });
     const method = new LocalAccountMethod({ storage, invites, rateLimiter });

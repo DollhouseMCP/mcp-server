@@ -1,5 +1,6 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { Router } from 'express';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
 import { InMemoryAdminAuditWriter } from './audit/InMemoryAdminAuditWriter.js';
@@ -14,6 +15,7 @@ import { AeadSecretEncryptionService } from './security/SecretEncryption.js';
 import type { IAdminAuditWriter } from './audit/IAdminAuditWriter.js';
 import type { IConsoleIdentityResolver } from './identity/IConsoleIdentityResolver.js';
 import { ConsoleModuleRegistry } from './platform/ConsoleModuleRegistry.js';
+import { assembleSecuredConsoleRouter } from './platform/ConsoleSecuredRouterAssembler.js';
 import type { IConsoleSessionStore } from './stores/IConsoleSessionStore.js';
 import { InMemoryConsoleSessionStore } from './stores/InMemoryConsoleSessionStore.js';
 import type { IIdempotencyStore } from './stores/IIdempotencyStore.js';
@@ -160,6 +162,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   authPolicyStore: 'WebConsoleAuthPolicyStore',
   userConfigStore: 'WebConsoleUserConfigStore',
   securityInvalidationReadiness: 'WebConsoleSecurityInvalidationReadiness',
+  apiV1Mount: 'WebConsoleApiV1Mount',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -197,6 +200,16 @@ export interface WebConsoleRegistrarOptions {
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
   readonly securityInvalidationReadiness?: IConsoleSecurityInvalidationReadiness | null;
   readonly publicBaseUrl?: string;
+  readonly enableApiV1Mount?: boolean;
+  readonly consoleOrigin?: string;
+  readonly consoleSessionIdleTimeoutMs?: number;
+  readonly reportApiV1InternalError?: (error: unknown, correlationId: string) => void;
+}
+
+export interface WebConsoleApiV1Mount {
+  readonly router: Router;
+  readonly mounted: () => boolean;
+  readonly markMounted: () => void;
 }
 
 export interface WebConsoleComposition {
@@ -238,9 +251,10 @@ export interface WebConsoleComposition {
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly userConfigStore: IUserConfigStore;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
+  readonly apiV1Mount: WebConsoleApiV1Mount | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
-  readonly routesMounted: false;
+  readonly routesMounted: boolean;
 }
 
 export class WebConsoleRegistrar {
@@ -294,12 +308,14 @@ export class WebConsoleRegistrar {
       securityInvalidationReadiness,
       this.options,
     );
+    const apiV1MountState = createApiV1MountState();
     const operationHealthChecks = createOperationHealthChecks({
       database,
       stores,
       authStorage,
       container,
       securityInvalidationReadiness,
+      routesMounted: apiV1MountState.mounted,
     });
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
@@ -307,7 +323,7 @@ export class WebConsoleRegistrar {
         stores,
         authStorage,
         securityInvalidationReadiness,
-        routesMounted: false,
+        routesMounted: apiV1MountState.mounted,
       }),
       now: this.options.now,
     }));
@@ -434,6 +450,20 @@ export class WebConsoleRegistrar {
         userConfigStore,
       },
     });
+    const apiV1Mount = createApiV1Mount({
+      activationProfile,
+      options: this.options,
+      registry,
+      sessionStore: stores.sessionStore,
+      identityResolver: stores.identityResolver,
+      opaqueValues,
+      integrationPublicBaseUrl,
+      adminAuditWriter,
+      idempotencyStore: stores.idempotencyStore,
+      authPolicyStore,
+      protectedCorrelationRateLimiter,
+      apiV1MountState,
+    });
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
       registry,
@@ -463,75 +493,15 @@ export class WebConsoleRegistrar {
       authPolicyStore,
       userConfigStore,
       securityInvalidationReadiness,
+      apiV1Mount,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
-      routesMounted: false,
+      get routesMounted() {
+        return apiV1MountState.mounted();
+      },
     };
 
-    container.register(WEB_CONSOLE_SERVICE_NAMES.composition, () => composition);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.moduleRegistry, () => registry);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionStore, () => stores.sessionStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.loginTransactionStore, () => stores.loginTransactionStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => stores.idempotencyStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => stores.factorStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => stores.accountAdminStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => stores.accountAllowlistStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => stores.integrationStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioStore, () => stores.portfolioStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncJobStore, () => stores.portfolioSyncJobStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => stores.securityInvalidationStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore, () => stores.runtimeSessionControlStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => stores.identityResolver);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => opaqueValues);
-    if (secretEncryption) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => secretEncryption);
-    }
-    container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => adminAuditWriter);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery, () => adminAuditQuery);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery, () => approvalAuditQuery);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery, () => authenticationAuditQuery);
-    container.register(
-      WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
-      () => accountAdminMutationTransactionRunner,
-    );
-    if (protectedCorrelationRateLimiter) {
-      container.register(
-        WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter,
-        () => protectedCorrelationRateLimiter,
-      );
-    }
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter, () => sessionActivationStateAdapter);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink, () => sessionActivationEventSink);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore, () => sessionApprovalStore);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink, () => sessionApprovalEventSink);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader, () => sessionExecutionReader);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader, () => sessionGatekeeperReader);
-    container.register(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery, () => telemetryQuery);
-    if (oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => oauthGrantRevocationService);
-    }
-    if (authStorage && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.authStorage, () => authStorage);
-    }
-    if (accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => accountInviteIssuer);
-    }
-    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore, () => operatorConfigStore);
-    }
-    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore, () => signingKeyStore);
-    }
-    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.authPolicyStore, () => authPolicyStore);
-    }
-    if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => userConfigStore);
-    }
-    registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness, () => securityInvalidationReadiness);
-    if (cleanupScheduler) {
-      container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
-    }
+    registerWebConsoleCompositionServices(container, composition);
 
     return composition;
   }
@@ -567,6 +537,138 @@ function registerIfMissing<T>(container: DiContainerFacade, name: string, factor
   }
 }
 
+function registerWebConsoleCompositionServices(
+  container: DiContainerFacade,
+  composition: WebConsoleComposition,
+): void {
+  container.register(WEB_CONSOLE_SERVICE_NAMES.composition, () => composition);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.moduleRegistry, () => composition.registry);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionStore, () => composition.sessionStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.loginTransactionStore, () => composition.loginTransactionStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.idempotencyStore, () => composition.idempotencyStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.factorStore, () => composition.factorStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => composition.accountAdminStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => composition.accountAllowlistStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => composition.integrationStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioStore, () => composition.portfolioStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncJobStore, () => composition.portfolioSyncJobStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => composition.securityInvalidationStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.runtimeSessionControlStore, () => composition.runtimeSessionControlStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.identityResolver, () => composition.identityResolver);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.opaqueValues, () => composition.opaqueValues);
+  if (composition.secretEncryption) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.secretEncryption, () => composition.secretEncryption);
+  }
+  container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditWriter, () => composition.adminAuditWriter);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.adminAuditQuery, () => composition.adminAuditQuery);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery, () => composition.approvalAuditQuery);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery, () => composition.authenticationAuditQuery);
+  container.register(
+    WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
+    () => composition.accountAdminMutationTransactionRunner,
+  );
+  if (composition.protectedCorrelationRateLimiter) {
+    container.register(
+      WEB_CONSOLE_SERVICE_NAMES.protectedCorrelationRateLimiter,
+      () => composition.protectedCorrelationRateLimiter,
+    );
+  }
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter, () => composition.sessionActivationStateAdapter);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink, () => composition.sessionActivationEventSink);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore, () => composition.sessionApprovalStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink, () => composition.sessionApprovalEventSink);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader, () => composition.sessionExecutionReader);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader, () => composition.sessionGatekeeperReader);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery, () => composition.telemetryQuery);
+  registerOptionalWebConsoleCompositionServices(container, composition);
+}
+
+function registerOptionalWebConsoleCompositionServices(
+  container: DiContainerFacade,
+  composition: WebConsoleComposition,
+): void {
+  if (composition.oauthGrantRevocationService && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService, () => composition.oauthGrantRevocationService);
+  }
+  if (composition.authStorage && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.authStorage, () => composition.authStorage);
+  }
+  if (composition.accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => composition.accountInviteIssuer);
+  }
+  registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore, () => composition.operatorConfigStore);
+  registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.signingKeyStore, () => composition.signingKeyStore);
+  registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.authPolicyStore, () => composition.authPolicyStore);
+  registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => composition.userConfigStore);
+  registerIfMissing(
+    container,
+    WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness,
+    () => composition.securityInvalidationReadiness,
+  );
+  if (composition.apiV1Mount) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount, () => composition.apiV1Mount);
+  }
+  if (composition.cleanupScheduler) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => composition.cleanupScheduler);
+  }
+}
+
+function createApiV1MountState(): Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'> {
+  let mounted = false;
+  return {
+    mounted: () => mounted,
+    markMounted: () => {
+      mounted = true;
+    },
+  };
+}
+
+function createApiV1Mount(options: {
+  readonly activationProfile: WebConsoleActivationProfile;
+  readonly options: WebConsoleRegistrarOptions;
+  readonly registry: ConsoleModuleRegistry;
+  readonly sessionStore: IConsoleSessionStore;
+  readonly identityResolver: IConsoleIdentityResolver;
+  readonly opaqueValues: IConsoleOpaqueValueService;
+  readonly integrationPublicBaseUrl: string | null;
+  readonly adminAuditWriter: IAdminAuditWriter;
+  readonly idempotencyStore: IIdempotencyStore;
+  readonly authPolicyStore: IConsoleAuthPolicyStore;
+  readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly apiV1MountState: Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'>;
+}): WebConsoleApiV1Mount | null {
+  if (options.options.enableApiV1Mount !== true) return null;
+  if (options.activationProfile !== 'shared-hosted') {
+    throw new Error('Web console /api/v1 mount requires shared-hosted activation profile');
+  }
+  const consoleOrigin = options.options.consoleOrigin ?? originFromPublicBaseUrl(options.integrationPublicBaseUrl);
+  const router = assembleSecuredConsoleRouter(options.registry, {
+    sessionStore: options.sessionStore,
+    identityResolver: options.identityResolver,
+    opaqueValues: options.opaqueValues,
+    consoleOrigin,
+    adminAuditWriter: options.adminAuditWriter,
+    idempotencyStore: options.idempotencyStore,
+    authPolicyStore: options.authPolicyStore,
+    protectedCorrelationRateLimiter: options.protectedCorrelationRateLimiter,
+    idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
+    now: options.options.now,
+    reportInternalError: options.options.reportApiV1InternalError,
+  });
+  return {
+    router,
+    mounted: options.apiV1MountState.mounted,
+    markMounted: options.apiV1MountState.markMounted,
+  };
+}
+
+function originFromPublicBaseUrl(publicBaseUrl: string | null): string {
+  if (!publicBaseUrl) {
+    throw new Error('Web console /api/v1 mount requires publicBaseUrl or consoleOrigin');
+  }
+  return new URL(publicBaseUrl).origin;
+}
+
 async function resolveProductionReadinessForActivation(
   activationProfile: WebConsoleActivationProfile,
   securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness,
@@ -599,7 +701,7 @@ function createHealthReadinessInputs(options: {
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
-  readonly routesMounted: false;
+  readonly routesMounted: () => boolean;
 }): HealthReadinessChecks {
   return {
     sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
@@ -608,8 +710,7 @@ function createHealthReadinessInputs(options: {
     runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     databaseAvailable: () => Boolean(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
-    // TODO(web-console-mount): flip through the M7 production mount gate.
-    apiV1Mounted: () => options.routesMounted,
+    apiV1Mounted: () => options.routesMounted(),
   };
 }
 
@@ -619,6 +720,7 @@ function createOperationHealthChecks(options: {
   readonly authStorage: IAuthStorageLayer | null;
   readonly container: DiContainerFacade;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
+  readonly routesMounted: () => boolean;
 }): OperationsHealthChecks {
   return {
     database: () => Boolean(options.database),
@@ -628,12 +730,19 @@ function createOperationHealthChecks(options: {
     securityInvalidation: async () => operationHealthFromInvalidationReadiness(
       await options.securityInvalidationReadiness.getReadiness(),
     ),
-    apiMount: () => ({
-      component: 'api_mount',
-      status: 'not_ready',
-      checked_at: new Date(0).toISOString(),
-      failure_codes: ['api_v1_not_mounted'],
-    }),
+    apiMount: () => options.routesMounted()
+      ? {
+        component: 'api_mount',
+        status: 'ok',
+        checked_at: new Date().toISOString(),
+        failure_codes: [],
+      }
+      : {
+        component: 'api_mount',
+        status: 'not_ready',
+        checked_at: new Date(0).toISOString(),
+        failure_codes: ['api_v1_not_mounted'],
+      },
   };
 }
 

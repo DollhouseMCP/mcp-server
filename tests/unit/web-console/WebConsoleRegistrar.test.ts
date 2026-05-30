@@ -120,6 +120,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition).toMatchObject({
       storageBackend: 'memory',
       routesMounted: false,
+      apiV1Mount: null,
     });
     expect(composition.registry).toBeInstanceOf(ConsoleModuleRegistry);
     expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
@@ -412,10 +413,12 @@ describe('WebConsoleRegistrar', () => {
     const {
       StaticConsoleSecurityInvalidationReadiness,
       WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
     } = await import('../../../src/web-console/index.js');
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
+      enableApiV1Mount: true,
       productionReadiness: {
         portfolioSyncWorkerReady: true,
       },
@@ -446,6 +449,24 @@ describe('WebConsoleRegistrar', () => {
 
     expect(composition.storageBackend).toBe('postgres');
     expect(composition.routesMounted).toBe(false);
+    expect(composition.apiV1Mount).not.toBeNull();
+    expect(composition.apiV1Mount?.mounted()).toBe(false);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount)).toBe(composition.apiV1Mount);
+    composition.apiV1Mount?.markMounted();
+    expect(composition.apiV1Mount?.mounted()).toBe(true);
+    expect(composition.routesMounted).toBe(true);
+  });
+
+  it('refuses descriptor api mount outside the hosted/shared activation gate', async () => {
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      enableApiV1Mount: true,
+      opaqueValueHmacKey: Buffer.alloc(32, 31),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects
+      .toThrow('Web console /api/v1 mount requires shared-hosted activation profile');
   });
 
   it('keeps aggregated production activation failures for null-prototype adapters', async () => {
