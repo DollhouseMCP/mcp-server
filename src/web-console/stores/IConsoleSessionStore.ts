@@ -50,6 +50,12 @@ export interface IConsoleSessionStore {
   setElevation(idHash: Buffer, elevation: ConsoleSessionElevation, at?: Date): Promise<boolean>;
   clearElevation(idHash: Buffer, at?: Date): Promise<boolean>;
   /**
+   * Clears active administrative elevations for every live browser console
+   * session owned by `userId`. Security invalidation processors use this for
+   * factor and elevation revocation fan-out.
+   */
+  clearElevationsForUser(userId: string, at?: Date): Promise<number>;
+  /**
    * Revokes a session by hash after the caller has already selected the
    * correct authority/ownership context. Admin and logout flows use this.
    */

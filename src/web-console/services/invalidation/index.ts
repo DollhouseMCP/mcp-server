@@ -11,6 +11,19 @@ export {
   StoreBackedConsoleSecurityInvalidationReadiness,
 } from './ConsoleSecurityInvalidationReadiness.js';
 export type {
+  ConsoleSecurityInvalidationProcessorLifecycle,
+  ConsoleSecurityInvalidationProcessorOptions,
+  ConsoleSecurityInvalidationProcessorRunResult,
+  IConsoleSecurityInvalidationProcessor,
+} from './ConsoleSecurityInvalidationProcessor.js';
+export {
+  ConsoleSecurityInvalidationProcessor,
+  DEFAULT_SECURITY_INVALIDATION_BATCH_SIZE,
+  DEFAULT_SECURITY_INVALIDATION_LEASE_DURATION_MS,
+  DEFAULT_SECURITY_INVALIDATION_PROCESSOR_INTERVAL_MS,
+  SECURITY_INVALIDATION_PROCESSOR_TASK_LABEL,
+} from './ConsoleSecurityInvalidationProcessor.js';
+export type {
   ConsoleSecurityInvalidationKind,
   ConsoleSecurityInvalidationUrgency,
   IConsoleSecurityInvalidationStore,

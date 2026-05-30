@@ -100,6 +100,25 @@ export class InMemoryConsoleSessionStore implements IConsoleSessionStore {
     return true;
   }
 
+  async clearElevationsForUser(userId: string, at: Date = new Date()): Promise<number> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    let cleared = 0;
+    for (const [key, record] of this.sessions) {
+      if (record.userId === userId && record.elevation && isActive(record, at)) {
+        const updated = {
+          ...record,
+          grantedCapabilities: record.grantedCapabilities.filter(capability => capability === 'console:self'),
+          elevation: null,
+        };
+        validateConsoleSessionRecord(updated);
+        this.sessions.set(key, cloneConsoleSession(updated));
+        cleared += 1;
+      }
+    }
+    return cleared;
+  }
+
   async revoke(idHash: Buffer, revokedAt: Date = new Date()): Promise<boolean> {
     await Promise.resolve();
     assertHash(idHash, 'idHash');

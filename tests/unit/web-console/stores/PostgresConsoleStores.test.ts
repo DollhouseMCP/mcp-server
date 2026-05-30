@@ -426,6 +426,28 @@ describe('PostgresConsoleSessionStore', () => {
     await expect(store.clearElevation(hash(1), FIVE_MINUTES)).resolves.toBe(false);
   });
 
+  it('clears all active elevated sessions for a user through a system-context conditional update', async () => {
+    const chain = returningChain([{ idHash: hash(1) }, { idHash: hash(2) }]);
+    transaction.update = jest.fn(() => chain);
+    transaction.select = jest.fn();
+    const store = new PostgresConsoleSessionStore({} as DatabaseInstance);
+
+    await expect(store.clearElevationsForUser(USER_ID, FIVE_MINUTES)).resolves.toBe(2);
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.select).not.toHaveBeenCalled();
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+    expect(chain.set).toHaveBeenCalledWith({
+      grantedCapabilities: [SELF_CAPABILITY],
+      elevatedCapabilities: [],
+      elevationExpiresAt: null,
+      elevationAcr: null,
+      elevationAmr: null,
+      elevationAuthTime: null,
+    });
+    expect(chain.where).toHaveBeenCalledWith(expect.anything());
+  });
+
   it('rejects unvalidated capabilities read from database state', async () => {
     transaction.select = jest.fn(() => selectingChain([sessionRow({
       grantedCapabilities: [SELF_CAPABILITY, 'console:admin:unknown'],

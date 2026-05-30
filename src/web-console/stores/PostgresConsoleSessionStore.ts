@@ -136,6 +136,27 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
     return rows.length === 1;
   }
 
+  async clearElevationsForUser(userId: string, at: Date = new Date()): Promise<number> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(consoleSessions).set({
+        grantedCapabilities: ['console:self'],
+        elevatedCapabilities: [],
+        elevationExpiresAt: null,
+        elevationAcr: null,
+        elevationAmr: null,
+        elevationAuthTime: null,
+      }).where(and(
+        eq(consoleSessions.userId, userId),
+        isNull(consoleSessions.revokedAt),
+        gt(consoleSessions.idleExpiresAt, at),
+        gt(consoleSessions.absoluteExpiresAt, at),
+        gt(consoleSessions.elevationExpiresAt, at),
+      )).returning({ idHash: consoleSessions.idHash }),
+    );
+    return rows.length;
+  }
+
   async revoke(idHash: Buffer, revokedAt: Date = new Date()): Promise<boolean> {
     assertHash(idHash, 'idHash');
     const rows = await withSystemContext(this.db, tx =>
