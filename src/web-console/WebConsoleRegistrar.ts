@@ -31,6 +31,10 @@ import type { IPortfolioSyncJobStore } from './stores/IPortfolioSyncJobStore.js'
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
+import {
+  StaticConsoleSecurityInvalidationReadiness,
+  type IConsoleSecurityInvalidationReadiness,
+} from './services/invalidation/ConsoleSecurityInvalidationReadiness.js';
 import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js';
 import type { IOperatorConfigStore } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import { InMemoryOperatorConfigStore } from '../storage/operatorConfig/InMemoryOperatorConfigStore.js';
@@ -155,6 +159,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   signingKeyStore: 'WebConsoleSigningKeyStore',
   authPolicyStore: 'WebConsoleAuthPolicyStore',
   userConfigStore: 'WebConsoleUserConfigStore',
+  securityInvalidationReadiness: 'WebConsoleSecurityInvalidationReadiness',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
@@ -190,6 +195,7 @@ export interface WebConsoleRegistrarOptions {
   readonly adminAuditQuery?: IAdminAuditQuery | null;
   readonly approvalAuditQuery?: IApprovalAuditQuery | null;
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
+  readonly securityInvalidationReadiness?: IConsoleSecurityInvalidationReadiness | null;
   readonly publicBaseUrl?: string;
 }
 
@@ -231,6 +237,7 @@ export interface WebConsoleComposition {
   readonly signingKeyStore: ISigningKeyStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly userConfigStore: IUserConfigStore;
+  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
   readonly routesMounted: false;
@@ -280,17 +287,26 @@ export class WebConsoleRegistrar {
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
+    const securityInvalidationReadiness = resolveSecurityInvalidationReadiness(container, this.options);
+    const activationProfile = this.options.activationProfile ?? 'development';
+    const productionReadiness = await resolveProductionReadinessForActivation(
+      activationProfile,
+      securityInvalidationReadiness,
+      this.options,
+    );
     const operationHealthChecks = createOperationHealthChecks({
       database,
       stores,
       authStorage,
       container,
+      securityInvalidationReadiness,
     });
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs({
         database,
         stores,
         authStorage,
+        securityInvalidationReadiness,
         routesMounted: false,
       }),
       now: this.options.now,
@@ -384,10 +400,10 @@ export class WebConsoleRegistrar {
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
     const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
     assertWebConsoleProductionActivation({
-      activationProfile: this.options.activationProfile ?? 'development',
+      activationProfile,
       storageBackend: database ? 'postgres' : 'memory',
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
-      readiness: this.options.productionReadiness,
+      readiness: productionReadiness,
       stores,
       services: {
         authStorage,
@@ -446,6 +462,7 @@ export class WebConsoleRegistrar {
       signingKeyStore,
       authPolicyStore,
       userConfigStore,
+      securityInvalidationReadiness,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
       routesMounted: false,
@@ -511,6 +528,7 @@ export class WebConsoleRegistrar {
     if (!container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.userConfigStore, () => userConfigStore);
     }
+    registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness, () => securityInvalidationReadiness);
     if (cleanupScheduler) {
       container.register(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler, () => cleanupScheduler);
     }
@@ -543,6 +561,24 @@ export class WebConsoleRegistrar {
   }
 }
 
+function registerIfMissing<T>(container: DiContainerFacade, name: string, factory: () => T): void {
+  if (!container.hasRegistration(name)) {
+    container.register(name, factory);
+  }
+}
+
+async function resolveProductionReadinessForActivation(
+  activationProfile: WebConsoleActivationProfile,
+  securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness,
+  options: WebConsoleRegistrarOptions,
+): Promise<WebConsoleProductionReadinessOptions | undefined> {
+  if (activationProfile !== 'shared-hosted') return options.productionReadiness;
+  return {
+    ...options.productionReadiness,
+    securityInvalidationProcessorReady: (await securityInvalidationReadiness.getReadiness()).ready,
+  };
+}
+
 interface ConsoleStoreSet {
   readonly sessionStore: IConsoleSessionStore;
   readonly loginTransactionStore: ILoginTransactionStore;
@@ -562,14 +598,13 @@ function createHealthReadinessInputs(options: {
   readonly database: DatabaseInstance | undefined;
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
+  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: false;
 }): HealthReadinessChecks {
   return {
     sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
     identityResolutionAvailable: () => Boolean(options.stores.identityResolver),
-    // TODO(web-console-readiness): replace this stub when the security
-    // invalidation processor/listener/cursor readiness runtime is wired.
-    securityInvalidationReady: () => false,
+    securityInvalidationReady: async () => (await options.securityInvalidationReadiness.getReadiness()).ready,
     runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     databaseAvailable: () => Boolean(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
@@ -583,24 +618,31 @@ function createOperationHealthChecks(options: {
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
   readonly container: DiContainerFacade;
+  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
 }): OperationsHealthChecks {
   return {
     database: () => Boolean(options.database),
     authServer: () => Boolean(options.authStorage),
     gatekeeper: () => options.container.hasRegistration('gatekeeper'),
     runtimeControl: () => Boolean(options.stores.runtimeSessionControlStore),
-    securityInvalidation: () => ({
-      component: 'security_invalidation',
-      status: 'not_ready',
-      checked_at: new Date(0).toISOString(),
-      failure_codes: ['security_invalidation_processor_not_ready'],
-    }),
+    securityInvalidation: async () => operationHealthFromInvalidationReadiness(
+      await options.securityInvalidationReadiness.getReadiness(),
+    ),
     apiMount: () => ({
       component: 'api_mount',
       status: 'not_ready',
       checked_at: new Date(0).toISOString(),
       failure_codes: ['api_v1_not_mounted'],
     }),
+  };
+}
+
+function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>) {
+  return {
+    component: 'security_invalidation' as const,
+    status: snapshot.status,
+    checked_at: snapshot.checkedAt.toISOString(),
+    failure_codes: snapshot.failureCodes,
   };
 }
 
@@ -981,6 +1023,21 @@ async function resolveAuthPolicyStore(
     return new PostgresConsoleAuthPolicyStore(database);
   }
   return new InMemoryConsoleAuthPolicyStore();
+}
+
+function resolveSecurityInvalidationReadiness(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): IConsoleSecurityInvalidationReadiness {
+  if (options.securityInvalidationReadiness !== undefined) {
+    return options.securityInvalidationReadiness ?? new StaticConsoleSecurityInvalidationReadiness(false, options.now);
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness)) {
+    return container.resolve<IConsoleSecurityInvalidationReadiness>(
+      WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness,
+    );
+  }
+  return new StaticConsoleSecurityInvalidationReadiness(false, options.now);
 }
 
 function resolveOAuthGrantRevocationService(

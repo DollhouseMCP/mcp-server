@@ -107,6 +107,7 @@ describe('WebConsoleRegistrar', () => {
       InMemoryConsoleTelemetryQuery,
       InMemoryIdempotencyStore,
       InMemoryLoginTransactionStore,
+      StaticConsoleSecurityInvalidationReadiness,
       WEB_CONSOLE_SERVICE_NAMES,
     } = await import('../../../src/web-console/index.js');
 
@@ -194,6 +195,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.adminAuditQuery).toBeInstanceOf(InMemoryAdminAuditQuery);
     expect(composition.approvalAuditQuery).toBeInstanceOf(InMemoryApprovalAuditQuery);
     expect(composition.authenticationAuditQuery).toBeInstanceOf(InMemoryAuthenticationAuditQuery);
+    expect(composition.securityInvalidationReadiness).toBeInstanceOf(StaticConsoleSecurityInvalidationReadiness);
     expect(lifecycle.registerPeriodicTask).toHaveBeenCalledWith(
       expect.any(Number),
       expect.any(Function),
@@ -221,6 +223,8 @@ describe('WebConsoleRegistrar', () => {
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery)).toBe(composition.approvalAuditQuery);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery))
       .toBe(composition.authenticationAuditQuery);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness))
+      .toBe(composition.securityInvalidationReadiness);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.userConfigStore)).toBe(composition.userConfigStore);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.cleanupScheduler)).toBe(composition.cleanupScheduler);
   });
@@ -405,14 +409,17 @@ describe('WebConsoleRegistrar', () => {
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
-    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+    const {
+      StaticConsoleSecurityInvalidationReadiness,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
       productionReadiness: {
-        securityInvalidationProcessorReady: true,
         portfolioSyncWorkerReady: true,
       },
+      securityInvalidationReadiness: new StaticConsoleSecurityInvalidationReadiness(true),
       opaqueValueHmacKey: Buffer.alloc(32, 27),
       protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 28),
       secretEncryptionKey: {

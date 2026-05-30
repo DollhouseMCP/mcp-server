@@ -366,14 +366,15 @@ describe('ApprovalModule', () => {
     expect(approval).toBeDefined();
     if (!approval) throw new Error('expected approval');
     const approvalStore = new GatekeeperSessionApprovalStore(gatekeeper);
+    const deniedAt = approval.requestedAt;
 
     await approvalStore.save(USER_ID, SESSION_ID, approvalId, {
       ...approval,
-      deniedAt: NOW.toISOString(),
+      deniedAt,
     });
 
     expect(liveSession.getCliApproval(approvalId)).toMatchObject({
-      deniedAt: NOW.toISOString(),
+      deniedAt,
     });
     expect(liveSession.checkCliApproval('Bash', { command: 'npm test' })).toBeUndefined();
   });
