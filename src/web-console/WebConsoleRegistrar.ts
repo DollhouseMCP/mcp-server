@@ -128,6 +128,10 @@ import {
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
 import { resolveStableWebConsoleReplicaId } from './WebConsoleReplicaIdentity.js';
+import {
+  resolveWebConsoleActivationProfile,
+  type WebConsoleDeploymentSignal,
+} from './WebConsoleActivationProfile.js';
 import { createConsoleBffAuthModule, type IConsoleOAuthClient } from './auth/index.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
@@ -178,6 +182,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
 
 export interface WebConsoleRegistrarOptions {
   readonly activationProfile?: WebConsoleActivationProfile;
+  readonly deploymentSignal?: WebConsoleDeploymentSignal;
   readonly productionReadiness?: WebConsoleProductionReadinessOptions;
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
@@ -229,6 +234,7 @@ export interface WebConsoleApiV1Mount {
 }
 
 export interface WebConsoleComposition {
+  readonly activationProfile: WebConsoleActivationProfile;
   readonly registry: ConsoleModuleRegistry;
   readonly sessionStore: IConsoleSessionStore;
   readonly loginTransactionStore: ILoginTransactionStore;
@@ -320,7 +326,10 @@ export class WebConsoleRegistrar {
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
-    const activationProfile = this.options.activationProfile ?? 'development';
+    const activationProfile = resolveWebConsoleActivationProfile({
+      activationProfile: this.options.activationProfile,
+      deploymentSignal: this.options.deploymentSignal,
+    });
     const securityInvalidationRuntime = await resolveSecurityInvalidationRuntime({
       activationProfile,
       container,
@@ -513,6 +522,7 @@ export class WebConsoleRegistrar {
     });
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
+      activationProfile,
       registry,
       ...stores,
       opaqueValues,

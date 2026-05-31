@@ -171,6 +171,7 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     expect(composition).toMatchObject({
+      activationProfile: 'development',
       storageBackend: 'memory',
       routesMounted: false,
       apiV1Mount: null,
@@ -456,6 +457,32 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'accountInviteIssuer_missing' }),
         expect.objectContaining({ code: 'githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'integrationPublicBaseUrl_missing' }),
+      ]),
+    });
+  });
+
+  it('derives hosted/shared activation from exposed multi-user deployment signal', async () => {
+    const { WebConsoleProductionActivationError, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      deploymentSignal: {
+        httpHost: '0.0.0.0',
+        authMethods: ['github'],
+      },
+      opaqueValueHmacKey: Buffer.alloc(32, 31),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toBeInstanceOf(WebConsoleProductionActivationError);
+    await expect(new WebConsoleRegistrar({
+      activationProfile: 'development',
+      deploymentSignal: {
+        httpHost: '0.0.0.0',
+        authMethods: ['local-password'],
+      },
+      opaqueValueHmacKey: Buffer.alloc(32, 31),
+      registerCleanup: false,
+    }).bootstrapAndRegister(new TestContainer())).rejects.toMatchObject({
+      failures: expect.arrayContaining([
+        expect.objectContaining({ code: 'database_required' }),
       ]),
     });
   });

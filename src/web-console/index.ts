@@ -8,6 +8,7 @@ export * from './lifecycle/index.js';
 export * from './auth/index.js';
 export * from './services/index.js';
 export * from './modules/index.js';
+export * from './WebConsoleActivationProfile.js';
 export * from './WebConsoleProductionActivation.js';
 export * from './WebConsoleReplicaIdentity.js';
 export * from './WebConsoleRegistrar.js';
