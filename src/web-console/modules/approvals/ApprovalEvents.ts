@@ -1,3 +1,6 @@
+import { sessionActivityEvents } from '../../../database/schema/index.js';
+import type { DatabaseInstance } from '../../../database/connection.js';
+import { withSystemContext } from '../../../database/admin.js';
 import type { ConsoleApprovalScope, ConsoleApprovalStatus } from './ApprovalDtos.js';
 
 export interface SessionApprovalDecisionEvent {
@@ -24,5 +27,25 @@ export class InMemorySessionApprovalEventSink implements ISessionApprovalEventSi
 
   listEvents(): readonly SessionApprovalDecisionEvent[] {
     return [...this.events];
+  }
+}
+
+export class PostgresSessionApprovalEventSink implements ISessionApprovalEventSink {
+  constructor(private readonly db: DatabaseInstance) {}
+
+  async recordApprovalDecision(event: SessionApprovalDecisionEvent): Promise<void> {
+    await withSystemContext(this.db, async (tx) => {
+      await tx.insert(sessionActivityEvents).values({
+        userId: event.userId,
+        sessionId: event.sessionId,
+        occurredAt: event.occurredAt,
+        level: 'info',
+        subsystem: 'approvals',
+        event: event.type,
+        message: `Approval ${event.decision}`,
+        correlationId: null,
+        stableErrorCode: null,
+      });
+    });
   }
 }

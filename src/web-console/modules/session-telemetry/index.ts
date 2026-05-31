@@ -2,6 +2,7 @@ export { createSessionTelemetryModule } from './SessionTelemetryModule.js';
 export type { SessionTelemetryModuleOptions } from './SessionTelemetryModule.js';
 export {
   InMemoryOwnedActivityQuery,
+  PostgresOwnedActivityQuery,
 } from './OwnedActivityQuery.js';
 export {
   InMemoryOwnedMetricQuery,

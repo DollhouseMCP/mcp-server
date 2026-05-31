@@ -561,15 +561,11 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container)).rejects.toMatchObject({
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'approvals_sessionApprovalStore_not_production_ready' }),
-        expect.objectContaining({ code: 'approvals_sessionApprovalEventSink_not_production_ready' }),
         expect.objectContaining({ code: 'audit_approvalAuditQuery_not_production_ready' }),
         expect.objectContaining({ code: 'audit_authenticationAuditQuery_not_production_ready' }),
         expect.objectContaining({ code: 'executions_sessionExecutionReader_not_production_ready' }),
-        expect.objectContaining({ code: 'executions_sessionGatekeeperReader_not_production_ready' }),
         expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'operations_telemetryQuery_not_production_ready' }),
-        expect.objectContaining({ code: 'session-telemetry_ownedActivityQuery_not_production_ready' }),
         expect.objectContaining({ code: 'session-telemetry_ownedMetricQuery_not_production_ready' }),
       ]),
     });

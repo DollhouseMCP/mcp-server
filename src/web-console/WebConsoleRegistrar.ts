@@ -67,6 +67,7 @@ import { InMemoryPortfolioSyncJobStore } from './stores/InMemoryPortfolioSyncJob
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
+import { DatabaseConfirmationStore } from '../state/DatabaseConfirmationStore.js';
 import {
   InMemorySessionActivationStateAdapter,
   InMemorySessionActivationEventSink,
@@ -79,7 +80,9 @@ import {
 import {
   InMemorySessionApprovalEventSink,
   InMemorySessionApprovalStore,
+  ConfirmationSessionApprovalStore,
   GatekeeperSessionApprovalStore,
+  PostgresSessionApprovalEventSink,
   createApprovalModule,
   type ISessionApprovalEventSink,
   type SessionApprovalStore,
@@ -98,6 +101,7 @@ import {
   EmptySessionGatekeeperReader,
   GatekeeperSessionStateReader,
   InMemorySessionExecutionReader,
+  PostgresSessionGatekeeperReader,
   createExecutionModule,
   type SessionExecutionReader,
   type SessionGatekeeperReader,
@@ -125,6 +129,7 @@ import { createSecurityAdminModule } from './modules/security-admin/index.js';
 import {
   InMemoryOwnedActivityQuery,
   InMemoryOwnedMetricQuery,
+  PostgresOwnedActivityQuery,
   createSessionTelemetryModule,
   type IOwnedActivityQuery,
   type IOwnedMetricQuery,
@@ -382,12 +387,12 @@ export class WebConsoleRegistrar {
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
     const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container, database, this.options);
     const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
-    const sessionApprovalStore = resolveSessionApprovalStore(container, this.options);
-    const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, this.options);
+    const sessionApprovalStore = resolveSessionApprovalStore(container, database, this.options);
+    const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, database, this.options);
     const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
-    const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, this.options);
+    const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, database, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
-    const ownedActivityQuery = resolveOwnedActivityQuery(container, this.options);
+    const ownedActivityQuery = resolveOwnedActivityQuery(container, database, this.options);
     const ownedMetricQuery = resolveOwnedMetricQuery(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
@@ -1333,11 +1338,20 @@ function resolveSessionActivationEventSink(
 
 function resolveSessionApprovalStore(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): SessionApprovalStore {
   if (options.approvalStore !== undefined) return options.approvalStore ?? new InMemorySessionApprovalStore();
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore)) {
     return container.resolve<SessionApprovalStore>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore);
+  }
+  if (database) {
+    return new ConfirmationSessionApprovalStore(({ userId, sessionId }) => {
+      const auditResolver = container.hasRegistration('AuditHmacResolver')
+        ? container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver')
+        : undefined;
+      return new DatabaseConfirmationStore(database, userId, sessionId, auditResolver);
+    });
   }
   if (container.hasRegistration('gatekeeper')) {
     return new GatekeeperSessionApprovalStore(container.resolve<Gatekeeper>('gatekeeper'));
@@ -1347,6 +1361,7 @@ function resolveSessionApprovalStore(
 
 function resolveSessionApprovalEventSink(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): ISessionApprovalEventSink {
   if (options.approvalEventSink !== undefined) {
@@ -1355,6 +1370,7 @@ function resolveSessionApprovalEventSink(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink)) {
     return container.resolve<ISessionApprovalEventSink>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink);
   }
+  if (database) return new PostgresSessionApprovalEventSink(database);
   return new InMemorySessionApprovalEventSink();
 }
 
@@ -1373,6 +1389,7 @@ function resolveSessionExecutionReader(
 
 function resolveSessionGatekeeperReader(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): SessionGatekeeperReader {
   if (options.gatekeeperReader !== undefined) {
@@ -1381,6 +1398,7 @@ function resolveSessionGatekeeperReader(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader)) {
     return container.resolve<SessionGatekeeperReader>(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader);
   }
+  if (database) return new PostgresSessionGatekeeperReader(database);
   if (container.hasRegistration('gatekeeper')) {
     return new GatekeeperSessionStateReader(container.resolve<Gatekeeper>('gatekeeper'));
   }
@@ -1402,6 +1420,7 @@ function resolveTelemetryQuery(
 
 function resolveOwnedActivityQuery(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): IOwnedActivityQuery {
   if (options.ownedActivityQuery !== undefined) {
@@ -1410,6 +1429,7 @@ function resolveOwnedActivityQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery)) {
     return container.resolve<IOwnedActivityQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery);
   }
+  if (database) return new PostgresOwnedActivityQuery(database);
   return new InMemoryOwnedActivityQuery();
 }
 

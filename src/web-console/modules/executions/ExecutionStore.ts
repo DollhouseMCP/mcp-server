@@ -1,9 +1,13 @@
+import { and, eq } from 'drizzle-orm';
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
 import {
   PermissionLevel,
   type CliApprovalRecord,
   type ConfirmationRecord,
 } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
+import type { DatabaseInstance } from '../../../database/connection.js';
+import { withSystemContext } from '../../../database/admin.js';
+import { sessions } from '../../../database/schema/index.js';
 import type {
   GatekeeperConfirmationDto,
   GatekeeperPendingApprovalDto,
@@ -96,6 +100,37 @@ export class GatekeeperSessionStateReader implements SessionGatekeeperReader {
   }
 }
 
+export class PostgresSessionGatekeeperReader implements SessionGatekeeperReader {
+  constructor(private readonly db: DatabaseInstance) {}
+
+  async get(userId: string, sessionId: string): Promise<SessionGatekeeperDto> {
+    const rows = await withSystemContext(this.db, tx => tx
+      .select({
+        confirmations: sessions.confirmations,
+        cliApprovals: sessions.cliApprovals,
+        permissionPromptActive: sessions.permissionPromptActive,
+      })
+        .from(sessions)
+        .where(and(eq(sessions.userId, userId), eq(sessions.sessionId, sessionId)))
+        .limit(1));
+    const row = rows.at(0);
+    if (!row) return emptyGatekeeperState(sessionId);
+    const confirmations = confirmationEntries(row.confirmations).map(toConfirmationDto);
+    const retainedApprovals = approvalEntries(row.cliApprovals);
+    const pendingApprovals = retainedApprovals.filter(isPendingApproval).map(toPendingApprovalDto);
+    return {
+      session_id: sessionId,
+      permission_prompt_active: row.permissionPromptActive,
+      confirmation_count: confirmations.length,
+      pending_approval_count: pendingApprovals.length,
+      retained_approval_count: retainedApprovals.length,
+      client: null,
+      confirmations,
+      pending_approvals: pendingApprovals,
+    };
+  }
+}
+
 function emptyGatekeeperState(sessionId: string): SessionGatekeeperDto {
   return {
     session_id: sessionId,
@@ -159,4 +194,55 @@ function toPendingApprovalDto(record: CliApprovalRecord): GatekeeperPendingAppro
     expires_at: new Date(new Date(record.requestedAt).getTime() + (record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS))
       .toISOString(),
   };
+}
+
+function confirmationEntries(value: unknown): ConfirmationRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(entry => {
+    if (!isEntry(entry)) return [];
+    const record = entry[1];
+    return isConfirmationRecord(record) ? [record] : [];
+  });
+}
+
+function approvalEntries(value: unknown): CliApprovalRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(entry => {
+    if (!isEntry(entry)) return [];
+    const record = entry[1];
+    return isCliApprovalRecord(record) ? [record] : [];
+  });
+}
+
+function isEntry(value: unknown): value is readonly [string, unknown] {
+  return Array.isArray(value) && value.length === 2 && typeof value[0] === 'string';
+}
+
+function isConfirmationRecord(value: unknown): value is ConfirmationRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<ConfirmationRecord>;
+  return typeof record.operation === 'string' &&
+    typeof record.confirmedAt === 'string' &&
+    (record.permissionLevel === PermissionLevel.CONFIRM_SESSION ||
+      record.permissionLevel === PermissionLevel.CONFIRM_SINGLE_USE) &&
+    typeof record.useCount === 'number';
+}
+
+function isCliApprovalRecord(value: unknown): value is CliApprovalRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<CliApprovalRecord>;
+  return typeof record.requestId === 'string' &&
+    typeof record.toolName === 'string' &&
+    typeof record.requestedAt === 'string' &&
+    typeof record.riskLevel === 'string' &&
+    typeof record.riskScore === 'number' &&
+    typeof record.irreversible === 'boolean' &&
+    typeof record.denyReason === 'string' &&
+    (record.scope === 'single' || record.scope === 'tool_session');
+}
+
+function isPendingApproval(record: CliApprovalRecord): boolean {
+  if (record.approvedAt || record.deniedAt || record.expiredAt || record.cancelledAt || record.consumed) return false;
+  const expiresAt = new Date(record.requestedAt).getTime() + (record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS);
+  return expiresAt > Date.now();
 }

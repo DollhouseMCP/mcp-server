@@ -551,6 +551,39 @@ export const sessionActivationEvents = pgTable('session_activation_events', {
   index('idx_session_activation_events_session').on(table.sessionId, table.occurredAt),
 ]);
 
+export type SessionActivityLevel = 'debug' | 'info' | 'warn' | 'error';
+
+export const sessionActivityEvents = pgTable('session_activity_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  level: text('level').$type<SessionActivityLevel>().notNull(),
+  subsystem: text('subsystem').notNull(),
+  event: text('event').notNull(),
+  message: text('message'),
+  correlationId: uuid('correlation_id'),
+  stableErrorCode: text('stable_error_code'),
+}, (table) => [
+  check('session_activity_events_level_check', sql`${table.level} IN ('debug', 'info', 'warn', 'error')`),
+  check('session_activity_events_shape_check', sql`
+    btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.subsystem}) <> ''
+    AND char_length(${table.subsystem}) <= 80
+    AND btrim(${table.event}) <> ''
+    AND char_length(${table.event}) <= 160
+    AND (${table.message} IS NULL OR char_length(${table.message}) <= 500)
+    AND (${table.stableErrorCode} IS NULL OR (
+      btrim(${table.stableErrorCode}) <> ''
+      AND char_length(${table.stableErrorCode}) <= 100
+    ))
+  `),
+  index('idx_session_activity_events_user_session').on(table.userId, table.sessionId, table.occurredAt),
+  index('idx_session_activity_events_session').on(table.sessionId, table.occurredAt),
+  index('idx_session_activity_events_event').on(table.event, table.occurredAt),
+]);
+
 export const runtimeControlCommands = pgTable('runtime_control_commands', {
   commandId: uuid('command_id').primaryKey().defaultRandom(),
   kind: text('kind').notNull(),
