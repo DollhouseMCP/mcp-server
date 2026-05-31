@@ -165,7 +165,11 @@ import {
   resolveWebConsoleActivationProfile,
   type WebConsoleDeploymentSignal,
 } from './WebConsoleActivationProfile.js';
-import { createConsoleBffAuthModule, type IConsoleOAuthClient } from './auth/index.js';
+import {
+  EmbeddedAsConsoleOAuthClient,
+  createConsoleBffAuthModule,
+  type IConsoleOAuthClient,
+} from './auth/index.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -1682,6 +1686,14 @@ function resolveConsoleOAuthClient(
   if (options.consoleOAuthClient !== undefined) return options.consoleOAuthClient;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient)) {
     return container.resolve<IConsoleOAuthClient>(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient);
+  }
+  if (options.publicBaseUrl) {
+    return markWebConsoleProductionAdapter(new EmbeddedAsConsoleOAuthClient({
+      publicBaseUrl: options.publicBaseUrl,
+    }), {
+      productionReady: true,
+      adapterName: 'EmbeddedAsConsoleOAuthClient',
+    });
   }
   return null;
 }

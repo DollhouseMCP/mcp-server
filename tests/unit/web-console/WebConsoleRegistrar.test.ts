@@ -523,11 +523,12 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
-  it('documents the full-surface hosted/shared production dependency inventory', async () => {
+  it('proves the full-surface hosted/shared production dependency inventory can close locally', async () => {
     const container = new TestContainer();
     const {
       WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES,
       WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
     } = await import('../../../src/web-console/index.js');
     const database = {
       execute: jest.fn()
@@ -540,9 +541,11 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SigningKeyStore', productionAdapter());
     container.seed('RateLimitStore', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    container.seed('WebConsoleAccountAllowlistAuthorityCutoverComplete', true);
 
-    await expect(new WebConsoleRegistrar({
+    const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
+      enableApiV1Mount: true,
       enableAccountAllowlistRoutes: true,
       productionDatabaseVerification: {
         expectedDatabaseName: 'dollhouse_prod',
@@ -555,15 +558,27 @@ describe('WebConsoleRegistrar', () => {
         key: Buffer.alloc(32, 47),
       },
       authStorage: productionAdapter(),
-      consoleOAuthClient: productionAdapter(),
+      githubIntegrationProviderConfig: {
+        clientId: 'github-client-id',
+        clientSecret: 'github-client-secret',
+      },
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
       registerCleanup: false,
-    }).bootstrapAndRegister(container)).rejects.toMatchObject({
-      failures: expect.arrayContaining([
-        expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
-      ]),
-    });
+    }).bootstrapAndRegister(container);
+
+    expect(composition.storageBackend).toBe('postgres');
+    expect(composition.routesMounted).toBe(false);
+    expect(composition.apiV1Mount).not.toBeNull();
+    expect(composition.consoleOAuthClient?.constructor.name).toBe('EmbeddedAsConsoleOAuthClient');
+    expect(composition.githubIntegrationProvider?.constructor.name).toBe('GitHubAppIntegrationProvider');
+    expect(composition.accountInviteIssuer?.constructor.name).toBe('PostgresConsoleAccountInviteIssuer');
+    expect(composition.oauthGrantRevocationService?.constructor.name)
+      .toBe('ConsoleOAuthGrantRevocationService');
+    expect(composition.portfolioSyncWorker?.isRunning()).toBe(true);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider))
+      .toBe(composition.githubIntegrationProvider);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount)).toBe(composition.apiV1Mount);
+    expect(database.execute).toHaveBeenCalledTimes(2);
   });
 
   it('accepts hosted/shared activation only when production dependencies are explicit', async () => {

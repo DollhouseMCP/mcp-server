@@ -72,6 +72,7 @@ import {
   type RotationRequestContext,
 } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import { EMBEDDED_AS_CONSOLE_CLIENT_ID } from './ConsoleOAuthClientConstants.js';
 import { EmbeddedASBootstrap } from './EmbeddedASBootstrap.js';
 import { EmbeddedASAdmin } from './EmbeddedASAdmin.js';
 import { EmbeddedASOidcAccount } from './EmbeddedASOidcAccount.js';
@@ -815,6 +816,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           response_types: ['code'],
           redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
           application_type: 'native',
+          id_token_signed_response_alg: 'ES256',
+        },
+        {
+          client_id: EMBEDDED_AS_CONSOLE_CLIENT_ID,
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+          redirect_uris: [
+            joinUrl(this.publicBaseUrl, '/api/v1/auth/callback'),
+            joinUrl(this.publicBaseUrl, '/api/v1/auth/step-up/callback'),
+          ],
           id_token_signed_response_alg: 'ES256',
         },
       ],
