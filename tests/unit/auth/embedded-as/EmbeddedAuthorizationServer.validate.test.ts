@@ -20,9 +20,17 @@ import * as path from 'node:path';
 import os from 'node:os';
 import { SignJWT, importJWK } from 'jose';
 import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
+import { loadPublicSigningJwksFromStore } from '../../../../src/auth/embedded-as/EmbeddedASTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
-import { loadOrGenerateSigningJwks } from '../../../../src/auth/embedded-as/persistKeys.js';
+import {
+  loadOrGenerateSigningJwks,
+  rotateSigningKeyViaStore,
+} from '../../../../src/auth/embedded-as/persistKeys.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
+
+const UNKNOWN_KEY_ID_REASON = 'unknown key id';
+const LOCAL_USER_SUB = 'local-user';
 
 interface TokenOpts {
   alg?: string;
@@ -54,8 +62,9 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     // same file when ensureInitialized runs.
     const keyset = await loadOrGenerateSigningJwks(keyFilePath);
     kid = keyset.kid;
-    const privateJwk = keyset.jwks.keys[0]!;
-    signKey = (await importJWK(privateJwk, 'ES256')) as CryptoKey;
+    const privateJwk = keyset.jwks.keys.at(0);
+    if (!privateJwk) throw new Error('test signing key was not generated');
+    signKey = await importJWK(privateJwk, 'ES256');
 
     as = new EmbeddedAuthorizationServer({
       publicBaseUrl: ISSUER,
@@ -80,8 +89,11 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       alg: opts.alg ?? 'ES256',
       typ: opts.typ ?? 'at+jwt',
     };
-    if (opts.kid !== undefined) protectedHeader.kid = opts.kid;
-    else if (opts.kid === undefined && !('kid' in opts)) protectedHeader.kid = kid;
+    if (Object.hasOwn(opts, 'kid')) {
+      if (opts.kid !== undefined) protectedHeader.kid = opts.kid;
+    } else {
+      protectedHeader.kid = kid;
+    }
     if (opts.crit) protectedHeader.crit = opts.crit;
 
     // scope: 'mcp' by default; null suppresses the claim entirely so the
@@ -96,7 +108,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       .setProtectedHeader(protectedHeader as Parameters<SignJWT['setProtectedHeader']>[0])
       .setIssuer(opts.iss ?? ISSUER)
       .setAudience(opts.aud ?? RESOURCE)
-      .setSubject(opts.sub ?? 'local-user')
+      .setSubject(opts.sub ?? LOCAL_USER_SUB)
       .setIssuedAt(now)
       .setExpirationTime(opts.exp ?? now + 3600);
     return jwt.sign(signKey);
@@ -115,7 +127,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       // dropped fields would otherwise pass this test silently.
       // AuthClaims fields per src/auth/IAuthProvider.ts: sub,
       // displayName, email, tenantId, scopes, roles, exp.
-      expect(result.claims.sub).toBe('local-user');
+      expect(result.claims.sub).toBe(LOCAL_USER_SUB);
       expect(typeof result.claims.exp).toBe('number');
       // scopes derived from the `scope` claim — `mcp` must be there
       // since validate() rejected the no-mcp-scope path otherwise.
@@ -198,7 +210,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       .setProtectedHeader({ alg: 'ES256', typ: 'at+jwt', kid })
       .setIssuer(ISSUER)
       .setAudience(RESOURCE)
-      .setSubject('local-user')
+      .setSubject(LOCAL_USER_SUB)
       .setIssuedAt(now)
       .setExpirationTime(now + 3600)
       .sign(signKey);
@@ -206,7 +218,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     const result = await as.validate(richToken);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.claims.sub).toBe('local-user');
+    expect(result.claims.sub).toBe(LOCAL_USER_SUB);
     expect(result.claims.displayName).toBe('Alice Admin');
     expect(result.claims.roles).toEqual(['admin', 'auditor']);
     expect(result.claims.email).toBe('alice@example.com');
@@ -234,7 +246,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       .setProtectedHeader({ alg: 'ES256', typ: 'at+jwt' })
       .setIssuer(ISSUER)
       .setAudience(RESOURCE)
-      .setSubject('local-user')
+      .setSubject(LOCAL_USER_SUB)
       .setIssuedAt(now)
       .setExpirationTime(now + 3600)
       .sign(signKey);
@@ -361,7 +373,7 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
       'x-unsupported-extension': 'malicious',
     };
     const payload = {
-      iss: ISSUER, aud: RESOURCE, sub: 'local-user',
+      iss: ISSUER, aud: RESOURCE, sub: LOCAL_USER_SUB,
       iat: now, exp: now + 3600,
     };
     const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
@@ -433,3 +445,67 @@ describe('EmbeddedAuthorizationServer.validate — RFC 9068 hardening', () => {
     expect(result.ok).toBe(false);
   });
 });
+
+describe('EmbeddedAuthorizationServer store-backed live signing keys', () => {
+  const ISSUER = 'http://127.0.0.1:65531';
+
+  it('observes JWKS rotation and retirement without process restart', async () => {
+    const signingKeyStore = new InMemorySigningKeyStore();
+    const server = new EmbeddedAuthorizationServer({
+      publicBaseUrl: ISSUER,
+      mcpPath: '/mcp',
+      methods: [new TrivialConsentMethod({ defaultSubject: 'store-backed-test' })],
+      storage: new InMemoryAuthStorageLayer(),
+      signingKeyStore,
+    });
+    const firstToken = await server.issue('alice');
+    const firstKid = tokenKid(firstToken);
+
+    await expect(server.validate(firstToken)).resolves.toMatchObject({ ok: true });
+    await rotateSigningKeyViaStore(signingKeyStore);
+    const secondToken = await server.issue('alice');
+    const secondKid = tokenKid(secondToken);
+
+    expect(secondKid).not.toBe(firstKid);
+    await expect(server.validate(firstToken)).resolves.toMatchObject({ ok: true });
+    await expect(server.validate(secondToken)).resolves.toMatchObject({ ok: true });
+    const publishedAfterRotate = await loadPublicSigningJwksFromStore(signingKeyStore);
+    expect(publishedAfterRotate.keys.map(key => key.kid)).toEqual(
+      expect.arrayContaining([firstKid, secondKid]),
+    );
+    for (const key of publishedAfterRotate.keys) {
+      expect(key).not.toHaveProperty('d');
+    }
+
+    await signingKeyStore.retire(firstKid);
+    await expect(server.validate(firstToken)).resolves.toEqual({
+      ok: false,
+      reason: UNKNOWN_KEY_ID_REASON,
+    });
+    await expect(server.validate(secondToken)).resolves.toMatchObject({ ok: true });
+    await expect(loadPublicSigningJwksFromStore(signingKeyStore)).resolves.toEqual({
+      keys: [expect.objectContaining({ kid: secondKid })],
+    });
+
+    const active = await signingKeyStore.getActive('jwks');
+    if (!active) {
+      throw new Error('expected active JWKS signing key');
+    }
+    expect(active.kid).toBe(secondKid);
+    await signingKeyStore.retire(active.kid);
+
+    await expect(server.validate(secondToken)).resolves.toEqual({
+      ok: false,
+      reason: UNKNOWN_KEY_ID_REASON,
+    });
+    await expect(loadPublicSigningJwksFromStore(signingKeyStore)).resolves.toEqual({ keys: [] });
+    await expect(server.issue('alice')).rejects.toThrow('No active JWKS signing key');
+  });
+});
+
+function tokenKid(token: string): string {
+  const [headerB64] = token.split('.');
+  const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')) as { kid?: string };
+  expect(header.kid).toEqual(expect.any(String));
+  return header.kid ?? '';
+}

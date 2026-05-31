@@ -85,6 +85,7 @@ import {
   DEFAULT_CLIENT_ID,
   EmbeddedASTokens,
   importSigningKeys,
+  loadPublicSigningJwksFromStore,
 } from './EmbeddedASTokens.js';
 
 /**
@@ -293,6 +294,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       () => this.ensureInitialized(),
       () => this.issuer,
       () => this.resource,
+      this.signingKeyStore ?? undefined,
     );
     this.oidcAccount = new EmbeddedASOidcAccount(this.methods, this.storage);
   }
@@ -392,6 +394,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         }
       })();
     });
+
+    const signingKeyStore = this.signingKeyStore;
+    if (signingKeyStore) {
+      router.get('/jwks', (_req, res, next) => {
+        void (async () => {
+          try {
+            await this.ensureInitialized();
+            res.json(await loadPublicSigningJwksFromStore(signingKeyStore));
+          } catch (err) {
+            next(err);
+          }
+        })();
+      });
+    }
 
     // Bootstrap gate (must-fix #22 / spec L923). When configured methods
     // include a multi-user identity provider, refuse all auth-flow
@@ -925,7 +941,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // window. A truly-atomic solution would require an upstream
       // contract change in oidc-provider; out of §8.1 scope.
       rotateRefreshToken: true,
-      issueRefreshToken: async (_ctx, client, code) => {
+      issueRefreshToken: (_ctx, client, code) => {
         // Only issue a refresh token when offline_access was granted.
         return client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access');
       },
