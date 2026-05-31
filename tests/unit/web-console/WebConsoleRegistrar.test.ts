@@ -451,13 +451,12 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'sessionStore_not_production_ready' }),
         expect.objectContaining({ code: 'authStorage_missing' }),
         expect.objectContaining({ code: 'secretEncryption_missing' }),
-        expect.objectContaining({ code: 'protectedCorrelationRateLimiter_missing' }),
-        expect.objectContaining({ code: 'protectedCorrelationRateLimitStore_missing' }),
-        expect.objectContaining({ code: 'oauthGrantRevocationService_missing' }),
         expect.objectContaining({ code: 'consoleOAuthClient_missing' }),
-        expect.objectContaining({ code: 'accountInviteIssuer_missing' }),
-        expect.objectContaining({ code: 'githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'integrationPublicBaseUrl_missing' }),
+        expect.objectContaining({ code: 'accountAdmin_accountInviteIssuer_missing' }),
+        expect.objectContaining({ code: 'accountAdmin_oauthGrantRevocationService_missing' }),
+        expect.objectContaining({ code: 'accountAdmin_protectedCorrelationRateLimiter_missing' }),
+        expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
       ]),
     });
   });
@@ -679,6 +678,43 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
+  it('omits selected route modules before hosted/shared production dependency checks', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const {
+      WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
+      productionDatabaseReady,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      omittedRouteModuleIds: WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
+      productionDatabaseReadiness: productionDatabaseReady(),
+      productionReadiness: {
+        portfolioSyncWorkerReady: true,
+      },
+      opaqueValueHmacKey: Buffer.alloc(32, 43),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 44),
+      },
+      authStorage: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    const registeredIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
+    expect([...registeredIds].sort()).toEqual(['auth', 'health']);
+    expect(composition.apiV1Mount).toBeNull();
+    expect(composition.routesMounted).toBe(false);
+  });
+
   it('refuses descriptor api mount outside the hosted/shared activation gate', async () => {
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
@@ -880,7 +916,12 @@ describe('WebConsoleRegistrar', () => {
       createIntegrationModule,
       createOperationsModule,
       createPortfolioModule,
+      createRuntimeSessionModule,
+      createSecurityAdminModule,
       createSessionTelemetryModule,
+      createSelfSecurityModule,
+      createSelfServiceModule,
+      createApprovalModule,
       createProductionRouteDependencies,
       registeredRouteModuleIds,
     } = await import('../../../src/web-console/index.js');
@@ -899,6 +940,11 @@ describe('WebConsoleRegistrar', () => {
       portfolioStore,
       activationState: productionAdapter(),
     }));
+    registry.register(createApprovalModule({
+      runtimeStore,
+      approvalStore: productionAdapter(),
+      eventSink: productionAdapter(),
+    }));
     registry.register(createAuditModule({
       adminAuditQuery: productionAdapter(),
       approvalAuditQuery: productionAdapter(),
@@ -908,6 +954,24 @@ describe('WebConsoleRegistrar', () => {
       runtimeStore,
       executionReader: new InMemorySessionExecutionReader(),
       gatekeeperReader: productionAdapter(),
+    }));
+    registry.register(createRuntimeSessionModule({
+      runtimeStore,
+      accountAdminStore: productionAdapter(),
+    }));
+    registry.register(createSecurityAdminModule({
+      signingKeyStore: productionAdapter(),
+      factorStore: productionAdapter(),
+      invalidationStore: productionAdapter(),
+      authPolicyStore: productionAdapter(),
+    }));
+    registry.register(createSelfServiceModule({
+      accountAdminStore: productionAdapter(),
+      userConfigStore: productionAdapter(),
+    }));
+    registry.register(createSelfSecurityModule({
+      factorStore: productionAdapter(),
+      sessionStore: productionAdapter(),
     }));
     registry.register(createIntegrationModule({
       integrationStore: productionAdapter(),
@@ -950,14 +1014,36 @@ describe('WebConsoleRegistrar', () => {
       stores: {
         portfolioStore,
         portfolioSyncJobStore: new InMemoryPortfolioSyncJobStore(),
+        accountAdminStore: productionAdapter(),
+        accountAllowlistStore: productionAdapter(),
+        sessionStore: productionAdapter(),
+        loginTransactionStore: productionAdapter(),
+        idempotencyStore: productionAdapter(),
+        factorStore: productionAdapter(),
+        securityInvalidationStore: productionAdapter(),
+        runtimeSessionControlStore: runtimeStore,
+        identityResolver: productionAdapter(),
       } as Parameters<typeof createProductionRouteDependencies>[0]['stores'],
       services: {
         accountInviteIssuer: productionAdapter(),
+        oauthGrantRevocationService: productionAdapter(),
+        protectedCorrelationRateLimiter: productionAdapter(),
+        protectedCorrelationRateLimitStore: productionAdapter(),
+        adminAuditQuery: productionAdapter(),
         approvalAuditQuery: productionAdapter(),
         authenticationAuditQuery: productionAdapter(),
         githubIntegrationProvider: productionAdapter(),
         ownedActivityQuery: new InMemoryOwnedActivityQuery(),
         ownedMetricQuery: new InMemoryOwnedMetricQuery(),
+        accountAdminMutationTransactionRunner: productionAdapter(),
+        operatorConfigStore: productionAdapter(),
+        signingKeyStore: productionAdapter(),
+        authPolicyStore: productionAdapter(),
+        userConfigStore: productionAdapter(),
+        sessionActivationStateAdapter: productionAdapter(),
+        sessionActivationEventSink: productionAdapter(),
+        sessionApprovalStore: productionAdapter(),
+        sessionApprovalEventSink: productionAdapter(),
         sessionExecutionReader: new InMemorySessionExecutionReader(),
         sessionGatekeeperReader: productionAdapter(),
         telemetryQuery: new InMemoryConsoleTelemetryQuery(),

@@ -185,11 +185,32 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
+const SECURITY_ADMIN_MODULE_ID = 'security-admin';
+
+export const WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS = [
+  'accountAdmin',
+  'activations',
+  'approvals',
+  'audit',
+  'executions',
+  'integrations',
+  'operations',
+  'portfolio',
+  'runtimeSessions',
+  SECURITY_ADMIN_MODULE_ID,
+  'selfSecurity',
+  'selfService',
+  'session-telemetry',
+] as const;
+
+export type WebConsoleOmittableRouteModuleId = typeof WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS[number];
+
 export interface WebConsoleRegistrarOptions {
   readonly activationProfile?: WebConsoleActivationProfile;
   readonly deploymentSignal?: WebConsoleDeploymentSignal;
   readonly productionReadiness?: WebConsoleProductionReadinessOptions;
   readonly productionDatabaseReadiness?: IProductionDatabaseReadiness | null;
+  readonly omittedRouteModuleIds?: readonly WebConsoleOmittableRouteModuleId[];
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
   readonly cleanupIntervalMs?: number;
@@ -381,25 +402,25 @@ export class WebConsoleRegistrar {
         now: this.options.now,
       }));
     }
-    registry.register(createAuditModule({
+    registerRouteModule(registry, this.options, 'audit', () => createAuditModule({
       adminAuditQuery,
       approvalAuditQuery,
       authenticationAuditQuery,
     }));
-    registry.register(createOperationsModule({
+    registerRouteModule(registry, this.options, 'operations', () => createOperationsModule({
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
       operatorConfigStore,
       now: this.options.now,
     }));
-    registry.register(createSecurityAdminModule({
+    registerRouteModule(registry, this.options, SECURITY_ADMIN_MODULE_ID, () => createSecurityAdminModule({
       signingKeyStore,
       factorStore: stores.factorStore,
       invalidationStore: stores.securityInvalidationStore,
       authPolicyStore,
       now: this.options.now,
     }));
-    registry.register(createAccountAdminModule({
+    registerRouteModule(registry, this.options, 'accountAdmin', () => createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
       sessionStore: stores.sessionStore,
@@ -412,37 +433,37 @@ export class WebConsoleRegistrar {
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
     }));
-    registry.register(createRuntimeSessionModule({
+    registerRouteModule(registry, this.options, 'runtimeSessions', () => createRuntimeSessionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       accountAdminStore: stores.accountAdminStore,
       now: this.options.now,
     }));
-    registry.register(createActivationModule({
+    registerRouteModule(registry, this.options, 'activations', () => createActivationModule({
       runtimeStore: stores.runtimeSessionControlStore,
       portfolioStore: stores.portfolioStore,
       activationState: sessionActivationStateAdapter,
       eventSink: sessionActivationEventSink,
       now: this.options.now,
     }));
-    registry.register(createApprovalModule({
+    registerRouteModule(registry, this.options, 'approvals', () => createApprovalModule({
       runtimeStore: stores.runtimeSessionControlStore,
       approvalStore: sessionApprovalStore,
       eventSink: sessionApprovalEventSink,
       now: this.options.now,
     }));
-    registry.register(createExecutionModule({
+    registerRouteModule(registry, this.options, 'executions', () => createExecutionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       executionReader: sessionExecutionReader,
       gatekeeperReader: sessionGatekeeperReader,
       now: this.options.now,
     }));
-    registry.register(createSessionTelemetryModule({
+    registerRouteModule(registry, this.options, 'session-telemetry', () => createSessionTelemetryModule({
       runtimeStore: stores.runtimeSessionControlStore,
       ownedActivityQuery,
       ownedMetricQuery,
       now: this.options.now,
     }));
-    registry.register(createIntegrationModule({
+    registerRouteModule(registry, this.options, 'integrations', () => createIntegrationModule({
       integrationStore: stores.integrationStore,
       loginTransactions: stores.loginTransactionStore,
       opaqueValues,
@@ -451,18 +472,18 @@ export class WebConsoleRegistrar {
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
-    registry.register(createPortfolioModule({
+    registerRouteModule(registry, this.options, 'portfolio', () => createPortfolioModule({
       portfolioStore: stores.portfolioStore,
       integrationStore: stores.integrationStore,
       syncJobStore: stores.portfolioSyncJobStore,
       now: this.options.now,
     }));
-    registry.register(createSelfServiceModule({
+    registerRouteModule(registry, this.options, 'selfService', () => createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
       now: this.options.now,
     }));
-    registry.register(createSelfSecurityModule({
+    registerRouteModule(registry, this.options, 'selfSecurity', () => createSelfSecurityModule({
       factorStore: stores.factorStore,
       sessionStore: stores.sessionStore,
       now: this.options.now,
@@ -474,17 +495,30 @@ export class WebConsoleRegistrar {
       storageBackend: database ? 'postgres' : 'memory',
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       readiness: productionReadiness,
-      stores,
+      stores: createProductionCoreStores(stores),
       registeredRouteModuleIds: registeredRouteModuleIds(registry),
       routeDependencies: createProductionRouteDependencies({
         stores,
         services: {
           accountInviteIssuer,
+          oauthGrantRevocationService,
+          protectedCorrelationRateLimiter,
+          protectedCorrelationRateLimitStore,
+          adminAuditQuery,
           approvalAuditQuery,
           authenticationAuditQuery,
           githubIntegrationProvider,
           ownedActivityQuery,
           ownedMetricQuery,
+          accountAdminMutationTransactionRunner,
+          operatorConfigStore,
+          signingKeyStore,
+          authPolicyStore,
+          userConfigStore,
+          sessionActivationStateAdapter,
+          sessionActivationEventSink,
+          sessionApprovalStore,
+          sessionApprovalEventSink,
           sessionExecutionReader,
           sessionGatekeeperReader,
           telemetryQuery,
@@ -493,24 +527,10 @@ export class WebConsoleRegistrar {
       services: {
         authStorage,
         secretEncryption,
-        protectedCorrelationRateLimiter,
-        protectedCorrelationRateLimitStore,
-        oauthGrantRevocationService,
         consoleOAuthClient,
-        accountInviteIssuer,
-        githubIntegrationProvider,
         integrationPublicBaseUrl,
         adminAuditWriter,
-        adminAuditQuery,
-        accountAdminMutationTransactionRunner,
-        sessionActivationStateAdapter,
-        sessionActivationEventSink,
-        sessionApprovalStore,
-        sessionApprovalEventSink,
-        operatorConfigStore,
-        signingKeyStore,
         authPolicyStore,
-        userConfigStore,
       },
     });
     const apiV1Mount = createApiV1Mount({
@@ -601,25 +621,109 @@ export function registeredRouteModuleIds(registry: ConsoleModuleRegistry): reado
   return [...new Set(registry.createRouteManifest().routes.map(route => route.moduleId))];
 }
 
+function registerRouteModule(
+  registry: ConsoleModuleRegistry,
+  options: WebConsoleRegistrarOptions,
+  moduleId: WebConsoleOmittableRouteModuleId,
+  createModule: () => Parameters<ConsoleModuleRegistry['register']>[0],
+): void {
+  if (isRouteModuleOmitted(options, moduleId)) return;
+  registry.register(createModule());
+}
+
+function isRouteModuleOmitted(
+  options: Pick<WebConsoleRegistrarOptions, 'omittedRouteModuleIds'>,
+  moduleId: WebConsoleOmittableRouteModuleId,
+): boolean {
+  return new Set(options.omittedRouteModuleIds ?? []).has(moduleId);
+}
+
+function createProductionCoreStores(stores: ConsoleStoreSet): Readonly<Record<string, unknown>> {
+  return {
+    sessionStore: stores.sessionStore,
+    loginTransactionStore: stores.loginTransactionStore,
+    idempotencyStore: stores.idempotencyStore,
+    securityInvalidationStore: stores.securityInvalidationStore,
+    identityResolver: stores.identityResolver,
+  };
+}
+
 export function createProductionRouteDependencies(options: {
   readonly stores: ConsoleStoreSet;
   readonly services: {
     readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
+    readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
+    readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+    readonly protectedCorrelationRateLimitStore: IRateLimitStore | null;
+    readonly adminAuditQuery: IAdminAuditQuery;
     readonly approvalAuditQuery: IApprovalAuditQuery;
     readonly authenticationAuditQuery: IAuthenticationAuditQuery;
     readonly githubIntegrationProvider: IGitHubIntegrationProvider | null;
     readonly ownedActivityQuery: IOwnedActivityQuery;
     readonly ownedMetricQuery: IOwnedMetricQuery;
+    readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
+    readonly operatorConfigStore: IOperatorConfigStore;
+    readonly signingKeyStore: ISigningKeyStore;
+    readonly authPolicyStore: IConsoleAuthPolicyStore;
+    readonly userConfigStore: IUserConfigStore;
+    readonly sessionActivationStateAdapter: ISessionActivationStateAdapter;
+    readonly sessionActivationEventSink: ISessionActivationEventSink;
+    readonly sessionApprovalStore: SessionApprovalStore;
+    readonly sessionApprovalEventSink: ISessionApprovalEventSink;
     readonly sessionExecutionReader: SessionExecutionReader;
     readonly sessionGatekeeperReader: SessionGatekeeperReader;
     readonly telemetryQuery: IConsoleTelemetryQuery;
   };
 }): readonly WebConsoleProductionRouteDependency[] {
   return [
+    routeDependency('accountAdmin', 'accountAdminStore', options.stores.accountAdminStore,
+      'accountAdmin routes require production account administration persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('accountAdmin', 'accountAllowlistStore', options.stores.accountAllowlistStore,
+      'accountAdmin allowlist routes require production account allowlist persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('accountAdmin', 'accountAdminMutationTransactionRunner', options.services.accountAdminMutationTransactionRunner,
+      'accountAdmin mutation routes require a production transaction runner or must be omitted before hosted/shared mount.'),
     routeDependency('accountAdmin', 'accountInviteIssuer', options.services.accountInviteIssuer,
       'accountAdmin invite routes require a production invite issuer or must be omitted before hosted/shared mount.'),
+    routeDependency('accountAdmin', 'oauthGrantRevocationService', options.services.oauthGrantRevocationService,
+      'accountAdmin credential revocation routes require a production OAuth grant revocation service or must be omitted before hosted/shared mount.'),
+    routeDependency('accountAdmin', 'protectedCorrelationRateLimiter', options.services.protectedCorrelationRateLimiter,
+      'accountAdmin protected correlation routes require a production protected-correlation rate limiter or must be omitted before hosted/shared mount.'),
+    routeDependency('accountAdmin', 'protectedCorrelationRateLimitStore', options.services.protectedCorrelationRateLimitStore,
+      'accountAdmin protected correlation routes require a production rate-limit store or must be omitted before hosted/shared mount.'),
+    routeDependency('runtimeSessions', 'runtimeSessionControlStore', options.stores.runtimeSessionControlStore,
+      'runtime session routes require production runtime-control persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('runtimeSessions', 'accountAdminStore', options.stores.accountAdminStore,
+      'runtime session account projections require production account administration persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('selfService', 'accountAdminStore', options.stores.accountAdminStore,
+      'self-service profile routes require production account administration persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('selfService', 'userConfigStore', options.services.userConfigStore,
+      'self-service settings routes require production user configuration persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('selfSecurity', 'factorStore', options.stores.factorStore,
+      'self-security factor routes require production factor persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('selfSecurity', 'sessionStore', options.stores.sessionStore,
+      'self-security session routes require production console-session persistence or must be omitted before hosted/shared mount.'),
+    routeDependency(SECURITY_ADMIN_MODULE_ID, 'signingKeyStore', options.services.signingKeyStore,
+      'security-admin signing-key routes require production signing-key persistence or must be omitted before hosted/shared mount.'),
+    routeDependency(SECURITY_ADMIN_MODULE_ID, 'factorStore', options.stores.factorStore,
+      'security-admin factor routes require production factor persistence or must be omitted before hosted/shared mount.'),
+    routeDependency(SECURITY_ADMIN_MODULE_ID, 'authPolicyStore', options.services.authPolicyStore,
+      'security-admin auth-policy routes require production auth-policy persistence or must be omitted before hosted/shared mount.'),
     routeDependency('activations', 'portfolioStore', options.stores.portfolioStore,
       'activation routes require production portfolio persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('activations', 'runtimeSessionControlStore', options.stores.runtimeSessionControlStore,
+      'activation routes require production runtime-control persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('activations', 'sessionActivationStateAdapter', options.services.sessionActivationStateAdapter,
+      'activation routes require a production activation-state adapter or must be omitted before hosted/shared mount.'),
+    routeDependency('activations', 'sessionActivationEventSink', options.services.sessionActivationEventSink,
+      'activation routes require a production activation-event sink or must be omitted before hosted/shared mount.'),
+    routeDependency('approvals', 'runtimeSessionControlStore', options.stores.runtimeSessionControlStore,
+      'approval routes require production runtime-control persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('approvals', 'sessionApprovalStore', options.services.sessionApprovalStore,
+      'approval routes require a production approval store or must be omitted before hosted/shared mount.'),
+    routeDependency('approvals', 'sessionApprovalEventSink', options.services.sessionApprovalEventSink,
+      'approval routes require a production approval-event sink or must be omitted before hosted/shared mount.'),
+    routeDependency('audit', 'adminAuditQuery', options.services.adminAuditQuery,
+      'audit routes require a production admin-audit query backend or must be omitted before hosted/shared mount.'),
     routeDependency('audit', 'approvalAuditQuery', options.services.approvalAuditQuery,
       'audit approval routes require a production approval-audit query backend or must be omitted before hosted/shared mount.'),
     routeDependency('audit', 'authenticationAuditQuery', options.services.authenticationAuditQuery,
@@ -628,12 +732,18 @@ export function createProductionRouteDependencies(options: {
       'execution routes require a production execution-state reader or must be omitted before hosted/shared mount.'),
     routeDependency('executions', 'sessionGatekeeperReader', options.services.sessionGatekeeperReader,
       'Gatekeeper execution routes require a production live Gatekeeper reader or must be omitted before hosted/shared mount.'),
+    routeDependency('integrations', 'integrationStore', options.stores.integrationStore,
+      'integration routes require production user-integration persistence or must be omitted before hosted/shared mount.'),
     routeDependency('integrations', 'githubIntegrationProvider', options.services.githubIntegrationProvider,
       'integration routes require a production GitHub provider or must be omitted before hosted/shared mount.'),
     routeDependency('operations', 'telemetryQuery', options.services.telemetryQuery,
       'operator telemetry routes require a production telemetry query backend or must be omitted before hosted/shared mount.'),
+    routeDependency('operations', 'operatorConfigStore', options.services.operatorConfigStore,
+      'operator configuration routes require production operator configuration persistence or must be omitted before hosted/shared mount.'),
     routeDependency('portfolio', 'portfolioStore', options.stores.portfolioStore,
       'portfolio routes require production portfolio persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('portfolio', 'integrationStore', options.stores.integrationStore,
+      'portfolio sync routes require production user-integration persistence or must be omitted before hosted/shared mount.'),
     routeDependency('portfolio', 'portfolioSyncJobStore', options.stores.portfolioSyncJobStore,
       'portfolio sync routes require production sync-job persistence or must be omitted before hosted/shared mount.'),
     routeDependency('session-telemetry', 'ownedActivityQuery', options.services.ownedActivityQuery,

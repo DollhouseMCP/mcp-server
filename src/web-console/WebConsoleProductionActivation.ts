@@ -130,11 +130,7 @@ export function assertWebConsoleProductionActivation(
 
   requirePresent(failures, 'authStorage', inputs.services.authStorage);
   requirePresent(failures, 'secretEncryption', inputs.services.secretEncryption);
-  requirePresent(failures, 'protectedCorrelationRateLimiter', inputs.services.protectedCorrelationRateLimiter);
-  requirePresent(failures, 'oauthGrantRevocationService', inputs.services.oauthGrantRevocationService);
   requirePresent(failures, 'consoleOAuthClient', inputs.services.consoleOAuthClient);
-  requirePresent(failures, 'accountInviteIssuer', inputs.services.accountInviteIssuer);
-  requirePresent(failures, 'githubIntegrationProvider', inputs.services.githubIntegrationProvider);
   requirePresent(failures, 'integrationPublicBaseUrl', inputs.services.integrationPublicBaseUrl);
 
   if (failures.length > 0) throw new WebConsoleProductionActivationError(failures);
