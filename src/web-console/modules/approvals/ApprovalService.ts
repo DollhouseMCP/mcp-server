@@ -1,5 +1,6 @@
 import type { CliApprovalRecord } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
 import type { ConsoleHandlerResult, ConsoleRequest } from '../../platform/ConsolePlatformTypes.js';
+import { requireConsoleRequestContext } from '../../platform/ConsoleRequestContext.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { ConsoleApprovalScope, ConsoleApprovalStatus, SessionApprovalDto, SessionApprovalListDto } from './ApprovalDtos.js';
@@ -58,7 +59,7 @@ export class ApprovalService {
         deniedAt: decidedAt,
       };
     await this.options.approvalStore.save(actor.userId, sessionId, approvalId, updated);
-    await this.recordEvent(actor.userId, sessionId, approvalId, decision, parsed.scope);
+    await this.recordEvent(actor.userId, sessionId, record, decision, parsed.scope, requireConsoleRequestContext(req).correlationId);
     return { status: 200, body: this.toDto(sessionId, updated) };
   }
 
@@ -104,17 +105,22 @@ export class ApprovalService {
   private async recordEvent(
     userId: string,
     sessionId: string,
-    approvalId: string,
+    record: CliApprovalRecord,
     decision: 'approved' | 'denied',
     scope: ConsoleApprovalScope,
+    correlationId: string,
   ): Promise<void> {
     await this.options.eventSink?.recordApprovalDecision({
       type: 'console.session.approval.decided.v1',
       userId,
       sessionId,
-      approvalId,
+      approvalId: record.requestId,
       decision,
       scope,
+      toolName: record.toolName,
+      operation: null,
+      decisionSource: 'user_prompt',
+      correlationId,
       occurredAt: this.now(),
     });
   }

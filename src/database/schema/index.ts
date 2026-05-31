@@ -47,6 +47,7 @@ export {
   sessionActivationRecords,
   sessionActivationEvents,
   sessionActivityEvents,
+  approvalAuditEvents,
   runtimeControlCommands,
   runtimeControlAcks,
   adminAuditChainHeads,

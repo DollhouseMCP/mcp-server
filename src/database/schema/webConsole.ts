@@ -584,6 +584,40 @@ export const sessionActivityEvents = pgTable('session_activity_events', {
   index('idx_session_activity_events_event').on(table.event, table.occurredAt),
 ]);
 
+export const approvalAuditEvents = pgTable('approval_audit_events', {
+  id: text('id').primaryKey(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  accountCorrelationId: uuid('account_correlation_id').notNull(),
+  sessionId: text('session_id').notNull(),
+  toolName: text('tool_name').notNull(),
+  operation: text('operation'),
+  result: text('result').notNull(),
+  decisionSource: text('decision_source'),
+  correlationId: uuid('correlation_id'),
+}, (table) => [
+  check('approval_audit_events_result_check', sql`${table.result} IN ('approved', 'denied', 'errored')`),
+  check('approval_audit_events_shape_check', sql`
+    btrim(${table.id}) <> ''
+    AND char_length(${table.id}) <= 120
+    AND btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.toolName}) <> ''
+    AND char_length(${table.toolName}) <= 200
+    AND (${table.operation} IS NULL OR (
+      btrim(${table.operation}) <> ''
+      AND char_length(${table.operation}) <= 200
+    ))
+    AND (${table.decisionSource} IS NULL OR (
+      btrim(${table.decisionSource}) <> ''
+      AND char_length(${table.decisionSource}) <= 100
+    ))
+  `),
+  index('idx_approval_audit_events_occurred').on(table.occurredAt),
+  index('idx_approval_audit_events_account').on(table.accountCorrelationId, table.occurredAt),
+  index('idx_approval_audit_events_session').on(table.sessionId, table.occurredAt),
+]);
+
 export const runtimeControlCommands = pgTable('runtime_control_commands', {
   commandId: uuid('command_id').primaryKey().defaultRandom(),
   kind: text('kind').notNull(),

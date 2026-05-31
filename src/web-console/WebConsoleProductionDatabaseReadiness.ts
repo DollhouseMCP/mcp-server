@@ -67,6 +67,7 @@ export const WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES = [
   'session_activation_records',
   'session_activation_events',
   'session_activity_events',
+  'approval_audit_events',
   'runtime_control_commands',
   'runtime_control_acks',
   'admin_audit_chain_heads',

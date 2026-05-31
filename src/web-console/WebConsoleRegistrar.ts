@@ -92,6 +92,8 @@ import {
   InMemoryApprovalAuditQuery,
   InMemoryAuthenticationAuditQuery,
   PostgresAdminAuditQuery,
+  PostgresApprovalAuditQuery,
+  PostgresAuthenticationAuditQuery,
   createAuditModule,
   type IAdminAuditQuery,
   type IApprovalAuditQuery,
@@ -361,8 +363,8 @@ export class WebConsoleRegistrar {
     };
     const adminAuditWriter = resolveAdminAuditWriter(database, container);
     const adminAuditQuery = resolveAdminAuditQuery(database, container, this.options);
-    const approvalAuditQuery = resolveApprovalAuditQuery(container, this.options);
-    const authenticationAuditQuery = resolveAuthenticationAuditQuery(container, this.options);
+    const approvalAuditQuery = resolveApprovalAuditQuery(database, container, this.options);
+    const authenticationAuditQuery = resolveAuthenticationAuditQuery(database, container, this.options);
     const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
       database,
       container,
@@ -1205,6 +1207,7 @@ function resolveAdminAuditQuery(
 }
 
 function resolveApprovalAuditQuery(
+  database: DatabaseInstance | undefined,
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
 ): IApprovalAuditQuery {
@@ -1214,10 +1217,12 @@ function resolveApprovalAuditQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery)) {
     return container.resolve<IApprovalAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery);
   }
+  if (database) return new PostgresApprovalAuditQuery(database);
   return new InMemoryApprovalAuditQuery();
 }
 
 function resolveAuthenticationAuditQuery(
+  database: DatabaseInstance | undefined,
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
 ): IAuthenticationAuditQuery {
@@ -1227,6 +1232,7 @@ function resolveAuthenticationAuditQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery)) {
     return container.resolve<IAuthenticationAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery);
   }
+  if (database) return new PostgresAuthenticationAuditQuery(database);
   return new InMemoryAuthenticationAuditQuery();
 }
 

@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { PermissionLevel, type CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 
-let tx: { insert: jest.Mock } | null = null;
+let tx: { insert: jest.Mock; select?: jest.Mock } | null = null;
 const withSystemContextMock = jest.fn(async (
   db: unknown,
   callback: (transaction: unknown) => Promise<unknown>,
@@ -29,8 +29,20 @@ const NOW = new Date('2099-05-31T12:00:00.000Z');
 
 describe('production session activity adapters', () => {
   it('persists approval decision events as owner-private session activity', async () => {
-    const values = jest.fn(() => Promise.resolve());
-    tx = { insert: jest.fn(() => ({ values })) };
+    const selectRows = [{ accountCorrelationId: '018f3d47-73ae-7f10-a0de-0742618d4fc1' }];
+    const insertChain = {
+      values: jest.fn(() => insertChain),
+      onConflictDoNothing: jest.fn(() => Promise.resolve()),
+    };
+    const selectChain = {
+      from: jest.fn(() => selectChain),
+      where: jest.fn(() => selectChain),
+      limit: jest.fn(() => Promise.resolve(selectRows)),
+    };
+    tx = {
+      insert: jest.fn(() => insertChain),
+      select: jest.fn(() => selectChain),
+    };
     const sink = new PostgresSessionApprovalEventSink({} as never);
 
     await sink.recordApprovalDecision({
@@ -40,11 +52,16 @@ describe('production session activity adapters', () => {
       approvalId: APPROVAL_ID,
       decision: 'approved',
       scope: 'session',
+      toolName: 'Bash',
+      operation: null,
+      decisionSource: 'user_prompt',
+      correlationId: '018f3d47-73ae-7f10-a0de-0742618d4fd1',
       occurredAt: NOW,
     });
 
-    expect(tx.insert).toHaveBeenCalledTimes(1);
-    expect(values).toHaveBeenCalledWith(expect.objectContaining({
+    expect(tx.select).toHaveBeenCalledTimes(1);
+    expect(tx.insert).toHaveBeenCalledTimes(2);
+    expect(insertChain.values).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: USER_ID,
       sessionId: SESSION_ID,
       occurredAt: NOW,
@@ -54,6 +71,17 @@ describe('production session activity adapters', () => {
       message: 'Approval approved',
       stableErrorCode: null,
     }));
+    expect(insertChain.values).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      id: APPROVAL_ID,
+      userId: USER_ID,
+      accountCorrelationId: selectRows[0].accountCorrelationId,
+      sessionId: SESSION_ID,
+      toolName: 'Bash',
+      result: 'approved',
+      decisionSource: 'user_prompt',
+      correlationId: '018f3d47-73ae-7f10-a0de-0742618d4fd1',
+    }));
+    expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
     tx = null;
   });
 

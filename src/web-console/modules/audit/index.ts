@@ -7,6 +7,10 @@ export {
   toAdminAuditDto,
 } from './AuditQueries.js';
 export { PostgresAdminAuditQuery } from './PostgresAdminAuditQuery.js';
+export {
+  PostgresApprovalAuditQuery,
+  PostgresAuthenticationAuditQuery,
+} from './PostgresProductionAuditQueries.js';
 export type {
   AdminAuditRow,
   AuditExportQuery,

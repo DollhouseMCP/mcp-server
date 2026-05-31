@@ -561,8 +561,6 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container)).rejects.toMatchObject({
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'audit_approvalAuditQuery_not_production_ready' }),
-        expect.objectContaining({ code: 'audit_authenticationAuditQuery_not_production_ready' }),
         expect.objectContaining({ code: 'executions_sessionExecutionReader_not_production_ready' }),
         expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'operations_telemetryQuery_not_production_ready' }),
@@ -1315,6 +1313,8 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
     expect(composition.adminAuditQuery.constructor.name).toBe('PostgresAdminAuditQuery');
+    expect(composition.approvalAuditQuery.constructor.name).toBe('PostgresApprovalAuditQuery');
+    expect(composition.authenticationAuditQuery.constructor.name).toBe('PostgresAuthenticationAuditQuery');
   });
 
   it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {
