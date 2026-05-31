@@ -17,7 +17,7 @@ const { PostgresSessionApprovalEventSink } = await import(
 const { PostgresOwnedActivityQuery } = await import(
   '../../../../src/web-console/modules/session-telemetry/OwnedActivityQuery.js'
 );
-const { PostgresSessionGatekeeperReader } = await import(
+const { PostgresSessionExecutionReader, PostgresSessionGatekeeperReader } = await import(
   '../../../../src/web-console/modules/executions/ExecutionStore.js'
 );
 
@@ -164,11 +164,72 @@ describe('production session activity adapters', () => {
     });
     expect(withSystemContextMock).toHaveBeenCalledWith(db, expect.any(Function));
   });
+
+  it('projects persisted agent goals as session executions', async () => {
+    const db = queryDb([{
+      agentName: 'CodeReviewer',
+      sessionId: SESSION_ID,
+      goals: [{
+        id: 'goal-1',
+        description: 'Review the console backend',
+        status: 'in_progress',
+        createdAt: new Date('2099-05-31T11:00:00.000Z'),
+        updatedAt: NOW,
+      }, {
+        id: 'goal-2',
+        description: 'Already completed',
+        status: 'completed',
+        createdAt: new Date('2099-05-31T10:00:00.000Z'),
+        updatedAt: new Date('2099-05-31T10:30:00.000Z'),
+        completedAt: new Date('2099-05-31T10:30:00.000Z'),
+        notes: 'Done',
+      }],
+      decisions: [{
+        goalId: 'goal-1',
+        timestamp: NOW,
+        decision: 'Read execution store',
+        reasoning: 'Need durable projection',
+        outcome: 'success',
+      }, {
+        goalId: 'goal-2',
+        timestamp: new Date('2099-05-31T10:30:00.000Z'),
+        decision: 'goal_complete',
+        reasoning: 'Finished',
+        outcome: 'success',
+      }],
+    }]);
+    const reader = new PostgresSessionExecutionReader(db as never);
+
+    await expect(reader.list(USER_ID, SESSION_ID)).resolves.toEqual([
+      expect.objectContaining({
+        goal_id: 'goal-1',
+        session_id: SESSION_ID,
+        agent_name: 'CodeReviewer',
+        status: 'running',
+        current_step: 'Read execution store',
+      }),
+      expect.objectContaining({
+        goal_id: 'goal-2',
+        status: 'succeeded',
+        progress: 1,
+      }),
+    ]);
+    await expect(reader.find(USER_ID, SESSION_ID, 'goal-1')).resolves.toMatchObject({
+      goal_id: 'goal-1',
+      output: [{
+        kind: 'progress',
+        message: 'Read execution store: Need durable projection',
+        occurred_at: NOW.toISOString(),
+      }],
+    });
+    expect(withSystemContextMock).toHaveBeenCalledWith(db, expect.any(Function));
+  });
 });
 
 function queryDb(rows: unknown[]) {
   const chain: Record<string, jest.Mock> = {};
   chain.from = jest.fn(() => chain);
+  chain.innerJoin = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
   chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => chain);

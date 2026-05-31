@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
 import {
   PermissionLevel,
@@ -7,12 +7,14 @@ import {
 } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { withSystemContext } from '../../../database/admin.js';
-import { sessions } from '../../../database/schema/index.js';
+import { agentStates, elements, sessions } from '../../../database/schema/index.js';
 import type {
   GatekeeperConfirmationDto,
   GatekeeperPendingApprovalDto,
   SessionExecutionDetailDto,
+  SessionExecutionOutputDto,
   SessionExecutionSummaryDto,
+  SessionExecutionStatus,
   SessionGatekeeperDto,
 } from './ExecutionDtos.js';
 
@@ -65,6 +67,69 @@ export class InMemorySessionExecutionReader implements SessionExecutionReader {
 export class EmptySessionGatekeeperReader implements SessionGatekeeperReader {
   get(_userId: string, sessionId: string): Promise<SessionGatekeeperDto> {
     return Promise.resolve(emptyGatekeeperState(sessionId));
+  }
+}
+
+interface AgentExecutionStateRow {
+  readonly agentName: string;
+  readonly sessionId: string;
+  readonly goals: unknown;
+  readonly decisions: unknown;
+}
+
+interface AgentGoalRecord {
+  readonly id: string;
+  readonly description: string;
+  readonly status: string;
+  readonly createdAt: Date | string;
+  readonly updatedAt: Date | string;
+  readonly completedAt?: Date | string;
+  readonly notes?: string;
+}
+
+interface AgentDecisionRecord {
+  readonly goalId: string;
+  readonly timestamp: Date | string;
+  readonly decision: string;
+  readonly reasoning?: string;
+  readonly outcome?: string;
+}
+
+export class PostgresSessionExecutionReader implements SessionExecutionReader {
+  constructor(private readonly db: DatabaseInstance) {}
+
+  async list(userId: string, sessionId: string): Promise<readonly SessionExecutionSummaryDto[]> {
+    const rows = await this.loadRows(userId, sessionId);
+    return rows
+      .flatMap(row => executionRecordsFromRow(row))
+      .map(toSummary)
+      .sort((left, right) => right.updated_at.localeCompare(left.updated_at));
+  }
+
+  async find(userId: string, sessionId: string, goalId: string): Promise<SessionExecutionDetailDto | null> {
+    const rows = await this.loadRows(userId, sessionId);
+    return rows
+      .flatMap(row => executionRecordsFromRow(row))
+      .find(record => record.goal_id === goalId) ?? null;
+  }
+
+  async *stream(userId: string, sessionId: string, goalId: string): AsyncIterable<SessionExecutionDetailDto> {
+    const record = await this.find(userId, sessionId, goalId);
+    if (record) yield record;
+  }
+
+  private loadRows(userId: string, sessionId: string): Promise<readonly AgentExecutionStateRow[]> {
+    return withSystemContext(this.db, tx => tx
+      .select({
+        agentName: elements.name,
+        sessionId: agentStates.sessionId,
+        goals: agentStates.goals,
+        decisions: agentStates.decisions,
+      })
+        .from(agentStates)
+        .innerJoin(elements, and(eq(elements.id, agentStates.agentId), eq(elements.userId, userId)))
+        .where(and(eq(agentStates.userId, userId), eq(agentStates.sessionId, sessionId)))
+        .orderBy(desc(agentStates.lastActive), desc(agentStates.id)));
   }
 }
 
@@ -169,6 +234,111 @@ function cloneExecutionRecord(record: SessionExecutionDetailDto): SessionExecuti
     ...record,
     output: record.output.map(item => ({ ...item })),
   };
+}
+
+function executionRecordsFromRow(row: AgentExecutionStateRow): SessionExecutionDetailDto[] {
+  const decisions = decisionRecords(row.decisions);
+  return goalRecords(row.goals).map(goal => {
+    const goalDecisions = decisions
+      .filter(decision => decision.goalId === goal.id)
+      .sort((left, right) => toTime(left.timestamp) - toTime(right.timestamp));
+    const lastDecision = goalDecisions.at(-1);
+    return {
+      goal_id: goal.id,
+      session_id: row.sessionId,
+      agent_name: row.agentName,
+      status: executionStatus(goal.status),
+      progress: executionProgress(goal.status),
+      started_at: toIso(goal.createdAt),
+      updated_at: toIso(goal.updatedAt),
+      completed_at: goal.completedAt ? toIso(goal.completedAt) : null,
+      current_step: lastDecision?.decision ?? null,
+      stable_error_code: goal.status === 'failed' ? 'agent_execution_failed' : null,
+      output: executionOutput(goalDecisions, goal),
+    };
+  });
+}
+
+function goalRecords(value: unknown): AgentGoalRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => isGoalRecord(item) ? [item] : []);
+}
+
+function isGoalRecord(value: unknown): value is AgentGoalRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<AgentGoalRecord>;
+  return typeof record.id === 'string' &&
+    typeof record.description === 'string' &&
+    typeof record.status === 'string' &&
+    isDateLike(record.createdAt) &&
+    isDateLike(record.updatedAt);
+}
+
+function decisionRecords(value: unknown): AgentDecisionRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => isDecisionRecord(item) ? [item] : []);
+}
+
+function isDecisionRecord(value: unknown): value is AgentDecisionRecord {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Partial<AgentDecisionRecord>;
+  return typeof record.goalId === 'string' &&
+    typeof record.decision === 'string' &&
+    isDateLike(record.timestamp);
+}
+
+function executionStatus(status: string): SessionExecutionStatus {
+  switch (status) {
+    case 'pending':
+      return 'queued';
+    case 'in_progress':
+      return 'running';
+    case 'completed':
+      return 'succeeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      return 'running';
+  }
+}
+
+function executionProgress(status: string): number | null {
+  if (status === 'pending') return 0;
+  if (status === 'completed' || status === 'failed' || status === 'cancelled') return 1;
+  return null;
+}
+
+function executionOutput(
+  decisions: readonly AgentDecisionRecord[],
+  goal: AgentGoalRecord,
+): readonly SessionExecutionOutputDto[] {
+  const output: SessionExecutionOutputDto[] = decisions.map(decision => ({
+    kind: decision.outcome === 'failure' ? 'error' : 'progress',
+    message: decision.reasoning ? `${decision.decision}: ${decision.reasoning}` : decision.decision,
+    occurred_at: toIso(decision.timestamp),
+  }));
+  if (goal.completedAt && goal.notes) {
+    output.push({
+      kind: goal.status === 'failed' ? 'error' : 'result',
+      message: goal.notes,
+      occurred_at: toIso(goal.completedAt),
+    });
+  }
+  return output;
+}
+
+function isDateLike(value: unknown): value is Date | string {
+  return value instanceof Date || typeof value === 'string';
+}
+
+function toIso(value: Date | string): string {
+  return value instanceof Date ? value.toISOString() : new Date(value).toISOString();
+}
+
+function toTime(value: Date | string): number {
+  return value instanceof Date ? value.getTime() : new Date(value).getTime();
 }
 
 function toConfirmationDto(record: ConfirmationRecord): GatekeeperConfirmationDto {

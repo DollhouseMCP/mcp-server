@@ -103,6 +103,7 @@ import {
   EmptySessionGatekeeperReader,
   GatekeeperSessionStateReader,
   InMemorySessionExecutionReader,
+  PostgresSessionExecutionReader,
   PostgresSessionGatekeeperReader,
   createExecutionModule,
   type SessionExecutionReader,
@@ -391,7 +392,7 @@ export class WebConsoleRegistrar {
     const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
     const sessionApprovalStore = resolveSessionApprovalStore(container, database, this.options);
     const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, database, this.options);
-    const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
+    const sessionExecutionReader = resolveSessionExecutionReader(container, database, this.options);
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, database, this.options);
     const telemetryQuery = resolveTelemetryQuery(container, this.options);
     const ownedActivityQuery = resolveOwnedActivityQuery(container, database, this.options);
@@ -1382,6 +1383,7 @@ function resolveSessionApprovalEventSink(
 
 function resolveSessionExecutionReader(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): SessionExecutionReader {
   if (options.executionReader !== undefined) {
@@ -1390,6 +1392,7 @@ function resolveSessionExecutionReader(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader)) {
     return container.resolve<SessionExecutionReader>(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader);
   }
+  if (database) return new PostgresSessionExecutionReader(database);
   return new InMemorySessionExecutionReader();
 }
 
