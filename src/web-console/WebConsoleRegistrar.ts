@@ -289,6 +289,7 @@ export interface WebConsoleRegistrarOptions {
   readonly securityInvalidationProcessorIntervalMs?: number;
   readonly securityInvalidationProcessorLeaseDurationMs?: number;
   readonly securityInvalidationProcessorBatchSize?: number;
+  readonly securityInvalidationInitialDrainMaxEvents?: number;
   readonly reportSecurityInvalidationProcessorError?: (error: unknown) => void;
   readonly publicBaseUrl?: string;
   readonly enableApiV1Mount?: boolean;
@@ -1581,7 +1582,7 @@ async function resolveSecurityInvalidationRuntime(options: {
     reportError: options.options.reportSecurityInvalidationProcessorError,
   });
   processor.register(options.container.resolve('LifecycleService'));
-  await processor.runOnce();
+  await processor.runUntilDrained(options.options.securityInvalidationInitialDrainMaxEvents);
   return {
     readiness: new StoreBackedConsoleSecurityInvalidationReadiness({
       store: options.stores.securityInvalidationStore,

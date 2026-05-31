@@ -5,6 +5,7 @@ import {
   InMemoryConsoleSecurityInvalidationStore,
   InMemoryConsoleSessionStore,
   SECURITY_INVALIDATION_PROCESSOR_TASK_LABEL,
+  StoreBackedConsoleSecurityInvalidationReadiness,
 } from '../../../../src/web-console/index.js';
 import type {
   ConsoleSessionRecord,
@@ -14,6 +15,7 @@ import type {
 
 const NOW = new Date('2026-05-30T12:00:00.000Z');
 const LATER = new Date('2026-05-30T12:00:20.000Z');
+const AFTER_LEASE_EXPIRY = new Date('2026-05-30T12:00:21.000Z');
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
 
@@ -106,6 +108,165 @@ describe('ConsoleSecurityInvalidationProcessor', () => {
     await expect(sessionStore.findActiveByIdHash(revokedHash, NOW)).resolves.toBeNull();
     await expect(sessionStore.findActiveByIdHash(activeHash, NOW)).resolves.toMatchObject({
       idHash: activeHash,
+    });
+  });
+
+  it('drains a bounded startup backlog across batches before readiness is evaluated', async () => {
+    const store = new InMemoryConsoleSecurityInvalidationStore();
+    const sessionStore = new InMemoryConsoleSessionStore();
+    const elevatedHash = hash(6);
+    await sessionStore.create(sessionFixture({ idHash: elevatedHash, userId: USER_ID, elevated: true }));
+    const firstEvent = await store.appendEvent({
+      kind: 'principal_authz_changed',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 2,
+      reason: 'roles_changed',
+      payload: { previousAuthzVersion: 1, newAuthzVersion: 2 },
+      createdAt: NOW,
+      createdByUserId: USER_ID,
+    });
+    const secondEvent = await store.appendEvent({
+      kind: 'admin_factor_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      reason: 'totp_reset',
+      payload: { clearedElevations: true, proofMethod: 'admin_reset' },
+      createdAt: NOW,
+      createdByUserId: USER_ID,
+    });
+    const processor = new ConsoleSecurityInvalidationProcessor({
+      store,
+      sessionStore,
+      replicaId: 'replica-a',
+      batchSize: 1,
+      leaseDurationMs: 20_000,
+      now: () => NOW,
+    });
+
+    await expect(processor.runUntilDrained(10)).resolves.toEqual({
+      replicaId: 'replica-a',
+      leasedUntil: LATER,
+      processed: 2,
+      acknowledged: 2,
+      cursorSequenceId: secondEvent.sequenceId,
+    });
+
+    await expect(store.getReplicaCursor('replica-a')).resolves.toBe(secondEvent.sequenceId);
+    await expect(store.listAcknowledgedReplicaIds(firstEvent.eventId)).resolves.toEqual(['replica-a']);
+    await expect(store.listAcknowledgedReplicaIds(secondEvent.eventId)).resolves.toEqual(['replica-a']);
+    await expect(sessionStore.findActiveByIdHash(elevatedHash, NOW)).resolves.toMatchObject({
+      elevation: null,
+    });
+  });
+
+  it('verifies multi-replica fan-out, acknowledgement, cursor drain, and stale lease readiness', async () => {
+    const store = new InMemoryConsoleSecurityInvalidationStore();
+    const sessionStoreA = new InMemoryConsoleSessionStore();
+    const sessionStoreB = new InMemoryConsoleSessionStore();
+    const userHashA = hash(7);
+    const userHashB = hash(8);
+    const elevationHashA = hash(9);
+    const elevationHashB = hash(10);
+    await sessionStoreA.create(sessionFixture({ idHash: userHashA, userId: USER_ID, elevated: false }));
+    await sessionStoreB.create(sessionFixture({ idHash: userHashB, userId: USER_ID, elevated: false }));
+    await sessionStoreA.create(sessionFixture({ idHash: elevationHashA, userId: OTHER_USER_ID, elevated: true }));
+    await sessionStoreB.create(sessionFixture({ idHash: elevationHashB, userId: OTHER_USER_ID, elevated: true }));
+    const disableEvent = await store.appendEvent({
+      kind: 'principal_disabled',
+      urgency: 'acknowledged',
+      userId: USER_ID,
+      authzVersion: 3,
+      reason: 'principal_disabled',
+      payload: { revokedSessions: true, revokedCredentials: true, terminatedRuntimeSessions: true },
+      createdAt: NOW,
+      createdByUserId: USER_ID,
+    });
+    const authzEvent = await store.appendEvent({
+      kind: 'principal_authz_changed',
+      urgency: 'acknowledged',
+      userId: OTHER_USER_ID,
+      authzVersion: 4,
+      reason: 'roles_changed',
+      payload: { previousAuthzVersion: 3, newAuthzVersion: 4 },
+      createdAt: NOW,
+      createdByUserId: USER_ID,
+    });
+    const processorA = new ConsoleSecurityInvalidationProcessor({
+      store,
+      sessionStore: sessionStoreA,
+      replicaId: 'replica-a',
+      batchSize: 1,
+      leaseDurationMs: 20_000,
+      now: () => NOW,
+    });
+    const processorB = new ConsoleSecurityInvalidationProcessor({
+      store,
+      sessionStore: sessionStoreB,
+      replicaId: 'replica-b',
+      batchSize: 1,
+      leaseDurationMs: 20_000,
+      now: () => NOW,
+    });
+
+    await expect(processorA.runUntilDrained()).resolves.toMatchObject({
+      processed: 2,
+      acknowledged: 2,
+      cursorSequenceId: authzEvent.sequenceId,
+    });
+    await expect(new StoreBackedConsoleSecurityInvalidationReadiness({
+      store,
+      replicaId: 'replica-b',
+      now: () => NOW,
+    }).getReadiness()).resolves.toMatchObject({
+      ready: false,
+      failureCodes: [
+        'security_invalidation_replica_lease_not_live',
+        'security_invalidation_events_pending',
+      ],
+    });
+
+    await expect(processorB.runUntilDrained()).resolves.toMatchObject({
+      processed: 2,
+      acknowledged: 2,
+      cursorSequenceId: authzEvent.sequenceId,
+    });
+
+    await expect(store.getReplicaCursor('replica-a')).resolves.toBe(authzEvent.sequenceId);
+    await expect(store.getReplicaCursor('replica-b')).resolves.toBe(authzEvent.sequenceId);
+    await expect(store.listAcknowledgedReplicaIds(disableEvent.eventId)).resolves.toEqual([
+      'replica-a',
+      'replica-b',
+    ]);
+    await expect(store.listAcknowledgedReplicaIds(authzEvent.eventId)).resolves.toEqual([
+      'replica-a',
+      'replica-b',
+    ]);
+    await expect(sessionStoreA.findActiveByIdHash(userHashA, NOW)).resolves.toBeNull();
+    await expect(sessionStoreB.findActiveByIdHash(userHashB, NOW)).resolves.toBeNull();
+    await expect(sessionStoreA.findActiveByIdHash(elevationHashA, NOW)).resolves.toMatchObject({
+      elevation: null,
+    });
+    await expect(sessionStoreB.findActiveByIdHash(elevationHashB, NOW)).resolves.toMatchObject({
+      elevation: null,
+    });
+    await expect(new StoreBackedConsoleSecurityInvalidationReadiness({
+      store,
+      replicaId: 'replica-b',
+      now: () => NOW,
+    }).getReadiness()).resolves.toEqual({
+      ready: true,
+      status: 'ok',
+      checkedAt: NOW,
+      failureCodes: [],
+    });
+    await expect(new StoreBackedConsoleSecurityInvalidationReadiness({
+      store,
+      replicaId: 'replica-b',
+      now: () => AFTER_LEASE_EXPIRY,
+    }).getReadiness()).resolves.toMatchObject({
+      ready: false,
+      failureCodes: ['security_invalidation_replica_lease_not_live'],
     });
   });
 

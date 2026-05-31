@@ -8,6 +8,7 @@ import { validateReplicaId } from './IConsoleSecurityInvalidationStore.js';
 export const DEFAULT_SECURITY_INVALIDATION_PROCESSOR_INTERVAL_MS = 5_000;
 export const DEFAULT_SECURITY_INVALIDATION_LEASE_DURATION_MS = 15_000;
 export const DEFAULT_SECURITY_INVALIDATION_BATCH_SIZE = 100;
+export const DEFAULT_SECURITY_INVALIDATION_INITIAL_DRAIN_MAX_EVENTS = 10_000;
 export const SECURITY_INVALIDATION_PROCESSOR_TASK_LABEL = 'webConsole.securityInvalidationProcessor';
 
 export interface ConsoleSecurityInvalidationProcessorLifecycle {
@@ -39,6 +40,7 @@ export interface IConsoleSecurityInvalidationProcessor {
   isRunning(): boolean;
   register(lifecycle: ConsoleSecurityInvalidationProcessorLifecycle): void;
   runOnce(): Promise<ConsoleSecurityInvalidationProcessorRunResult | null>;
+  runUntilDrained(maxEvents?: number): Promise<ConsoleSecurityInvalidationProcessorRunResult | null>;
 }
 
 export class ConsoleSecurityInvalidationProcessor implements IConsoleSecurityInvalidationProcessor {
@@ -90,7 +92,40 @@ export class ConsoleSecurityInvalidationProcessor implements IConsoleSecurityInv
     }
   }
 
-  private async drainOnce(): Promise<ConsoleSecurityInvalidationProcessorRunResult> {
+  async runUntilDrained(
+    maxEvents = DEFAULT_SECURITY_INVALIDATION_INITIAL_DRAIN_MAX_EVENTS,
+  ): Promise<ConsoleSecurityInvalidationProcessorRunResult | null> {
+    const maxDrainEvents = validateMaxDrainEvents(maxEvents);
+    if (this.running) return null;
+    this.running = true;
+    try {
+      let remaining = maxDrainEvents;
+      let latestResult: ConsoleSecurityInvalidationProcessorRunResult;
+      let processed = 0;
+      let acknowledged = 0;
+      do {
+        const maxBatchEvents = Math.min(this.batchSize, remaining);
+        latestResult = await this.drainOnce(maxBatchEvents);
+        processed += latestResult.processed;
+        acknowledged += latestResult.acknowledged;
+        remaining -= latestResult.processed;
+        if (latestResult.processed < maxBatchEvents) break;
+      } while (remaining > 0);
+
+      return {
+        ...latestResult,
+        processed,
+        acknowledged,
+      };
+    } catch (error) {
+      this.options.reportError?.(error);
+      throw error;
+    } finally {
+      this.running = false;
+    }
+  }
+
+  private async drainOnce(maxEvents = this.batchSize): Promise<ConsoleSecurityInvalidationProcessorRunResult> {
     const renewedAt = this.now();
     const leasedUntil = new Date(renewedAt.getTime() + this.leaseDurationMs);
     await this.options.store.acquireReplicaLease({
@@ -102,8 +137,8 @@ export class ConsoleSecurityInvalidationProcessor implements IConsoleSecurityInv
     let cursor = await this.options.store.getReplicaCursor(this.options.replicaId);
     let processed = 0;
     let acknowledged = 0;
-    while (processed < this.batchSize) {
-      const events = await this.options.store.listEventsAfter(cursor, this.batchSize - processed);
+    while (processed < maxEvents) {
+      const events = await this.options.store.listEventsAfter(cursor, maxEvents - processed);
       if (events.length === 0) break;
       const outcome = await this.applyEventBatch(events, cursor);
       cursor = outcome.cursor;
@@ -199,6 +234,13 @@ function validatePositiveInteger(value: number, name: string): number {
 function validateBatchSize(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1 || value > 1000) {
     throw new Error('security invalidation processor batch size must be between 1 and 1000');
+  }
+  return value;
+}
+
+function validateMaxDrainEvents(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100_000) {
+    throw new Error('security invalidation initial drain max events must be between 1 and 100000');
   }
   return value;
 }
