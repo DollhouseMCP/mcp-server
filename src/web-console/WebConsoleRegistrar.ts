@@ -127,6 +127,7 @@ import {
   type WebConsoleProductionRouteDependency,
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
+import { resolveStableWebConsoleReplicaId } from './WebConsoleReplicaIdentity.js';
 import { createConsoleBffAuthModule, type IConsoleOAuthClient } from './auth/index.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
@@ -1321,9 +1322,7 @@ function resolveSecurityInvalidationReplicaId(
   if (container.hasRegistration('WebConsoleReplicaId')) {
     return container.resolve<string>('WebConsoleReplicaId');
   }
-  throw new Error(
-    'Hosted/shared security invalidation processor requires WebConsoleSecurityInvalidationReplicaId, WebConsoleReplicaId, or securityInvalidationReplicaId',
-  );
+  return resolveStableWebConsoleReplicaId();
 }
 
 function resolveOAuthGrantRevocationService(

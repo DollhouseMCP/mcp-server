@@ -63,8 +63,9 @@ const isWebSilent = process.argv.includes('--web')
   && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG;
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
-process.stdout.write = (isWebSilent ? (() => true) : process.stderr.write.bind(process.stderr)) as any;
-if (isWebSilent) process.stderr.write = (() => true) as any;
+const suppressStreamWrite = () => true;
+process.stdout.write = isWebSilent ? suppressStreamWrite : process.stderr.write.bind(process.stderr);
+if (isWebSilent) process.stderr.write = suppressStreamWrite;
 dotenv.config({ path: ['.env.local', '.env'] });
 process.stdout.write = originalStdoutWrite;
 if (isWebSilent) process.stderr.write = originalStderrWrite;
@@ -131,6 +132,9 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_WEB_CONSOLE: envBool(true),
   /** Public HTTPS base URL used in OAuth discovery metadata for remote connectors. */
   DOLLHOUSE_PUBLIC_BASE_URL: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Stable per-process replica identifier for hosted web-console/runtime control. */
+  DOLLHOUSE_REPLICA_ID: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /** Path to TLS certificate (PEM). When set with DOLLHOUSE_TLS_KEY_PATH, the HTTP transport binds HTTPS. */
   DOLLHOUSE_TLS_CERT_PATH: z.string().trim().optional()

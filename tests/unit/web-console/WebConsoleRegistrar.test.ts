@@ -598,21 +598,53 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
-  it('fails hosted/shared PostgreSQL invalidation startup without a deployment replica id', async () => {
+  it('uses the deployment-derived replica id when hosted/shared startup omits an explicit one', async () => {
     const container = new TestContainer();
     container.seed('SystemDatabaseInstance', {});
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
+    container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
-    await expect(new WebConsoleRegistrar({
+    const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
+      productionReadiness: {
+        portfolioSyncWorkerReady: true,
+      },
       opaqueValueHmacKey: Buffer.alloc(32, 40),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 41),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 42),
+      },
+      authStorage: productionAdapter(),
+      oauthGrantRevocationService: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      githubIntegrationProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      portfolioStore: productionAdapter(),
+      approvalStore: productionAdapter(),
+      approvalEventSink: productionAdapter(),
+      executionReader: productionAdapter(),
+      gatekeeperReader: productionAdapter(),
+      telemetryQuery: productionAdapter(),
+      ownedActivityQuery: productionAdapter(),
+      ownedMetricQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
       registerCleanup: false,
-    }).bootstrapAndRegister(container)).rejects
-      .toThrow('Hosted/shared security invalidation processor requires');
+    }).bootstrapAndRegister(container);
+
+    expect(composition.securityInvalidationProcessor).not.toBeNull();
+    await expect(composition.securityInvalidationReadiness.getReadiness()).resolves.toMatchObject({
+      ready: true,
+      failureCodes: [],
+    });
   });
 
   it('refuses descriptor api mount outside the hosted/shared activation gate', async () => {
