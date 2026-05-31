@@ -127,6 +127,10 @@ import {
   type WebConsoleProductionRouteDependency,
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
+import {
+  productionDatabaseNotVerified,
+  type IProductionDatabaseReadiness,
+} from './WebConsoleProductionDatabaseReadiness.js';
 import { resolveStableWebConsoleReplicaId } from './WebConsoleReplicaIdentity.js';
 import {
   resolveWebConsoleActivationProfile,
@@ -170,6 +174,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   consoleOAuthClient: 'WebConsoleOAuthClient',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
+  productionDatabaseReadiness: 'WebConsoleProductionDatabaseReadiness',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
   signingKeyStore: 'WebConsoleSigningKeyStore',
   authPolicyStore: 'WebConsoleAuthPolicyStore',
@@ -184,6 +189,7 @@ export interface WebConsoleRegistrarOptions {
   readonly activationProfile?: WebConsoleActivationProfile;
   readonly deploymentSignal?: WebConsoleDeploymentSignal;
   readonly productionReadiness?: WebConsoleProductionReadinessOptions;
+  readonly productionDatabaseReadiness?: IProductionDatabaseReadiness | null;
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
   readonly cleanupIntervalMs?: number;
@@ -342,6 +348,7 @@ export class WebConsoleRegistrar {
       activationProfile,
       securityInvalidationReadiness,
       this.options,
+      container,
     );
     const apiV1MountState = createApiV1MountState();
     const operationHealthChecks = createOperationHealthChecks({
@@ -802,12 +809,26 @@ async function resolveProductionReadinessForActivation(
   activationProfile: WebConsoleActivationProfile,
   securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness,
   options: WebConsoleRegistrarOptions,
+  container: DiContainerFacade,
 ): Promise<WebConsoleProductionReadinessOptions | undefined> {
   if (activationProfile !== 'shared-hosted') return options.productionReadiness;
+  const databaseReadiness = await resolveProductionDatabaseReadiness(options, container).getReadiness();
   return {
     ...options.productionReadiness,
+    databaseVerificationReady: options.productionReadiness?.databaseVerificationReady ?? databaseReadiness.ready,
     securityInvalidationProcessorReady: (await securityInvalidationReadiness.getReadiness()).ready,
   };
+}
+
+function resolveProductionDatabaseReadiness(
+  options: WebConsoleRegistrarOptions,
+  container: DiContainerFacade,
+): IProductionDatabaseReadiness {
+  if (options.productionDatabaseReadiness) return options.productionDatabaseReadiness;
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness)) {
+    return container.resolve<IProductionDatabaseReadiness>(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness);
+  }
+  return productionDatabaseNotVerified();
 }
 
 interface ConsoleStoreSet {

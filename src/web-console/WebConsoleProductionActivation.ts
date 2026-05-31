@@ -19,6 +19,7 @@ export type WebConsoleActivationProfile = 'development' | 'shared-hosted';
  */
 
 export interface WebConsoleProductionReadinessOptions {
+  readonly databaseVerificationReady?: boolean;
   readonly securityInvalidationProcessorReady?: boolean;
   readonly portfolioSyncWorkerReady?: boolean;
   readonly accountAllowlistAuthorityCutoverComplete?: boolean;
@@ -90,6 +91,12 @@ export function assertWebConsoleProductionActivation(
     inputs.storageBackend === 'postgres',
     'database_required',
     'Hosted/shared web-console activation requires shared PostgreSQL persistence.',
+  );
+  requireCondition(
+    failures,
+    inputs.readiness?.databaseVerificationReady === true,
+    'database_verification_not_ready',
+    'Hosted/shared web-console activation requires verification of the intended PostgreSQL database and current migration state.',
   );
   requireCondition(
     failures,

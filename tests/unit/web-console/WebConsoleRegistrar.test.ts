@@ -445,6 +445,7 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(new TestContainer())).rejects.toMatchObject({
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'database_required' }),
+        expect.objectContaining({ code: 'database_verification_not_ready' }),
         expect.objectContaining({ code: 'security_invalidation_processor_not_ready' }),
         expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
         expect.objectContaining({ code: 'sessionStore_not_production_ready' }),
@@ -500,6 +501,7 @@ describe('WebConsoleRegistrar', () => {
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     const {
+      productionDatabaseReady,
       WebConsoleRegistrar,
       WEB_CONSOLE_SERVICE_NAMES,
     } = await import('../../../src/web-console/index.js');
@@ -507,6 +509,7 @@ describe('WebConsoleRegistrar', () => {
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
       enableApiV1Mount: true,
+      productionDatabaseReadiness: productionDatabaseReady(),
       productionReadiness: {
         portfolioSyncWorkerReady: true,
       },
@@ -574,6 +577,7 @@ describe('WebConsoleRegistrar', () => {
       activationProfile: SHARED_HOSTED_PROFILE,
       enableApiV1Mount: true,
       productionReadiness: {
+        databaseVerificationReady: true,
         portfolioSyncWorkerReady: true,
       },
       securityInvalidationReplicaId: 'replica-a',
@@ -640,6 +644,7 @@ describe('WebConsoleRegistrar', () => {
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
       productionReadiness: {
+        databaseVerificationReady: true,
         portfolioSyncWorkerReady: true,
       },
       opaqueValueHmacKey: Buffer.alloc(32, 40),
@@ -697,6 +702,7 @@ describe('WebConsoleRegistrar', () => {
       storageBackend: 'postgres',
       enableAccountAllowlistRoutes: false,
       readiness: {
+        databaseVerificationReady: true,
         securityInvalidationProcessorReady: true,
         portfolioSyncWorkerReady: true,
       },
@@ -719,6 +725,7 @@ describe('WebConsoleRegistrar', () => {
         storageBackend: 'postgres',
         enableAccountAllowlistRoutes: false,
         readiness: {
+          databaseVerificationReady: true,
           securityInvalidationProcessorReady: true,
           portfolioSyncWorkerReady: true,
         },
@@ -754,6 +761,7 @@ describe('WebConsoleRegistrar', () => {
       storageBackend: 'postgres',
       enableAccountAllowlistRoutes: false,
       readiness: {
+        databaseVerificationReady: true,
         securityInvalidationProcessorReady: true,
         portfolioSyncWorkerReady: true,
       },
@@ -770,6 +778,7 @@ describe('WebConsoleRegistrar', () => {
         storageBackend: 'postgres',
         enableAccountAllowlistRoutes: false,
         readiness: {
+          databaseVerificationReady: true,
           securityInvalidationProcessorReady: true,
           portfolioSyncWorkerReady: true,
         },
@@ -802,6 +811,7 @@ describe('WebConsoleRegistrar', () => {
       storageBackend: 'postgres',
       enableAccountAllowlistRoutes: false,
       readiness: {
+        databaseVerificationReady: true,
         securityInvalidationProcessorReady: true,
         portfolioSyncWorkerReady: true,
       },
@@ -825,6 +835,7 @@ describe('WebConsoleRegistrar', () => {
         storageBackend: 'postgres',
         enableAccountAllowlistRoutes: false,
         readiness: {
+          databaseVerificationReady: true,
           securityInvalidationProcessorReady: true,
           portfolioSyncWorkerReady: true,
         },
@@ -980,6 +991,7 @@ describe('WebConsoleRegistrar', () => {
       storageBackend: 'postgres',
       enableAccountAllowlistRoutes: false,
       readiness: {
+        databaseVerificationReady: true,
         securityInvalidationProcessorReady: true,
         portfolioSyncWorkerReady: true,
       },
@@ -995,6 +1007,7 @@ describe('WebConsoleRegistrar', () => {
         storageBackend: 'postgres',
         enableAccountAllowlistRoutes: false,
         readiness: {
+          databaseVerificationReady: true,
           securityInvalidationProcessorReady: true,
           portfolioSyncWorkerReady: true,
         },
