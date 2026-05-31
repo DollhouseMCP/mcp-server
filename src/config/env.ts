@@ -207,6 +207,12 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   /** SSL mode for database connection. */
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+  /** Expected production database name for hosted web-console activation verification. */
+  DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Expected database current_user for hosted web-console activation verification. */
+  DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
   /** Base64-encoded 32-byte key used to wrap DB-stored OAuth token DEKs. Required in database mode. */
   DOLLHOUSE_MASTER_ENCRYPTION_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),

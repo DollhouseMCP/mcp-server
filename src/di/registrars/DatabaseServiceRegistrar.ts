@@ -32,6 +32,7 @@
 import { env } from '../../config/env.js';
 import { createStdioSession } from '../../context/StdioSession.js';
 import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
+import type { DatabaseInstance } from '../../database/connection.js';
 import type { SessionIdResolver, UserIdResolver } from '../../database/UserContext.js';
 
 import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
@@ -52,7 +53,8 @@ export class DatabaseServiceRegistrar {
    *         retry, log, or abort.
    */
   public async bootstrapAndRegister(container: DiContainerFacade): Promise<void> {
-    if (!env.DOLLHOUSE_DATABASE_URL) {
+    const appConnectionUrl = env.DOLLHOUSE_DATABASE_URL;
+    if (!appConnectionUrl) {
       throw new Error(
         'DOLLHOUSE_STORAGE_BACKEND=database requires DOLLHOUSE_DATABASE_URL to be set',
       );
@@ -65,7 +67,7 @@ export class DatabaseServiceRegistrar {
     const { createSessionIdResolver, createUserIdResolver } = await import('../../database/UserContext.js');
 
     const result = await bootstrapDatabase({
-      connectionUrl: env.DOLLHOUSE_DATABASE_URL,
+      connectionUrl: appConnectionUrl,
       adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
       poolSize: env.DOLLHOUSE_DATABASE_POOL_SIZE,
       ssl: env.DOLLHOUSE_DATABASE_SSL,
@@ -85,6 +87,7 @@ export class DatabaseServiceRegistrar {
       : result.connection;
     container.register('SystemDatabaseConnection', () => systemConnection);
     container.register('SystemDatabaseInstance', () => systemConnection.db);
+    await this.registerWebConsoleProductionDatabaseReadiness(container, systemConnection.db);
 
     // Storage layer factory + state store classes — loaded here (async context)
     // so drizzle-orm stays out of the static import graph entirely. File-mode
@@ -142,7 +145,7 @@ export class DatabaseServiceRegistrar {
     container.register('UserIdentityService', () => new UserIdentityService({
       db: result.db,
       adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
-      appConnectionUrl: env.DOLLHOUSE_DATABASE_URL!,
+      appConnectionUrl,
       ssl: env.DOLLHOUSE_DATABASE_SSL,
     }));
 
@@ -156,6 +159,27 @@ export class DatabaseServiceRegistrar {
       ...createStdioSession(),
       userId: result.userId,
     }));
+  }
+
+  private async registerWebConsoleProductionDatabaseReadiness(
+    container: DiContainerFacade,
+    db: DatabaseInstance,
+  ): Promise<void> {
+    if (!env.DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME) return;
+
+    const {
+      createPostgresProductionDatabaseReadiness,
+      resolveWebConsoleProductionDatabaseVerificationFromEnv,
+    } = await import('../../web-console/WebConsoleProductionDatabaseReadiness.js');
+    const verification = resolveWebConsoleProductionDatabaseVerificationFromEnv(env);
+    if (!verification) return;
+
+    container.register('WebConsoleProductionDatabaseReadiness', () =>
+      createPostgresProductionDatabaseReadiness({
+        db,
+        ...verification,
+      })
+    );
   }
 
 }

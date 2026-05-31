@@ -4,6 +4,7 @@ import type { DatabaseInstance } from '../../../src/database/connection.js';
 import {
   WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES,
   createPostgresProductionDatabaseReadiness,
+  resolveWebConsoleProductionDatabaseVerificationFromEnv,
 } from '../../../src/web-console/index.js';
 
 const CUSTOM_REQUIRED_TABLE = 'custom_console_table';
@@ -95,6 +96,25 @@ describe('PostgresProductionDatabaseReadiness', () => {
     await expect(readiness.getReadiness()).resolves.toEqual({
       ready: true,
       failureCodes: [],
+    });
+  });
+});
+
+describe('resolveWebConsoleProductionDatabaseVerificationFromEnv', () => {
+  it('returns no verification config until the expected database name is configured', () => {
+    expect(resolveWebConsoleProductionDatabaseVerificationFromEnv({})).toBeUndefined();
+    expect(resolveWebConsoleProductionDatabaseVerificationFromEnv({
+      DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: 'dollhouse_admin',
+    })).toBeUndefined();
+  });
+
+  it('derives database identity verification from typed deployment env', () => {
+    expect(resolveWebConsoleProductionDatabaseVerificationFromEnv({
+      DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: 'dollhouse_prod',
+      DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: 'dollhouse_admin',
+    })).toEqual({
+      expectedDatabaseName: 'dollhouse_prod',
+      expectedCurrentUser: 'dollhouse_admin',
     });
   });
 });

@@ -34,6 +34,16 @@ export interface PostgresProductionDatabaseReadinessOptions {
   readonly requiredTables?: readonly string[];
 }
 
+export interface WebConsoleProductionDatabaseVerificationConfig {
+  readonly expectedDatabaseName: string;
+  readonly expectedCurrentUser?: string;
+}
+
+export interface WebConsoleProductionDatabaseVerificationEnv {
+  readonly DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME?: string;
+  readonly DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER?: string;
+}
+
 interface DatabaseIdentityRow {
   readonly databaseName: string;
   readonly currentUser: string;
@@ -154,6 +164,16 @@ export function createPostgresProductionDatabaseReadiness(
   options: PostgresProductionDatabaseReadinessOptions,
 ): IProductionDatabaseReadiness {
   return new PostgresProductionDatabaseReadiness(options);
+}
+
+export function resolveWebConsoleProductionDatabaseVerificationFromEnv(
+  env: WebConsoleProductionDatabaseVerificationEnv,
+): WebConsoleProductionDatabaseVerificationConfig | undefined {
+  if (!env.DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME) return undefined;
+  return {
+    expectedDatabaseName: env.DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME,
+    expectedCurrentUser: env.DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER,
+  };
 }
 
 export function productionDatabaseNotVerified(detail = 'Production database and migration state have not been verified.'): IProductionDatabaseReadiness {
