@@ -163,6 +163,16 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /**
+   * GitHub App OAuth credentials for the web-console portfolio integration.
+   * These are intentionally separate from console login GitHub credentials:
+   * integration grants are repository/portfolio capabilities, not identity
+   * authentication.
+   */
+  DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
    * Legacy GitHub OAuth client secret. Predates the env-var split
    * above. Kept as a fallback so existing operators don't break;
    * prefer `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` for new deployments.

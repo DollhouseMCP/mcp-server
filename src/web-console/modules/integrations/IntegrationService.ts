@@ -157,6 +157,7 @@ export class IntegrationService {
         code,
         codeVerifier: pkceVerifier,
         redirectUri: this.githubCallbackUri(),
+        installationId: singleQueryValue(req.query.installation_id),
       });
     } catch {
       await this.options.store.recordError({

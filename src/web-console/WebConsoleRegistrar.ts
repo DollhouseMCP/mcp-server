@@ -1,5 +1,6 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import { env } from '../config/env.js';
 import type { Router } from 'express';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
@@ -104,6 +105,10 @@ import {
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
+import {
+  GitHubAppIntegrationProvider,
+  type GitHubAppIntegrationProviderConfig,
+} from './modules/integrations/GitHubAppIntegrationProvider.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
 import {
@@ -135,6 +140,7 @@ import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStor
 import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 import {
   assertWebConsoleProductionActivation,
+  markWebConsoleProductionAdapter,
   type WebConsoleActivationProfile,
   type WebConsoleProductionRouteDependency,
   type WebConsoleProductionReadinessOptions,
@@ -187,6 +193,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   consoleOAuthClient: 'WebConsoleOAuthClient',
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
+  githubIntegrationProvider: 'WebConsoleGitHubIntegrationProvider',
   productionDatabaseReadiness: 'WebConsoleProductionDatabaseReadiness',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
   signingKeyStore: 'WebConsoleSigningKeyStore',
@@ -244,6 +251,7 @@ export interface WebConsoleRegistrarOptions {
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
+  readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
@@ -321,6 +329,7 @@ export interface WebConsoleComposition {
   readonly consoleOAuthClient: IConsoleOAuthClient | null;
   readonly authStorage: IAuthStorageLayer | null;
   readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
+  readonly githubIntegrationProvider: IGitHubIntegrationProvider | null;
   readonly operatorConfigStore: IOperatorConfigStore;
   readonly signingKeyStore: ISigningKeyStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
@@ -619,6 +628,7 @@ export class WebConsoleRegistrar {
       consoleOAuthClient,
       authStorage,
       accountInviteIssuer,
+      githubIntegrationProvider,
       operatorConfigStore,
       signingKeyStore,
       authPolicyStore,
@@ -881,6 +891,9 @@ function registerOptionalWebConsoleCompositionServices(
   }
   if (composition.accountInviteIssuer && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
     container.register(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer, () => composition.accountInviteIssuer);
+  }
+  if (composition.githubIntegrationProvider && !container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
+    container.register(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider, () => composition.githubIntegrationProvider);
   }
   registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore, () => composition.operatorConfigStore);
   registerIfMissing(container, WEB_CONSOLE_SERVICE_NAMES.signingKeyStore, () => composition.signingKeyStore);
@@ -1661,10 +1674,32 @@ function resolveGitHubIntegrationProvider(
   options: WebConsoleRegistrarOptions,
 ): IGitHubIntegrationProvider | null {
   if (options.githubIntegrationProvider !== undefined) return options.githubIntegrationProvider;
-  if (container.hasRegistration('WebConsoleGitHubIntegrationProvider')) {
-    return container.resolve<IGitHubIntegrationProvider>('WebConsoleGitHubIntegrationProvider');
+  const config = resolveGitHubIntegrationProviderConfig(options);
+  if (config) {
+    return markWebConsoleProductionAdapter(new GitHubAppIntegrationProvider(config), {
+      productionReady: true,
+      adapterName: 'GitHubAppIntegrationProvider',
+    });
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
+    return container.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider);
   }
   return null;
+}
+
+function resolveGitHubIntegrationProviderConfig(
+  options: WebConsoleRegistrarOptions,
+): GitHubAppIntegrationProviderConfig | null {
+  if (options.githubIntegrationProviderConfig !== undefined) {
+    return options.githubIntegrationProviderConfig;
+  }
+  if (!env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID || !env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET) {
+    return null;
+  }
+  return {
+    clientId: env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID,
+    clientSecret: env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET,
+  };
 }
 
 function resolvePortfolioElementStore(

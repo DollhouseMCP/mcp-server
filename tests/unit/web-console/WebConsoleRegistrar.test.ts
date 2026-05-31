@@ -442,6 +442,30 @@ describe('WebConsoleRegistrar', () => {
       .toThrow('GitHub integration provider requires publicBaseUrl');
   });
 
+  it('constructs a production GitHub integration provider from explicit config', async () => {
+    const {
+      GitHubAppIntegrationProvider,
+      WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
+    } = await import('../../../src/web-console/index.js');
+    const container = new TestContainer();
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 251),
+      registerCleanup: false,
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      githubIntegrationProviderConfig: {
+        clientId: 'Iv1.test-client',
+        clientSecret: 'github-client-secret',
+        fetch: jest.fn<typeof fetch>(),
+      },
+    }).bootstrapAndRegister(container);
+
+    expect(composition.githubIntegrationProvider).toBeInstanceOf(GitHubAppIntegrationProvider);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider))
+      .toBe(composition.githubIntegrationProvider);
+  });
+
   it('fails hosted/shared activation with all production invariant failures instead of mounting', async () => {
     const { WebConsoleProductionActivationError, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 

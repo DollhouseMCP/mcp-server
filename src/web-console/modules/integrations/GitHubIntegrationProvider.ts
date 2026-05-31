@@ -13,6 +13,7 @@ export interface GitHubIntegrationTokenExchangeRequest {
   readonly code: string;
   readonly codeVerifier: string;
   readonly redirectUri: string;
+  readonly installationId?: string | null;
 }
 
 export interface GitHubIntegrationTokenExchangeResult {
