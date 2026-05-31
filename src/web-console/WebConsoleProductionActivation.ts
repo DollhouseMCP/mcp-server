@@ -68,6 +68,10 @@ const KNOWN_PROCESS_LOCAL_ADAPTERS = new Set<string>([
   'GatekeeperSessionApprovalStore',
   'GatekeeperSessionStateReader',
 ]);
+const ROUTE_MODULES_WITH_GLOBAL_PRODUCTION_DEPENDENCIES = new Set<string>([
+  'auth',
+  'health',
+]);
 
 const ADAPTER_METADATA = new WeakMap<object | ((...args: never[]) => unknown), WebConsoleProductionAdapterMetadata>();
 
@@ -150,6 +154,15 @@ function requireRegisteredRouteDependencies(
   inputs: WebConsoleProductionActivationInputs,
 ): void {
   const registeredRouteModuleIds = new Set(inputs.registeredRouteModuleIds ?? []);
+  const dependencyModuleIds = new Set((inputs.routeDependencies ?? []).map(dependency => dependency.moduleId));
+  for (const moduleId of registeredRouteModuleIds) {
+    if (ROUTE_MODULES_WITH_GLOBAL_PRODUCTION_DEPENDENCIES.has(moduleId)) continue;
+    if (dependencyModuleIds.has(moduleId)) continue;
+    failures.push({
+      code: `${moduleId}_production_dependencies_undeclared`,
+      detail: `${moduleId} routes are registered without a production dependency declaration; omit the module or declare its production dependencies before hosted/shared activation.`,
+    });
+  }
   for (const dependency of inputs.routeDependencies ?? []) {
     if (!registeredRouteModuleIds.has(dependency.moduleId)) continue;
     const failure = productionAdapterFailure(

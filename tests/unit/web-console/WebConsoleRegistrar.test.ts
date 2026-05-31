@@ -919,6 +919,60 @@ describe('WebConsoleRegistrar', () => {
     }
   });
 
+  it('rejects registered route modules without production dependency declarations', async () => {
+    const {
+      WebConsoleProductionActivationError,
+      assertWebConsoleProductionActivation,
+    } = await import('../../../src/web-console/index.js');
+    const inputs = {
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres' as const,
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        databaseVerificationReady: true,
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: {},
+      services: productionActivationServices(),
+      registeredRouteModuleIds: ['health', 'auth', 'operations'],
+      routeDependencies: [],
+    };
+
+    expect(() => assertWebConsoleProductionActivation(inputs)).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation(inputs);
+    } catch (error) {
+      expect(error).toMatchObject({
+        failures: [
+          expect.objectContaining({
+            code: 'operations_production_dependencies_undeclared',
+            detail: 'operations routes are registered without a production dependency declaration; omit the module or declare its production dependencies before hosted/shared activation.',
+          }),
+        ],
+      });
+    }
+  });
+
+  it('allows globally checked health and auth modules without route dependency declarations', async () => {
+    const { assertWebConsoleProductionActivation } = await import('../../../src/web-console/index.js');
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        databaseVerificationReady: true,
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: {},
+      services: productionActivationServices(),
+      registeredRouteModuleIds: ['health', 'auth'],
+      routeDependencies: [],
+    })).not.toThrow();
+  });
+
   it('keeps declared route dependency module ids aligned with registered descriptors', async () => {
     const {
       ConsoleModuleRegistry,
