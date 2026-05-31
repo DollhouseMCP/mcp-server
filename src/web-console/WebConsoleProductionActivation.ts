@@ -35,6 +35,13 @@ export interface WebConsoleProductionAdapterMetadata {
   readonly detail?: string;
 }
 
+export interface WebConsoleProductionRouteDependency {
+  readonly moduleId: string;
+  readonly dependencyName: string;
+  readonly value: unknown;
+  readonly detail?: string;
+}
+
 export class WebConsoleProductionActivationError extends Error {
   readonly failures: readonly WebConsoleProductionActivationFailure[];
 
@@ -52,6 +59,8 @@ export interface WebConsoleProductionActivationInputs {
   readonly readiness?: WebConsoleProductionReadinessOptions;
   readonly stores: Readonly<Record<string, unknown>>;
   readonly services: Readonly<Record<string, unknown>>;
+  readonly registeredRouteModuleIds?: readonly string[];
+  readonly routeDependencies?: readonly WebConsoleProductionRouteDependency[];
 }
 
 const KNOWN_PROCESS_LOCAL_ADAPTERS = new Set<string>([
@@ -110,6 +119,7 @@ export function assertWebConsoleProductionActivation(
   for (const [name, value] of Object.entries(inputs.services)) {
     requireProductionAdapter(failures, name, value);
   }
+  requireRegisteredRouteDependencies(failures, inputs);
 
   requirePresent(failures, 'authStorage', inputs.services.authStorage);
   requirePresent(failures, 'secretEncryption', inputs.services.secretEncryption);
@@ -128,34 +138,60 @@ function requireProductionAdapter(
   name: string,
   value: unknown,
 ): void {
-  requirePresent(failures, name, value);
-  if (!value) return;
-  const metadata = productionAdapterMetadata(value);
-  if (metadata) {
-    requireMetadataProductionAdapter(failures, name, metadata);
-    return;
-  }
-  const adapter = adapterName(value);
-  if (isKnownUnsafeAdapter(adapter)) {
-    failures.push({
-      code: `${name}_not_production_ready`,
-      detail: `${name} uses ${adapter}; hosted/shared activation requires a durable or externally managed production adapter.`,
-    });
+  const failure = productionAdapterFailure(name, value);
+  if (failure) failures.push(failure);
+}
+
+function requireRegisteredRouteDependencies(
+  failures: WebConsoleProductionActivationFailure[],
+  inputs: WebConsoleProductionActivationInputs,
+): void {
+  const registeredRouteModuleIds = new Set(inputs.registeredRouteModuleIds ?? []);
+  for (const dependency of inputs.routeDependencies ?? []) {
+    if (!registeredRouteModuleIds.has(dependency.moduleId)) continue;
+    const failure = productionAdapterFailure(
+      `${dependency.moduleId}_${dependency.dependencyName}`,
+      dependency.value,
+      dependency.detail,
+    );
+    if (failure) failures.push(failure);
   }
 }
 
-function requireMetadataProductionAdapter(
-  failures: WebConsoleProductionActivationFailure[],
+function productionAdapterFailure(
+  name: string,
+  value: unknown,
+  detail?: string,
+): WebConsoleProductionActivationFailure | null {
+  const missing = missingFailure(name, value);
+  if (missing) return missing;
+  const metadata = productionAdapterMetadata(value);
+  if (metadata) {
+    return metadataProductionAdapterFailure(name, metadata, detail);
+  }
+  const adapter = adapterName(value);
+  if (isKnownUnsafeAdapter(adapter)) {
+    return {
+      code: `${name}_not_production_ready`,
+      detail: detail ??
+        `${name} uses ${adapter}; hosted/shared activation requires a durable or externally managed production adapter.`,
+    };
+  }
+  return null;
+}
+
+function metadataProductionAdapterFailure(
   name: string,
   metadata: WebConsoleProductionAdapterMetadata,
-): void {
-  if (metadata.productionReady) return;
+  detail?: string,
+): WebConsoleProductionActivationFailure | null {
+  if (metadata.productionReady) return null;
   const adapter = metadata.adapterName ?? 'explicitly-marked-adapter';
-  failures.push({
+  return {
     code: `${name}_not_production_ready`,
-    detail: metadata.detail ??
+    detail: detail ?? metadata.detail ??
       `${name} uses ${adapter}; hosted/shared activation requires a durable or externally managed production adapter.`,
-  });
+  };
 }
 
 function productionAdapterMetadata(value: unknown): WebConsoleProductionAdapterMetadata | null {
@@ -169,13 +205,22 @@ function requirePresent(
   name: string,
   value: unknown,
 ): void {
-  if (value !== null && value !== undefined && value !== '') return;
+  const failure = missingFailure(name, value);
+  if (!failure) return;
+  if (failures.some(existing => existing.code === failure.code)) return;
+  failures.push(failure);
+}
+
+function missingFailure(
+  name: string,
+  value: unknown,
+): WebConsoleProductionActivationFailure | null {
+  if (value !== null && value !== undefined && value !== '') return null;
   const code = `${name}_missing`;
-  if (failures.some(failure => failure.code === code)) return;
-  failures.push({
+  return {
     code,
     detail: `${name} is required for hosted/shared web-console activation.`,
-  });
+  };
 }
 
 function requireCondition(

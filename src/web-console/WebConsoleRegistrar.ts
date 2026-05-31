@@ -119,6 +119,7 @@ import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/Co
 import {
   assertWebConsoleProductionActivation,
   type WebConsoleActivationProfile,
+  type WebConsoleProductionRouteDependency,
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
 import { createConsoleBffAuthModule, type IConsoleOAuthClient } from './auth/index.js';
@@ -438,6 +439,21 @@ export class WebConsoleRegistrar {
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       readiness: productionReadiness,
       stores,
+      registeredRouteModuleIds: registeredRouteModuleIds(registry),
+      routeDependencies: createProductionRouteDependencies({
+        stores,
+        services: {
+          accountInviteIssuer,
+          approvalAuditQuery,
+          authenticationAuditQuery,
+          githubIntegrationProvider,
+          ownedActivityQuery,
+          ownedMetricQuery,
+          sessionExecutionReader,
+          sessionGatekeeperReader,
+          telemetryQuery,
+        },
+      }),
       services: {
         authStorage,
         secretEncryption,
@@ -450,18 +466,11 @@ export class WebConsoleRegistrar {
         integrationPublicBaseUrl,
         adminAuditWriter,
         adminAuditQuery,
-        approvalAuditQuery,
-        authenticationAuditQuery,
         accountAdminMutationTransactionRunner,
         sessionActivationStateAdapter,
         sessionActivationEventSink,
         sessionApprovalStore,
         sessionApprovalEventSink,
-        sessionExecutionReader,
-        sessionGatekeeperReader,
-        telemetryQuery,
-        ownedActivityQuery,
-        ownedMetricQuery,
         operatorConfigStore,
         signingKeyStore,
         authPolicyStore,
@@ -548,6 +557,66 @@ export class WebConsoleRegistrar {
     scheduler.register(container.resolve('LifecycleService'));
     return scheduler;
   }
+}
+
+export function registeredRouteModuleIds(registry: ConsoleModuleRegistry): readonly string[] {
+  return [...new Set(registry.createRouteManifest().routes.map(route => route.moduleId))];
+}
+
+export function createProductionRouteDependencies(options: {
+  readonly stores: ConsoleStoreSet;
+  readonly services: {
+    readonly accountInviteIssuer: IConsoleAccountInviteIssuer | null;
+    readonly approvalAuditQuery: IApprovalAuditQuery;
+    readonly authenticationAuditQuery: IAuthenticationAuditQuery;
+    readonly githubIntegrationProvider: IGitHubIntegrationProvider | null;
+    readonly ownedActivityQuery: IOwnedActivityQuery;
+    readonly ownedMetricQuery: IOwnedMetricQuery;
+    readonly sessionExecutionReader: SessionExecutionReader;
+    readonly sessionGatekeeperReader: SessionGatekeeperReader;
+    readonly telemetryQuery: IConsoleTelemetryQuery;
+  };
+}): readonly WebConsoleProductionRouteDependency[] {
+  return [
+    routeDependency('accountAdmin', 'accountInviteIssuer', options.services.accountInviteIssuer,
+      'accountAdmin invite routes require a production invite issuer or must be omitted before hosted/shared mount.'),
+    routeDependency('activations', 'portfolioStore', options.stores.portfolioStore,
+      'activation routes require production portfolio persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('audit', 'approvalAuditQuery', options.services.approvalAuditQuery,
+      'audit approval routes require a production approval-audit query backend or must be omitted before hosted/shared mount.'),
+    routeDependency('audit', 'authenticationAuditQuery', options.services.authenticationAuditQuery,
+      'audit authentication routes require a production authentication-audit query backend or must be omitted before hosted/shared mount.'),
+    routeDependency('executions', 'sessionExecutionReader', options.services.sessionExecutionReader,
+      'execution routes require a production execution-state reader or must be omitted before hosted/shared mount.'),
+    routeDependency('executions', 'sessionGatekeeperReader', options.services.sessionGatekeeperReader,
+      'Gatekeeper execution routes require a production live Gatekeeper reader or must be omitted before hosted/shared mount.'),
+    routeDependency('integrations', 'githubIntegrationProvider', options.services.githubIntegrationProvider,
+      'integration routes require a production GitHub provider or must be omitted before hosted/shared mount.'),
+    routeDependency('operations', 'telemetryQuery', options.services.telemetryQuery,
+      'operator telemetry routes require a production telemetry query backend or must be omitted before hosted/shared mount.'),
+    routeDependency('portfolio', 'portfolioStore', options.stores.portfolioStore,
+      'portfolio routes require production portfolio persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('portfolio', 'portfolioSyncJobStore', options.stores.portfolioSyncJobStore,
+      'portfolio sync routes require production sync-job persistence or must be omitted before hosted/shared mount.'),
+    routeDependency('session-telemetry', 'ownedActivityQuery', options.services.ownedActivityQuery,
+      'owned session log routes require a production activity query backend or must be omitted before hosted/shared mount.'),
+    routeDependency('session-telemetry', 'ownedMetricQuery', options.services.ownedMetricQuery,
+      'owned session metric routes require a production metric query backend or must be omitted before hosted/shared mount.'),
+  ];
+}
+
+function routeDependency(
+  moduleId: string,
+  dependencyName: string,
+  value: unknown,
+  detail: string,
+): WebConsoleProductionRouteDependency {
+  return {
+    moduleId,
+    dependencyName,
+    value,
+    detail,
+  };
 }
 
 function registerIfMissing<T>(container: DiContainerFacade, name: string, factory: () => T): void {

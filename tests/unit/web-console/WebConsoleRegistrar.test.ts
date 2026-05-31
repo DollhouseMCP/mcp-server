@@ -668,6 +668,175 @@ describe('WebConsoleRegistrar', () => {
     }
   });
 
+  it('rejects production route dependencies for registered modules when backends are deferred defaults', async () => {
+    const {
+      WebConsoleProductionActivationError,
+      InMemoryConsoleTelemetryQuery,
+      assertWebConsoleProductionActivation,
+    } = await import('../../../src/web-console/index.js');
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: {},
+      services: productionActivationServices(),
+      registeredRouteModuleIds: ['operations'],
+      routeDependencies: [{
+        moduleId: 'operations',
+        dependencyName: 'telemetryQuery',
+        value: new InMemoryConsoleTelemetryQuery(),
+        detail: 'operator telemetry routes require a production telemetry query backend.',
+      }, {
+        moduleId: 'sessionTelemetry',
+        dependencyName: 'ownedActivityQuery',
+        value: new InMemoryConsoleTelemetryQuery(),
+      }],
+    })).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation({
+        activationProfile: SHARED_HOSTED_PROFILE,
+        storageBackend: 'postgres',
+        enableAccountAllowlistRoutes: false,
+        readiness: {
+          securityInvalidationProcessorReady: true,
+          portfolioSyncWorkerReady: true,
+        },
+        stores: {},
+        services: productionActivationServices(),
+        registeredRouteModuleIds: ['operations'],
+        routeDependencies: [{
+          moduleId: 'operations',
+          dependencyName: 'telemetryQuery',
+          value: new InMemoryConsoleTelemetryQuery(),
+          detail: 'operator telemetry routes require a production telemetry query backend.',
+        }, {
+          moduleId: 'sessionTelemetry',
+          dependencyName: 'ownedActivityQuery',
+          value: new InMemoryConsoleTelemetryQuery(),
+        }],
+      });
+    } catch (error) {
+      expect(error).toMatchObject({
+        failures: [expect.objectContaining({
+          code: 'operations_telemetryQuery_not_production_ready',
+          detail: 'operator telemetry routes require a production telemetry query backend.',
+        })],
+      });
+    }
+  });
+
+  it('keeps declared route dependency module ids aligned with registered descriptors', async () => {
+    const {
+      ConsoleModuleRegistry,
+      InMemoryConsoleTelemetryQuery,
+      InMemoryOwnedActivityQuery,
+      InMemoryOwnedMetricQuery,
+      InMemoryPortfolioElementStore,
+      InMemoryPortfolioSyncJobStore,
+      InMemoryRuntimeSessionControlStore,
+      InMemorySessionExecutionReader,
+      createAccountAdminModule,
+      createActivationModule,
+      createAuditModule,
+      createExecutionModule,
+      createIntegrationModule,
+      createOperationsModule,
+      createPortfolioModule,
+      createSessionTelemetryModule,
+      createProductionRouteDependencies,
+      registeredRouteModuleIds,
+    } = await import('../../../src/web-console/index.js');
+    const registry = new ConsoleModuleRegistry();
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    registry.register(createAccountAdminModule({
+      accountAdminStore: productionAdapter(),
+      accountAllowlistStore: productionAdapter(),
+      sessionStore: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      enableAccountAllowlistRoutes: false,
+    }));
+    registry.register(createActivationModule({
+      runtimeStore,
+      portfolioStore,
+      activationState: productionAdapter(),
+    }));
+    registry.register(createAuditModule({
+      adminAuditQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
+    }));
+    registry.register(createExecutionModule({
+      runtimeStore,
+      executionReader: new InMemorySessionExecutionReader(),
+      gatekeeperReader: productionAdapter(),
+    }));
+    registry.register(createIntegrationModule({
+      integrationStore: productionAdapter(),
+      loginTransactions: productionAdapter(),
+      opaqueValues: productionAdapter(),
+      secretEncryption: productionAdapter(),
+      githubProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+    }));
+    registry.register(createOperationsModule({
+      healthChecks: {
+        database: () => true,
+        authServer: () => true,
+        gatekeeper: () => true,
+        runtimeControl: () => true,
+        securityInvalidation: () => Promise.resolve({
+          component: 'security_invalidation',
+          status: 'ok',
+          checked_at: new Date(0).toISOString(),
+          failure_codes: [],
+        }),
+        apiMount: () => ({ component: 'api_mount', status: 'ok', checked_at: new Date(0).toISOString(), failure_codes: [] }),
+      },
+      telemetry: new InMemoryConsoleTelemetryQuery(),
+      operatorConfigStore: productionAdapter(),
+    }));
+    registry.register(createPortfolioModule({
+      portfolioStore,
+      integrationStore: productionAdapter(),
+      syncJobStore: new InMemoryPortfolioSyncJobStore(),
+    }));
+    registry.register(createSessionTelemetryModule({
+      runtimeStore,
+      ownedActivityQuery: new InMemoryOwnedActivityQuery(),
+      ownedMetricQuery: new InMemoryOwnedMetricQuery(),
+    }));
+
+    const registeredIds = new Set(registeredRouteModuleIds(registry));
+    const dependencies = createProductionRouteDependencies({
+      stores: {
+        portfolioStore,
+        portfolioSyncJobStore: new InMemoryPortfolioSyncJobStore(),
+      } as Parameters<typeof createProductionRouteDependencies>[0]['stores'],
+      services: {
+        accountInviteIssuer: productionAdapter(),
+        approvalAuditQuery: productionAdapter(),
+        authenticationAuditQuery: productionAdapter(),
+        githubIntegrationProvider: productionAdapter(),
+        ownedActivityQuery: new InMemoryOwnedActivityQuery(),
+        ownedMetricQuery: new InMemoryOwnedMetricQuery(),
+        sessionExecutionReader: new InMemorySessionExecutionReader(),
+        sessionGatekeeperReader: productionAdapter(),
+        telemetryQuery: new InMemoryConsoleTelemetryQuery(),
+      },
+    });
+
+    expect([...new Set(dependencies.map(dependency => dependency.moduleId))].sort()).toEqual(
+      [...registeredIds].filter(moduleId => moduleId !== 'health').sort(),
+    );
+    expect(dependencies.every(dependency => registeredIds.has(dependency.moduleId))).toBe(true);
+  });
+
   it('honors explicit production adapter metadata before constructor-name checks', async () => {
     const {
       WebConsoleProductionActivationError,
