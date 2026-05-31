@@ -538,7 +538,6 @@ describe('WebConsoleRegistrar', () => {
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'activations_portfolioStore_not_production_ready' }),
         expect.objectContaining({ code: 'activations_sessionActivationStateAdapter_not_production_ready' }),
         expect.objectContaining({ code: 'activations_sessionActivationEventSink_not_production_ready' }),
         expect.objectContaining({ code: 'approvals_sessionApprovalStore_not_production_ready' }),
@@ -549,7 +548,6 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'executions_sessionGatekeeperReader_not_production_ready' }),
         expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
         expect.objectContaining({ code: 'operations_telemetryQuery_not_production_ready' }),
-        expect.objectContaining({ code: 'portfolio_portfolioStore_not_production_ready' }),
         expect.objectContaining({ code: 'session-telemetry_ownedActivityQuery_not_production_ready' }),
         expect.objectContaining({ code: 'session-telemetry_ownedMetricQuery_not_production_ready' }),
       ]),
@@ -1291,7 +1289,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.integrationStore.constructor.name).toBe('PostgresUserIntegrationStore');
-    expect(composition.portfolioStore.constructor.name).toBe('InMemoryPortfolioElementStore');
+    expect(composition.portfolioStore.constructor.name).toBe('PostgresPortfolioElementStore');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
     expect(composition.adminAuditQuery.constructor.name).toBe('PostgresAdminAuditQuery');

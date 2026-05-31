@@ -1055,6 +1055,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
       { PostgresUserIntegrationStore },
+      { PostgresPortfolioElementStore },
       { PostgresPortfolioSyncJobStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresRuntimeSessionControlStore },
@@ -1067,6 +1068,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./stores/PostgresUserIntegrationStore.js'),
+      import('./stores/PostgresPortfolioElementStore.js'),
       import('./stores/PostgresPortfolioSyncJobStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
@@ -1080,11 +1082,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       accountAdminStore: new PostgresConsoleAccountAdminStore(database),
       accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
       integrationStore: new PostgresUserIntegrationStore(database),
+      portfolioStore: new PostgresPortfolioElementStore(database),
       portfolioSyncJobStore: new PostgresPortfolioSyncJobStore(database),
-      // Portfolio persistence is intentionally behind a typed reader boundary:
-      // the production adapter may be filesystem-, database-, or manager-backed.
-      // That adapter is deferred while /api/v1 remains unmounted.
-      portfolioStore: new InMemoryPortfolioElementStore(),
       securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
       runtimeSessionControlStore: new PostgresRuntimeSessionControlStore(database),
       identityResolver: new PostgresConsoleIdentityResolver(database),
