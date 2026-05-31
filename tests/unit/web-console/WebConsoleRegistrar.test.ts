@@ -118,6 +118,18 @@ function productionAdapter<T>(): T {
   return new ProductionAdapter() as T;
 }
 
+function productionDatabaseRows() {
+  return [
+    { databaseName: 'dollhouse_prod', currentUser: 'dollhouse_app' },
+  ];
+}
+
+function productionRequiredTableRows(tableNames: readonly string[]) {
+  return tableNames.map(tableName => ({
+    tableName,
+  }));
+}
+
 function productionActivationServices() {
   return {
     authStorage: productionAdapter(),
@@ -680,21 +692,29 @@ describe('WebConsoleRegistrar', () => {
 
   it('omits selected route modules before hosted/shared production dependency checks', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    const {
+      WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
+      WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const database = {
+      execute: jest.fn()
+        .mockResolvedValueOnce(productionDatabaseRows())
+        .mockResolvedValueOnce(productionRequiredTableRows(WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES)),
+    };
+    container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
-    const {
-      WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
-      productionDatabaseReady,
-      WebConsoleRegistrar,
-    } = await import('../../../src/web-console/index.js');
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
       omittedRouteModuleIds: WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
-      productionDatabaseReadiness: productionDatabaseReady(),
+      productionDatabaseVerification: {
+        expectedDatabaseName: 'dollhouse_prod',
+        expectedCurrentUser: 'dollhouse_app',
+      },
       productionReadiness: {
         portfolioSyncWorkerReady: true,
       },

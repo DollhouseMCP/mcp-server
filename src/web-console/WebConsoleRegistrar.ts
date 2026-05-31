@@ -128,6 +128,7 @@ import {
   type WebConsoleProductionReadinessOptions,
 } from './WebConsoleProductionActivation.js';
 import {
+  createPostgresProductionDatabaseReadiness,
   productionDatabaseNotVerified,
   type IProductionDatabaseReadiness,
 } from './WebConsoleProductionDatabaseReadiness.js';
@@ -210,6 +211,10 @@ export interface WebConsoleRegistrarOptions {
   readonly deploymentSignal?: WebConsoleDeploymentSignal;
   readonly productionReadiness?: WebConsoleProductionReadinessOptions;
   readonly productionDatabaseReadiness?: IProductionDatabaseReadiness | null;
+  readonly productionDatabaseVerification?: {
+    readonly expectedDatabaseName: string;
+    readonly expectedCurrentUser?: string;
+  };
   readonly omittedRouteModuleIds?: readonly WebConsoleOmittableRouteModuleId[];
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
@@ -370,6 +375,7 @@ export class WebConsoleRegistrar {
       securityInvalidationReadiness,
       this.options,
       container,
+      database,
     );
     const apiV1MountState = createApiV1MountState();
     const operationHealthChecks = createOperationHealthChecks({
@@ -920,9 +926,10 @@ async function resolveProductionReadinessForActivation(
   securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness,
   options: WebConsoleRegistrarOptions,
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
 ): Promise<WebConsoleProductionReadinessOptions | undefined> {
   if (activationProfile !== 'shared-hosted') return options.productionReadiness;
-  const databaseReadiness = await resolveProductionDatabaseReadiness(options, container).getReadiness();
+  const databaseReadiness = await resolveProductionDatabaseReadiness(options, container, database).getReadiness();
   return {
     ...options.productionReadiness,
     databaseVerificationReady: options.productionReadiness?.databaseVerificationReady ?? databaseReadiness.ready,
@@ -933,8 +940,15 @@ async function resolveProductionReadinessForActivation(
 function resolveProductionDatabaseReadiness(
   options: WebConsoleRegistrarOptions,
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
 ): IProductionDatabaseReadiness {
   if (options.productionDatabaseReadiness) return options.productionDatabaseReadiness;
+  if (options.productionDatabaseVerification && database) {
+    return createPostgresProductionDatabaseReadiness({
+      db: database,
+      ...options.productionDatabaseVerification,
+    });
+  }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness)) {
     return container.resolve<IProductionDatabaseReadiness>(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness);
   }
