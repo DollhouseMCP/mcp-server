@@ -36,7 +36,7 @@ import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLa
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 
 const LOCAL_PROVIDER = 'local';
 /** Single error reason returned to users; precise causes go to logs only. */
@@ -96,6 +96,8 @@ export interface LocalAccountMethodOptions {
    * allowlist.
    */
   allowlistRequired?: boolean;
+  /** Optional replacement sign-in allowlist authority for hosted console cutover. */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
 }
 
 export class LocalAccountMethod implements IAuthMethod {
@@ -104,24 +106,24 @@ export class LocalAccountMethod implements IAuthMethod {
 
   constructor(private readonly options: LocalAccountMethodOptions) {}
 
-  async beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
+  beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
     // Two render paths key off the OAuth request's resource/state — but
     // simpler: detect an invite token in the URL via the request URL's query.
     // The InteractionRouter's GET handler doesn't pass query through to begin;
     // we render a single page that can handle both invite + login depending
     // on which fields the user fills in.
-    return {
+    return Promise.resolve({
       kind: 'render-html',
       html: renderLoginOrInvitePage(),
       csrfToken: '', // InteractionRouter stamps the real token.
-    };
+    });
   }
 
   async completeInteraction(
     _ctx: InteractionContext,
     input: InteractionInput,
   ): Promise<InteractionResult> {
-    const form = input.formBody ?? {};
+    const form: Partial<Record<string, string>> = input.formBody ?? {};
     const action = String(form.action ?? '');
 
     if (action === 'set-password') {
@@ -268,7 +270,11 @@ export class LocalAccountMethod implements IAuthMethod {
         provider: LOCAL_PROVIDER,
         externalSub,
       },
-      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
     );
     if (!gate.allowed) {
       return { kind: 'denied', reason: gate.reason };
@@ -316,7 +322,7 @@ export class LocalAccountMethod implements IAuthMethod {
     return { kind: 'ok', sub, email: consume.payload.email };
   }
 
-  private async handleSetPassword(form: Record<string, string>): Promise<InteractionResult> {
+  private async handleSetPassword(form: Partial<Record<string, string>>): Promise<InteractionResult> {
     const inviteToken = String(form.invite ?? '');
     const newPassword = String(form.password ?? '');
     const result = await this.consumeInvite(inviteToken, newPassword);
@@ -375,19 +381,17 @@ export class LocalAccountMethod implements IAuthMethod {
     const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
 
     router.get('/auth/local/invite', (req, res, next) => {
-      void (async () => {
-        try {
-          const token = typeof req.query.invite === 'string' ? req.query.invite : '';
-          const verified = this.verifyInvite(token);
-          if (!verified.ok) {
-            res.status(400).type('html').send(renderInviteError(verified.reason));
-            return;
-          }
-          res.type('html').send(this.renderInviteForm(token, verified.email));
-        } catch (err) {
-          next(err);
+      try {
+        const token = typeof req.query.invite === 'string' ? req.query.invite : '';
+        const verified = this.verifyInvite(token);
+        if (!verified.ok) {
+          res.status(400).type('html').send(renderInviteError(verified.reason));
+          return;
         }
-      })();
+        res.type('html').send(this.renderInviteForm(token, verified.email));
+      } catch (err) {
+        next(err);
+      }
     });
 
     router.post('/auth/local/invite', bodyParser, (req, res, next) => {
@@ -418,7 +422,7 @@ export class LocalAccountMethod implements IAuthMethod {
   }
 
   private async handleLogin(
-    form: Record<string, string>,
+    form: Partial<Record<string, string>>,
     ip: string,
   ): Promise<InteractionResult> {
     // Lowercase + trim so 'Alice' and 'alice' don't get independent rate-limit
@@ -472,6 +476,10 @@ export class LocalAccountMethod implements IAuthMethod {
       await this.options.rateLimiter.noteFailure(sub, ip);
       return { kind: 'denied', reason: 'invalid credentials' };
     }
+    if (!account) {
+      await this.options.rateLimiter.noteFailure(sub, ip);
+      return { kind: 'denied', reason: 'invalid credentials' };
+    }
 
     // Sign-in allowlist gate. Runs AFTER password verification succeeds
     // so we don't leak "this user is on the allowlist" via timing/error
@@ -482,11 +490,15 @@ export class LocalAccountMethod implements IAuthMethod {
       {
         sub,
         method: 'local-password',
-        email: account?.email,
+        email: account.email,
         provider: LOCAL_PROVIDER,
         externalSub: sub.replace(/^local_/, ''),
       },
-      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
     );
     if (!gate.allowed) {
       // Generic message — don't disclose whether the failure was credentials
@@ -499,8 +511,8 @@ export class LocalAccountMethod implements IAuthMethod {
       kind: 'authenticated',
       identity: {
         sub,
-        displayName: account!.displayName,
-        email: account!.email,
+        displayName: account.displayName,
+        email: account.email,
         emailVerified: false,
       },
     };

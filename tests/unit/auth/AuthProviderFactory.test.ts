@@ -12,8 +12,11 @@ import {
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
+import type { SignInAllowlistAuthority } from '../../../src/auth/embedded-as/allowlistGate.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
+const LOOPBACK_BASE_URL = 'http://127.0.0.1:65530';
+const ALICE_EMAIL = 'alice@example.com';
 
 describe('AuthProviderFactory two-level structure', () => {
   describe('selectAuthMode', () => {
@@ -86,7 +89,7 @@ describe('AuthProviderFactory two-level structure', () => {
         provider: 'embedded',
         methods: [TRIVIAL_CONSENT_ID],
         methodFactory: factory,
-        publicBaseUrl: 'http://127.0.0.1:65530',
+        publicBaseUrl: LOOPBACK_BASE_URL,
       }).catch(err => err);
       // Either we got a provider back, or the failure is NOT about method registration.
       if (result instanceof Error) {
@@ -148,13 +151,49 @@ describe('AuthProviderFactory two-level structure', () => {
         storage,
         signingKeyStore,
         rateLimitStore: new InMemoryRateLimitStore(),
-        publicBaseUrl: 'http://127.0.0.1:65530',
+        publicBaseUrl: LOOPBACK_BASE_URL,
       });
 
       expect(provider).toBeDefined();
       const active = await signingKeyStore.getActive('invite');
       expect(active).not.toBeNull();
       expect(active?.payload.secret).toEqual(expect.any(String));
+    });
+  });
+
+  describe('sign-in allowlist authority cutover', () => {
+    it('accepts cutover when legacy auth_allowlist entries are represented by the injected authority', async () => {
+      const storage = new InMemoryAuthStorageLayer();
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
+
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['local-password'],
+        storage,
+        signingKeyStore: new InMemorySigningKeyStore(),
+        rateLimitStore: new InMemoryRateLimitStore(),
+        publicBaseUrl: LOOPBACK_BASE_URL,
+        signInAllowlistAuthority: fixedAuthority([{ kind: 'email', value: 'ALICE@example.com' }]),
+      });
+
+      expect(provider).toBeDefined();
+    });
+
+    it('refuses cutover when legacy auth_allowlist entries are missing from the injected authority', async () => {
+      const storage = new InMemoryAuthStorageLayer();
+      await storage.allowlistAdd({ kind: 'email', value: ALICE_EMAIL });
+
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: ['local-password'],
+        storage,
+        signingKeyStore: new InMemorySigningKeyStore(),
+        rateLimitStore: new InMemoryRateLimitStore(),
+        publicBaseUrl: LOOPBACK_BASE_URL,
+        signInAllowlistAuthority: fixedAuthority([]),
+      })).rejects.toThrow(/cutover refused/);
     });
   });
 
@@ -199,7 +238,7 @@ describe('AuthProviderFactory two-level structure', () => {
         enabled: true,
         provider: 'embedded',
         methods: [TRIVIAL_CONSENT_ID],
-        publicBaseUrl: 'http://127.0.0.1:65530',
+        publicBaseUrl: LOOPBACK_BASE_URL,
       });
       expect(provider).toBeDefined();
     });
@@ -296,3 +335,22 @@ describe('AuthProviderFactory two-level structure', () => {
     });
   });
 });
+
+function fixedAuthority(entries: readonly { readonly kind: 'email' | 'github_username' | 'github_id'; readonly value: string }[]): SignInAllowlistAuthority {
+  return {
+    hasAnyEntries: () => Promise.resolve(entries.length > 0),
+    listEntries: () => Promise.resolve(entries.map((entry, index) => ({
+      id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+      kind: entry.kind,
+      value: entry.value,
+      note: null,
+      createdBy: null,
+      createdAt: new Date('2026-05-31T00:00:00.000Z'),
+    }))),
+    matchesIdentity: values => Promise.resolve(entries.some(entry => {
+      if (entry.kind === 'email') return values.email?.toLowerCase() === entry.value.toLowerCase();
+      if (entry.kind === 'github_username') return values.githubUsername?.toLowerCase() === entry.value.toLowerCase();
+      return values.githubId === entry.value;
+    })),
+  };
+}

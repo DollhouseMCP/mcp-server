@@ -44,7 +44,7 @@ import { renderInteractionBindingError, verifyInteractionCookieMatches } from '.
 import { finishInteractionWithIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_API_USER_URL,
@@ -99,6 +99,8 @@ export interface GithubSocialMethodOptions {
    * passes regardless. Resolved at construction so tests can override.
    */
   allowlistRequired?: boolean;
+  /** Optional replacement sign-in allowlist authority for hosted console cutover. */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
 }
 
 interface GithubProfile {
@@ -124,7 +126,7 @@ export class GithubSocialMethod implements IAuthMethod {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
+  beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
     // Use the interactionId itself as the OAuth state. It is unguessable
     // and unique per authorization request; we verify it round-trips on the
     // callback. No extra storage write needed.
@@ -133,7 +135,7 @@ export class GithubSocialMethod implements IAuthMethod {
     url.searchParams.set('redirect_uri', this.options.callbackUrl);
     url.searchParams.set('scope', MIN_AUTHCODE_SCOPES.join(' '));
     url.searchParams.set('state', ctx.interactionId);
-    return { kind: 'redirect', url: url.toString() };
+    return Promise.resolve({ kind: 'redirect', url: url.toString() });
   }
 
   /**
@@ -142,14 +144,14 @@ export class GithubSocialMethod implements IAuthMethod {
    * GitHub interaction is in flight, it's an error condition (the user
    * shouldn't have a consent form to submit).
    */
-  async completeInteraction(
+  completeInteraction(
     _ctx: InteractionContext,
     _input: InteractionInput,
   ): Promise<InteractionResult> {
-    return {
+    return Promise.resolve({
       kind: 'denied',
       reason: 'GitHub social does not use the consent POST path; complete via /auth/social/github/callback.',
-    };
+    });
   }
 
   /**
@@ -323,7 +325,11 @@ export class GithubSocialMethod implements IAuthMethod {
         provider: GITHUB_PROVIDER,
         externalSub: String(profile.id),
       },
-      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
     );
     if (!gate.allowed) {
       return { kind: 'denied', reason: gate.reason };

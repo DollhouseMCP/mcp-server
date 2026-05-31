@@ -585,6 +585,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    container.seed('WebConsoleAccountAllowlistAuthorityCutoverComplete', true);
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     const {
@@ -596,6 +597,7 @@ describe('WebConsoleRegistrar', () => {
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
       enableApiV1Mount: true,
+      enableAccountAllowlistRoutes: true,
       productionDatabaseReadiness: productionDatabaseReady(),
       securityInvalidationReplicaId: 'replica-a',
       portfolioSyncWorkerId: 'portfolio-worker-a',

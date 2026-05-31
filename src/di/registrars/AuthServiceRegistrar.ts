@@ -15,9 +15,12 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { AuthConfig } from '../../auth/AuthProviderFactory.js';
 import type { IAuthProvider } from '../../auth/IAuthProvider.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
+import type { SignInAllowlistAuthority } from '../../auth/embedded-as/allowlistGate.js';
+import type { IRateLimitStore } from '../../auth/embedded-as/storage/IRateLimitStore.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -39,7 +42,6 @@ export class AuthServiceRegistrar {
     const { createSigningKeyStore } = await import('../../storage/signingKeys/createSigningKeyStore.js');
     const { InMemoryRateLimitStore } = await import('../../auth/embedded-as/storage/InMemoryRateLimitStore.js');
     const { PostgresRateLimitStore } = await import('../../auth/embedded-as/storage/PostgresRateLimitStore.js');
-    type IRateLimitStore = import('../../auth/embedded-as/storage/IRateLimitStore.js').IRateLimitStore;
 
     // Pull DatabaseInstance from the container if it has one. Required
     // when DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; the Postgres backend's
@@ -73,6 +75,7 @@ export class AuthServiceRegistrar {
       rateLimitStore = new InMemoryRateLimitStore();
     }
     container.register('RateLimitStore', () => rateLimitStore);
+    const signInAllowlistAuthority = await this.createSignInAllowlistAuthority(database);
 
     // Phase 4.5 / Phase J: prune rotated signing keys older than 30 days
     // every 6 hours. Without this, audit history accumulates unboundedly —
@@ -120,7 +123,7 @@ export class AuthServiceRegistrar {
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
-      methods: env.DOLLHOUSE_AUTH_METHODS as import('../../auth/AuthProviderFactory.js').AuthConfig['methods'],
+      methods: env.DOLLHOUSE_AUTH_METHODS as AuthConfig['methods'],
       database,
       // Cycle 19 / security-#6: opt-in OIDC-bridge typ enforcement.
       oidcRequireAccessTokenTyp: env.DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP,
@@ -128,6 +131,7 @@ export class AuthServiceRegistrar {
       // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
       signingKeyStore,
       rateLimitStore,
+      signInAllowlistAuthority,
       // PerformanceMonitor for auth-flow timing. Optional — when present,
       // each method's three IAuthMethod entry points (beginInteraction /
       // completeInteraction / findAccount) record per-call duration into
@@ -141,6 +145,10 @@ export class AuthServiceRegistrar {
     if (!provider) return;
 
     container.register('AuthProvider', () => provider);
+    if (signInAllowlistAuthority) {
+      container.register('SignInAllowlistAuthority', () => signInAllowlistAuthority);
+      container.register('WebConsoleAccountAllowlistAuthorityCutoverComplete', () => true);
+    }
 
     const middleware = createUnifiedAuthMiddleware({
       provider,
@@ -152,6 +160,23 @@ export class AuthServiceRegistrar {
     container.register('AuthMiddleware', () => middleware);
 
     logger.info(`[AuthServiceRegistrar] Auth enabled with provider: ${provider.name}`);
+  }
+
+  private async createSignInAllowlistAuthority(
+    database: DatabaseInstance | undefined,
+  ): Promise<SignInAllowlistAuthority | undefined> {
+    if (!database || env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || env.DOLLHOUSE_AUTH_STORAGE_BACKEND !== 'postgres') {
+      return undefined;
+    }
+    const { PostgresConsoleAccountAllowlistStore } = await import(
+      '../../web-console/stores/PostgresConsoleAccountAllowlistStore.js'
+    );
+    const { ConsoleAccountAllowlistSignInAuthority } = await import(
+      '../../web-console/services/account-allowlist/ConsoleAccountAllowlistSignInAuthority.js'
+    );
+    return new ConsoleAccountAllowlistSignInAuthority(
+      new PostgresConsoleAccountAllowlistStore(database),
+    );
   }
 }
 

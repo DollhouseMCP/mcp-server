@@ -28,14 +28,18 @@ import os from 'node:os';
 import { logger } from '../utils/logger.js';
 import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 import type { IAuthProvider } from './IAuthProvider.js';
-import {
+import { createDefaultAuthMethodFactory } from './embedded-as/AuthMethodFactory.js';
+import type {
   AuthMethodFactory,
-  createDefaultAuthMethodFactory,
-  type AuthMethodId,
+  AuthMethodId,
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from './embedded-as/storage/IRateLimitStore.js';
+import type { SignInAllowlistAuthority } from './embedded-as/allowlistGate.js';
+import type { IAuthMethod } from './embedded-as/IAuthMethod.js';
+import type { InviteTokenStore } from './embedded-as/inviteTokens.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { ISigningKeyStore } from '../storage/signingKeys/ISigningKeyStore.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { instrumentAuthMethod } from './embedded-as/instrumentAuthMethod.js';
 import { instrumentAuthProvider } from './instrumentAuthProvider.js';
@@ -86,9 +90,15 @@ export interface AuthConfig {
    * keys persist via the store instead of the legacy filesystem path.
    * Forwarded to EmbeddedAuthorizationServer; ignored by other providers.
    */
-  signingKeyStore?: import('../storage/signingKeys/ISigningKeyStore.js').ISigningKeyStore;
+  signingKeyStore?: ISigningKeyStore;
   /** Shared auth rate-limit state store. Required for multi-replica Postgres deployments. */
   rateLimitStore?: IRateLimitStore;
+  /**
+   * Replacement sign-in allowlist authority. Hosted/shared console cutover
+   * injects this so auth methods read from account_allowlist_entries while
+   * legacy auth storage still owns bootstrap/audit/OAuth state.
+   */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
   /**
    * Optional PerformanceMonitor for instrumenting auth-flow timing.
    * When present, each method's beginInteraction / completeInteraction /
@@ -221,6 +231,9 @@ async function createEmbeddedProvider(
   // and refuses memory storage with durable-data methods unless
   // DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true is explicitly set.
   const storage = config.storage ?? await createAuthStorage({ methods, database: config.database });
+  if (config.signInAllowlistAuthority) {
+    await verifySignInAllowlistAuthorityCutover(storage, config.signInAllowlistAuthority);
+  }
 
   const baseUrl = config.publicBaseUrl
     ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
@@ -230,7 +243,7 @@ async function createEmbeddedProvider(
   // Construct each configured method. Build ALL of them — multi-method
   // deployments (e.g. "GitHub + magic link") expose every method
   // simultaneously and let the LoginChooser pick at /interaction time.
-  const builtMethods: import('./embedded-as/IAuthMethod.js').IAuthMethod[] = [];
+  const builtMethods: IAuthMethod[] = [];
   for (const id of methods) {
     const raw = await buildAuthMethod(id, { storage, baseUrl, ensureInvites, config });
     // Wrap with PerformanceMonitor instrumentation when one was injected.
@@ -349,8 +362,8 @@ function warnAllowlistDisabledForSocial(
 function makeInviteStoreFactory(
   config: AuthConfig,
   storage: IAuthStorageLayer,
-): () => Promise<import('./embedded-as/inviteTokens.js').InviteTokenStore> {
-  let shared: import('./embedded-as/inviteTokens.js').InviteTokenStore | undefined;
+): () => Promise<InviteTokenStore> {
+  let shared: InviteTokenStore | undefined;
   return async () => {
     if (shared) return shared;
     const {
@@ -408,7 +421,7 @@ function getDefaultSub(): string {
 interface BuildAuthMethodCtx {
   storage: IAuthStorageLayer;
   baseUrl: string;
-  ensureInvites: () => Promise<import('./embedded-as/inviteTokens.js').InviteTokenStore>;
+  ensureInvites: () => Promise<InviteTokenStore>;
   config: AuthConfig;
 }
 
@@ -421,7 +434,7 @@ interface BuildAuthMethodCtx {
 async function buildAuthMethod(
   id: AuthMethodId,
   ctx: BuildAuthMethodCtx,
-): Promise<import('./embedded-as/IAuthMethod.js').IAuthMethod> {
+): Promise<IAuthMethod> {
   const { storage, baseUrl, ensureInvites, config } = ctx;
   const { env } = await import('../config/env.js');
 
@@ -466,6 +479,7 @@ async function buildAuthMethod(
         callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
         storage,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
       });
     }
 
@@ -489,6 +503,7 @@ async function buildAuthMethod(
         invites,
         rateLimiter,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
       });
     }
 
@@ -528,6 +543,7 @@ async function buildAuthMethod(
         emailSender,
         verifyUrl,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
         rateLimitStore: config.rateLimitStore,
       });
     }
@@ -542,4 +558,27 @@ async function buildAuthMethod(
       });
     }
   }
+}
+
+async function verifySignInAllowlistAuthorityCutover(
+  storage: IAuthStorageLayer,
+  authority: SignInAllowlistAuthority,
+): Promise<void> {
+  const legacyEntries = await storage.allowlistList();
+  if (legacyEntries.length === 0) return;
+
+  const authorityEntries = await authority.listEntries();
+  const authorityKeys = new Set(
+    authorityEntries.map(entry => allowlistEntryKey(entry.kind, entry.value)),
+  );
+  const missing = legacyEntries.filter(entry => !authorityKeys.has(allowlistEntryKey(entry.kind, entry.value)));
+  if (missing.length > 0) {
+    throw new Error(
+      'Sign-in allowlist authority cutover refused: legacy auth_allowlist entries are not fully represented in account_allowlist_entries.',
+    );
+  }
+}
+
+function allowlistEntryKey(kind: string, value: string): string {
+  return `${kind}\0${kind === 'github_id' ? value.trim() : value.trim().toLowerCase()}`;
 }

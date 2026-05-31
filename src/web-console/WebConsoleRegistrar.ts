@@ -997,7 +997,14 @@ async function resolveProductionReadinessForActivation(
     databaseVerificationReady: options.productionReadiness?.databaseVerificationReady ?? databaseReadiness.ready,
     securityInvalidationProcessorReady: (await securityInvalidationReadiness.getReadiness()).ready,
     portfolioSyncWorkerReady: options.productionReadiness?.portfolioSyncWorkerReady ?? portfolioSyncWorker?.isRunning() === true,
+    accountAllowlistAuthorityCutoverComplete: options.productionReadiness?.accountAllowlistAuthorityCutoverComplete ??
+      resolveAccountAllowlistAuthorityCutoverComplete(container),
   };
+}
+
+function resolveAccountAllowlistAuthorityCutoverComplete(container: DiContainerFacade): boolean {
+  return container.hasRegistration('WebConsoleAccountAllowlistAuthorityCutoverComplete') &&
+    container.resolve<boolean>('WebConsoleAccountAllowlistAuthorityCutoverComplete') === true;
 }
 
 function resolveProductionDatabaseReadiness(
