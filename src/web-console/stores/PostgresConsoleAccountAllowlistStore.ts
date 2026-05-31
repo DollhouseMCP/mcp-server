@@ -1,9 +1,10 @@
-import { and, asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
 import { accountAllowlistEntries } from '../../database/schema/index.js';
+import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import {
   ConsoleStoreConflictError,
   isUniqueViolation,
@@ -27,6 +28,14 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
 
   async listActive(): Promise<ConsoleAccountAllowlistEntry[]> {
     return withSystemContext(this.db, tx => listActiveAccountAllowlistEntriesWithTx(tx));
+  }
+
+  async hasActiveEntries(): Promise<boolean> {
+    return withSystemContext(this.db, tx => hasActiveAccountAllowlistEntriesWithTx(tx));
+  }
+
+  async matchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    return withSystemContext(this.db, tx => accountAllowlistMatchesIdentityWithTx(tx, values));
   }
 
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {
@@ -55,6 +64,37 @@ export async function listActiveAccountAllowlistEntriesWithTx(
   return rows.map(fromAllowlistRow);
 }
 
+export async function hasActiveAccountAllowlistEntriesWithTx(tx: DrizzleTx): Promise<boolean> {
+  const rows = await tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+    .where(isNull(accountAllowlistEntries.revokedAt))
+    .limit(1);
+  return rows.length > 0;
+}
+
+export async function accountAllowlistMatchesIdentityWithTx(
+  tx: DrizzleTx,
+  values: AllowlistMatchValues,
+): Promise<boolean> {
+  const predicates: SQL[] = [];
+  if (values.email) {
+    const pred = activeAllowlistValuePredicate('email', values.email);
+    if (pred) predicates.push(pred);
+  }
+  if (values.githubUsername) {
+    const pred = activeAllowlistValuePredicate('github_username', values.githubUsername);
+    if (pred) predicates.push(pred);
+  }
+  if (values.githubId) {
+    const pred = activeAllowlistValuePredicate('github_id', values.githubId);
+    if (pred) predicates.push(pred);
+  }
+  if (predicates.length === 0) return false;
+  const rows = await tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+    .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function findActiveAccountAllowlistEntryWithTx(
   tx: DrizzleTx,
   id: string,
@@ -63,6 +103,16 @@ export async function findActiveAccountAllowlistEntryWithTx(
     .where(and(eq(accountAllowlistEntries.id, id), isNull(accountAllowlistEntries.revokedAt)))
     .limit(1);
   return rows[0] ? fromAllowlistRow(rows[0]) : null;
+}
+
+function activeAllowlistValuePredicate(
+  kind: ConsoleAccountAllowlistEntry['kind'],
+  value: string,
+): SQL | undefined {
+  return and(
+    eq(accountAllowlistEntries.kind, kind),
+    eq(accountAllowlistEntries.normalizedValue, normalizeAllowlistValue(kind, value)),
+  );
 }
 
 export async function addAccountAllowlistEntryWithTx(

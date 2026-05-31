@@ -37,7 +37,11 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import type {
+  AuthAllowlistEntry,
+  AllowlistMatchValues,
+  IAuthStorageLayer,
+} from './storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from './bootstrapAdmin.js';
 
 /** Caller-supplied identity values to match against the allowlist. */
@@ -66,8 +70,40 @@ export type AllowlistGateResult =
 export interface AllowlistGateOptions {
   /** Storage backend that holds the allowlist + bootstrap state + audit log. */
   storage: IAuthStorageLayer;
+  /**
+   * Optional sign-in allowlist authority. When omitted, the legacy
+   * IAuthStorageLayer allowlist remains authoritative.
+   */
+  authority?: SignInAllowlistAuthority | undefined;
   /** `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED` env value. */
   required: boolean;
+}
+
+export interface SignInAllowlistAuthority {
+  matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  hasAnyEntries(): Promise<boolean>;
+  listEntries(): Promise<AuthAllowlistEntry[]>;
+}
+
+/**
+ * Read-path adapter for AS sign-in cutover only.
+ *
+ * This intentionally overrides allowlist reads while leaving all other
+ * IAuthStorageLayer behavior on the wrapped storage. Do not pass the wrapped
+ * object to allowlist administration/write paths: writes would still go to the
+ * legacy storage while sign-in reads come from the injected authority.
+ */
+export function withSignInAllowlistAuthority(
+  storage: IAuthStorageLayer,
+  authority: SignInAllowlistAuthority,
+): IAuthStorageLayer {
+  return new Proxy(storage, {
+    get(target, property, receiver) {
+      if (property === 'allowlistMatchesIdentity') return authority.matchesIdentity.bind(authority);
+      if (property === 'allowlistList') return authority.listEntries.bind(authority);
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 /**
@@ -80,6 +116,7 @@ export async function checkAllowlistGate(
   options: AllowlistGateOptions,
 ): Promise<AllowlistGateResult> {
   const { storage, required } = options;
+  const authority = options.authority ?? legacyStorageAuthority(storage);
 
   // Rule 1: bootstrap admin always passes.
   if (await isBootstrapAdminFor(storage, identity.sub, identity.method)) {
@@ -87,7 +124,7 @@ export async function checkAllowlistGate(
   }
 
   // Rule 2: any-kind match wins.
-  const matched = await storage.allowlistMatchesIdentity({
+  const matched = await authority.matchesIdentity({
     email: identity.email,
     githubUsername: identity.githubUsername,
     githubId: identity.githubId,
@@ -99,13 +136,9 @@ export async function checkAllowlistGate(
   // Rule 3: REQUIRED=true with no match → DENY.
   // Rule 4: REQUIRED=false with empty list → PASS (back-compat).
   // Rule 5: REQUIRED=false with populated list but no match → DENY.
-  if (!required) {
-    const entries = await storage.allowlistList();
-    if (entries.length === 0) {
-      // Back-compat: gate is effectively off.
-      return { allowed: true };
-    }
-    // Operator intended a gate; this identity just isn't on it.
+  if (!required && !await authority.hasAnyEntries()) {
+    // Back-compat: gate is effectively off.
+    return { allowed: true };
   }
 
   // Audit-log the denial before returning.
@@ -116,6 +149,14 @@ export async function checkAllowlistGate(
     reason: required
       ? 'Sign-in allowlist is required and this identity is not on it.'
       : 'This identity is not on the sign-in allowlist.',
+  };
+}
+
+function legacyStorageAuthority(storage: IAuthStorageLayer): SignInAllowlistAuthority {
+  return {
+    matchesIdentity: values => storage.allowlistMatchesIdentity(values),
+    hasAnyEntries: async () => (await storage.allowlistList()).length > 0,
+    listEntries: () => storage.allowlistList(),
   };
 }
 

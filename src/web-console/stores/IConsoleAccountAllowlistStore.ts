@@ -1,4 +1,5 @@
 import type { AuthAllowlistKind } from '../../database/schema/index.js';
+import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import {
   assertUuid,
   cloneDate,
@@ -40,6 +41,8 @@ export interface AllowlistRemoveInput {
 
 export interface IConsoleAccountAllowlistStore {
   listActive(): Promise<ConsoleAccountAllowlistEntry[]>;
+  hasActiveEntries(): Promise<boolean>;
+  matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
   findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null>;
   add(input: AllowlistAddInput): Promise<ConsoleAccountAllowlistEntry>;
   update(input: AllowlistUpdateInput): Promise<ConsoleAccountAllowlistEntry | null>;

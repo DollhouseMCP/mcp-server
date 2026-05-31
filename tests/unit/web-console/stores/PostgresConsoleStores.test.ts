@@ -1553,6 +1553,19 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     expect(transaction.select).toHaveBeenCalledTimes(1);
   });
 
+  it('checks account allowlist sign-in authority through active rows only', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
+      .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
+      .mockReturnValueOnce(selectingChain([]));
+
+    await expect(store.hasActiveEntries()).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: 'Alice@Example.Test' })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ githubId: '123' })).resolves.toBe(false);
+    expect(transaction.select).toHaveBeenCalledTimes(3);
+  });
+
   it('normalizes inserted allowlist values and maps duplicate active entries to conflicts', async () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     const unique = Object.assign(new Error('duplicate'), { code: '23505' });

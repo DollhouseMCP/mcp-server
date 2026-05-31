@@ -744,6 +744,35 @@ describe('InMemoryConsoleAccountAllowlistStore', () => {
     });
   });
 
+  it('matches active sign-in identities without treating revoked entries as authority', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    const email = await store.add({
+      kind: 'email',
+      value: ' Alice@Example.Test ',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+    await store.add({
+      kind: 'github_username',
+      value: 'Mick',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+
+    await expect(store.hasActiveEntries()).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ githubUsername: 'mick' })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ githubId: '123' })).resolves.toBe(false);
+
+    await store.remove({
+      id: email.id,
+      revokedByUserId: SECOND_USER_ID,
+      revokedAt: THIRTY_MINUTES,
+    });
+    await expect(store.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(false);
+  });
+
   it('validates allowlist inputs before storing entries', async () => {
     const store = new InMemoryConsoleAccountAllowlistStore();
 
