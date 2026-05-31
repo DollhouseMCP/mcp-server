@@ -43,6 +43,41 @@ jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleAccount
     constructor(readonly database: unknown) {}
   },
 }));
+jest.unstable_mockModule('../../../src/web-console/services/invalidation/PostgresConsoleSecurityInvalidationStore.js', () => ({
+  appendSecurityInvalidationEventWithTx: jest.fn(),
+  PostgresConsoleSecurityInvalidationStore: class PostgresConsoleSecurityInvalidationStore {
+    private readonly liveReplicaIds = new Set<string>();
+    private readonly cursors = new Map<string, number>();
+
+    constructor(readonly database: unknown) {}
+
+    acquireReplicaLease(input: { readonly replicaId: string }): Promise<void> {
+      this.liveReplicaIds.add(input.replicaId);
+      return Promise.resolve();
+    }
+
+    getReplicaCursor(replicaId: string): Promise<number> {
+      return Promise.resolve(this.cursors.get(replicaId) ?? 0);
+    }
+
+    recordReplicaCursor(replicaId: string, sequenceId: number): Promise<void> {
+      this.cursors.set(replicaId, sequenceId);
+      return Promise.resolve();
+    }
+
+    listLiveReplicaIds(): Promise<readonly string[]> {
+      return Promise.resolve([...this.liveReplicaIds]);
+    }
+
+    listEventsAfter(): Promise<readonly unknown[]> {
+      return Promise.resolve([]);
+    }
+
+    acknowledgeEvent(): Promise<void> {
+      return Promise.resolve();
+    }
+  },
+}));
 jest.unstable_mockModule('../../../src/web-console/identity/PostgresConsoleIdentityResolver.js', () => ({
   PostgresConsoleIdentityResolver: class PostgresConsoleIdentityResolver {
     constructor(readonly database: unknown) {}
@@ -435,8 +470,9 @@ describe('WebConsoleRegistrar', () => {
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    const lifecycle = { registerPeriodicTask: jest.fn() };
+    container.seed('LifecycleService', lifecycle);
     const {
-      StaticConsoleSecurityInvalidationReadiness,
       WebConsoleRegistrar,
       WEB_CONSOLE_SERVICE_NAMES,
     } = await import('../../../src/web-console/index.js');
@@ -447,7 +483,7 @@ describe('WebConsoleRegistrar', () => {
       productionReadiness: {
         portfolioSyncWorkerReady: true,
       },
-      securityInvalidationReadiness: new StaticConsoleSecurityInvalidationReadiness(true),
+      securityInvalidationReplicaId: 'replica-a',
       opaqueValueHmacKey: Buffer.alloc(32, 27),
       protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 28),
       secretEncryptionKey: {
@@ -476,6 +512,18 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.storageBackend).toBe('postgres');
     expect(composition.routesMounted).toBe(false);
     expect(composition.apiV1Mount).not.toBeNull();
+    expect(composition.securityInvalidationProcessor).not.toBeNull();
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationProcessor))
+      .toBe(composition.securityInvalidationProcessor);
+    await expect(composition.securityInvalidationReadiness.getReadiness()).resolves.toMatchObject({
+      ready: true,
+      failureCodes: [],
+    });
+    expect(lifecycle.registerPeriodicTask).toHaveBeenCalledWith(
+      5000,
+      expect.any(Function),
+      'webConsole.securityInvalidationProcessor',
+    );
     expect(composition.apiV1Mount?.mounted()).toBe(false);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount)).toBe(composition.apiV1Mount);
     composition.apiV1Mount?.markMounted();
@@ -492,10 +540,8 @@ describe('WebConsoleRegistrar', () => {
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
-    const {
-      StaticConsoleSecurityInvalidationReadiness,
-      WebConsoleRegistrar,
-    } = await import('../../../src/web-console/index.js');
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
@@ -503,7 +549,7 @@ describe('WebConsoleRegistrar', () => {
       productionReadiness: {
         portfolioSyncWorkerReady: true,
       },
-      securityInvalidationReadiness: new StaticConsoleSecurityInvalidationReadiness(true),
+      securityInvalidationReplicaId: 'replica-a',
       opaqueValueHmacKey: Buffer.alloc(32, 37),
       protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 38),
       secretEncryptionKey: {
@@ -550,6 +596,23 @@ describe('WebConsoleRegistrar', () => {
       status: 401,
       body: expect.objectContaining({ code: 'unauthenticated' }),
     });
+  });
+
+  it('fails hosted/shared PostgreSQL invalidation startup without a deployment replica id', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      opaqueValueHmacKey: Buffer.alloc(32, 40),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container)).rejects
+      .toThrow('Hosted/shared security invalidation processor requires');
   });
 
   it('refuses descriptor api mount outside the hosted/shared activation gate', async () => {

@@ -35,8 +35,13 @@ import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAut
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
 import {
   StaticConsoleSecurityInvalidationReadiness,
+  StoreBackedConsoleSecurityInvalidationReadiness,
   type IConsoleSecurityInvalidationReadiness,
 } from './services/invalidation/ConsoleSecurityInvalidationReadiness.js';
+import {
+  ConsoleSecurityInvalidationProcessor,
+  type IConsoleSecurityInvalidationProcessor,
+} from './services/invalidation/ConsoleSecurityInvalidationProcessor.js';
 import type { IUserConfigStore } from '../storage/userConfig/IUserConfigStore.js';
 import type { IOperatorConfigStore } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import { InMemoryOperatorConfigStore } from '../storage/operatorConfig/InMemoryOperatorConfigStore.js';
@@ -165,6 +170,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   authPolicyStore: 'WebConsoleAuthPolicyStore',
   userConfigStore: 'WebConsoleUserConfigStore',
   securityInvalidationReadiness: 'WebConsoleSecurityInvalidationReadiness',
+  securityInvalidationProcessor: 'WebConsoleSecurityInvalidationProcessor',
   apiV1Mount: 'WebConsoleApiV1Mount',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -203,6 +209,11 @@ export interface WebConsoleRegistrarOptions {
   readonly approvalAuditQuery?: IApprovalAuditQuery | null;
   readonly authenticationAuditQuery?: IAuthenticationAuditQuery | null;
   readonly securityInvalidationReadiness?: IConsoleSecurityInvalidationReadiness | null;
+  readonly securityInvalidationReplicaId?: string;
+  readonly securityInvalidationProcessorIntervalMs?: number;
+  readonly securityInvalidationProcessorLeaseDurationMs?: number;
+  readonly securityInvalidationProcessorBatchSize?: number;
+  readonly reportSecurityInvalidationProcessorError?: (error: unknown) => void;
   readonly publicBaseUrl?: string;
   readonly enableApiV1Mount?: boolean;
   readonly consoleOrigin?: string;
@@ -256,6 +267,7 @@ export interface WebConsoleComposition {
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly userConfigStore: IUserConfigStore;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
+  readonly securityInvalidationProcessor: IConsoleSecurityInvalidationProcessor | null;
   readonly apiV1Mount: WebConsoleApiV1Mount | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -307,8 +319,15 @@ export class WebConsoleRegistrar {
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
-    const securityInvalidationReadiness = resolveSecurityInvalidationReadiness(container, this.options);
     const activationProfile = this.options.activationProfile ?? 'development';
+    const securityInvalidationRuntime = await resolveSecurityInvalidationRuntime({
+      activationProfile,
+      container,
+      options: this.options,
+      stores,
+      storageBackend: database ? 'postgres' : 'memory',
+    });
+    const securityInvalidationReadiness = securityInvalidationRuntime.readiness;
     const productionReadiness = await resolveProductionReadinessForActivation(
       activationProfile,
       securityInvalidationReadiness,
@@ -521,6 +540,7 @@ export class WebConsoleRegistrar {
       authPolicyStore,
       userConfigStore,
       securityInvalidationReadiness,
+      securityInvalidationProcessor: securityInvalidationRuntime.processor,
       apiV1Mount,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -696,6 +716,13 @@ function registerOptionalWebConsoleCompositionServices(
     WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness,
     () => composition.securityInvalidationReadiness,
   );
+  if (composition.securityInvalidationProcessor) {
+    registerIfMissing(
+      container,
+      WEB_CONSOLE_SERVICE_NAMES.securityInvalidationProcessor,
+      () => composition.securityInvalidationProcessor,
+    );
+  }
   if (composition.apiV1Mount) {
     container.register(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount, () => composition.apiV1Mount);
   }
@@ -1225,19 +1252,78 @@ async function resolveAuthPolicyStore(
   return new InMemoryConsoleAuthPolicyStore();
 }
 
-function resolveSecurityInvalidationReadiness(
+async function resolveSecurityInvalidationRuntime(options: {
+  readonly activationProfile: WebConsoleActivationProfile;
+  readonly container: DiContainerFacade;
+  readonly options: WebConsoleRegistrarOptions;
+  readonly stores: ConsoleStoreSet;
+  readonly storageBackend: 'memory' | 'postgres';
+}): Promise<{
+  readonly readiness: IConsoleSecurityInvalidationReadiness;
+  readonly processor: IConsoleSecurityInvalidationProcessor | null;
+}> {
+  if (options.options.securityInvalidationReadiness !== undefined) {
+    return {
+      readiness: options.options.securityInvalidationReadiness ??
+        new StaticConsoleSecurityInvalidationReadiness(false, options.options.now),
+      processor: null,
+    };
+  }
+  if (options.container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness)) {
+    return {
+      readiness: options.container.resolve<IConsoleSecurityInvalidationReadiness>(
+        WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness,
+      ),
+      processor: null,
+    };
+  }
+  if (options.activationProfile !== 'shared-hosted' || options.storageBackend !== 'postgres') {
+    return {
+      readiness: new StaticConsoleSecurityInvalidationReadiness(false, options.options.now),
+      processor: null,
+    };
+  }
+  const replicaId = resolveSecurityInvalidationReplicaId(options.container, options.options);
+  if (!options.container.hasRegistration('LifecycleService')) {
+    throw new Error('Hosted/shared security invalidation processor registration requires LifecycleService');
+  }
+  const processor = new ConsoleSecurityInvalidationProcessor({
+    store: options.stores.securityInvalidationStore,
+    sessionStore: options.stores.sessionStore,
+    replicaId,
+    intervalMs: options.options.securityInvalidationProcessorIntervalMs,
+    leaseDurationMs: options.options.securityInvalidationProcessorLeaseDurationMs,
+    batchSize: options.options.securityInvalidationProcessorBatchSize,
+    now: options.options.now,
+    reportError: options.options.reportSecurityInvalidationProcessorError,
+  });
+  processor.register(options.container.resolve('LifecycleService'));
+  await processor.runOnce();
+  return {
+    readiness: new StoreBackedConsoleSecurityInvalidationReadiness({
+      store: options.stores.securityInvalidationStore,
+      replicaId,
+      processorReady: () => processor.isRunning(),
+      now: options.options.now,
+    }),
+    processor,
+  };
+}
+
+function resolveSecurityInvalidationReplicaId(
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
-): IConsoleSecurityInvalidationReadiness {
-  if (options.securityInvalidationReadiness !== undefined) {
-    return options.securityInvalidationReadiness ?? new StaticConsoleSecurityInvalidationReadiness(false, options.now);
+): string {
+  if (options.securityInvalidationReplicaId) return options.securityInvalidationReplicaId;
+  if (container.hasRegistration('WebConsoleSecurityInvalidationReplicaId')) {
+    return container.resolve<string>('WebConsoleSecurityInvalidationReplicaId');
   }
-  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness)) {
-    return container.resolve<IConsoleSecurityInvalidationReadiness>(
-      WEB_CONSOLE_SERVICE_NAMES.securityInvalidationReadiness,
-    );
+  if (container.hasRegistration('WebConsoleReplicaId')) {
+    return container.resolve<string>('WebConsoleReplicaId');
   }
-  return new StaticConsoleSecurityInvalidationReadiness(false, options.now);
+  throw new Error(
+    'Hosted/shared security invalidation processor requires WebConsoleSecurityInvalidationReplicaId, WebConsoleReplicaId, or securityInvalidationReplicaId',
+  );
 }
 
 function resolveOAuthGrantRevocationService(
