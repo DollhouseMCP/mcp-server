@@ -12,7 +12,7 @@ export type {
   OperationalLogQuery,
   OperationalMetricQuery,
 } from './OperationsTelemetry.js';
-export { InMemoryConsoleTelemetryQuery } from './OperationsTelemetry.js';
+export { InMemoryConsoleTelemetryQuery, PostgresConsoleTelemetryQuery } from './OperationsTelemetry.js';
 export type { OperationsHealthChecks, OperationHealthCheck } from './OperationsHealth.js';
 export {
   projectOperationHealthComponent,

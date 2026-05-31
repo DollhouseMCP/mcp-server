@@ -6,6 +6,7 @@ export {
 } from './OwnedActivityQuery.js';
 export {
   InMemoryOwnedMetricQuery,
+  PostgresOwnedMetricQuery,
 } from './OwnedMetricQuery.js';
 export type {
   ActivityQuery,

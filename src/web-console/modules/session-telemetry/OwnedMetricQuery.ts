@@ -1,3 +1,7 @@
+import { sql } from 'drizzle-orm';
+
+import { withSystemContext } from '../../../database/admin.js';
+import type { DatabaseInstance } from '../../../database/connection.js';
 import type { UserMetricDto, UserMetricResponseDto } from './SessionTelemetryDtos.js';
 
 export interface MetricQuery {
@@ -8,6 +12,53 @@ export interface MetricQuery {
 export interface IOwnedMetricQuery {
   queryOwnedMetrics(userId: string, sessionId: string, query: MetricQuery): Promise<UserMetricResponseDto>;
   streamOwnedMetrics(userId: string, sessionId: string, query: MetricQuery): AsyncIterable<UserMetricDto>;
+}
+
+interface OwnedMetricRow {
+  readonly subsystem: string;
+  readonly event: string;
+  readonly error_code: string | null;
+  readonly value: number | string;
+}
+
+export class PostgresOwnedMetricQuery implements IOwnedMetricQuery {
+  constructor(
+    private readonly db: DatabaseInstance,
+    private readonly options: { readonly now?: () => Date } = {},
+  ) {}
+
+  async queryOwnedMetrics(userId: string, sessionId: string, query: MetricQuery): Promise<UserMetricResponseDto> {
+    const rows = await withSystemContext(this.db, tx => tx.execute(sql`
+      SELECT
+        e.subsystem,
+        e.event,
+        e.stable_error_code AS error_code,
+        COUNT(*)::integer AS value
+      FROM session_activity_events e
+      WHERE e.user_id = ${userId}
+        AND e.session_id = ${sessionId}
+        AND (${query.subsystem}::text IS NULL OR e.subsystem = ${query.subsystem})
+      GROUP BY e.subsystem, e.event, e.stable_error_code
+      ORDER BY e.subsystem ASC, e.event ASC, e.stable_error_code ASC NULLS FIRST
+    `)) as unknown as OwnedMetricRow[];
+    return {
+      checked_at: this.now().toISOString(),
+      metrics: ownedMetricsFromRows(rows).filter(metric => !query.name || metric.name === query.name),
+    };
+  }
+
+  async *streamOwnedMetrics(
+    userId: string,
+    sessionId: string,
+    query: MetricQuery,
+  ): AsyncIterable<UserMetricDto> {
+    const response = await this.queryOwnedMetrics(userId, sessionId, query);
+    for (const item of response.metrics) yield item;
+  }
+
+  private now(): Date {
+    return this.options.now?.() ?? new Date();
+  }
 }
 
 export class InMemoryOwnedMetricQuery implements IOwnedMetricQuery {
@@ -56,6 +107,33 @@ export class InMemoryOwnedMetricQuery implements IOwnedMetricQuery {
 function matchesMetric(metric: UserMetricDto, query: MetricQuery): boolean {
   return (!query.name || metric.name === query.name) &&
     (!query.subsystem || metric.dimensions.subsystem === query.subsystem);
+}
+
+function ownedMetricsFromRows(rows: readonly OwnedMetricRow[]): readonly UserMetricDto[] {
+  return rows.flatMap(row => {
+    const base: UserMetricDto = {
+      name: 'session.activity.events',
+      kind: 'counter',
+      value: Number(row.value),
+      unit: 'count',
+      dimensions: {
+        subsystem: row.subsystem,
+        event: row.event,
+      },
+    };
+    if (!row.error_code) return [base];
+    return [base, {
+      name: 'session.activity.errors',
+      kind: 'counter',
+      value: Number(row.value),
+      unit: 'count',
+      dimensions: {
+        subsystem: row.subsystem,
+        event: row.event,
+        error_code: row.error_code,
+      },
+    }];
+  });
 }
 
 function cloneMetricResponse(response: UserMetricResponseDto): UserMetricResponseDto {

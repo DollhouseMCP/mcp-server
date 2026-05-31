@@ -120,6 +120,7 @@ import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIn
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
 import {
   InMemoryConsoleTelemetryQuery,
+  PostgresConsoleTelemetryQuery,
   createOperationsModule,
   type IConsoleTelemetryQuery,
   type OperationsHealthChecks,
@@ -133,6 +134,7 @@ import {
   InMemoryOwnedActivityQuery,
   InMemoryOwnedMetricQuery,
   PostgresOwnedActivityQuery,
+  PostgresOwnedMetricQuery,
   createSessionTelemetryModule,
   type IOwnedActivityQuery,
   type IOwnedMetricQuery,
@@ -158,7 +160,7 @@ import {
   productionDatabaseNotVerified,
   type IProductionDatabaseReadiness,
 } from './WebConsoleProductionDatabaseReadiness.js';
-import { resolveStableWebConsoleReplicaId } from './WebConsoleReplicaIdentity.js';
+import { resolveStableWebConsoleReplicaId, resolveWebConsoleReplicaId } from './WebConsoleReplicaIdentity.js';
 import {
   resolveWebConsoleActivationProfile,
   type WebConsoleDeploymentSignal,
@@ -394,9 +396,9 @@ export class WebConsoleRegistrar {
     const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, database, this.options);
     const sessionExecutionReader = resolveSessionExecutionReader(container, database, this.options);
     const sessionGatekeeperReader = resolveSessionGatekeeperReader(container, database, this.options);
-    const telemetryQuery = resolveTelemetryQuery(container, this.options);
+    const telemetryQuery = resolveTelemetryQuery(container, database, this.options);
     const ownedActivityQuery = resolveOwnedActivityQuery(container, database, this.options);
-    const ownedMetricQuery = resolveOwnedMetricQuery(container, this.options);
+    const ownedMetricQuery = resolveOwnedMetricQuery(container, database, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer({
@@ -1416,6 +1418,7 @@ function resolveSessionGatekeeperReader(
 
 function resolveTelemetryQuery(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): IConsoleTelemetryQuery {
   if (options.telemetryQuery !== undefined) {
@@ -1423,6 +1426,12 @@ function resolveTelemetryQuery(
   }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery)) {
     return container.resolve<IConsoleTelemetryQuery>(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery);
+  }
+  if (database) {
+    return new PostgresConsoleTelemetryQuery(database, {
+      replicaId: resolveTelemetryReplicaId(container),
+      now: options.now,
+    });
   }
   return new InMemoryConsoleTelemetryQuery();
 }
@@ -1444,6 +1453,7 @@ function resolveOwnedActivityQuery(
 
 function resolveOwnedMetricQuery(
   container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
   options: WebConsoleRegistrarOptions,
 ): IOwnedMetricQuery {
   if (options.ownedMetricQuery !== undefined) {
@@ -1452,7 +1462,15 @@ function resolveOwnedMetricQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery)) {
     return container.resolve<IOwnedMetricQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery);
   }
+  if (database) return new PostgresOwnedMetricQuery(database, { now: options.now });
   return new InMemoryOwnedMetricQuery({ now: options.now });
+}
+
+function resolveTelemetryReplicaId(container: DiContainerFacade): string {
+  if (container.hasRegistration('WebConsoleReplicaId')) {
+    return container.resolve<string>('WebConsoleReplicaId');
+  }
+  return resolveWebConsoleReplicaId();
 }
 
 function resolveUserConfigStore(

@@ -562,8 +562,6 @@ describe('WebConsoleRegistrar', () => {
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
         expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
-        expect.objectContaining({ code: 'operations_telemetryQuery_not_production_ready' }),
-        expect.objectContaining({ code: 'session-telemetry_ownedMetricQuery_not_production_ready' }),
       ]),
     });
   });
@@ -1311,6 +1309,8 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.sessionActivationEventSink.constructor.name).toBe('PostgresSessionActivationEventSink');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.sessionExecutionReader.constructor.name).toBe('PostgresSessionExecutionReader');
+    expect(composition.telemetryQuery.constructor.name).toBe('PostgresConsoleTelemetryQuery');
+    expect(composition.ownedMetricQuery.constructor.name).toBe('PostgresOwnedMetricQuery');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
     expect(composition.adminAuditQuery.constructor.name).toBe('PostgresAdminAuditQuery');
     expect(composition.approvalAuditQuery.constructor.name).toBe('PostgresApprovalAuditQuery');
