@@ -5,6 +5,10 @@ export {
   InMemorySessionActivationStateAdapter,
   RegistrySessionActivationStateAdapter,
 } from './SessionActivationStateAdapter.js';
+export {
+  PostgresSessionActivationEventSink,
+  PostgresSessionActivationStateAdapter,
+} from './PostgresSessionActivationStateAdapter.js';
 export type {
   ISessionActivationStateAdapter,
   SessionActivationRecord,

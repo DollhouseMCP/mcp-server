@@ -64,6 +64,8 @@ import type { SessionActivationRegistry } from '../state/SessionActivationState.
 import {
   InMemorySessionActivationStateAdapter,
   InMemorySessionActivationEventSink,
+  PostgresSessionActivationEventSink,
+  PostgresSessionActivationStateAdapter,
   RegistrySessionActivationStateAdapter,
   type ISessionActivationEventSink,
   type ISessionActivationStateAdapter,
@@ -355,8 +357,8 @@ export class WebConsoleRegistrar {
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
-    const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container);
-    const sessionActivationEventSink = resolveSessionActivationEventSink(container);
+    const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container, database, this.options);
+    const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
     const sessionApprovalStore = resolveSessionApprovalStore(container, this.options);
     const sessionApprovalEventSink = resolveSessionApprovalEventSink(container, this.options);
     const sessionExecutionReader = resolveSessionExecutionReader(container, this.options);
@@ -1243,11 +1245,18 @@ function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | 
   return container.resolve<IRateLimitStore>('RateLimitStore');
 }
 
-function resolveSessionActivationStateAdapter(container: DiContainerFacade): ISessionActivationStateAdapter {
+function resolveSessionActivationStateAdapter(
+  container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
+  options: WebConsoleRegistrarOptions,
+): ISessionActivationStateAdapter {
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter)) {
     return container.resolve<ISessionActivationStateAdapter>(
       WEB_CONSOLE_SERVICE_NAMES.sessionActivationStateAdapter,
     );
+  }
+  if (database) {
+    return new PostgresSessionActivationStateAdapter(database, options.now);
   }
   if (container.hasRegistration('SessionActivationRegistry')) {
     return new RegistrySessionActivationStateAdapter(
@@ -1257,12 +1266,16 @@ function resolveSessionActivationStateAdapter(container: DiContainerFacade): ISe
   return new InMemorySessionActivationStateAdapter();
 }
 
-function resolveSessionActivationEventSink(container: DiContainerFacade): ISessionActivationEventSink {
+function resolveSessionActivationEventSink(
+  container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
+): ISessionActivationEventSink {
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink)) {
     return container.resolve<ISessionActivationEventSink>(
       WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink,
     );
   }
+  if (database) return new PostgresSessionActivationEventSink(database);
   return new InMemorySessionActivationEventSink();
 }
 

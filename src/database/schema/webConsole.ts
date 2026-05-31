@@ -16,6 +16,7 @@ import {
   customType,
   index,
   uniqueIndex,
+  primaryKey,
   check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
@@ -495,6 +496,59 @@ export const runtimeSessionPresence = pgTable('runtime_session_presence', {
   index('idx_runtime_session_presence_user').on(table.userId, table.status, table.leaseUntil),
   index('idx_runtime_session_presence_replica').on(table.replicaId, table.leaseUntil),
   index('idx_runtime_session_presence_correlation').on(table.accountCorrelationId),
+]);
+
+export type SessionActivationElementType =
+  | 'personas'
+  | 'skills'
+  | 'agents'
+  | 'memories'
+  | 'ensembles';
+export type SessionActivationAction = 'activated' | 'deactivated';
+
+export const sessionActivationRecords = pgTable('session_activation_records', {
+  sessionId: text('session_id').notNull().references(() => runtimeSessionPresence.sessionId, { onDelete: 'cascade' }),
+  elementType: text('element_type').$type<SessionActivationElementType>().notNull(),
+  elementName: text('element_name').notNull(),
+  activatedAt: timestamp('activated_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  primaryKey({
+    name: 'pk_session_activation_records',
+    columns: [table.sessionId, table.elementType, table.elementName],
+  }),
+  check('session_activation_records_type_check', sql`
+    ${table.elementType} IN ('personas', 'skills', 'agents', 'memories', 'ensembles')
+  `),
+  check('session_activation_records_shape_check', sql`
+    btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.elementName}) <> ''
+    AND char_length(${table.elementName}) <= 200
+  `),
+  index('idx_session_activation_records_session').on(table.sessionId, table.activatedAt),
+]);
+
+export const sessionActivationEvents = pgTable('session_activation_events', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  sessionId: text('session_id').notNull(),
+  elementType: text('element_type').$type<SessionActivationElementType>().notNull(),
+  elementName: text('element_name').notNull(),
+  action: text('action').$type<SessionActivationAction>().notNull(),
+  occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  check('session_activation_events_type_check', sql`
+    ${table.elementType} IN ('personas', 'skills', 'agents', 'memories', 'ensembles')
+  `),
+  check('session_activation_events_action_check', sql`${table.action} IN ('activated', 'deactivated')`),
+  check('session_activation_events_shape_check', sql`
+    btrim(${table.sessionId}) <> ''
+    AND char_length(${table.sessionId}) <= 200
+    AND btrim(${table.elementName}) <> ''
+    AND char_length(${table.elementName}) <= 200
+  `),
+  index('idx_session_activation_events_user_session').on(table.userId, table.sessionId, table.occurredAt),
+  index('idx_session_activation_events_session').on(table.sessionId, table.occurredAt),
 ]);
 
 export const runtimeControlCommands = pgTable('runtime_control_commands', {

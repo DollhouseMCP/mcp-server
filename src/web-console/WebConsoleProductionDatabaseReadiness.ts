@@ -64,6 +64,8 @@ export const WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES = [
   'security_invalidation_replica_leases',
   'security_invalidation_acks',
   'runtime_session_presence',
+  'session_activation_records',
+  'session_activation_events',
   'runtime_control_commands',
   'runtime_control_acks',
   'admin_audit_chain_heads',

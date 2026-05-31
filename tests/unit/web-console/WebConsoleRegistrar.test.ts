@@ -538,8 +538,6 @@ describe('WebConsoleRegistrar', () => {
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'activations_sessionActivationStateAdapter_not_production_ready' }),
-        expect.objectContaining({ code: 'activations_sessionActivationEventSink_not_production_ready' }),
         expect.objectContaining({ code: 'approvals_sessionApprovalStore_not_production_ready' }),
         expect.objectContaining({ code: 'approvals_sessionApprovalEventSink_not_production_ready' }),
         expect.objectContaining({ code: 'audit_approvalAuditQuery_not_production_ready' }),
@@ -1290,6 +1288,8 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.integrationStore.constructor.name).toBe('PostgresUserIntegrationStore');
     expect(composition.portfolioStore.constructor.name).toBe('PostgresPortfolioElementStore');
+    expect(composition.sessionActivationStateAdapter.constructor.name).toBe('PostgresSessionActivationStateAdapter');
+    expect(composition.sessionActivationEventSink.constructor.name).toBe('PostgresSessionActivationEventSink');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
     expect(composition.identityResolver.constructor.name).toBe('PostgresConsoleIdentityResolver');
     expect(composition.adminAuditQuery.constructor.name).toBe('PostgresAdminAuditQuery');
