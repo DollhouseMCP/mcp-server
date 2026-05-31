@@ -31,7 +31,11 @@ import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
 import type { IPortfolioElementStore } from './stores/IPortfolioElementStore.js';
 import type { IPortfolioSyncJobStore } from './stores/IPortfolioSyncJobStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
-import type { IOAuthGrantRevocationService } from './services/oauth/IConsoleOAuthGrantRevocationService.js';
+import {
+  ConsoleOAuthGrantRevocationService,
+  PostgresConsoleOAuthSubjectResolver,
+  type IOAuthGrantRevocationService,
+} from './services/oauth/index.js';
 import type { IRuntimeSessionControlStore } from './services/runtime/IRuntimeSessionControlStore.js';
 import {
   StaticConsoleSecurityInvalidationReadiness,
@@ -337,9 +341,14 @@ export class WebConsoleRegistrar {
       adminAuditWriter,
     });
     const registry = new ConsoleModuleRegistry();
-    const oauthGrantRevocationService = resolveOAuthGrantRevocationService(container, this.options);
     const consoleOAuthClient = resolveConsoleOAuthClient(container, this.options);
     const authStorage = resolveAuthStorage(container, this.options);
+    const oauthGrantRevocationService = resolveOAuthGrantRevocationService({
+      container,
+      options: this.options,
+      database,
+      authStorage,
+    });
     const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     const userConfigStore = resolveUserConfigStore(database, container);
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
@@ -1480,13 +1489,22 @@ function resolveSecurityInvalidationReplicaId(
   return resolveStableWebConsoleReplicaId();
 }
 
-function resolveOAuthGrantRevocationService(
-  container: DiContainerFacade,
-  options: WebConsoleRegistrarOptions,
+function resolveOAuthGrantRevocationService(options: {
+  readonly container: DiContainerFacade;
+  readonly options: WebConsoleRegistrarOptions;
+  readonly database: DatabaseInstance | undefined;
+  readonly authStorage: IAuthStorageLayer | null;
+},
 ): IOAuthGrantRevocationService | null {
-  if (options.oauthGrantRevocationService !== undefined) return options.oauthGrantRevocationService;
-  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
-    return container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
+  if (options.options.oauthGrantRevocationService !== undefined) return options.options.oauthGrantRevocationService;
+  if (options.container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService)) {
+    return options.container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
+  }
+  if (options.database && options.authStorage) {
+    return new ConsoleOAuthGrantRevocationService(
+      new PostgresConsoleOAuthSubjectResolver(options.database),
+      options.authStorage,
+    );
   }
   return null;
 }

@@ -499,6 +499,64 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
+  it('documents the full-surface hosted/shared production dependency inventory', async () => {
+    const container = new TestContainer();
+    const {
+      WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const database = {
+      execute: jest.fn()
+        .mockResolvedValueOnce(productionDatabaseRows())
+        .mockResolvedValueOnce(productionRequiredTableRows(WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES)),
+    };
+    container.seed('SystemDatabaseInstance', database);
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+
+    await expect(new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      enableAccountAllowlistRoutes: true,
+      productionDatabaseVerification: {
+        expectedDatabaseName: 'dollhouse_prod',
+        expectedCurrentUser: 'dollhouse_app',
+      },
+      opaqueValueHmacKey: Buffer.alloc(32, 45),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 46),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 47),
+      },
+      authStorage: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container)).rejects.toMatchObject({
+      failures: expect.arrayContaining([
+        expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
+        expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
+        expect.objectContaining({ code: 'accountAdmin_accountInviteIssuer_missing' }),
+        expect.objectContaining({ code: 'activations_portfolioStore_not_production_ready' }),
+        expect.objectContaining({ code: 'activations_sessionActivationStateAdapter_not_production_ready' }),
+        expect.objectContaining({ code: 'activations_sessionActivationEventSink_not_production_ready' }),
+        expect.objectContaining({ code: 'approvals_sessionApprovalStore_not_production_ready' }),
+        expect.objectContaining({ code: 'approvals_sessionApprovalEventSink_not_production_ready' }),
+        expect.objectContaining({ code: 'audit_approvalAuditQuery_not_production_ready' }),
+        expect.objectContaining({ code: 'audit_authenticationAuditQuery_not_production_ready' }),
+        expect.objectContaining({ code: 'executions_sessionExecutionReader_not_production_ready' }),
+        expect.objectContaining({ code: 'executions_sessionGatekeeperReader_not_production_ready' }),
+        expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
+        expect.objectContaining({ code: 'operations_telemetryQuery_not_production_ready' }),
+        expect.objectContaining({ code: 'portfolio_portfolioStore_not_production_ready' }),
+        expect.objectContaining({ code: 'session-telemetry_ownedActivityQuery_not_production_ready' }),
+        expect.objectContaining({ code: 'session-telemetry_ownedMetricQuery_not_production_ready' }),
+      ]),
+    });
+  });
+
   it('accepts hosted/shared activation only when production dependencies are explicit', async () => {
     const container = new TestContainer();
     const database = {};
@@ -532,7 +590,6 @@ describe('WebConsoleRegistrar', () => {
         key: Buffer.alloc(32, 29),
       },
       authStorage: productionAdapter(),
-      oauthGrantRevocationService: productionAdapter(),
       consoleOAuthClient: productionAdapter(),
       accountInviteIssuer: productionAdapter(),
       githubIntegrationProvider: productionAdapter(),
@@ -551,6 +608,8 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     expect(composition.storageBackend).toBe('postgres');
+    expect(composition.oauthGrantRevocationService?.constructor.name)
+      .toBe('ConsoleOAuthGrantRevocationService');
     expect(composition.routesMounted).toBe(false);
     expect(composition.apiV1Mount).not.toBeNull();
     expect(composition.securityInvalidationProcessor).not.toBeNull();
