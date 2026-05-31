@@ -43,6 +43,11 @@ import {
   type IConsoleSecurityInvalidationReadiness,
 } from './services/invalidation/ConsoleSecurityInvalidationReadiness.js';
 import {
+  ConsolePortfolioSyncWorker,
+  type IConsolePortfolioSyncWorker,
+  type IPortfolioSyncJobExecutor,
+} from './services/portfolio-sync/index.js';
+import {
   ConsoleSecurityInvalidationProcessor,
   type IConsoleSecurityInvalidationProcessor,
 } from './services/invalidation/ConsoleSecurityInvalidationProcessor.js';
@@ -189,6 +194,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   userConfigStore: 'WebConsoleUserConfigStore',
   securityInvalidationReadiness: 'WebConsoleSecurityInvalidationReadiness',
   securityInvalidationProcessor: 'WebConsoleSecurityInvalidationProcessor',
+  portfolioSyncWorker: 'WebConsolePortfolioSyncWorker',
   apiV1Mount: 'WebConsoleApiV1Mount',
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
@@ -240,6 +246,13 @@ export interface WebConsoleRegistrarOptions {
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
+  readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
+  readonly portfolioSyncJobExecutor?: IPortfolioSyncJobExecutor | null;
+  readonly portfolioSyncWorkerId?: string;
+  readonly portfolioSyncWorkerIntervalMs?: number;
+  readonly portfolioSyncWorkerLeaseDurationMs?: number;
+  readonly portfolioSyncWorkerBatchSize?: number;
+  readonly reportPortfolioSyncWorkerError?: (error: unknown) => void;
   readonly approvalStore?: SessionApprovalStore | null;
   readonly approvalEventSink?: ISessionApprovalEventSink | null;
   readonly executionReader?: SessionExecutionReader | null;
@@ -314,6 +327,7 @@ export interface WebConsoleComposition {
   readonly userConfigStore: IUserConfigStore;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly securityInvalidationProcessor: IConsoleSecurityInvalidationProcessor | null;
+  readonly portfolioSyncWorker: IConsolePortfolioSyncWorker | null;
   readonly apiV1Mount: WebConsoleApiV1Mount | null;
   readonly cleanupScheduler: ConsoleStoreCleanupScheduler | null;
   readonly storageBackend: 'memory' | 'postgres';
@@ -388,9 +402,17 @@ export class WebConsoleRegistrar {
       storageBackend: database ? 'postgres' : 'memory',
     });
     const securityInvalidationReadiness = securityInvalidationRuntime.readiness;
+    const portfolioSyncWorker = resolvePortfolioSyncWorker({
+      activationProfile,
+      container,
+      options: this.options,
+      syncJobStore: stores.portfolioSyncJobStore,
+      storageBackend: database ? 'postgres' : 'memory',
+    });
     const productionReadiness = await resolveProductionReadinessForActivation(
       activationProfile,
       securityInvalidationReadiness,
+      portfolioSyncWorker,
       this.options,
       container,
       database,
@@ -603,6 +625,7 @@ export class WebConsoleRegistrar {
       userConfigStore,
       securityInvalidationReadiness,
       securityInvalidationProcessor: securityInvalidationRuntime.processor,
+      portfolioSyncWorker,
       apiV1Mount,
       cleanupScheduler,
       storageBackend: database ? 'postgres' : 'memory',
@@ -875,6 +898,13 @@ function registerOptionalWebConsoleCompositionServices(
       () => composition.securityInvalidationProcessor,
     );
   }
+  if (composition.portfolioSyncWorker) {
+    registerIfMissing(
+      container,
+      WEB_CONSOLE_SERVICE_NAMES.portfolioSyncWorker,
+      () => composition.portfolioSyncWorker,
+    );
+  }
   if (composition.apiV1Mount) {
     container.register(WEB_CONSOLE_SERVICE_NAMES.apiV1Mount, () => composition.apiV1Mount);
   }
@@ -942,6 +972,7 @@ function originFromPublicBaseUrl(publicBaseUrl: string | null): string {
 async function resolveProductionReadinessForActivation(
   activationProfile: WebConsoleActivationProfile,
   securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness,
+  portfolioSyncWorker: IConsolePortfolioSyncWorker | null,
   options: WebConsoleRegistrarOptions,
   container: DiContainerFacade,
   database: DatabaseInstance | undefined,
@@ -952,6 +983,7 @@ async function resolveProductionReadinessForActivation(
     ...options.productionReadiness,
     databaseVerificationReady: options.productionReadiness?.databaseVerificationReady ?? databaseReadiness.ready,
     securityInvalidationProcessorReady: (await securityInvalidationReadiness.getReadiness()).ready,
+    portfolioSyncWorkerReady: options.productionReadiness?.portfolioSyncWorkerReady ?? portfolioSyncWorker?.isRunning() === true,
   };
 }
 
@@ -1501,6 +1533,53 @@ function resolveSecurityInvalidationReplicaId(
   if (options.securityInvalidationReplicaId) return options.securityInvalidationReplicaId;
   if (container.hasRegistration('WebConsoleSecurityInvalidationReplicaId')) {
     return container.resolve<string>('WebConsoleSecurityInvalidationReplicaId');
+  }
+  if (container.hasRegistration('WebConsoleReplicaId')) {
+    return container.resolve<string>('WebConsoleReplicaId');
+  }
+  return resolveStableWebConsoleReplicaId();
+}
+
+function resolvePortfolioSyncWorker(options: {
+  readonly activationProfile: WebConsoleActivationProfile;
+  readonly container: DiContainerFacade;
+  readonly options: WebConsoleRegistrarOptions;
+  readonly syncJobStore: IPortfolioSyncJobStore;
+  readonly storageBackend: 'memory' | 'postgres';
+}): IConsolePortfolioSyncWorker | null {
+  if (options.options.portfolioSyncWorker !== undefined) {
+    return options.options.portfolioSyncWorker;
+  }
+  if (options.container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncWorker)) {
+    return options.container.resolve<IConsolePortfolioSyncWorker>(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncWorker);
+  }
+  if (options.activationProfile !== 'shared-hosted' || options.storageBackend !== 'postgres') {
+    return null;
+  }
+  if (!options.container.hasRegistration('LifecycleService')) {
+    throw new Error('Hosted/shared portfolio sync worker registration requires LifecycleService');
+  }
+  const worker = new ConsolePortfolioSyncWorker({
+    store: options.syncJobStore,
+    workerId: resolvePortfolioSyncWorkerId(options.container, options.options),
+    executor: options.options.portfolioSyncJobExecutor ?? undefined,
+    intervalMs: options.options.portfolioSyncWorkerIntervalMs,
+    leaseDurationMs: options.options.portfolioSyncWorkerLeaseDurationMs,
+    batchSize: options.options.portfolioSyncWorkerBatchSize,
+    now: options.options.now,
+    reportError: options.options.reportPortfolioSyncWorkerError,
+  });
+  worker.register(options.container.resolve('LifecycleService'));
+  return worker;
+}
+
+function resolvePortfolioSyncWorkerId(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): string {
+  if (options.portfolioSyncWorkerId) return options.portfolioSyncWorkerId;
+  if (container.hasRegistration('WebConsolePortfolioSyncWorkerId')) {
+    return container.resolve<string>('WebConsolePortfolioSyncWorkerId');
   }
   if (container.hasRegistration('WebConsoleReplicaId')) {
     return container.resolve<string>('WebConsoleReplicaId');

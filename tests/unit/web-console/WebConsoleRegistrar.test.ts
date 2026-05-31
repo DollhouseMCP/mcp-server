@@ -536,7 +536,6 @@ describe('WebConsoleRegistrar', () => {
       registerCleanup: false,
     }).bootstrapAndRegister(container)).rejects.toMatchObject({
       failures: expect.arrayContaining([
-        expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
         expect.objectContaining({ code: 'approvals_sessionApprovalStore_not_production_ready' }),
         expect.objectContaining({ code: 'approvals_sessionApprovalEventSink_not_production_ready' }),
@@ -574,10 +573,8 @@ describe('WebConsoleRegistrar', () => {
       activationProfile: SHARED_HOSTED_PROFILE,
       enableApiV1Mount: true,
       productionDatabaseReadiness: productionDatabaseReady(),
-      productionReadiness: {
-        portfolioSyncWorkerReady: true,
-      },
       securityInvalidationReplicaId: 'replica-a',
+      portfolioSyncWorkerId: 'portfolio-worker-a',
       opaqueValueHmacKey: Buffer.alloc(32, 27),
       protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 28),
       secretEncryptionKey: {
@@ -609,8 +606,11 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.routesMounted).toBe(false);
     expect(composition.apiV1Mount).not.toBeNull();
     expect(composition.securityInvalidationProcessor).not.toBeNull();
+    expect(composition.portfolioSyncWorker?.isRunning()).toBe(true);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationProcessor))
       .toBe(composition.securityInvalidationProcessor);
+    expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncWorker))
+      .toBe(composition.portfolioSyncWorker);
     await expect(composition.securityInvalidationReadiness.getReadiness()).resolves.toMatchObject({
       ready: true,
       failureCodes: [],
