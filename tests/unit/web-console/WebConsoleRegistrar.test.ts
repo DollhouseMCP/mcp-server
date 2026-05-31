@@ -538,7 +538,6 @@ describe('WebConsoleRegistrar', () => {
       failures: expect.arrayContaining([
         expect.objectContaining({ code: 'portfolio_sync_worker_not_ready' }),
         expect.objectContaining({ code: 'account_allowlist_authority_not_cut_over' }),
-        expect.objectContaining({ code: 'accountAdmin_accountInviteIssuer_missing' }),
         expect.objectContaining({ code: 'activations_portfolioStore_not_production_ready' }),
         expect.objectContaining({ code: 'activations_sessionActivationStateAdapter_not_production_ready' }),
         expect.objectContaining({ code: 'activations_sessionActivationEventSink_not_production_ready' }),
@@ -591,7 +590,6 @@ describe('WebConsoleRegistrar', () => {
       },
       authStorage: productionAdapter(),
       consoleOAuthClient: productionAdapter(),
-      accountInviteIssuer: productionAdapter(),
       githubIntegrationProvider: productionAdapter(),
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
       portfolioStore: productionAdapter(),
@@ -610,6 +608,8 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.storageBackend).toBe('postgres');
     expect(composition.oauthGrantRevocationService?.constructor.name)
       .toBe('ConsoleOAuthGrantRevocationService');
+    expect(composition.accountInviteIssuer?.constructor.name)
+      .toBe('PostgresConsoleAccountInviteIssuer');
     expect(composition.routesMounted).toBe(false);
     expect(composition.apiV1Mount).not.toBeNull();
     expect(composition.securityInvalidationProcessor).not.toBeNull();

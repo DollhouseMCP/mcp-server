@@ -82,14 +82,6 @@ interface IdentityEventRow {
   createdAt: Date;
 }
 
-interface AuthKvRow {
-  model: string;
-  id: string;
-  payload: unknown;
-  expiresAt: Date | null;
-  createdAt: Date;
-}
-
 export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   private readonly db: DatabaseInstance;
 
@@ -105,7 +97,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .where(and(eq(authAccounts.provider, provider), eq(authAccounts.externalSub, externalSub)))
         .limit(1),
     );
-    return rows.length > 0 ? rowToStoredAccount(rows[0] as AuthAccountRow) : null;
+    return rows.length > 0 ? rowToStoredAccount(rows[0]) : null;
   }
 
   async upsertAccount(account: StoredAccount): Promise<void> {
@@ -115,7 +107,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         target: [authAccounts.provider, authAccounts.externalSub],
         set: {
           sub: row.sub,
-          userId: row.userId,
+          userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
           email: row.email,
           emailVerified: row.emailVerified,
           displayName: row.displayName,
@@ -136,7 +128,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select().from(authAccounts).where(eq(authAccounts.sub, sub)).limit(1),
     );
-    return rows.length > 0 ? rowToStoredAccount(rows[0] as AuthAccountRow) : null;
+    return rows.length > 0 ? rowToStoredAccount(rows[0]) : null;
   }
 
   async updateAccountLastAuth(sub: string, lastAuthAt: number): Promise<boolean> {
@@ -211,12 +203,12 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         .values({
           model: 'AuthBootstrap',
           id: 'state',
-          payload: payload as AuthKvRow['payload'],
+          payload,
           expiresAt: null,
         })
         .onConflictDoUpdate({
           target: [authKv.model, authKv.id],
-          set: { payload: payload as AuthKvRow['payload'] },
+          set: { payload },
           where: sql`auth_kv.payload->>'adminSub' = ${adminSub}`,
         })
         .returning({ id: authKv.id }),
@@ -243,7 +235,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
         sub: event.sub ?? null,
         provider: event.provider ?? null,
         externalSub: event.externalSub ?? null,
-        details: (event.details ?? null) as IdentityEventRow['details'],
+        details: event.details ?? null,
         timestamp: event.timestamp,
       });
     });
@@ -479,7 +471,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       // for resilience to driver-layer changes.
       const direct = err as { code?: string };
       const wrapped = (err as { cause?: { code?: string } }).cause;
-      if (direct?.code === '23505' || wrapped?.code === '23505') {
+      if (direct.code === '23505' || wrapped?.code === '23505') {
         throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
       }
       throw err;
@@ -534,10 +526,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 }
 
 function notExpired(): SQL {
-  return or(
-    sql`${authKv.expiresAt} IS NULL`,
-    sql`${authKv.expiresAt} > NOW()`,
-  )!;
+  return sql`(${authKv.expiresAt} IS NULL OR ${authKv.expiresAt} > NOW())`;
 }
 
 function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferInsert {
@@ -545,11 +534,13 @@ function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferI
     provider: account.provider,
     externalSub: account.externalSub,
     sub: account.sub,
-    userId: null, // §8.1 doesn't auto-link to users.id; future work
+    // IAuthStorageLayer has no userId field. The conflict upsert preserves
+    // any pre-linked auth_accounts.user_id created by console invite issuance.
+    userId: null,
     email: account.email ?? null,
     emailVerified: account.emailVerified,
     displayName: account.displayName ?? null,
-    rawProfile: (account.rawProfile ?? null) as typeof authAccounts.$inferInsert['rawProfile'],
+    rawProfile: account.rawProfile ?? null,
     passwordHash: account.credentials?.passwordHash ?? null,
     lastAuthAt: account.lastAuthAt ?? null,
     // Round 5 / B1: roles must round-trip through Postgres. Empty array
@@ -606,4 +597,3 @@ function rowToAllowlistEntry(row: typeof authAllowlist.$inferSelect): AuthAllowl
     createdAt: row.createdAt,
   };
 }
-

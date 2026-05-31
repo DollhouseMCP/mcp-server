@@ -118,6 +118,7 @@ import {
   type IOwnedMetricQuery,
 } from './modules/session-telemetry/index.js';
 import type { IConsoleAccountInviteIssuer } from './modules/account-admin/AccountAdminInviteService.js';
+import { PostgresConsoleAccountInviteIssuer } from './modules/account-admin/PostgresConsoleAccountInviteIssuer.js';
 import {
   InMemoryAccountAdminMutationTransactionRunner,
   PostgresAccountAdminMutationTransactionRunner,
@@ -349,7 +350,6 @@ export class WebConsoleRegistrar {
       database,
       authStorage,
     });
-    const accountInviteIssuer = resolveAccountInviteIssuer(container, this.options);
     const userConfigStore = resolveUserConfigStore(database, container);
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
@@ -366,6 +366,13 @@ export class WebConsoleRegistrar {
     const ownedMetricQuery = resolveOwnedMetricQuery(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
+    const accountInviteIssuer = resolveAccountInviteIssuer({
+      container,
+      options: this.options,
+      database,
+      signingKeyStore,
+      publicBaseUrl: integrationPublicBaseUrl,
+    });
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
     const activationProfile = resolveWebConsoleActivationProfile({
       activationProfile: this.options.activationProfile,
@@ -1536,13 +1543,24 @@ function resolveAuthStorage(
   return null;
 }
 
-function resolveAccountInviteIssuer(
-  container: DiContainerFacade,
-  options: WebConsoleRegistrarOptions,
-): IConsoleAccountInviteIssuer | null {
+function resolveAccountInviteIssuer(input: {
+  readonly container: DiContainerFacade;
+  readonly options: WebConsoleRegistrarOptions;
+  readonly database: DatabaseInstance | undefined;
+  readonly signingKeyStore: ISigningKeyStore;
+  readonly publicBaseUrl: string | null;
+}): IConsoleAccountInviteIssuer | null {
+  const { container, options } = input;
   if (options.accountInviteIssuer !== undefined) return options.accountInviteIssuer;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer)) {
     return container.resolve<IConsoleAccountInviteIssuer>(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer);
+  }
+  if (input.database && input.publicBaseUrl) {
+    return new PostgresConsoleAccountInviteIssuer({
+      db: input.database,
+      signingKeyStore: input.signingKeyStore,
+      publicBaseUrl: input.publicBaseUrl,
+    });
   }
   return null;
 }

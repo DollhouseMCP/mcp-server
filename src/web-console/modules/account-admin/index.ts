@@ -6,6 +6,10 @@ export type {
   IConsoleAccountInviteIssuer,
 } from './AccountAdminInviteService.js';
 export {
+  PostgresConsoleAccountInviteIssuer,
+  type PostgresConsoleAccountInviteIssuerOptions,
+} from './PostgresConsoleAccountInviteIssuer.js';
+export {
   InMemoryAccountAdminMutationTransactionRunner,
   PostgresAccountAdminMutationTransactionRunner,
 } from './AccountAdminMutationTransaction.js';
