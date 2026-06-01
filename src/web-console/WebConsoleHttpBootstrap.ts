@@ -22,6 +22,7 @@ const API_V1_REPLACEMENT_REQUIRES_EVIDENCE =
 export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
   | 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED'
+  | 'DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED'
   | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
@@ -81,6 +82,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
       authMethods: normalizeAuthMethods(sourceEnv.DOLLHOUSE_AUTH_METHODS),
     },
     enableApiV1Mount: true,
+    enablePortfolioWriteRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED,
     requireExplicitProductionAdapterMetadata: true,
     productionDatabaseVerification: resolveWebConsoleProductionDatabaseVerificationFromEnv(sourceEnv),
     publicBaseUrl: sourceEnv.DOLLHOUSE_PUBLIC_BASE_URL,

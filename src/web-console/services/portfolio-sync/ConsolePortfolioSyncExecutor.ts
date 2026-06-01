@@ -1,6 +1,9 @@
 import * as yaml from 'js-yaml';
 
+import type { SessionContext } from '../../../context/SessionContext.js';
+import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { SecureYamlParser } from '../../../security/secureYamlParser.js';
+import type { SessionActivationRegistry } from '../../../state/SessionActivationState.js';
 import {
   canonicalizePortfolioElementName,
   CONSOLE_PORTFOLIO_ELEMENT_TYPES,
@@ -12,6 +15,10 @@ import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { PortfolioSyncJobRecord } from '../../stores/IPortfolioSyncJobStore.js';
 import { integrationSecretContext } from '../../modules/integrations/IntegrationSecretContext.js';
+import {
+  isBridgeOnlySessionActivationState,
+  restoreSessionDbUserId,
+} from '../../platform/ConsoleSessionActivationBridgeState.js';
 import type {
   IPortfolioSyncJobExecutor,
   PortfolioSyncWorkerOutcome,
@@ -26,6 +33,8 @@ export interface ConsolePortfolioSyncExecutorOptions {
   readonly portfolioStore: IPortfolioElementStore;
   readonly secretEncryption: ISecretEncryptionService;
   readonly repositoryName?: string;
+  readonly contextTracker?: ContextTracker;
+  readonly sessionActivationRegistry?: SessionActivationRegistry;
   readonly fetch?: typeof fetch;
   readonly now?: () => Date;
 }
@@ -58,6 +67,42 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
   }
 
   async execute(job: PortfolioSyncJobRecord): Promise<PortfolioSyncWorkerOutcome> {
+    if (this.options.contextTracker && this.options.sessionActivationRegistry) {
+      return this.executeWithUserContext(job);
+    }
+    return this.executeInCurrentContext(job);
+  }
+
+  private async executeWithUserContext(job: PortfolioSyncJobRecord): Promise<PortfolioSyncWorkerOutcome> {
+    const { contextTracker, sessionActivationRegistry: registry } = this.options;
+    if (!contextTracker || !registry) {
+      return this.executeInCurrentContext(job);
+    }
+    const sessionId = `web-console-sync:${job.id}`;
+    const existingState = registry.get(sessionId);
+    const state = existingState ?? registry.getOrCreate(sessionId);
+    const previousDbUserId = state.dbUserId;
+    state.dbUserId = job.userId;
+    const session: SessionContext = {
+      userId: job.userId,
+      sessionId,
+      tenantId: job.userId,
+      transport: 'http',
+      createdAt: Date.now(),
+    };
+    const context = contextTracker.createSessionContext('background-task', session, {
+      jobId: job.id,
+      provider: GITHUB_SECRET_PROVIDER,
+    });
+    try {
+      return await contextTracker.runAsync(context, () => this.executeInCurrentContext(job));
+    } finally {
+      restoreSessionDbUserId(state, previousDbUserId);
+      if (!existingState && isBridgeOnlySessionActivationState(state)) registry.dispose(sessionId);
+    }
+  }
+
+  private async executeInCurrentContext(job: PortfolioSyncJobRecord): Promise<PortfolioSyncWorkerOutcome> {
     const integration = await this.options.integrationStore.findByProvider(job.userId, GITHUB_SECRET_PROVIDER);
     if (!isUsableIntegration(integration, job.integrationId)) {
       return failed('portfolio_sync_integration_unavailable', baseSummary(job, { provider_connected: false }));
@@ -149,6 +194,7 @@ export class ConsolePortfolioSyncExecutor implements IPortfolioSyncJobExecutor {
       type,
       canonicalName: existing.canonicalName,
       expectedVersion: existing.version,
+      expectedContentHash: existing.contentHash,
       displayName: parsed.displayName,
       metadata: parsed.metadata,
       content: parsed.content,
@@ -321,10 +367,7 @@ function isUsableIntegration(
 }
 
 function parseRemoteElement(fileName: string, content: string): ParsedRemoteElement {
-  const parsed = SecureYamlParser.parse(content, {
-    validateContent: false,
-    validateFields: false,
-  });
+  const parsed = SecureYamlParser.parse(content, { validateFields: false });
   const metadata = sanitizeMetadata(parsed.data);
   const name = stripElementExtension(fileName);
   return {

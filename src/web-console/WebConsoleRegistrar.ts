@@ -64,10 +64,18 @@ import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccoun
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
 import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElementStore.js';
+import {
+  ManagerBackedPortfolioElementStore,
+  type ManagerBackedPortfolioManagers,
+} from './stores/ManagerBackedPortfolioElementStore.js';
 import { InMemoryPortfolioSyncJobStore } from './stores/InMemoryPortfolioSyncJobStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from './services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
 import { InMemoryRuntimeSessionControlStore } from './services/runtime/InMemoryRuntimeSessionControlStore.js';
 import type { SessionActivationRegistry } from '../state/SessionActivationState.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+import type { UserIdResolver } from '../database/UserContext.js';
+import type { IElement } from '../types/elements/IElement.js';
+import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { DatabaseConfirmationStore } from '../state/DatabaseConfirmationStore.js';
 import {
   InMemorySessionActivationStateAdapter,
@@ -256,6 +264,8 @@ export interface WebConsoleRegistrarOptions {
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
   readonly portfolioStore?: IPortfolioElementStore | null;
+  readonly enableManagerBackedPortfolioStore?: boolean;
+  readonly enablePortfolioWriteRoutes?: boolean;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
   readonly portfolioSyncJobExecutor?: IPortfolioSyncJobExecutor | null;
@@ -537,6 +547,7 @@ export class WebConsoleRegistrar {
       portfolioStore: stores.portfolioStore,
       integrationStore: stores.integrationStore,
       syncJobStore: stores.portfolioSyncJobStore,
+      enablePortfolioWriteRoutes: this.options.enablePortfolioWriteRoutes === true,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'selfService', () => createSelfServiceModule({
@@ -608,6 +619,7 @@ export class WebConsoleRegistrar {
       authPolicyStore,
       protectedCorrelationRateLimiter,
       apiV1MountState,
+      userContext: resolveConsoleUserContext(container),
     });
     const cleanupScheduler = this.createCleanupScheduler(stores, container);
     const composition: WebConsoleComposition = {
@@ -956,6 +968,7 @@ function createApiV1Mount(options: {
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly apiV1MountState: Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'>;
+  readonly userContext: ReturnType<typeof resolveConsoleUserContext>;
 }): WebConsoleApiV1Mount | null {
   if (options.options.enableApiV1Mount !== true) return null;
   if (options.activationProfile !== 'shared-hosted') {
@@ -974,6 +987,7 @@ function createApiV1Mount(options: {
     idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
     now: options.options.now,
     reportInternalError: options.options.reportApiV1InternalError,
+    userContext: options.userContext ?? undefined,
   });
   return {
     router,
@@ -1116,7 +1130,6 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
       { PostgresUserIntegrationStore },
-      { PostgresPortfolioElementStore },
       { PostgresPortfolioSyncJobStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresRuntimeSessionControlStore },
@@ -1129,7 +1142,6 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./stores/PostgresUserIntegrationStore.js'),
-      import('./stores/PostgresPortfolioElementStore.js'),
       import('./stores/PostgresPortfolioSyncJobStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
@@ -1146,7 +1158,7 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
         'PostgresConsoleAccountAllowlistStore',
       ),
       integrationStore: markProductionAdapter(new PostgresUserIntegrationStore(database), 'PostgresUserIntegrationStore'),
-      portfolioStore: markProductionAdapter(new PostgresPortfolioElementStore(database), 'PostgresPortfolioElementStore'),
+      portfolioStore: new InMemoryPortfolioElementStore(),
       portfolioSyncJobStore: markProductionAdapter(
         new PostgresPortfolioSyncJobStore(database),
         'PostgresPortfolioSyncJobStore',
@@ -1668,6 +1680,7 @@ function resolvePortfolioSyncWorker(options: {
   }
   const executor = options.options.portfolioSyncJobExecutor ??
     resolvePortfolioSyncJobExecutor(
+      options.container,
       options.stores,
       options.secretEncryption,
       options.options.portfolioSyncRepositoryName,
@@ -1687,6 +1700,7 @@ function resolvePortfolioSyncWorker(options: {
 }
 
 function resolvePortfolioSyncJobExecutor(
+  container: DiContainerFacade,
   stores: ConsoleStoreSet,
   secretEncryption: ISecretEncryptionService | null,
   repositoryName?: string,
@@ -1698,9 +1712,19 @@ function resolvePortfolioSyncJobExecutor(
       portfolioStore: stores.portfolioStore,
       secretEncryption,
       repositoryName,
+      ...resolveConsolePortfolioSyncContext(container),
     }),
     'ConsolePortfolioSyncExecutor',
   );
+}
+
+function resolveConsolePortfolioSyncContext(container: DiContainerFacade) {
+  const userContext = resolveConsoleUserContext(container);
+  if (!userContext) return {};
+  return {
+    contextTracker: userContext.contextTracker,
+    sessionActivationRegistry: userContext.sessionActivationRegistry,
+  };
 }
 
 function resolvePortfolioSyncWorkerId(
@@ -1840,7 +1864,48 @@ function resolvePortfolioElementStore(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore)) {
     return container.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore);
   }
+  if (options.enableManagerBackedPortfolioStore !== false) {
+    const store = createManagerBackedPortfolioElementStore(container);
+    if (store) return markProductionAdapter(store, 'ManagerBackedPortfolioElementStore');
+  }
   return fallback;
+}
+
+function createManagerBackedPortfolioElementStore(
+  container: DiContainerFacade,
+): ManagerBackedPortfolioElementStore | null {
+  const requiredServices = [
+    'UserIdResolver',
+    'PersonaManager',
+    'SkillManager',
+    'TemplateManager',
+    'AgentManager',
+    'MemoryManager',
+    'EnsembleManager',
+  ];
+  if (!requiredServices.every(serviceName => container.hasRegistration(serviceName))) return null;
+  const managers: ManagerBackedPortfolioManagers = {
+    personas: container.resolve<BaseElementManager<IElement>>('PersonaManager'),
+    skills: container.resolve<BaseElementManager<IElement>>('SkillManager'),
+    templates: container.resolve<BaseElementManager<IElement>>('TemplateManager'),
+    agents: container.resolve<BaseElementManager<IElement>>('AgentManager'),
+    memories: container.resolve<BaseElementManager<IElement>>('MemoryManager'),
+    ensembles: container.resolve<BaseElementManager<IElement>>('EnsembleManager'),
+  };
+  return new ManagerBackedPortfolioElementStore({
+    managers,
+    getCurrentUserId: container.resolve<UserIdResolver>('UserIdResolver'),
+  });
+}
+
+function resolveConsoleUserContext(container: DiContainerFacade) {
+  if (!container.hasRegistration('ContextTracker') || !container.hasRegistration('SessionActivationRegistry')) {
+    return null;
+  }
+  return {
+    contextTracker: container.resolve<ContextTracker>('ContextTracker'),
+    sessionActivationRegistry: container.resolve<SessionActivationRegistry>('SessionActivationRegistry'),
+  };
 }
 
 function resolvePortfolioSyncJobStore(

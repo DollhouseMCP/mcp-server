@@ -125,6 +125,7 @@ export function serializePortfolioElementDetail(
 }
 
 export function portfolioElementEtag(record: ConsolePortfolioElementSummaryRecord): string {
+  if (record.contentHash) return `"sha256:${record.contentHash}"`;
   return `W/"portfolio:${record.type}:${record.canonicalName}:v${record.version}"`;
 }
 

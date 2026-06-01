@@ -21,6 +21,10 @@ import type { ConsoleAuthenticatedContext, ConsoleHttpMethod, ConsoleRouteDefini
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
+import {
+  createConsoleUserContextMiddleware,
+  type ConsoleUserContextOptions,
+} from './ConsoleUserContextMiddleware.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
 import type { ConsoleRequest } from './ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from '../middleware/ConsoleAuthentication.js';
@@ -37,6 +41,7 @@ export interface SecuredConsoleRouterOptions {
   readonly idleTimeoutMs: number;
   readonly now?: () => Date;
   readonly reportInternalError?: (error: unknown, correlationId: string) => void;
+  readonly userContext?: ConsoleUserContextOptions;
 }
 
 export function assembleSecuredConsoleRouter(
@@ -48,21 +53,19 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
+  const userContext = options.userContext
+    ? createConsoleUserContextMiddleware(options.userContext)
+    : null;
 
   for (const module of registry.getModules()) {
     for (const route of module.routes) {
-      if (route.audience === 'public') {
-        registerSecuredRoute(router, route, [createSecuredHandler(route, options)]);
-      } else {
-        registerSecuredRoute(router, route, [
-          ...(route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(route, options)] : []),
-          authenticate,
-          csrf,
-          createConsoleAuthorizationMiddleware(route, options),
-          createConsoleRateLimitMiddleware(route, options),
-          createSecuredHandler(route, options),
-        ]);
-      }
+      registerSecuredRoute(router, route, middlewareForRoute({
+        route,
+        options,
+        authenticate,
+        userContext,
+        csrf,
+      }));
     }
   }
   const sendInternalProblem: ErrorRequestHandler = (error, request, response, next): void => {
@@ -90,6 +93,27 @@ export function assembleSecuredConsoleRouter(
   };
   router.use(sendInternalProblem);
   return router;
+}
+
+function middlewareForRoute(input: {
+  readonly route: ConsoleRouteDefinition;
+  readonly options: SecuredConsoleRouterOptions;
+  readonly authenticate: RequestHandler;
+  readonly userContext: RequestHandler | null;
+  readonly csrf: RequestHandler;
+}): readonly RequestHandler[] {
+  if (input.route.audience === 'public') {
+    return [createSecuredHandler(input.route, input.options)];
+  }
+  return [
+    ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
+    input.authenticate,
+    ...(input.userContext ? [input.userContext] : []),
+    input.csrf,
+    createConsoleAuthorizationMiddleware(input.route, input.options),
+    createConsoleRateLimitMiddleware(input.route, input.options),
+    createSecuredHandler(input.route, input.options),
+  ];
 }
 
 function createConsoleStreamRequestProtectionMiddleware(

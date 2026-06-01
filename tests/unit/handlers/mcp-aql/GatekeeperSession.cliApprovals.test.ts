@@ -200,12 +200,13 @@ describe('GatekeeperSession CLI approval store', () => {
 
     it('should cancel pending approvals on session termination', async () => {
       const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      const cancelledAt = new Date().toISOString();
 
-      expect(session.cancelPendingCliApprovals('2026-05-29T15:00:00.000Z')).toBe(1);
+      expect(session.cancelPendingCliApprovals(cancelledAt)).toBe(1);
 
       expect(session.getPendingCliApprovals()).toEqual([]);
       expect(session.getCliApproval(requestId)).toMatchObject({
-        cancelledAt: '2026-05-29T15:00:00.000Z',
+        cancelledAt,
       });
       expect(session.checkCliApproval(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
     });

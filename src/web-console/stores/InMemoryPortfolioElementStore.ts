@@ -92,6 +92,9 @@ export class InMemoryPortfolioElementStore implements IPortfolioElementStore {
     if (existing.version !== input.expectedVersion) {
       throw new PortfolioElementVersionConflictError();
     }
+    if (input.expectedContentHash !== undefined && existing.contentHash !== input.expectedContentHash) {
+      throw new PortfolioElementVersionConflictError();
+    }
     let displayName = existing.displayName;
     if (input.displayName !== undefined) displayName = input.displayName;
     let metadata = existing.metadata;
@@ -121,6 +124,9 @@ export class InMemoryPortfolioElementStore implements IPortfolioElementStore {
     const existing = this.records.get(recordKey);
     if (!existing) return null;
     if (existing.version !== input.expectedVersion) {
+      throw new PortfolioElementVersionConflictError();
+    }
+    if (input.expectedContentHash !== undefined && existing.contentHash !== input.expectedContentHash) {
       throw new PortfolioElementVersionConflictError();
     }
     this.records.delete(recordKey);

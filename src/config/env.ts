@@ -400,6 +400,12 @@ const envSchema = z.object({
    * are deliberately satisfied.
    */
   DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: envBool(false),
+  /**
+   * Enables portfolio mutation/sync routes on the replacement console. Reads
+   * remain available when the API v1 gate is enabled; writes default off until
+   * the manager-backed authoring path is deliberately exposed.
+   */
+  DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: envBool(false),
   /** Base64-encoded 32-byte HMAC key for opaque console browser values. */
   DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),

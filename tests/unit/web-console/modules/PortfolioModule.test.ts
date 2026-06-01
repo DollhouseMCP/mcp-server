@@ -106,11 +106,13 @@ function moduleFixtureWithStore(
   store: IPortfolioElementStore,
   integrationStore = new InMemoryUserIntegrationStore([userIntegration()]),
   syncJobStore: IPortfolioSyncJobStore = new InMemoryPortfolioSyncJobStore(),
+  enablePortfolioWriteRoutes = true,
 ) {
   const module = createPortfolioModule({
     portfolioStore: store,
     integrationStore,
     syncJobStore,
+    enablePortfolioWriteRoutes,
     now: () => NOW,
   });
   return { module, store, integrationStore, syncJobStore };
@@ -149,6 +151,23 @@ class ConflictOnWritePortfolioStore extends InMemoryPortfolioElementStore {
 }
 
 describe('PortfolioModule', () => {
+  it('keeps portfolio write and sync-start routes gated off by default', () => {
+    const module = createPortfolioModule({
+      portfolioStore: new InMemoryPortfolioElementStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
+      syncJobStore: new InMemoryPortfolioSyncJobStore(),
+      now: () => NOW,
+    });
+
+    expect(module.routes.some(route => route.method !== 'GET')).toBe(false);
+    expect(module.routes.map(route => route.path)).toEqual(expect.arrayContaining([
+      PORTFOLIO_PATH,
+      ELEMENTS_PATH,
+      ELEMENT_DETAIL_PATH,
+      SYNC_STATUS_PATH,
+    ]));
+  });
+
   it('registers self-private portfolio read descriptors', () => {
     const { module } = moduleFixture([]);
 

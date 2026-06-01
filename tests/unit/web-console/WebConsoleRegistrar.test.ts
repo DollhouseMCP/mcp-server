@@ -118,6 +118,20 @@ function productionAdapter<T>(): T {
   return new ProductionAdapter() as T;
 }
 
+function seedCanonicalPortfolioManagers(container: TestContainer): void {
+  container.seed('UserIdResolver', () => '018f3d47-73ae-7f10-a0de-0742618d4fb1');
+  for (const serviceName of [
+    'PersonaManager',
+    'SkillManager',
+    'TemplateManager',
+    'AgentManager',
+    'MemoryManager',
+    'EnsembleManager',
+  ]) {
+    container.seed(serviceName, productionAdapter());
+  }
+}
+
 function productionDatabaseRows() {
   return [
     { databaseName: 'dollhouse_prod', currentUser: 'dollhouse_app' },
@@ -542,6 +556,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('RateLimitStore', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     container.seed('WebConsoleAccountAllowlistAuthorityCutoverComplete', true);
+    seedCanonicalPortfolioManagers(container);
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
@@ -1363,7 +1378,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.integrationStore.constructor.name).toBe('PostgresUserIntegrationStore');
-    expect(composition.portfolioStore.constructor.name).toBe('PostgresPortfolioElementStore');
+    expect(composition.portfolioStore.constructor.name).toBe('InMemoryPortfolioElementStore');
     expect(composition.sessionActivationStateAdapter.constructor.name).toBe('PostgresSessionActivationStateAdapter');
     expect(composition.sessionActivationEventSink.constructor.name).toBe('PostgresSessionActivationEventSink');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');

@@ -153,6 +153,7 @@ describe('web-console route manifest parity', () => {
       consoleOAuthClient: fakeConsoleOAuthClient(),
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
       enableAccountAllowlistRoutes: true,
+      enablePortfolioWriteRoutes: true,
       registerCleanup: false,
     }).bootstrapAndRegister(new TestContainer());
 

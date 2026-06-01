@@ -7,7 +7,7 @@ export * from './IUserIntegrationStore.js';
 export * from './InMemoryUserIntegrationStore.js';
 export * from './IPortfolioElementStore.js';
 export * from './InMemoryPortfolioElementStore.js';
-export * from './PostgresPortfolioElementStore.js';
+export * from './ManagerBackedPortfolioElementStore.js';
 export * from './IPortfolioSyncJobStore.js';
 export * from './InMemoryPortfolioSyncJobStore.js';
 export * from './IIdempotencyStore.js';

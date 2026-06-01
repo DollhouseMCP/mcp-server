@@ -234,56 +234,6 @@ export const userIntegrations = pgTable('user_integrations', {
 export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
 export type PortfolioSyncConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
 export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
-export type PortfolioElementType =
-  | 'personas'
-  | 'skills'
-  | 'templates'
-  | 'agents'
-  | 'memories'
-  | 'ensembles';
-export type PortfolioElementValidationStatus = 'valid' | 'invalid' | 'unknown';
-
-export const portfolioElements = pgTable('portfolio_elements', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
-  type: text('type').$type<PortfolioElementType>().notNull(),
-  name: text('name').notNull(),
-  canonicalName: text('canonical_name').notNull(),
-  displayName: text('display_name'),
-  version: integer('version').notNull().default(1),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
-  validationStatus: text('validation_status').$type<PortfolioElementValidationStatus>().notNull().default('valid'),
-  tags: text('tags').array().notNull().default(sql`ARRAY[]::text[]`),
-  metadata: jsonb('metadata').notNull().default({}),
-  content: text('content').notNull(),
-}, (table) => [
-  check('portfolio_elements_type_check', sql`
-    ${table.type} IN ('personas', 'skills', 'templates', 'agents', 'memories', 'ensembles')
-  `),
-  check('portfolio_elements_validation_status_check', sql`
-    ${table.validationStatus} IN ('valid', 'invalid', 'unknown')
-  `),
-  check('portfolio_elements_shape_check', sql`
-    btrim(${table.name}) <> ''
-    AND btrim(${table.canonicalName}) <> ''
-    AND char_length(${table.name}) <= 200
-    AND char_length(${table.canonicalName}) <= 200
-    AND (${table.displayName} IS NULL OR (
-      btrim(${table.displayName}) <> ''
-      AND char_length(${table.displayName}) <= 200
-    ))
-    AND ${table.version} >= 1
-    AND coalesce(array_length(${table.tags}, 1), 0) <= 50
-    AND jsonb_typeof(${table.metadata}) = 'object'
-    AND char_length(${table.metadata}::text) <= 65536
-    AND octet_length(${table.content}) <= 1048576
-  `),
-  uniqueIndex('idx_portfolio_elements_user_type_name_unique')
-    .on(table.userId, table.type, table.canonicalName),
-  index('idx_portfolio_elements_user_updated').on(table.userId, table.updatedAt),
-  index('idx_portfolio_elements_user_type').on(table.userId, table.type),
-]);
-
 export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),

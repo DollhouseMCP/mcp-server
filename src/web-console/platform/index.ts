@@ -6,5 +6,7 @@ export * from './ConsoleRouterAssembler.js';
 export * from './ConsoleRouteExecution.js';
 export * from './ConsoleReturnPaths.js';
 export * from './ConsoleSecuredRouterAssembler.js';
+export * from './ConsoleSessionActivationBridgeState.js';
 export * from './ConsoleSseStream.js';
+export * from './ConsoleUserContextMiddleware.js';
 export * from './ProblemResponses.js';

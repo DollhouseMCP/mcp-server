@@ -112,6 +112,38 @@ describe('ConsolePortfolioSyncExecutor', () => {
     });
   });
 
+  it('rejects invalid remote GitHub content before writing to the portfolio store', async () => {
+    const portfolioStore = new InMemoryPortfolioElementStore();
+    const maliciousContent = [
+      '---',
+      'name: Bad Remote',
+      'payload: !!python/object/apply:os.system ["touch /tmp/nope"]',
+      '---',
+      '',
+      'Bad body.',
+    ].join('\n');
+    const fetchMock = createFetchMock([
+      route('GET', '/repos/alice/dollhouse-portfolio/contents/personas', 200, [
+        { type: 'file', name: 'bad-remote.md', path: 'personas/bad-remote.md' },
+      ]),
+      route('GET', '/repos/alice/dollhouse-portfolio/contents/personas/bad-remote.md', 200, {
+        content: Buffer.from(maliciousContent, 'utf8').toString('base64'),
+        sha: 'remote-sha',
+      }),
+    ]);
+    const executor = new ConsolePortfolioSyncExecutor({
+      integrationStore: new InMemoryUserIntegrationStore([integrationRecord()]),
+      portfolioStore,
+      secretEncryption,
+      fetch: fetchMock,
+      now: () => NOW,
+    });
+
+    await expect(executor.execute(syncJob({ direction: 'pull', conflictPolicy: 'prefer_remote' })))
+      .rejects.toThrow('Malicious YAML content detected');
+    await expect(portfolioStore.listByUser(USER_ID)).resolves.toHaveLength(0);
+  });
+
   it('fails closed without a usable connected integration credential', async () => {
     const executor = new ConsolePortfolioSyncExecutor({
       integrationStore: new InMemoryUserIntegrationStore([integrationRecord({

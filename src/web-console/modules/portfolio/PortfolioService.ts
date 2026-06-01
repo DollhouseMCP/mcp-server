@@ -184,6 +184,7 @@ export class PortfolioService {
         type: path.type,
         canonicalName: path.canonicalName,
         expectedVersion: precondition.version,
+        expectedContentHash: precondition.contentHash,
         displayName: parsed.value.displayName,
         metadata: parsed.value.metadata,
         content: parsed.value.content,
@@ -222,6 +223,7 @@ export class PortfolioService {
         type: path.type,
         canonicalName: path.canonicalName,
         expectedVersion: precondition.version,
+        expectedContentHash: precondition.contentHash,
         now: this.now(),
       });
       if (!deleted) return notFound();
@@ -524,7 +526,7 @@ function requireCurrentElementEtag(
   req: ConsoleRequest,
   record: ConsolePortfolioElementSummaryRecord,
 ):
-  | { readonly kind: 'valid'; readonly version: number }
+  | { readonly kind: 'valid'; readonly version: number; readonly contentHash?: string }
   | { readonly kind: 'problem'; readonly result: ConsoleHandlerResult } {
   const value = singleHeader(req.headers['if-match']);
   if (!value) {
@@ -540,7 +542,7 @@ function requireCurrentElementEtag(
       result: problem(412, 'precondition_failed', 'Precondition failed', 'If-Match does not match the current portfolio element ETag.'),
     };
   }
-  return { kind: 'valid', version: record.version };
+  return { kind: 'valid', version: record.version, contentHash: record.contentHash };
 }
 
 function validationFailed(issues: readonly PortfolioElementValidationIssueDto[]): ConsoleHandlerResult {

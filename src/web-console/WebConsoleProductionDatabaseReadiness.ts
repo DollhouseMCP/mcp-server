@@ -83,7 +83,6 @@ export const WEB_CONSOLE_PRODUCTION_REQUIRED_TABLES = [
   'admin_audit_chain_heads',
   'admin_audit_events',
   'user_integrations',
-  'portfolio_elements',
   'portfolio_sync_jobs',
 ] as const;
 

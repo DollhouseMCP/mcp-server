@@ -21,7 +21,13 @@ export interface ConsolePortfolioElementSummaryRecord {
   readonly name: string;
   readonly canonicalName: string;
   readonly displayName: string | null;
+  /**
+   * Legacy mirror-store revision retained only for older in-memory tests and
+   * DTO compatibility. Manager-backed portfolio concurrency is defined by
+   * contentHash/ETag, not this integer.
+   */
   readonly version: number;
+  readonly contentHash?: string;
   readonly updatedAt: Date;
   readonly validationStatus: ConsolePortfolioValidationStatus;
   readonly tags: readonly string[];
@@ -68,7 +74,9 @@ export interface ConsolePortfolioElementUpdateInput {
   readonly userId: string;
   readonly type: ConsolePortfolioElementType;
   readonly canonicalName: string;
+  /** Legacy mirror-store precondition; ignored by manager-backed stores when contentHash is supplied. */
   readonly expectedVersion: number;
+  readonly expectedContentHash?: string;
   readonly displayName?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
   readonly content?: string;
@@ -80,7 +88,9 @@ export interface ConsolePortfolioElementDeleteInput {
   readonly userId: string;
   readonly type: ConsolePortfolioElementType;
   readonly canonicalName: string;
+  /** Legacy mirror-store precondition; ignored by manager-backed stores when contentHash is supplied. */
   readonly expectedVersion: number;
+  readonly expectedContentHash?: string;
   readonly now: Date;
 }
 
@@ -133,6 +143,9 @@ export function validatePortfolioElementSummaryRecord(record: ConsolePortfolioEl
   if (record.displayName !== null) assertDisplayString(record.displayName, 'displayName', 200);
   if (!Number.isSafeInteger(record.version) || record.version < 1) {
     throw new ConsoleStoreValidationError('version must be a positive safe integer');
+  }
+  if (record.contentHash !== undefined && !/^[a-f0-9]{64}$/u.test(record.contentHash)) {
+    throw new ConsoleStoreValidationError('contentHash must be a lowercase SHA-256 hex digest');
   }
   if (!['valid', 'invalid', 'unknown'].includes(record.validationStatus)) {
     throw new ConsoleStoreValidationError(`unsupported validation status '${record.validationStatus}'`);
