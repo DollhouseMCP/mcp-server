@@ -37,9 +37,10 @@ export class AuthServiceRegistrar {
       return;
     }
 
-    const { createAuthProvider } = await import('../../auth/AuthProviderFactory.js');
+    const { createAuthProvider, resolveAuthMethods } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
     const { createSigningKeyStore } = await import('../../storage/signingKeys/createSigningKeyStore.js');
+    const { createAuthStorage } = await import('../../auth/embedded-as/storage/createAuthStorage.js');
     const { InMemoryRateLimitStore } = await import('../../auth/embedded-as/storage/InMemoryRateLimitStore.js');
     const { PostgresRateLimitStore } = await import('../../auth/embedded-as/storage/PostgresRateLimitStore.js');
 
@@ -76,6 +77,17 @@ export class AuthServiceRegistrar {
     }
     container.register('RateLimitStore', () => rateLimitStore);
     const signInAllowlistAuthority = await this.createSignInAllowlistAuthority(database);
+    const authMethods = resolveAuthMethods({
+      enabled: true,
+      provider: env.DOLLHOUSE_AUTH_PROVIDER,
+      methods: env.DOLLHOUSE_AUTH_METHODS as AuthConfig['methods'],
+    });
+    const authStorage = env.DOLLHOUSE_AUTH_PROVIDER === 'embedded'
+      ? await createAuthStorage({ methods: authMethods, database })
+      : undefined;
+    if (authStorage) {
+      container.register('AuthStorage', () => authStorage);
+    }
 
     // Phase 4.5 / Phase J: prune rotated signing keys older than 30 days
     // every 6 hours. Without this, audit history accumulates unboundedly —
@@ -123,8 +135,9 @@ export class AuthServiceRegistrar {
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
-      methods: env.DOLLHOUSE_AUTH_METHODS as AuthConfig['methods'],
+      methods: authMethods,
       database,
+      storage: authStorage,
       // Cycle 19 / security-#6: opt-in OIDC-bridge typ enforcement.
       oidcRequireAccessTokenTyp: env.DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP,
       // Phase 4.5: signing key store (filesystem or postgres backend

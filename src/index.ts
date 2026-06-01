@@ -7,7 +7,6 @@ import { env } from './config/env.js';
 import * as path from 'path';
 import { realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
@@ -22,7 +21,7 @@ import {
 } from './server/StreamableHttpServer.js';
 import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
-import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
+import type { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
 import { PACKAGE_VERSION } from "./generated/version.js";
 import { joinUrl } from './auth/oauth/url.js';
 import type { IndicatorConfig } from "./config/indicator-config.js";
@@ -38,8 +37,21 @@ import type { IdentityHandler } from "./handlers/IdentityHandler.js";
 import type { ConfigHandler } from "./handlers/ConfigHandler.js";
 import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
+import type { ResourceHandler } from './handlers/ResourceHandler.js';
 import type { WebConsoleComposition } from './web-console/WebConsoleRegistrar.js';
 import type { RuntimeMcpSessionControlService } from './web-console/services/runtime/index.js';
+import type { ServerSetup } from './server/ServerSetup.js';
+import type { IngestRoutesResult } from './web/console/IngestRoutes.js';
+import type { MemoryLogSink } from './logging/sinks/MemoryLogSink.js';
+import type { MemoryMetricsSink } from './metrics/sinks/MemoryMetricsSink.js';
+import type { LogManager } from './logging/LogManager.js';
+import type { MCPAQLHandler } from './handlers/mcp-aql/MCPAQLHandler.js';
+import type { RequestHandler, Router } from 'express';
+import type { ContextTracker } from './security/encryption/ContextTracker.js';
+import type { UserIdentityService } from './services/UserIdentityService.js';
+import type { SessionActivationRegistry } from './state/SessionActivationState.js';
+import type { TlsConfig } from './server/TlsConfig.js';
+import type { PerformanceMonitor } from './utils/PerformanceMonitor.js';
 import { ConfigManager } from "./config/ConfigManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
@@ -50,6 +62,10 @@ import { validateUserId } from './paths/validateUserId.js';
 // The service is created eagerly here (before DI container) because error
 // handlers must be installed before any async work begins.
 import { LifecycleService } from './lifecycle/LifecycleService.js';
+
+type LowLevelMcpServer = {
+  connect(transport: StdioServerTransport): Promise<void>;
+};
 
 const _lifecycleService = new LifecycleService();
 _lifecycleService.installErrorHandlers();
@@ -94,7 +110,8 @@ function toPathSafeAuthUserId(subject: string, providerName: string | undefined)
 }
 
 export class DollhouseMCPServer implements IToolHandler {
-  private server: Server;
+  private server: LowLevelMcpServer | undefined;
+  private readonly capabilities: Record<string, unknown>;
   public personasDir: string | null;
   private currentUser: string | null = null;
   private isInitialized: boolean = false;
@@ -111,7 +128,7 @@ export class DollhouseMCPServer implements IToolHandler {
   private identityHandler?: IdentityHandler;
   private configHandler?: ConfigHandler;
   private syncHandler?: SyncHandler;
-  private resourceHandler?: import('./handlers/ResourceHandler.js').ResourceHandler;
+  private resourceHandler?: ResourceHandler;
 
   /**
    * Create a new DollhouseMCPServer instance
@@ -123,7 +140,7 @@ export class DollhouseMCPServer implements IToolHandler {
   constructor(container: DollhouseContainer) {
     // Build capabilities object conditionally based on configuration
     // Resources are disabled by default (advertise_resources: false)
-    const capabilities: any = {
+    const capabilities: Record<string, unknown> = {
       tools: {},
     };
 
@@ -147,19 +164,29 @@ export class DollhouseMCPServer implements IToolHandler {
       logger.debug(`[DollhouseMCP] Resources capability disabled by default: ${errorMessage}`);
     }
 
-    this.server = new Server(
+    this.capabilities = capabilities;
+    this.personasDir = null;
+    this.currentUser = process.env.DOLLHOUSE_USER || null;
+    this.container = container;
+  }
+
+  private async getServer(): Promise<LowLevelMcpServer> {
+    if (this.server) return this.server;
+    const serverModule = await import('@modelcontextprotocol/sdk/server/index.js') as Record<string, unknown>;
+    const LowLevelServer = serverModule['Server'] as new (
+      info: { name: string; version: string },
+      options: { capabilities: Record<string, unknown> },
+    ) => LowLevelMcpServer;
+    this.server = new LowLevelServer(
       {
         name: "dollhousemcp",
         version: PACKAGE_VERSION,
       },
       {
-        capabilities,
+        capabilities: this.capabilities,
       }
     );
-
-    this.personasDir = null;
-    this.currentUser = process.env.DOLLHOUSE_USER || null;
-    this.container = container;
+    return this.server;
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -174,7 +201,8 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   private async completeInitialization(): Promise<void> {
     // Create handlers with server instance - all state managed by services
-    const handlers = await this.container.createHandlers(this.server);
+    const server = await this.getServer();
+    const handlers = await this.container.createHandlers(server);
 
     this.personaHandler = handlers.personaHandler;
     this.elementCRUDHandler = handlers.elementCrudHandler;
@@ -195,6 +223,53 @@ export class DollhouseMCPServer implements IToolHandler {
     this.isInitialized = true;
   }
 
+  private requireInitializedHandler<T>(handler: T | undefined, name: string): T {
+    if (!handler) {
+      throw new Error(`${name} is not initialized`);
+    }
+    return handler;
+  }
+
+  private get personaHandlerOrThrow(): PersonaHandler {
+    return this.requireInitializedHandler(this.personaHandler, 'PersonaHandler');
+  }
+
+  private get elementCrudHandlerOrThrow(): ElementCRUDHandler {
+    return this.requireInitializedHandler(this.elementCRUDHandler, 'ElementCRUDHandler');
+  }
+
+  private get collectionHandlerOrThrow(): CollectionHandler {
+    return this.requireInitializedHandler(this.collectionHandler, 'CollectionHandler');
+  }
+
+  private get portfolioHandlerOrThrow(): PortfolioHandler {
+    return this.requireInitializedHandler(this.portfolioHandler, 'PortfolioHandler');
+  }
+
+  private get githubAuthHandlerOrThrow(): GitHubAuthHandler {
+    return this.requireInitializedHandler(this.githubAuthHandler, 'GitHubAuthHandler');
+  }
+
+  private get displayConfigHandlerOrThrow(): DisplayConfigHandler {
+    return this.requireInitializedHandler(this.displayConfigHandler, 'DisplayConfigHandler');
+  }
+
+  private get identityHandlerOrThrow(): IdentityHandler {
+    return this.requireInitializedHandler(this.identityHandler, 'IdentityHandler');
+  }
+
+  private get configHandlerOrThrow(): ConfigHandler {
+    return this.requireInitializedHandler(this.configHandler, 'ConfigHandler');
+  }
+
+  private get syncHandlerOrThrow(): SyncHandler {
+    return this.requireInitializedHandler(this.syncHandler, 'SyncHandler');
+  }
+
+  private get enhancedIndexHandlerOrThrow(): EnhancedIndexHandler {
+    return this.requireInitializedHandler(this.enhancedIndexHandler, 'EnhancedIndexHandler');
+  }
+
   /**
    * Initialize MCP Resources handlers if enabled in configuration
    * This is separate from other handlers because it requires dynamic import
@@ -206,7 +281,7 @@ export class DollhouseMCPServer implements IToolHandler {
       const configManager = this.container.resolve<ConfigManager>('ConfigManager');
 
       this.resourceHandler = new ResourceHandler(configManager);
-      await this.resourceHandler.initialize(this.server);
+      await this.resourceHandler.initialize(await this.getServer() as never);
     } catch (error) {
       // Resources are optional - don't fail server startup if they can't be initialized
       logger.warn('[DollhouseMCP] Failed to initialize resource handlers, continuing without resources');
@@ -248,7 +323,7 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async listPersonas() {
     await this.ensureInitialized();
-    return this.personaHandler!.listPersonas();
+    return this.personaHandlerOrThrow.listPersonas();
   }
 
   // Use activateElement(name, 'persona'), deactivateElement(name, 'persona'),
@@ -257,18 +332,18 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async reloadPersonas() {
     await this.ensureInitialized();
-    return this.personaHandler!.reloadPersonas();
+    return this.personaHandlerOrThrow.reloadPersonas();
   }
 
   // ===== Element Methods (Generic for all element types) =====
   
   async listElements(type: string) {
     try {
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
       if (normalizedType === ElementType.PERSONA) {
         return this.listPersonas();
       }
-      return this.elementCRUDHandler!.listElements(normalizedType);
+      return this.elementCrudHandlerOrThrow.listElements(normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.listElements', error, { type });
       return {
@@ -284,8 +359,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.activatePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.activateElement(name, normalizedType, context);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.activateElement(name, normalizedType, context);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.activateElement', error, { type, name });
       return {
@@ -301,8 +376,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.getActivePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.getActiveElements(normalizedType);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.getActiveElements(normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.getActiveElements', error, { type });
       return {
@@ -318,8 +393,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.deactivatePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.deactivateElement(name, normalizedType);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.deactivateElement(name, normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.deactivateElement', error, { type, name });
       return {
@@ -334,24 +409,24 @@ export class DollhouseMCPServer implements IToolHandler {
   async getElementDetails(name: string, type: string) {
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.getPersonaDetails is deprecated; PersonaActivationStrategy handles personas
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-    return this.elementCRUDHandler!.getElementDetails(name, normalizedType);
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+    return this.elementCrudHandlerOrThrow.getElementDetails(name, normalizedType);
   }
   
   async reloadElements(type: string) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.reloadElements(type);
+    return this.elementCrudHandlerOrThrow.reloadElements(type);
   }
 
   // Element-specific methods
   async renderTemplate(name: string, variables: Record<string, any>) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.renderTemplate(name, variables);
+    return this.elementCrudHandlerOrThrow.renderTemplate(name, variables);
   }
 
   async executeAgent(name: string, parameters: Record<string, any>) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.executeAgent(name, parameters);
+    return this.elementCrudHandlerOrThrow.executeAgent(name, parameters);
   }
   
   /**
@@ -363,116 +438,116 @@ export class DollhouseMCPServer implements IToolHandler {
     // FIX: Issue #20 - Remove persona special case, route all element creation through ElementCRUDHandler
     // This ensures consistent duplicate checking and error handling for all element types
     // FIX: Issue #278 - Support elements parameter for ensembles
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.createElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.createElement({...args, type: normalizedType});
   }
 
   async editElement(args: {name: string; type: string; input: Record<string, unknown>}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.editPersona is deprecated; elementCRUDHandler handles personas via PersonaActivationStrategy
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.editElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.editElement({...args, type: normalizedType});
   }
 
   async validateElement(args: {name: string; type: string; strict?: boolean}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.validatePersona is deprecated; elementCRUDHandler handles personas
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.validateElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.validateElement({...args, type: normalizedType});
   }
 
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.deletePersona is deprecated; elementCRUDHandler handles personas via dedicated delete path
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.deleteElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.deleteElement({...args, type: normalizedType});
   }
 
   async browseCollection(section?: string, type?: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.browseCollection(section, type);
+    return this.collectionHandlerOrThrow.browseCollection(section, type);
   }
 
   async searchCollection(query: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.searchCollection(query);
+    return this.collectionHandlerOrThrow.searchCollection(query);
   }
 
   async searchCollectionEnhanced(query: string, options: any = {}) {
     await this.ensureInitialized();
-    return this.collectionHandler!.searchCollectionEnhanced(query, options);
+    return this.collectionHandlerOrThrow.searchCollectionEnhanced(query, options);
   }
 
   async getCollectionContent(path: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionContent(path);
+    return this.collectionHandlerOrThrow.getCollectionContent(path);
   }
 
   async installContent(inputPath: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.installContent(inputPath);
+    return this.collectionHandlerOrThrow.installContent(inputPath);
   }
 
   async submitContent(contentIdentifier: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.submitContent(contentIdentifier);
+    return this.collectionHandlerOrThrow.submitContent(contentIdentifier);
   }
 
   async getCollectionCacheHealth() {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionCacheHealth();
+    return this.collectionHandlerOrThrow.getCollectionCacheHealth();
   }
 
   // User identity management - delegated to IdentityHandler
   async setUserIdentity(username: string, email?: string) {
     await this.ensureInitialized();
-    return this.identityHandler!.setUserIdentity(username, email);
+    return this.identityHandlerOrThrow.setUserIdentity(username, email);
   }
 
   async getUserIdentity() {
     await this.ensureInitialized();
-    return this.identityHandler!.getUserIdentity();
+    return this.identityHandlerOrThrow.getUserIdentity();
   }
 
   async clearUserIdentity() {
     await this.ensureInitialized();
-    return this.identityHandler!.clearUserIdentity();
+    return this.identityHandlerOrThrow.clearUserIdentity();
   }
 
   private getCurrentUserForAttribution(): string {
-    return this.identityHandler!.getCurrentUserForAttribution();
+    return this.identityHandlerOrThrow.getCurrentUserForAttribution();
   }
 
   // GitHub authentication management
   async setupGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.setupGitHubAuth();
+    return this.githubAuthHandlerOrThrow.setupGitHubAuth();
   }
   
   async checkGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.checkGitHubAuth();
+    return this.githubAuthHandlerOrThrow.checkGitHubAuth();
   }
   
   async getOAuthHelperStatus(verbose: boolean = false) {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.getOAuthHelperStatus(verbose);
+    return this.githubAuthHandlerOrThrow.getOAuthHelperStatus(verbose);
   }
   
 
   
   async clearGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.clearGitHubAuth();
+    return this.githubAuthHandlerOrThrow.clearGitHubAuth();
   }
 
   // OAuth configuration management
   async configureOAuth(client_id?: string) {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.configureOAuth(client_id);
+    return this.githubAuthHandlerOrThrow.configureOAuth(client_id);
   }
 
 
@@ -489,7 +564,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async configureIndicator(config: Partial<IndicatorConfig>) {
     await this.ensureInitialized();
-    return this.displayConfigHandler!.configureIndicator(config);
+    return this.displayConfigHandlerOrThrow.configureIndicator(config);
   }
 
   /**
@@ -497,7 +572,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async getIndicatorConfig() {
     await this.ensureInitialized();
-    return this.displayConfigHandler!.getIndicatorConfig();
+    return this.displayConfigHandlerOrThrow.getIndicatorConfig();
   }
 
   /**
@@ -505,7 +580,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async configureCollectionSubmission(autoSubmit: boolean) {
     await this.ensureInitialized();
-    return this.collectionHandler!.configureCollectionSubmission(autoSubmit);
+    return this.collectionHandlerOrThrow.configureCollectionSubmission(autoSubmit);
   }
 
   /**
@@ -513,7 +588,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async getCollectionSubmissionConfig() {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionSubmissionConfig();
+    return this.collectionHandlerOrThrow.getCollectionSubmissionConfig();
   }
 
 
@@ -522,7 +597,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async exportPersona(personaName: string) {
     await this.ensureInitialized();
-    return this.personaHandler!.exportPersona(personaName);
+    return this.personaHandlerOrThrow.exportPersona(personaName);
   }
 
   /**
@@ -530,7 +605,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async exportAllPersonas(includeDefaults = true) {
     await this.ensureInitialized();
-    return this.personaHandler!.exportAllPersonas(includeDefaults);
+    return this.personaHandlerOrThrow.exportAllPersonas(includeDefaults);
   }
 
   /**
@@ -538,7 +613,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async importPersona(source: string, overwrite = false) {
     await this.ensureInitialized();
-    return this.personaHandler!.importPersona(source, overwrite);
+    return this.personaHandlerOrThrow.importPersona(source, overwrite);
   }
 
 
@@ -551,7 +626,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async portfolioStatus(username?: string) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.portfolioStatus(username);
+    return this.portfolioHandlerOrThrow.portfolioStatus(username);
   }
 
   /**
@@ -559,7 +634,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.initPortfolio(options);
+    return this.portfolioHandlerOrThrow.initPortfolio(options);
   }
 
   /**
@@ -567,7 +642,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.portfolioConfig(options);
+    return this.portfolioHandlerOrThrow.portfolioConfig(options);
   }
 
   /**
@@ -581,7 +656,7 @@ export class DollhouseMCPServer implements IToolHandler {
     confirmDeletions?: boolean;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.syncPortfolio(options);
+    return this.portfolioHandlerOrThrow.syncPortfolio(options);
   }
 
   /**
@@ -589,7 +664,7 @@ export class DollhouseMCPServer implements IToolHandler {
   */
   async handleConfigOperation(options: any) {
     await this.ensureInitialized();
-    return this.configHandler!.handleConfigOperation(options);
+    return this.configHandlerOrThrow.handleConfigOperation(options);
   }
 
   /**
@@ -597,7 +672,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async handleSyncOperation(options: any) {
     await this.ensureInitialized();
-    return this.syncHandler!.handleSyncOperation(options);
+    return this.syncHandlerOrThrow.handleSyncOperation(options);
   }
 
   async dispose(): Promise<void> {
@@ -619,7 +694,7 @@ export class DollhouseMCPServer implements IToolHandler {
     includeDescriptions?: boolean;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.searchPortfolio(options);
+    return this.portfolioHandlerOrThrow.searchPortfolio(options);
   }
 
   /**
@@ -635,7 +710,7 @@ export class DollhouseMCPServer implements IToolHandler {
     sortBy?: string;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.searchAll(options);
+    return this.portfolioHandlerOrThrow.searchAll(options);
   }
 
   /**
@@ -647,7 +722,7 @@ export class DollhouseMCPServer implements IToolHandler {
     limit: number;
     threshold: number;
   }) {
-    return this.enhancedIndexHandler!.findSimilarElements(options);
+    return this.enhancedIndexHandlerOrThrow.findSimilarElements(options);
   }
 
   /**
@@ -658,7 +733,7 @@ export class DollhouseMCPServer implements IToolHandler {
     elementType?: string;
     relationshipTypes?: string[];
   }) {
-    return this.enhancedIndexHandler!.getElementRelationships(options);
+    return this.enhancedIndexHandlerOrThrow.getElementRelationships(options);
   }
 
   /**
@@ -668,14 +743,14 @@ export class DollhouseMCPServer implements IToolHandler {
     verb: string;
     limit: number;
   }) {
-    return this.enhancedIndexHandler!.searchByVerb(options);
+    return this.enhancedIndexHandlerOrThrow.searchByVerb(options);
   }
 
   /**
    * Get statistics about Enhanced Index relationships
    */
   async getRelationshipStats() {
-    return this.enhancedIndexHandler!.getRelationshipStats();
+    return this.enhancedIndexHandlerOrThrow.getRelationshipStats();
   }
 
   async run() {
@@ -738,7 +813,8 @@ export class DollhouseMCPServer implements IToolHandler {
 
     // Connect ASAP — tools are registered, server can accept requests
     timer.startPhase('mcp_connect', true);
-    await this.server.connect(transport);
+    const server = await this.getServer();
+    await server.connect(transport);
     timer.endPhase('mcp_connect');
     timer.markConnect();
 
@@ -757,11 +833,11 @@ export class DollhouseMCPServer implements IToolHandler {
     deferredPromise.catch(err => logger.warn('[Startup] Deferred setup error:', err));
 
     // Issue #706 Phase 4: Wire deferred promise into ServerSetup for request buffering
-    const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
+    const serverSetup = this.container.resolve<ServerSetup>('ServerSetup');
     serverSetup.setDeferredSetupPromise(deferredPromise);
 
     // Log startup timing after deferred setup completes
-    deferredPromise.then(async () => {
+    deferredPromise.then(() => {
       const report = timer.getReport();
       logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
         `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
@@ -779,7 +855,7 @@ export class DollhouseMCPServer implements IToolHandler {
 // Bug fix: npx creates symlinks in .bin/ (e.g. .bin/mcp-server → dist/index.js).
 // Node.js keeps the symlink path in process.argv[1], so without resolving it,
 // isDirectExecution missed the dist/index.js suffix and the server never started.
-const rawScriptPath = process.argv?.[1] ?? '';
+const rawScriptPath = process.argv[1] ?? '';
 let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
 try {
   scriptPath = realpathSync(scriptPath);
@@ -905,17 +981,17 @@ function tryResolveOptional<T>(
 
 async function startHttpConsole(
   container: DollhouseContainer,
-): Promise<import('./web/console/IngestRoutes.js').IngestRoutesResult> {
+): Promise<IngestRoutesResult> {
   const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
 
   // Resolve sinks from the shared container
-  let memorySink = tryResolveOptional<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>(
+  let memorySink = tryResolveOptional<MemoryLogSink>(
     container, 'MemoryLogSink', 'MemoryLogSink not registered, using fallback',
   );
-  let metricsSink = tryResolveOptional<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>(
+  let metricsSink = tryResolveOptional<MemoryMetricsSink>(
     container, 'MemoryMetricsSink', 'MemoryMetricsSink not registered, using fallback',
   );
-  const logManager = tryResolveOptional<import('./logging/LogManager.js').LogManager>(
+  const logManager = tryResolveOptional<LogManager>(
     container, 'LogManager', 'LogManager not registered',
   );
 
@@ -950,7 +1026,7 @@ async function startHttpConsole(
   const resolvedPort = await resolvePortFromConfig() ?? env.DOLLHOUSE_WEB_CONSOLE_PORT;
 
   // Resolve MCP-AQL handler for gateway routes
-  const mcpAqlHandler = tryResolveOptional<import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler>(
+  const mcpAqlHandler = tryResolveOptional<MCPAQLHandler>(
     container, 'mcpAqlHandler', 'MCPAQLHandler not registered',
   );
 
@@ -962,13 +1038,13 @@ async function startHttpConsole(
   // when auth isn't registered (auth disabled), startWebServer keeps
   // its existing console-token-only behavior.
   const unifiedAuthMiddleware = container.hasRegistration('AuthMiddleware')
-    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
     : undefined;
   // ContextTracker is required for per-request session scoping on /api so DB
   // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
   // but every DB-touching handler throws "No session context is active".
   const contextTracker = container.hasRegistration('ContextTracker')
-    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    ? container.resolve<ContextTracker>('ContextTracker')
     : undefined;
 
   // Start the web server
@@ -1010,7 +1086,7 @@ async function startHttpConsole(
  */
 async function startStreamableHttpServer(
   options: StreamableHttpRuntimeOptions = {},
-  params?: { container?: DollhouseContainer; ingestRoutes?: import('./web/console/IngestRoutes.js').IngestRoutesResult },
+  params?: { container?: DollhouseContainer; ingestRoutes?: IngestRoutesResult },
 ): Promise<StreamableHttpRuntimeHandle> {
   const container = params?.container ?? await bootstrapHttpContainer();
   const ingestRoutes = params?.ingestRoutes;
@@ -1020,14 +1096,14 @@ async function startStreamableHttpServer(
 
   // Resolve auth middleware if enabled (unified JWT auth for HTTP transport)
   const authMiddleware = container.hasRegistration('AuthMiddleware')
-    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
     : undefined;
   const authProvider = container.hasRegistration('AuthProvider')
     ? container.resolve<unknown>('AuthProvider')
     : undefined;
   const authProviderName = (() => {
     if (typeof authProvider !== 'object' || authProvider === null || !('name' in authProvider)) {
-      return undefined;
+      return;
     }
     const rawName = (authProvider as { name?: unknown }).name;
     return typeof rawName === 'string' ? rawName : 'auth';
@@ -1041,11 +1117,11 @@ async function startStreamableHttpServer(
 
   // Resolve UserIdentityService for auth-driven DB user creation
   const userIdentityService = container.hasRegistration('UserIdentityService')
-    ? container.resolve<import('./services/UserIdentityService.js').UserIdentityService>('UserIdentityService')
+    ? container.resolve<UserIdentityService>('UserIdentityService')
     : undefined;
 
   const activationRegistry = container.hasRegistration('SessionActivationRegistry')
-    ? container.resolve<import('./state/SessionActivationState.js').SessionActivationRegistry>('SessionActivationRegistry')
+    ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
     : undefined;
   const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
 
@@ -1122,14 +1198,15 @@ async function startStreamableHttpServer(
     authMiddleware,
     oauthProvider,
     tlsConfig: container.hasRegistration('TlsConfig')
-      ? container.resolve<import('./server/TlsConfig.js').TlsConfig>('TlsConfig')
+      ? container.resolve<TlsConfig>('TlsConfig')
       : undefined,
     // Forward PerformanceMonitor so /healthz can surface auth-flow timing
     // aggregates alongside session telemetry. Resolved from the container
     // which ObservabilityServiceRegistrar wires unconditionally.
     performanceMonitor: container.hasRegistration('PerformanceMonitor')
-      ? container.resolve<import('./utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor')
+      ? container.resolve<PerformanceMonitor>('PerformanceMonitor')
       : undefined,
+    webConsoleApiV1: resolveWebConsoleApiV1Mount(container),
     runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
     onSessionCreated: (sessionId) => {
@@ -1139,6 +1216,18 @@ async function startStreamableHttpServer(
       ingestRoutes?.deregisterHttpSession(sessionId);
     },
   });
+}
+
+function resolveWebConsoleApiV1Mount(
+  container: DollhouseContainer,
+): StreamableHttpRuntimeOptions['webConsoleApiV1'] {
+  if (!container.hasRegistration('WebConsoleComposition')) return undefined;
+  const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
+  if (!composition.apiV1Mount) return undefined;
+  return {
+    router: composition.apiV1Mount.router,
+    markMounted: composition.apiV1Mount.markMounted,
+  };
 }
 
 async function resolveRuntimeMcpSessionControl(
@@ -1201,7 +1290,7 @@ function resolveRuntimeReplicaId(): string {
 
 function isEmbeddedOAuthProvider(value: unknown): value is {
   setPublicBaseUrl?: (publicBaseUrl: string) => void;
-  createRouter: () => import('express').Router;
+  createRouter: () => Router;
   isReadyForTraffic?: () => Promise<boolean>;
 } {
   return typeof value === 'object'
@@ -1216,16 +1305,16 @@ function isEmbeddedOAuthProvider(value: unknown): value is {
  */
 async function bootstrapWebContainer(): Promise<{
   container?: DollhouseContainer;
-  mcpAqlHandler?: import('./handlers/mcp-aql/MCPAQLHandler.js').MCPAQLHandler;
-  memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink;
-  metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
-  logManager?: import('./logging/LogManager.js').LogManager;
+  mcpAqlHandler?: MCPAQLHandler;
+  memorySink: MemoryLogSink;
+  metricsSink: MemoryMetricsSink;
+  logManager?: LogManager;
 }> {
   let container: DollhouseContainer | undefined;
   let mcpAqlHandler;
-  let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
-  let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
-  let logManager: import('./logging/LogManager.js').LogManager | undefined;
+  let memorySink: MemoryLogSink | undefined;
+  let metricsSink: MemoryMetricsSink | undefined;
+  let logManager: LogManager | undefined;
 
   try {
     container = new DollhouseContainer(_lifecycleService);
@@ -1239,9 +1328,9 @@ async function bootstrapWebContainer(): Promise<{
     } catch { /* non-fatal */ }
 
     mcpAqlHandler = bundle.mcpAqlHandler;
-    try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
-    try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
-    try { logManager = container.resolve<import('./logging/LogManager.js').LogManager>('LogManager'); } catch { /* not registered */ }
+    try { memorySink = container.resolve<MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
+    try { metricsSink = container.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
+    try { logManager = container.resolve<LogManager>('LogManager'); } catch { /* not registered */ }
   } catch (err) {
     console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
     console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
@@ -1256,7 +1345,7 @@ async function bootstrapWebContainer(): Promise<{
     const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
     metricsSink = new MemoryMetricsSink(240);
     try {
-      container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager')?.registerSink(metricsSink);
+      container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager').registerSink(metricsSink);
     } catch { /* MetricsManager may be unavailable in degraded startup */ }
   }
 
@@ -1330,13 +1419,13 @@ async function startWebStandaloneMode(): Promise<void> {
   // would protect MCP routes (if any) but leave /api on the console
   // token only.
   const unifiedAuthMiddleware = container?.hasRegistration('AuthMiddleware')
-    ? container.resolve<import('express').RequestHandler>('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
     : undefined;
   // ContextTracker is required for per-request session scoping on /api so DB
   // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
   // but every DB-touching handler throws "No session context is active".
   const contextTracker = container?.hasRegistration('ContextTracker')
-    ? container.resolve<import('./security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+    ? container.resolve<ContextTracker>('ContextTracker')
     : undefined;
   const { startWebServer } = await import('./web/server.js');
   const webResult = await startWebServer({
@@ -1375,7 +1464,7 @@ async function startHttpMode(): Promise<void> {
   const options = getStreamableHttpRuntimeOptions();
   const container = await bootstrapHttpContainer();
 
-  let ingestRoutes: import('./web/console/IngestRoutes.js').IngestRoutesResult | undefined;
+  let ingestRoutes: IngestRoutesResult | undefined;
   if (env.DOLLHOUSE_HTTP_WEB_CONSOLE) {
     try {
       ingestRoutes = await startHttpConsole(container);

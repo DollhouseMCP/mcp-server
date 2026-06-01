@@ -1,30 +1,30 @@
 import { PACKAGE_VERSION } from "../generated/version.js";
 import * as path from "node:path";
 import { SecurityMonitor } from "../security/securityMonitor.js";
-import { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
-import { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
-import { CollectionCache } from "../cache/index.js";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { CircuitBreakerState } from "../elements/agents/resilienceEvaluator.js";
+import type { ResilienceMetricsTracker } from "../elements/agents/resilienceMetrics.js";
+import type { CollectionCache } from "../cache/index.js";
 import { env } from "../config/env.js";
 import { getValidatedMaxBackupsPerElement, STORAGE_LAYER_CONFIG } from "../config/performance-constants.js";
 import { BackupService } from "../services/BackupService.js";
 import { resolveSessionIdentity } from "../services/sessionIdentity.js";
-import { PortfolioManager, ElementType } from "../portfolio/PortfolioManager.js";
-import { MigrationManager } from "../portfolio/MigrationManager.js";
+import type { PortfolioManager } from "../portfolio/PortfolioManager.js";
+import { ElementType } from "../portfolio/PortfolioManager.js";
+import type { MigrationManager } from "../portfolio/MigrationManager.js";
 import { EnhancedIndexHandler } from "../handlers/EnhancedIndexHandler.js";
 import { MCPAQLHandler, type HandlerRegistry } from "../handlers/mcp-aql/MCPAQLHandler.js";
 import { Gatekeeper } from "../handlers/mcp-aql/Gatekeeper.js";
 import { GatekeeperSession } from "../handlers/mcp-aql/GatekeeperSession.js";
 import type { AuditHmacResolver } from "../security/toolRedaction.js";
-import { SkillManager } from "../elements/skills/index.js";
-import { AgentManager } from "../elements/agents/AgentManager.js";
+import type { SkillManager } from "../elements/skills/index.js";
+import type { AgentManager } from "../elements/agents/AgentManager.js";
 import { Memory } from "../elements/memories/Memory.js";
-import { MemoryManager } from "../elements/memories/MemoryManager.js";
+import type { MemoryManager } from "../elements/memories/MemoryManager.js";
 import { WebSSELogSink } from "../web/sinks/WebSSELogSink.js";
 import { WebSSEMetricsSink } from "../web/sinks/WebSSEMetricsSink.js";
-import { EnsembleManager } from "../elements/ensembles/EnsembleManager.js";
+import type { EnsembleManager } from "../elements/ensembles/EnsembleManager.js";
 import { PersonaExporter, PersonaImporter } from "../persona/export-import/index.js";
-import { PersonaManager } from "../persona/PersonaManager.js";
+import type { PersonaManager } from "../persona/PersonaManager.js";
 import { PersonaHandler } from "../handlers/PersonaHandler.js";
 import { ElementCRUDHandler } from "../handlers/ElementCRUDHandler.js";
 import { CollectionHandler } from "../handlers/CollectionHandler.js";
@@ -47,11 +47,11 @@ import { PortfolioRepoManager } from "../portfolio/PortfolioRepoManager.js";
 import { GitHubPortfolioIndexer } from "../portfolio/GitHubPortfolioIndexer.js";
 import { PortfolioSyncManager } from "../portfolio/PortfolioSyncManager.js";
 import { getPortfolioRepositoryName } from "../config/portfolioConfig.js";
-import { ConfigManager } from "../config/ConfigManager.js";
-import { IndexConfigManager } from "../portfolio/config/IndexConfig.js";
-import { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
+import type { ConfigManager } from "../config/ConfigManager.js";
+import type { IndexConfigManager } from "../portfolio/config/IndexConfig.js";
+import type { PerformanceMonitor } from "../utils/PerformanceMonitor.js";
 import { BuildInfoService } from "../services/BuildInfoService.js";
-import { InitializationService } from "../services/InitializationService.js";
+import type { InitializationService } from "../services/InitializationService.js";
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
 import { ElementEventDispatcher } from "../events/ElementEventDispatcher.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
@@ -71,23 +71,23 @@ import { PathsServiceRegistrar } from "./registrars/PathsServiceRegistrar.js";
 // to keep the shared-pool module out of the static import graph. Deleting
 // src/collection/shared-pool/ does not break compilation.
 import { validateUserId } from "../paths/validateUserId.js";
-import { SessionActivationRegistry } from "../state/SessionActivationState.js";
+import type { SessionActivationRegistry } from "../state/SessionActivationState.js";
 import { SessionContainer } from "./SessionContainer.js";
-import { SessionContainerRegistry } from "./SessionContainerRegistry.js";
-import { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
-import { ContextTracker } from "../security/encryption/ContextTracker.js";
-import { createStdioSession } from "../context/StdioSession.js";
+import type { SessionContainerRegistry } from "./SessionContainerRegistry.js";
+import type { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
+import type { ContextTracker } from "../security/encryption/ContextTracker.js";
+import type { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver } from "../context/SessionContext.js";
-import { StartupTimer } from "../telemetry/StartupTimer.js";
+import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
 import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
 import type { UnifiedConsoleResult } from "../web/console/UnifiedConsole.js";
-import { PolicyExportService } from '../services/PolicyExportService.js';
-import { LogManager } from '../logging/LogManager.js';
-import { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
+import type { PolicyExportService } from '../services/PolicyExportService.js';
+import type { LogManager } from '../logging/LogManager.js';
+import type { MemoryLogSink } from '../logging/sinks/MemoryLogSink.js';
 import { wireLogHooks } from '../logging/LogHooks.js';
-import { MetricsManager } from '../metrics/MetricsManager.js';
-import { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
+import type { MetricsManager } from '../metrics/MetricsManager.js';
+import type { MemoryMetricsSink } from '../metrics/sinks/MemoryMetricsSink.js';
 import {
   PerformanceMonitorCollector,
   LRUCacheCollector,
@@ -100,8 +100,21 @@ import {
   OperationMetricsCollector,
   GatekeeperMetricsCollector,
 } from '../metrics/collectors/index.js';
-import { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
-import { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
+import type { OperationMetricsTracker } from '../metrics/OperationMetricsTracker.js';
+import type { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTracker.js';
+import type { LifecycleService } from '../lifecycle/LifecycleService.js';
+import type { WebServerResult } from '../web/server.js';
+import type { RequestHandler } from 'express';
+import type { PersistedActivation } from '../state/IActivationStateStore.js';
+import type { SessionContext } from '../context/SessionContext.js';
+import type { IUserPathResolver } from '../paths/IUserPathResolver.js';
+import type { PathService } from '../paths/PathService.js';
+import type { SecurityTelemetry } from '../security/telemetry/SecurityTelemetry.js';
+import type { FileLockManager } from '../security/fileLockManager.js';
+import type { EnhancedIndexManager } from '../portfolio/EnhancedIndexManager.js';
+import type { OperationalTelemetry } from '../telemetry/OperationalTelemetry.js';
+import type { LRUCache, CacheStats } from '../cache/LRUCache.js';
+import type { BaseElementManager } from '../elements/base/BaseElementManager.js';
 import { CoreInfraServiceRegistrar } from './registrars/CoreInfraServiceRegistrar.js';
 import { SecurityServiceRegistrar } from './registrars/SecurityServiceRegistrar.js';
 import { ObservabilityServiceRegistrar } from './registrars/ObservabilityServiceRegistrar.js';
@@ -113,6 +126,10 @@ import {
   AGENT_STATE_MAX_YAML_SIZE,
   FileAgentStateStore,
 } from '../storage/FileAgentStateStore.js';
+
+type LowLevelMcpServer = {
+  connect(transport: unknown): Promise<void>;
+};
 
 // State is owned by PersonaManager and services
 
@@ -157,7 +174,7 @@ export class DollhouseContainer {
    *   container in index.ts because error handlers must be installed before any async work).
    *   Registered in the container so it's resolvable via DI like any other service.
    */
-  constructor(lifecycleService?: import('../lifecycle/LifecycleService.js').LifecycleService) {
+  constructor(lifecycleService?: LifecycleService) {
     // FIX: DMCP-SEC-006 - Audit DI container initialization
     SecurityMonitor.logSecurityEvent({
       type: 'PORTFOLIO_INITIALIZATION',
@@ -194,7 +211,7 @@ export class DollhouseContainer {
       additionalData: { serviceName: name, singleton: options.singleton ?? true }
     });
     this.services.set(name, {
-      factory: factory as () => unknown,
+      factory: factory,
       instance: null,
       singleton: options.singleton ?? true
     });
@@ -297,6 +314,7 @@ export class DollhouseContainer {
     await this.runLegacyConfigMigrationIfEnabled();
     await this.bootstrapAuthAndSharedPool();
     await this.runDeploymentSeedLoaderIfEnabled();
+    await this.bootstrapWebConsoleApiV1IfEnabled();
     this.wireMemoryServiceRefs();
 
     const timer = this.resolve<StartupTimer>('StartupTimer');
@@ -411,12 +429,17 @@ export class DollhouseContainer {
     }
   }
 
+  private async bootstrapWebConsoleApiV1IfEnabled(): Promise<void> {
+    const { bootstrapWebConsoleHttpApiV1 } = await import('../web-console/WebConsoleHttpBootstrap.js');
+    await bootstrapWebConsoleHttpApiV1(this);
+  }
+
   private wireMemoryServiceRefs(): void {
     // Issue #1948: deferred from registerServices to avoid eager resolution.
     try {
       const mm = this.resolve<MemoryManager>('MemoryManager');
       mm.setRetentionPolicyService(this.resolve('RetentionPolicyService'));
-      Memory.setRootMemoryManager(mm as { list(): Promise<import('../elements/memories/Memory.js').Memory[]>; save(memory: import('../elements/memories/Memory.js').Memory, filePath?: string): Promise<void> });
+      Memory.setRootMemoryManager(mm);
     } catch {
       // Not available in test containers — safe to skip
     }
@@ -551,11 +574,11 @@ export class DollhouseContainer {
       await this.deferredMemoryAutoload(timer);
       await this.deferredActivationRestore(timer);
       await this.deferredPolicyExport();
-      await this.deferredLogHooks(timer);
-      await this.deferredMetricsCollectors(timer);
+      this.deferredLogHooks(timer);
+      this.deferredMetricsCollectors(timer);
       await this.deferredDangerZoneInit(timer);
       await this.deferredPatternEncryption(timer);
-      await this.deferredBackgroundValidator(timer);
+      this.deferredBackgroundValidator(timer);
     });
   }
 
@@ -658,7 +681,7 @@ export class DollhouseContainer {
     }
   }
 
-  private async deferredLogHooks(timer?: StartupTimer): Promise<void> {
+  private deferredLogHooks(timer?: StartupTimer): void {
     timer?.startPhase('log_hooks', false);
     try {
       const logManager = this.resolve<LogManager>('LogManager');
@@ -670,7 +693,7 @@ export class DollhouseContainer {
     timer?.endPhase('log_hooks');
   }
 
-  private async deferredMetricsCollectors(timer?: StartupTimer): Promise<void> {
+  private deferredMetricsCollectors(timer?: StartupTimer): void {
     timer?.startPhase('metrics_collectors', false);
     try {
       const metricsManager = this.resolve<MetricsManager>('MetricsManager');
@@ -690,7 +713,7 @@ export class DollhouseContainer {
 
   /** Wire SSE broadcast sinks for the web console */
   private wireSSEBroadcasts(
-    webResult: import('../web/server.js').WebServerResult,
+    webResult: WebServerResult,
     metricsSink: MemoryMetricsSink | undefined,
   ): void {
     if (webResult.logBroadcast) {
@@ -725,7 +748,7 @@ export class DollhouseContainer {
 
       const { startUnifiedConsole } = await import('../web/console/UnifiedConsole.js');
       const unifiedAuthMiddleware = this.hasRegistration('AuthMiddleware')
-        ? this.resolve<import('express').RequestHandler>('AuthMiddleware')
+        ? this.resolve<RequestHandler>('AuthMiddleware')
         : undefined;
       const result = await startUnifiedConsole({
         sessionId,
@@ -814,7 +837,7 @@ export class DollhouseContainer {
     timer?.endPhase('pattern_encryption');
   }
 
-  private async deferredBackgroundValidator(timer?: StartupTimer): Promise<void> {
+  private deferredBackgroundValidator(timer?: StartupTimer): void {
     timer?.startPhase('background_validator', false);
     try {
       const backgroundValidator = this.resolve<{ start: () => void }>('BackgroundValidator');
@@ -846,7 +869,7 @@ export class DollhouseContainer {
 
     const restoreType = async (
       elementType: string,
-      activateFn: (activation: import('../state/IActivationStateStore.js').PersistedActivation) => Promise<{ success: boolean }>,
+      activateFn: (activation: PersistedActivation) => Promise<{ success: boolean }>,
       skip?: Set<string>,
     ): Promise<void> => {
       for (const activation of store.getActivations(elementType)) {
@@ -1103,7 +1126,15 @@ export class DollhouseContainer {
       isDbMode: this.hasRegistration('DatabaseInstance'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
-      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      get: () => {
+        let sink: MemoryMetricsSink | undefined;
+        try {
+          sink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
+        } catch {
+          // Optional in lightweight containers.
+        }
+        return sink;
+      },
       configurable: true,
       enumerable: true,
     });
@@ -1143,10 +1174,10 @@ export class DollhouseContainer {
    * Create all handlers with dependency injection and register MCP tools.
    * @param server - MCP Server instance for tool registration
    */
-  public async createHandlers(server: Server): Promise<HandlerBundle> {
+  public async createHandlers(server: LowLevelMcpServer): Promise<HandlerBundle> {
     const bundle = await this.bootstrapHandlers();
 
-    const toolRegistry = new ToolRegistry(server);
+    const toolRegistry = new ToolRegistry(server as never);
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
@@ -1164,7 +1195,7 @@ export class DollhouseContainer {
       enhancedIndexHandler: bundle.enhancedIndexHandler,
     });
 
-    this.resolve<ServerSetup>('ServerSetup').setupServer(server, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<ServerSetup>('ServerSetup').setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
 
     return {
       ...bundle,
@@ -1200,8 +1231,8 @@ export class DollhouseContainer {
    * @param sessionContext - Frozen SessionContext created by createHttpSession()
    * @returns Per-session Server instance plus a dispose callback
    */
-  public async createServerForHttpSession(sessionContext: Readonly<import('../context/SessionContext.js').SessionContext>): Promise<{
-    server: Server;
+  public async createServerForHttpSession(sessionContext: Readonly<SessionContext>): Promise<{
+    server: LowLevelMcpServer;
     dispose: () => Promise<void>;
   }> {
     if (!this.httpRootHandlerBundle) {
@@ -1220,7 +1251,7 @@ export class DollhouseContainer {
     // Resolve the active user's directories once per session creation.
     // These are used to scope file-mode stores and the session-scoped
     // PathValidator to this user's subtree.
-    const userPathResolver = this.resolve<import('../paths/IUserPathResolver.js').IUserPathResolver>('UserPathResolver');
+    const userPathResolver = this.resolve<IUserPathResolver>('UserPathResolver');
     const httpUserId = validateUserId(sessionContext.userId);
     const userStateDir = userPathResolver.getUserStateDir(httpUserId);
     const userAuthDir = userPathResolver.getUserAuthDir(httpUserId);
@@ -1259,7 +1290,7 @@ export class DollhouseContainer {
     // get a locked-down instance that only allows writes inside the
     // user's dirs and reads from user dirs + shared pool.
     const sharedPoolDir = this.hasRegistration('PathService')
-      ? this.resolve<import('../paths/PathService.js').PathService>('PathService').resolveDataDir('shared-pool')
+      ? this.resolve<PathService>('PathService').resolveDataDir('shared-pool')
       : undefined;
     child.register('PathValidator', () => new PathValidator({
       writeDirs: [userPortfolioDir, userStateDir, userAuthDir, userBackupsDir, userSecurityDir],
@@ -1429,23 +1460,28 @@ export class DollhouseContainer {
       });
     }
 
-    child.register('Server', () => new Server(
+    const serverModule = await import('@modelcontextprotocol/sdk/server/index.js') as Record<string, unknown>;
+    const LowLevelServer = serverModule['Server'] as new (
+      info: { name: string; version: string },
+      options: { capabilities: Record<string, unknown> },
+    ) => LowLevelMcpServer;
+    child.register('Server', () => new LowLevelServer(
       { name: 'dollhousemcp', version: PACKAGE_VERSION },
       { capabilities }
     ));
-    child.register('SessionResolver', () => (() => sessionContext) as SessionResolver);
+    child.register('SessionResolver', () => (() => sessionContext));
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-        const registry = new ToolRegistry(child.resolve<Server>('Server'));
+        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server') as never);
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
 
     // Wire up: setup server with tools
-    const server = child.resolve<Server>('Server');
+    const server = child.resolve<LowLevelMcpServer>('Server');
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
-    serverSetup.setupServer(server, toolRegistry, bundle.elementCrudHandler);
+    serverSetup.setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
     this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
@@ -1636,7 +1672,15 @@ export class DollhouseContainer {
       isDbMode: this.hasRegistration('DatabaseInstance'),
     };
     Object.defineProperty(handlerDeps, 'metricsSink', {
-      get: () => { try { return this.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { return undefined; } },
+      get: () => {
+        let sink: MemoryMetricsSink | undefined;
+        try {
+          sink = this.resolve<MemoryMetricsSink>('MemoryMetricsSink');
+        } catch {
+          // Optional in lightweight containers.
+        }
+        return sink;
+      },
       configurable: true,
       enumerable: true,
     });
@@ -1724,13 +1768,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-        const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as never);
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-        const tempRegistry = new ToolRegistry({} as Server);
+        const tempRegistry = new ToolRegistry({} as never);
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);
@@ -1782,7 +1826,7 @@ export class DollhouseContainer {
   private wireMetricsCollectors(metricsManager: MetricsManager): void {
     // PerformanceMonitor (instance)
     try {
-      const monitor = this.resolve<import('../utils/PerformanceMonitor.js').PerformanceMonitor>('PerformanceMonitor');
+      const monitor = this.resolve<PerformanceMonitor>('PerformanceMonitor');
       metricsManager.registerCollector(new PerformanceMonitorCollector(monitor));
     } catch { /* not registered */ }
 
@@ -1799,13 +1843,13 @@ export class DollhouseContainer {
 
     // SecurityTelemetry (instance)
     try {
-      const telemetry = this.resolve<import('../security/telemetry/SecurityTelemetry.js').SecurityTelemetry>('SecurityTelemetry');
+      const telemetry = this.resolve<SecurityTelemetry>('SecurityTelemetry');
       metricsManager.registerCollector(new SecurityTelemetryCollector(telemetry));
     } catch { /* not registered */ }
 
     // FileLockManager (instance)
     try {
-      const lockManager = this.resolve<import('../security/fileLockManager.js').FileLockManager>('FileLockManager');
+      const lockManager = this.resolve<FileLockManager>('FileLockManager');
       metricsManager.registerCollector(new FileLockManagerCollector(lockManager));
     } catch { /* not registered */ }
 
@@ -1816,7 +1860,7 @@ export class DollhouseContainer {
 
     // TriggerMetricsTracker (instance — created inside EnhancedIndexManager factory)
     try {
-      const enhancedIndex = this.resolve<import('../portfolio/EnhancedIndexManager.js').EnhancedIndexManager>('EnhancedIndexManager');
+      const enhancedIndex = this.resolve<EnhancedIndexManager>('EnhancedIndexManager');
       // EnhancedIndexManager exposes tracker via public getter if available
       if ('triggerMetricsTracker' in enhancedIndex) {
         const tracker = (enhancedIndex as any).triggerMetricsTracker;
@@ -1828,7 +1872,7 @@ export class DollhouseContainer {
 
     // OperationalTelemetry (instance)
     try {
-      const opTelemetry = this.resolve<import('../telemetry/OperationalTelemetry.js').OperationalTelemetry>('OperationalTelemetry');
+      const opTelemetry = this.resolve<OperationalTelemetry>('OperationalTelemetry');
       metricsManager.registerCollector(new OperationalTelemetryCollector(opTelemetry));
     } catch { /* not registered */ }
 
@@ -1845,10 +1889,10 @@ export class DollhouseContainer {
     } catch { /* not registered */ }
   }
 
-  private collectLruCachesForMetrics(): Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> {
-    const caches: Array<{ name: string; instance: import('../cache/LRUCache.js').LRUCache<unknown> }> = [];
+  private collectLruCachesForMetrics(): Array<{ name: string; instance: LRUCache<unknown> }> {
+    const caches: Array<{ name: string; instance: LRUCache<unknown> }> = [];
     try {
-      const apiCache = this.resolve<{ getStats(): import('../cache/LRUCache.js').CacheStats }>('APICache');
+      const apiCache = this.resolve<{ getStats(): CacheStats }>('APICache');
       caches.push({ name: 'APICache', instance: apiCache as any });
     } catch { /* not available */ }
 
@@ -1858,7 +1902,7 @@ export class DollhouseContainer {
     ] as const;
     for (const name of managerNames) {
       try {
-        const mgr = this.resolve<import('../elements/base/BaseElementManager.js').BaseElementManager<any>>(name);
+        const mgr = this.resolve<BaseElementManager<any>>(name);
         caches.push(...mgr.getMetricsCaches());
       } catch { /* not registered */ }
     }

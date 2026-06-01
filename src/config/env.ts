@@ -395,6 +395,24 @@ const envSchema = z.object({
   DOLLHOUSE_WEB_AUTH_ENABLED: envBool(false),
 
   /**
+   * Enables the replacement descriptor-driven `/api/v1/*` web-console API on
+   * the Streamable HTTP server. Default false until the M7 cutover gates are
+   * deliberately satisfied.
+   */
+  DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: envBool(false),
+  /** Base64-encoded 32-byte HMAC key for opaque console browser values. */
+  DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Base64-encoded 32-byte AEAD key for console-managed integration secrets. */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Stable key ID persisted in console secret ciphertext records. */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: z.string().trim().default('web-console-env-v1'),
+  /** Base64-encoded 32-byte HMAC key for protected-correlation rate-limit selectors. */
+  DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+
+  /**
    * Unified authentication (JWT-based) for HTTP transport and web console.
    * When enabled, all HTTP requests must carry a valid Bearer token.
    * When disabled (default), auth behavior depends on the surface:

@@ -12,4 +12,5 @@ export * from './WebConsoleActivationProfile.js';
 export * from './WebConsoleProductionDatabaseReadiness.js';
 export * from './WebConsoleProductionActivation.js';
 export * from './WebConsoleReplicaIdentity.js';
+export * from './WebConsoleHttpBootstrap.js';
 export * from './WebConsoleRegistrar.js';
