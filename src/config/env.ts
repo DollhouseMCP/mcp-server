@@ -411,6 +411,12 @@ const envSchema = z.object({
   /** Base64-encoded 32-byte HMAC key for protected-correlation rate-limit selectors. */
   DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * JSON evidence file consumed by the replacement-readiness gate before the
+   * production `/api/v1/*` router is exposed.
+   */
+  DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   /**
    * Unified authentication (JWT-based) for HTTP transport and web console.
