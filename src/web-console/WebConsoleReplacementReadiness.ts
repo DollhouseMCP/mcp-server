@@ -1,4 +1,5 @@
-import { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS, type WebConsoleComposition } from './WebConsoleRegistrar.js';
+import type { WebConsoleComposition } from './WebConsoleRegistrar.js';
+import { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS } from './WebConsoleRouteModuleIds.js';
 
 export const WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS = [
   'auth',
@@ -117,7 +118,7 @@ function hasAllRegisteredModules(
   composition: WebConsoleReplacementReadinessOptions['composition'],
   expected: readonly string[],
 ): boolean {
-  const moduleIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
+  const moduleIds = new Set(composition.registry.getModules().map(module => module.id));
   return expected.every(moduleId => moduleIds.has(moduleId));
 }
 

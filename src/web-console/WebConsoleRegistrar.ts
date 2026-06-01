@@ -171,6 +171,11 @@ import {
   createConsoleBffAuthModule,
   type IConsoleOAuthClient,
 } from './auth/index.js';
+import {
+  SECURITY_ADMIN_MODULE_ID,
+  WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
+  type WebConsoleOmittableRouteModuleId,
+} from './WebConsoleRouteModuleIds.js';
 
 export const WEB_CONSOLE_SERVICE_NAMES = {
   composition: 'WebConsoleComposition',
@@ -221,25 +226,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
-const SECURITY_ADMIN_MODULE_ID = 'security-admin';
-
-export const WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS = [
-  'accountAdmin',
-  'activations',
-  'approvals',
-  'audit',
-  'executions',
-  'integrations',
-  'operations',
-  'portfolio',
-  'runtimeSessions',
-  SECURITY_ADMIN_MODULE_ID,
-  'selfSecurity',
-  'selfService',
-  'session-telemetry',
-] as const;
-
-export type WebConsoleOmittableRouteModuleId = typeof WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS[number];
+export { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS, type WebConsoleOmittableRouteModuleId };
 
 export interface WebConsoleRegistrarOptions {
   readonly activationProfile?: WebConsoleActivationProfile;
