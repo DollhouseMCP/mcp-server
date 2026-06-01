@@ -15,6 +15,7 @@ function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHtt
     DOLLHOUSE_PUBLIC_BASE_URL: 'https://console.example.test',
     DOLLHOUSE_HTTP_HOST: '0.0.0.0',
     DOLLHOUSE_AUTH_METHODS: ['local-password'],
+    GITHUB_REPOSITORY: 'custom-portfolio',
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: 'dollhouse_prod',
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: 'dollhouse_admin',
     DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: KEY_1,
@@ -59,6 +60,7 @@ describe('WebConsoleHttpBootstrap', () => {
         expectedDatabaseName: 'dollhouse_prod',
         expectedCurrentUser: 'dollhouse_admin',
       },
+      portfolioSyncRepositoryName: 'custom-portfolio',
     });
     expect(options?.opaqueValueHmacKey).toEqual(Buffer.alloc(32, 1));
     expect(options?.secretEncryptionKey).toEqual({

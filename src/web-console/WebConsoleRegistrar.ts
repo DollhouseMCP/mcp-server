@@ -44,6 +44,7 @@ import {
   type IConsoleSecurityInvalidationReadiness,
 } from './services/invalidation/ConsoleSecurityInvalidationReadiness.js';
 import {
+  ConsolePortfolioSyncExecutor,
   ConsolePortfolioSyncWorker,
   type IConsolePortfolioSyncWorker,
   type IPortfolioSyncJobExecutor,
@@ -271,6 +272,7 @@ export interface WebConsoleRegistrarOptions {
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
   readonly portfolioSyncJobExecutor?: IPortfolioSyncJobExecutor | null;
+  readonly portfolioSyncRepositoryName?: string;
   readonly portfolioSyncWorkerId?: string;
   readonly portfolioSyncWorkerIntervalMs?: number;
   readonly portfolioSyncWorkerLeaseDurationMs?: number;
@@ -431,7 +433,8 @@ export class WebConsoleRegistrar {
       activationProfile,
       container,
       options: this.options,
-      syncJobStore: stores.portfolioSyncJobStore,
+      stores,
+      secretEncryption,
       storageBackend: database ? 'postgres' : 'memory',
     });
     const productionReadiness = await resolveProductionReadinessForActivation(
@@ -1660,7 +1663,8 @@ function resolvePortfolioSyncWorker(options: {
   readonly activationProfile: WebConsoleActivationProfile;
   readonly container: DiContainerFacade;
   readonly options: WebConsoleRegistrarOptions;
-  readonly syncJobStore: IPortfolioSyncJobStore;
+  readonly stores: ConsoleStoreSet;
+  readonly secretEncryption: ISecretEncryptionService | null;
   readonly storageBackend: 'memory' | 'postgres';
 }): IConsolePortfolioSyncWorker | null {
   if (options.options.portfolioSyncWorker !== undefined) {
@@ -1675,10 +1679,16 @@ function resolvePortfolioSyncWorker(options: {
   if (!options.container.hasRegistration('LifecycleService')) {
     throw new Error('Hosted/shared portfolio sync worker registration requires LifecycleService');
   }
+  const executor = options.options.portfolioSyncJobExecutor ??
+    resolvePortfolioSyncJobExecutor(
+      options.stores,
+      options.secretEncryption,
+      options.options.portfolioSyncRepositoryName,
+    );
   const worker = new ConsolePortfolioSyncWorker({
-    store: options.syncJobStore,
+    store: options.stores.portfolioSyncJobStore,
     workerId: resolvePortfolioSyncWorkerId(options.container, options.options),
-    executor: options.options.portfolioSyncJobExecutor ?? undefined,
+    executor,
     intervalMs: options.options.portfolioSyncWorkerIntervalMs,
     leaseDurationMs: options.options.portfolioSyncWorkerLeaseDurationMs,
     batchSize: options.options.portfolioSyncWorkerBatchSize,
@@ -1687,6 +1697,23 @@ function resolvePortfolioSyncWorker(options: {
   });
   worker.register(options.container.resolve('LifecycleService'));
   return worker;
+}
+
+function resolvePortfolioSyncJobExecutor(
+  stores: ConsoleStoreSet,
+  secretEncryption: ISecretEncryptionService | null,
+  repositoryName?: string,
+): IPortfolioSyncJobExecutor | undefined {
+  if (!secretEncryption) return undefined;
+  return markProductionAdapter(
+    new ConsolePortfolioSyncExecutor({
+      integrationStore: stores.integrationStore,
+      portfolioStore: stores.portfolioStore,
+      secretEncryption,
+      repositoryName,
+    }),
+    'ConsolePortfolioSyncExecutor',
+  );
 }
 
 function resolvePortfolioSyncWorkerId(

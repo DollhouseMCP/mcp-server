@@ -28,6 +28,7 @@ import type {
   IIntegrationSecurityEventSink,
   IntegrationCallbackRejectedReason,
 } from './IntegrationSecurityEvents.js';
+import { integrationSecretContext, type IntegrationSecretContext } from './IntegrationSecretContext.js';
 
 const INTEGRATION_TRANSACTION_TTL_MS = 10 * 60 * 1000;
 const PKCE_VERIFIER_BYTES = 32;
@@ -328,18 +329,10 @@ function pkceContext(transactionId: string): { readonly secretClass: string; rea
   return { secretClass: PKCE_SECRET_CLASS, ownerId: `integration:${transactionId}` };
 }
 
-function integrationSecretContext(
-  secret: 'access_token' | 'refresh_token',
-  userId: string,
-  provider: 'github',
-): { readonly secretClass: string; readonly ownerId: string } {
-  return { secretClass: `integration_${secret}`, ownerId: `${provider}:${userId}` };
-}
-
 function decryptNullable(
   secretEncryption: ISecretEncryptionService,
   ciphertext: Buffer,
-  context: { readonly secretClass: string; readonly ownerId: string },
+  context: IntegrationSecretContext,
 ): string | null {
   try {
     return secretEncryption.decrypt(ciphertext, context).toString('utf8');

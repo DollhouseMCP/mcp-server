@@ -4,4 +4,5 @@ export * from './GitHubAppIntegrationProvider.js';
 export * from './IntegrationSecurityEvents.js';
 export * from './IntegrationModule.js';
 export * from './IntegrationPrivacyProjectors.js';
+export * from './IntegrationSecretContext.js';
 export * from './IntegrationService.js';

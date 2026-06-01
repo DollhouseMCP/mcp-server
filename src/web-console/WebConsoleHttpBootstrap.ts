@@ -14,6 +14,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
   | 'DOLLHOUSE_AUTH_METHODS'
+  | 'GITHUB_REPOSITORY'
   | 'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME'
   | 'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER'
   | 'DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY'
@@ -75,6 +76,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
       'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY',
     ),
     githubIntegrationProviderConfig,
+    portfolioSyncRepositoryName: sourceEnv.GITHUB_REPOSITORY,
   };
 }
 
