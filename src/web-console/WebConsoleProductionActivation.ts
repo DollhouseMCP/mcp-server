@@ -11,11 +11,10 @@ export type WebConsoleActivationProfile = 'development' | 'shared-hosted';
  * back to the current constructor-name heuristic for unknown, InMemory*, Empty*,
  * and known process-local Gatekeeper classes.
  *
- * This is not a complete cutover proof. The metadata mechanism is an additive,
- * in-trust opt-in path; undeclared adapters do not yet fail closed solely
- * because they lack metadata. Before /api/v1 is mounted, the checker still
- * needs to be driven from the authoritative hosted-deployment signal and
- * production-critical adapters need broad metadata adoption.
+ * The metadata mechanism is an additive, in-trust opt-in path by default. The
+ * final hosted/shared mount path can require explicit metadata and fail closed
+ * for unmarked adapters, which removes constructor-name heuristics from the
+ * production proof.
  */
 
 export interface WebConsoleProductionReadinessOptions {
@@ -62,6 +61,7 @@ export interface WebConsoleProductionActivationInputs {
   readonly services: Readonly<Record<string, unknown>>;
   readonly registeredRouteModuleIds?: readonly string[];
   readonly routeDependencies?: readonly WebConsoleProductionRouteDependency[];
+  readonly requireExplicitProductionAdapterMetadata?: boolean;
 }
 
 const KNOWN_PROCESS_LOCAL_ADAPTERS = new Set<string>([
@@ -125,10 +125,10 @@ export function assertWebConsoleProductionActivation(
   }
 
   for (const [name, value] of Object.entries(inputs.stores)) {
-    requireProductionAdapter(failures, name, value);
+    requireProductionAdapter(failures, name, value, inputs.requireExplicitProductionAdapterMetadata === true);
   }
   for (const [name, value] of Object.entries(inputs.services)) {
-    requireProductionAdapter(failures, name, value);
+    requireProductionAdapter(failures, name, value, inputs.requireExplicitProductionAdapterMetadata === true);
   }
   requireRegisteredRouteDependencies(failures, inputs);
 
@@ -144,8 +144,9 @@ function requireProductionAdapter(
   failures: WebConsoleProductionActivationFailure[],
   name: string,
   value: unknown,
+  requireExplicitMetadata: boolean,
 ): void {
-  const failure = productionAdapterFailure(name, value);
+  const failure = productionAdapterFailure(name, value, undefined, requireExplicitMetadata);
   if (failure) failures.push(failure);
 }
 
@@ -169,6 +170,7 @@ function requireRegisteredRouteDependencies(
       `${dependency.moduleId}_${dependency.dependencyName}`,
       dependency.value,
       dependency.detail,
+      inputs.requireExplicitProductionAdapterMetadata === true,
     );
     if (failure) failures.push(failure);
   }
@@ -178,12 +180,20 @@ function productionAdapterFailure(
   name: string,
   value: unknown,
   detail?: string,
+  requireExplicitMetadata = false,
 ): WebConsoleProductionActivationFailure | null {
   const missing = missingFailure(name, value);
   if (missing) return missing;
   const metadata = productionAdapterMetadata(value);
   if (metadata) {
     return metadataProductionAdapterFailure(name, metadata, detail);
+  }
+  if (requireExplicitMetadata && isAdapterValue(value)) {
+    return {
+      code: `${name}_metadata_missing`,
+      detail: detail ??
+        `${name} does not declare web-console production adapter metadata; hosted/shared mount requires explicit production readiness metadata.`,
+    };
   }
   const adapter = adapterName(value);
   if (isKnownUnsafeAdapter(adapter)) {
@@ -211,9 +221,12 @@ function metadataProductionAdapterFailure(
 }
 
 function productionAdapterMetadata(value: unknown): WebConsoleProductionAdapterMetadata | null {
-  if (typeof value !== 'object' && typeof value !== 'function') return null;
-  if (value === null) return null;
+  if (!isAdapterValue(value)) return null;
   return ADAPTER_METADATA.get(value) ?? null;
+}
+
+function isAdapterValue(value: unknown): value is object | ((...args: never[]) => unknown) {
+  return (typeof value === 'object' && value !== null) || typeof value === 'function';
 }
 
 function requirePresent(

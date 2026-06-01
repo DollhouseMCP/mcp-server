@@ -547,6 +547,7 @@ describe('WebConsoleRegistrar', () => {
       activationProfile: SHARED_HOSTED_PROFILE,
       enableApiV1Mount: true,
       enableAccountAllowlistRoutes: true,
+      requireExplicitProductionAdapterMetadata: true,
       productionDatabaseVerification: {
         expectedDatabaseName: 'dollhouse_prod',
         expectedCurrentUser: 'dollhouse_app',
@@ -1272,6 +1273,49 @@ describe('WebConsoleRegistrar', () => {
             detail: 'ProcessLocalStore is process-local and cannot serve hosted/shared traffic.',
           }),
         ],
+      });
+    }
+
+    expect(() => assertWebConsoleProductionActivation({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres',
+      enableAccountAllowlistRoutes: false,
+      requireExplicitProductionAdapterMetadata: true,
+      readiness: {
+        databaseVerificationReady: true,
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: { explicitlyReadyUnknownAdapter },
+      services: {
+        ...productionActivationServices(),
+        unmarkedAdapter: new ProductionAdapter(),
+      },
+    })).toThrow(WebConsoleProductionActivationError);
+    try {
+      assertWebConsoleProductionActivation({
+        activationProfile: SHARED_HOSTED_PROFILE,
+        storageBackend: 'postgres',
+        enableAccountAllowlistRoutes: false,
+        requireExplicitProductionAdapterMetadata: true,
+        readiness: {
+          databaseVerificationReady: true,
+          securityInvalidationProcessorReady: true,
+          portfolioSyncWorkerReady: true,
+        },
+        stores: { explicitlyReadyUnknownAdapter },
+        services: {
+          ...productionActivationServices(),
+          unmarkedAdapter: new ProductionAdapter(),
+        },
+      });
+    } catch (error) {
+      expect(error).toMatchObject({
+        failures: expect.arrayContaining([
+          expect.objectContaining({
+            code: 'unmarkedAdapter_metadata_missing',
+          }),
+        ]),
       });
     }
   });

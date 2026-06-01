@@ -249,6 +249,7 @@ export interface WebConsoleRegistrarOptions {
     readonly expectedDatabaseName: string;
     readonly expectedCurrentUser?: string;
   };
+  readonly requireExplicitProductionAdapterMetadata?: boolean;
   readonly omittedRouteModuleIds?: readonly WebConsoleOmittableRouteModuleId[];
   readonly opaqueValueHmacKey?: Buffer;
   readonly registerCleanup?: boolean;
@@ -564,6 +565,7 @@ export class WebConsoleRegistrar {
       activationProfile,
       storageBackend: database ? 'postgres' : 'memory',
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
+      requireExplicitProductionAdapterMetadata: this.options.requireExplicitProductionAdapterMetadata === true,
       readiness: productionReadiness,
       stores: createProductionCoreStores(stores),
       registeredRouteModuleIds: registeredRouteModuleIds(registry),
@@ -1144,18 +1146,30 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./identity/PostgresConsoleIdentityResolver.js'),
     ]);
     return {
-      sessionStore: new PostgresConsoleSessionStore(database),
-      loginTransactionStore: new PostgresLoginTransactionStore(database),
-      idempotencyStore: new PostgresIdempotencyStore(database),
-      factorStore: new PostgresConsoleFactorStore(database),
-      accountAdminStore: new PostgresConsoleAccountAdminStore(database),
-      accountAllowlistStore: new PostgresConsoleAccountAllowlistStore(database),
-      integrationStore: new PostgresUserIntegrationStore(database),
-      portfolioStore: new PostgresPortfolioElementStore(database),
-      portfolioSyncJobStore: new PostgresPortfolioSyncJobStore(database),
-      securityInvalidationStore: new PostgresConsoleSecurityInvalidationStore(database),
-      runtimeSessionControlStore: new PostgresRuntimeSessionControlStore(database),
-      identityResolver: new PostgresConsoleIdentityResolver(database),
+      sessionStore: markProductionAdapter(new PostgresConsoleSessionStore(database), 'PostgresConsoleSessionStore'),
+      loginTransactionStore: markProductionAdapter(new PostgresLoginTransactionStore(database), 'PostgresLoginTransactionStore'),
+      idempotencyStore: markProductionAdapter(new PostgresIdempotencyStore(database), 'PostgresIdempotencyStore'),
+      factorStore: markProductionAdapter(new PostgresConsoleFactorStore(database), 'PostgresConsoleFactorStore'),
+      accountAdminStore: markProductionAdapter(new PostgresConsoleAccountAdminStore(database), 'PostgresConsoleAccountAdminStore'),
+      accountAllowlistStore: markProductionAdapter(
+        new PostgresConsoleAccountAllowlistStore(database),
+        'PostgresConsoleAccountAllowlistStore',
+      ),
+      integrationStore: markProductionAdapter(new PostgresUserIntegrationStore(database), 'PostgresUserIntegrationStore'),
+      portfolioStore: markProductionAdapter(new PostgresPortfolioElementStore(database), 'PostgresPortfolioElementStore'),
+      portfolioSyncJobStore: markProductionAdapter(
+        new PostgresPortfolioSyncJobStore(database),
+        'PostgresPortfolioSyncJobStore',
+      ),
+      securityInvalidationStore: markProductionAdapter(
+        new PostgresConsoleSecurityInvalidationStore(database),
+        'PostgresConsoleSecurityInvalidationStore',
+      ),
+      runtimeSessionControlStore: markProductionAdapter(
+        new PostgresRuntimeSessionControlStore(database),
+        'PostgresRuntimeSessionControlStore',
+      ),
+      identityResolver: markProductionAdapter(new PostgresConsoleIdentityResolver(database), 'PostgresConsoleIdentityResolver'),
     };
   }
   const { InMemoryConsoleFactorStore } = await import('./stores/InMemoryConsoleFactorStore.js');
@@ -1193,7 +1207,10 @@ function resolveAdminAuditWriter(
   if (!container.hasRegistration('AuditHmacResolver')) {
     throw new Error('Web console PostgreSQL admin audit requires AuditHmacResolver');
   }
-  return new PostgresAdminAuditWriter(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'));
+  return markProductionAdapter(
+    new PostgresAdminAuditWriter(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver')),
+    'PostgresAdminAuditWriter',
+  );
 }
 
 function resolveAdminAuditQuery(
@@ -1209,7 +1226,10 @@ function resolveAdminAuditQuery(
     if (!container.hasRegistration('AuditHmacResolver')) {
       throw new Error('Web console PostgreSQL admin audit query requires AuditHmacResolver');
     }
-    return new PostgresAdminAuditQuery(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'));
+    return markProductionAdapter(
+      new PostgresAdminAuditQuery(database, container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver')),
+      'PostgresAdminAuditQuery',
+    );
   }
   return new InMemoryAdminAuditQuery();
 }
@@ -1225,7 +1245,7 @@ function resolveApprovalAuditQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery)) {
     return container.resolve<IApprovalAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.approvalAuditQuery);
   }
-  if (database) return new PostgresApprovalAuditQuery(database);
+  if (database) return markProductionAdapter(new PostgresApprovalAuditQuery(database), 'PostgresApprovalAuditQuery');
   return new InMemoryApprovalAuditQuery();
 }
 
@@ -1240,7 +1260,7 @@ function resolveAuthenticationAuditQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery)) {
     return container.resolve<IAuthenticationAuditQuery>(WEB_CONSOLE_SERVICE_NAMES.authenticationAuditQuery);
   }
-  if (database) return new PostgresAuthenticationAuditQuery(database);
+  if (database) return markProductionAdapter(new PostgresAuthenticationAuditQuery(database), 'PostgresAuthenticationAuditQuery');
   return new InMemoryAuthenticationAuditQuery();
 }
 
@@ -1256,10 +1276,10 @@ function resolveAccountAdminMutationTransactionRunner(options: {
     if (!options.container.hasRegistration('AuditHmacResolver')) {
       throw new Error('Web console PostgreSQL account-admin mutation transactions require AuditHmacResolver');
     }
-    return new PostgresAccountAdminMutationTransactionRunner({
+    return markProductionAdapter(new PostgresAccountAdminMutationTransactionRunner({
       db: options.database,
       hmacKeyResolver: options.container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
-    });
+    }), 'PostgresAccountAdminMutationTransactionRunner');
   }
   return new InMemoryAccountAdminMutationTransactionRunner({
     accountAdminStore: options.accountAdminStore,
@@ -1289,7 +1309,10 @@ function resolveSecretEncryption(
       ? container.resolve<AeadSecretKey>('WebConsoleSecretEncryptionKey')
       : null);
   if (!key) return null;
-  return new AeadSecretEncryptionService(key, options.retainedSecretEncryptionKeys ?? []);
+  return markProductionAdapter(
+    new AeadSecretEncryptionService(key, options.retainedSecretEncryptionKeys ?? []),
+    'AeadSecretEncryptionService',
+  );
 }
 
 function resolveProtectedCorrelationRateLimiter(
@@ -1304,16 +1327,19 @@ function resolveProtectedCorrelationRateLimiter(
   if (!container.hasRegistration('RateLimitStore')) {
     throw new Error('Web console protected correlation rate limiting requires RateLimitStore');
   }
-  return new ConsoleProtectedCorrelationRateLimiter({
+  return markProductionAdapter(new ConsoleProtectedCorrelationRateLimiter({
     store: container.resolve<IRateLimitStore>('RateLimitStore'),
     selectorHmacKey: Buffer.from(key),
     now: options.now,
-  });
+  }), 'ConsoleProtectedCorrelationRateLimiter');
 }
 
 function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | null {
   if (!container.hasRegistration('RateLimitStore')) return null;
-  return container.resolve<IRateLimitStore>('RateLimitStore');
+  return markResolvedProductionAdapter(
+    container.resolve<IRateLimitStore>('RateLimitStore'),
+    'RateLimitStore',
+  );
 }
 
 function resolveSessionActivationStateAdapter(
@@ -1327,7 +1353,10 @@ function resolveSessionActivationStateAdapter(
     );
   }
   if (database) {
-    return new PostgresSessionActivationStateAdapter(database, options.now);
+    return markProductionAdapter(
+      new PostgresSessionActivationStateAdapter(database, options.now),
+      'PostgresSessionActivationStateAdapter',
+    );
   }
   if (container.hasRegistration('SessionActivationRegistry')) {
     return new RegistrySessionActivationStateAdapter(
@@ -1346,7 +1375,7 @@ function resolveSessionActivationEventSink(
       WEB_CONSOLE_SERVICE_NAMES.sessionActivationEventSink,
     );
   }
-  if (database) return new PostgresSessionActivationEventSink(database);
+  if (database) return markProductionAdapter(new PostgresSessionActivationEventSink(database), 'PostgresSessionActivationEventSink');
   return new InMemorySessionActivationEventSink();
 }
 
@@ -1360,12 +1389,12 @@ function resolveSessionApprovalStore(
     return container.resolve<SessionApprovalStore>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalStore);
   }
   if (database) {
-    return new ConfirmationSessionApprovalStore(({ userId, sessionId }) => {
+    return markProductionAdapter(new ConfirmationSessionApprovalStore(({ userId, sessionId }) => {
       const auditResolver = container.hasRegistration('AuditHmacResolver')
         ? container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver')
         : undefined;
       return new DatabaseConfirmationStore(database, userId, sessionId, auditResolver);
-    });
+    }), 'ConfirmationSessionApprovalStore');
   }
   if (container.hasRegistration('gatekeeper')) {
     return new GatekeeperSessionApprovalStore(container.resolve<Gatekeeper>('gatekeeper'));
@@ -1384,7 +1413,7 @@ function resolveSessionApprovalEventSink(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink)) {
     return container.resolve<ISessionApprovalEventSink>(WEB_CONSOLE_SERVICE_NAMES.sessionApprovalEventSink);
   }
-  if (database) return new PostgresSessionApprovalEventSink(database);
+  if (database) return markProductionAdapter(new PostgresSessionApprovalEventSink(database), 'PostgresSessionApprovalEventSink');
   return new InMemorySessionApprovalEventSink();
 }
 
@@ -1399,7 +1428,7 @@ function resolveSessionExecutionReader(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader)) {
     return container.resolve<SessionExecutionReader>(WEB_CONSOLE_SERVICE_NAMES.sessionExecutionReader);
   }
-  if (database) return new PostgresSessionExecutionReader(database);
+  if (database) return markProductionAdapter(new PostgresSessionExecutionReader(database), 'PostgresSessionExecutionReader');
   return new InMemorySessionExecutionReader();
 }
 
@@ -1414,7 +1443,7 @@ function resolveSessionGatekeeperReader(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader)) {
     return container.resolve<SessionGatekeeperReader>(WEB_CONSOLE_SERVICE_NAMES.sessionGatekeeperReader);
   }
-  if (database) return new PostgresSessionGatekeeperReader(database);
+  if (database) return markProductionAdapter(new PostgresSessionGatekeeperReader(database), 'PostgresSessionGatekeeperReader');
   if (container.hasRegistration('gatekeeper')) {
     return new GatekeeperSessionStateReader(container.resolve<Gatekeeper>('gatekeeper'));
   }
@@ -1433,10 +1462,10 @@ function resolveTelemetryQuery(
     return container.resolve<IConsoleTelemetryQuery>(WEB_CONSOLE_SERVICE_NAMES.telemetryQuery);
   }
   if (database) {
-    return new PostgresConsoleTelemetryQuery(database, {
+    return markProductionAdapter(new PostgresConsoleTelemetryQuery(database, {
       replicaId: resolveTelemetryReplicaId(container),
       now: options.now,
-    });
+    }), 'PostgresConsoleTelemetryQuery');
   }
   return new InMemoryConsoleTelemetryQuery();
 }
@@ -1452,7 +1481,7 @@ function resolveOwnedActivityQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery)) {
     return container.resolve<IOwnedActivityQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedActivityQuery);
   }
-  if (database) return new PostgresOwnedActivityQuery(database);
+  if (database) return markProductionAdapter(new PostgresOwnedActivityQuery(database), 'PostgresOwnedActivityQuery');
   return new InMemoryOwnedActivityQuery();
 }
 
@@ -1467,7 +1496,7 @@ function resolveOwnedMetricQuery(
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery)) {
     return container.resolve<IOwnedMetricQuery>(WEB_CONSOLE_SERVICE_NAMES.ownedMetricQuery);
   }
-  if (database) return new PostgresOwnedMetricQuery(database, { now: options.now });
+  if (database) return markProductionAdapter(new PostgresOwnedMetricQuery(database, { now: options.now }), 'PostgresOwnedMetricQuery');
   return new InMemoryOwnedMetricQuery({ now: options.now });
 }
 
@@ -1483,7 +1512,10 @@ function resolveUserConfigStore(
   container: DiContainerFacade,
 ): IUserConfigStore {
   if (container.hasRegistration('UserConfigStore')) {
-    return container.resolve<IUserConfigStore>('UserConfigStore');
+    return markResolvedProductionAdapter(
+      container.resolve<IUserConfigStore>('UserConfigStore'),
+      'UserConfigStore',
+    );
   }
   if (database) {
     throw new Error('Web console PostgreSQL self-service settings require UserConfigStore');
@@ -1503,7 +1535,9 @@ function resolveOperatorConfigStore(
   if (container.hasRegistration('OperatorConfigStore')) {
     return container.resolve<IOperatorConfigStore>('OperatorConfigStore');
   }
-  return database ? new PostgresOperatorConfigStore({ db: database }) : new InMemoryOperatorConfigStore();
+  return database
+    ? markProductionAdapter(new PostgresOperatorConfigStore({ db: database }), 'PostgresOperatorConfigStore')
+    : new InMemoryOperatorConfigStore();
 }
 
 function resolveSigningKeyStore(
@@ -1511,12 +1545,22 @@ function resolveSigningKeyStore(
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
 ): ISigningKeyStore {
-  if (options.signingKeyStore !== undefined) return options.signingKeyStore ?? new InMemorySigningKeyStore();
+  if (options.signingKeyStore !== undefined) {
+    return options.signingKeyStore
+      ? markResolvedProductionAdapter(options.signingKeyStore, 'SigningKeyStore')
+      : new InMemorySigningKeyStore();
+  }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore)) {
-    return container.resolve<ISigningKeyStore>(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore);
+    return markResolvedProductionAdapter(
+      container.resolve<ISigningKeyStore>(WEB_CONSOLE_SERVICE_NAMES.signingKeyStore),
+      'SigningKeyStore',
+    );
   }
   if (container.hasRegistration('SigningKeyStore')) {
-    return container.resolve<ISigningKeyStore>('SigningKeyStore');
+    return markResolvedProductionAdapter(
+      container.resolve<ISigningKeyStore>('SigningKeyStore'),
+      'SigningKeyStore',
+    );
   }
   if (database) {
     throw new Error('Web console PostgreSQL security-admin signing keys require SigningKeyStore');
@@ -1535,7 +1579,7 @@ async function resolveAuthPolicyStore(
   }
   if (database) {
     const { PostgresConsoleAuthPolicyStore } = await import('./stores/PostgresConsoleAuthPolicyStore.js');
-    return new PostgresConsoleAuthPolicyStore(database);
+    return markProductionAdapter(new PostgresConsoleAuthPolicyStore(database), 'PostgresConsoleAuthPolicyStore');
   }
   return new InMemoryConsoleAuthPolicyStore();
 }
@@ -1671,10 +1715,10 @@ function resolveOAuthGrantRevocationService(options: {
     return options.container.resolve<IOAuthGrantRevocationService>(WEB_CONSOLE_SERVICE_NAMES.oauthGrantRevocationService);
   }
   if (options.database && options.authStorage) {
-    return new ConsoleOAuthGrantRevocationService(
+    return markProductionAdapter(new ConsoleOAuthGrantRevocationService(
       new PostgresConsoleOAuthSubjectResolver(options.database),
       options.authStorage,
-    );
+    ), 'ConsoleOAuthGrantRevocationService');
   }
   return null;
 }
@@ -1688,12 +1732,9 @@ function resolveConsoleOAuthClient(
     return container.resolve<IConsoleOAuthClient>(WEB_CONSOLE_SERVICE_NAMES.consoleOAuthClient);
   }
   if (options.publicBaseUrl) {
-    return markWebConsoleProductionAdapter(new EmbeddedAsConsoleOAuthClient({
+    return markProductionAdapter(new EmbeddedAsConsoleOAuthClient({
       publicBaseUrl: options.publicBaseUrl,
-    }), {
-      productionReady: true,
-      adapterName: 'EmbeddedAsConsoleOAuthClient',
-    });
+    }), 'EmbeddedAsConsoleOAuthClient');
   }
   return null;
 }
@@ -1702,14 +1743,24 @@ function resolveAuthStorage(
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
 ): IAuthStorageLayer | null {
-  if (options.authStorage !== undefined) return options.authStorage;
+  if (options.authStorage !== undefined) {
+    return options.authStorage
+      ? markResolvedProductionAdapter(options.authStorage, 'AuthStorage')
+      : null;
+  }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.authStorage)) {
-    return container.resolve<IAuthStorageLayer>(WEB_CONSOLE_SERVICE_NAMES.authStorage);
+    return markResolvedProductionAdapter(
+      container.resolve<IAuthStorageLayer>(WEB_CONSOLE_SERVICE_NAMES.authStorage),
+      'AuthStorage',
+    );
   }
   // Transitional bridge for the embedded AS bootstrap wiring, which still
   // publishes its storage under the legacy container key.
   if (container.hasRegistration('AuthStorage')) {
-    return container.resolve<IAuthStorageLayer>('AuthStorage');
+    return markResolvedProductionAdapter(
+      container.resolve<IAuthStorageLayer>('AuthStorage'),
+      'AuthStorage',
+    );
   }
   return null;
 }
@@ -1727,11 +1778,11 @@ function resolveAccountInviteIssuer(input: {
     return container.resolve<IConsoleAccountInviteIssuer>(WEB_CONSOLE_SERVICE_NAMES.accountInviteIssuer);
   }
   if (input.database && input.publicBaseUrl) {
-    return new PostgresConsoleAccountInviteIssuer({
+    return markProductionAdapter(new PostgresConsoleAccountInviteIssuer({
       db: input.database,
       signingKeyStore: input.signingKeyStore,
       publicBaseUrl: input.publicBaseUrl,
-    });
+    }), 'PostgresConsoleAccountInviteIssuer');
   }
   return null;
 }
@@ -1743,10 +1794,7 @@ function resolveGitHubIntegrationProvider(
   if (options.githubIntegrationProvider !== undefined) return options.githubIntegrationProvider;
   const config = resolveGitHubIntegrationProviderConfig(options);
   if (config) {
-    return markWebConsoleProductionAdapter(new GitHubAppIntegrationProvider(config), {
-      productionReady: true,
-      adapterName: 'GitHubAppIntegrationProvider',
-    });
+    return markProductionAdapter(new GitHubAppIntegrationProvider(config), 'GitHubAppIntegrationProvider');
   }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
     return container.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider);
@@ -1802,4 +1850,34 @@ function resolveIntegrationPublicBaseUrl(
     throw new Error('Web console GitHub integration provider requires publicBaseUrl');
   }
   return null;
+}
+
+function markProductionAdapter<T extends object>(
+  adapter: T,
+  adapterName: string,
+): T {
+  return markWebConsoleProductionAdapter(adapter, {
+    productionReady: true,
+    adapterName,
+  });
+}
+
+function markResolvedProductionAdapter<T extends object>(
+  adapter: T,
+  adapterName: string,
+): T {
+  if (hasKnownUnsafeAdapterName(adapter)) return adapter;
+  return markProductionAdapter(adapter, adapterName);
+}
+
+function hasKnownUnsafeAdapterName(value: object): boolean {
+  const prototype = Object.getPrototypeOf(value) as { readonly constructor?: { readonly name?: unknown } } | null;
+  const constructorName = typeof prototype?.constructor?.name === 'string'
+    ? prototype.constructor.name
+    : 'unknown';
+  return constructorName === 'unknown' ||
+    constructorName.startsWith('InMemory') ||
+    constructorName.startsWith('Empty') ||
+    constructorName === 'GatekeeperSessionApprovalStore' ||
+    constructorName === 'GatekeeperSessionStateReader';
 }
