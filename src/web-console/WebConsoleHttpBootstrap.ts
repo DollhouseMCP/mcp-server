@@ -7,10 +7,13 @@ import { resolveWebConsoleProductionDatabaseVerificationFromEnv } from './WebCon
 const REQUIRED_KEY_BYTES = 32;
 const API_V1_MOUNT_REQUIRES_PUBLIC_BASE_URL =
   'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true requires DOLLHOUSE_PUBLIC_BASE_URL';
+const API_V1_REPLACEMENT_REFUSES_LEGACY_WEB_CONSOLE =
+  'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true replaces the legacy web console API; set DOLLHOUSE_HTTP_WEB_CONSOLE=false so legacy /api routes are not exposed';
 
 export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
   | 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED'
+  | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
   | 'DOLLHOUSE_AUTH_METHODS'
@@ -38,6 +41,9 @@ export function resolveWebConsoleHttpBootstrapOptions(
   sourceEnv: WebConsoleHttpBootstrapEnv,
 ): WebConsoleRegistrarOptions | null {
   if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED) return null;
+  if (sourceEnv.DOLLHOUSE_HTTP_WEB_CONSOLE) {
+    throw new Error(API_V1_REPLACEMENT_REFUSES_LEGACY_WEB_CONSOLE);
+  }
   if (!sourceEnv.DOLLHOUSE_PUBLIC_BASE_URL) {
     throw new Error(API_V1_MOUNT_REQUIRES_PUBLIC_BASE_URL);
   }

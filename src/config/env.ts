@@ -396,8 +396,8 @@ const envSchema = z.object({
 
   /**
    * Enables the replacement descriptor-driven `/api/v1/*` web-console API on
-   * the Streamable HTTP server. Default false until the M7 cutover gates are
-   * deliberately satisfied.
+   * the Streamable HTTP server. Default false until the M7 replacement gates
+   * are deliberately satisfied.
    */
   DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: envBool(false),
   /** Base64-encoded 32-byte HMAC key for opaque console browser values. */

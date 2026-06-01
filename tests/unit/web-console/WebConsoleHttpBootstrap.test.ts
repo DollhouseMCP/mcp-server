@@ -12,6 +12,7 @@ const KEY_3 = Buffer.alloc(32, 3).toString('base64');
 function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHttpBootstrapEnv {
   return {
     DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: true,
+    DOLLHOUSE_HTTP_WEB_CONSOLE: false,
     DOLLHOUSE_PUBLIC_BASE_URL: 'https://console.example.test',
     DOLLHOUSE_HTTP_HOST: '0.0.0.0',
     DOLLHOUSE_AUTH_METHODS: ['local-password'],
@@ -71,6 +72,10 @@ describe('WebConsoleHttpBootstrap', () => {
   });
 
   it('fails clearly when required hosted mount keys are missing or malformed', () => {
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_HTTP_WEB_CONSOLE: true,
+    }))).toThrow('replaces the legacy web console API');
+
     expect(() => resolveWebConsoleHttpBootstrapOptions(env({
       DOLLHOUSE_PUBLIC_BASE_URL: undefined,
     }))).toThrow('DOLLHOUSE_PUBLIC_BASE_URL');

@@ -1,12 +1,12 @@
 import { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS, type WebConsoleComposition } from './WebConsoleRegistrar.js';
 
-export const WEB_CONSOLE_CUTOVER_REQUIRED_ROUTE_MODULE_IDS = [
+export const WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS = [
   'auth',
   'health',
   ...WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
 ] as const;
 
-export const WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS = [
+export const WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS = [
   'production_database_migrations',
   'security_invalidation_multi_replica',
   'allowlist_authority_parity',
@@ -20,38 +20,38 @@ export const WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS = [
   'audit_telemetry_projection',
 ] as const;
 
-export type WebConsoleCutoverLiveCheckId = typeof WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS[number];
-export type WebConsoleCutoverPhase = 'pre-mount' | 'post-mount';
+export type WebConsoleReplacementLiveCheckId = typeof WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS[number];
+export type WebConsoleReplacementPhase = 'pre-replacement' | 'active-replacement';
 
-export interface WebConsoleCutoverLiveCheck {
-  readonly id: WebConsoleCutoverLiveCheckId;
+export interface WebConsoleReplacementLiveCheck {
+  readonly id: WebConsoleReplacementLiveCheckId;
   readonly ready: boolean;
   readonly detail?: string;
 }
 
-export interface WebConsoleCutoverVerificationItem {
+export interface WebConsoleReplacementReadinessItem {
   readonly id: string;
   readonly ready: boolean;
   readonly detail: string;
 }
 
-export interface WebConsoleCutoverVerificationResult {
+export interface WebConsoleReplacementReadinessResult {
   readonly ready: boolean;
-  readonly failures: readonly WebConsoleCutoverVerificationItem[];
-  readonly items: readonly WebConsoleCutoverVerificationItem[];
+  readonly failures: readonly WebConsoleReplacementReadinessItem[];
+  readonly items: readonly WebConsoleReplacementReadinessItem[];
 }
 
-export interface WebConsoleCutoverVerificationOptions {
+export interface WebConsoleReplacementReadinessOptions {
   readonly composition: Pick<WebConsoleComposition,
     'activationProfile' | 'apiV1Mount' | 'registry' | 'routesMounted' | 'storageBackend'
   >;
-  readonly phase: WebConsoleCutoverPhase;
-  readonly liveChecks: readonly WebConsoleCutoverLiveCheck[];
+  readonly phase: WebConsoleReplacementPhase;
+  readonly liveChecks: readonly WebConsoleReplacementLiveCheck[];
 }
 
-export function verifyWebConsoleCutoverReadiness(
-  options: WebConsoleCutoverVerificationOptions,
-): WebConsoleCutoverVerificationResult {
+export function verifyWebConsoleReplacementReadiness(
+  options: WebConsoleReplacementReadinessOptions,
+): WebConsoleReplacementReadinessResult {
   const items = [
     ...localCompositionChecks(options.composition, options.phase),
     ...liveDeploymentChecks(options.liveChecks),
@@ -65,9 +65,9 @@ export function verifyWebConsoleCutoverReadiness(
 }
 
 function localCompositionChecks(
-  composition: WebConsoleCutoverVerificationOptions['composition'],
-  phase: WebConsoleCutoverPhase,
-): readonly WebConsoleCutoverVerificationItem[] {
+  composition: WebConsoleReplacementReadinessOptions['composition'],
+  phase: WebConsoleReplacementPhase,
+): readonly WebConsoleReplacementReadinessItem[] {
   const apiV1MountCreated = composition.apiV1Mount !== null;
   return [
     check(
@@ -83,28 +83,28 @@ function localCompositionChecks(
     check(
       'api_v1_mount_created',
       apiV1MountCreated,
-      'descriptor API v1 mount was created by activation',
+      'replacement descriptor API v1 mount was created by activation',
     ),
     check(
-      phase === 'pre-mount' ? 'api_v1_mount_still_dormant' : 'api_v1_mount_marked_mounted',
-      phase === 'pre-mount' ? !composition.routesMounted : composition.routesMounted,
-      phase === 'pre-mount'
-        ? 'pre-mount verification requires the router to remain unmounted'
-        : 'post-mount verification requires the HTTP runtime to mark the router mounted',
+      phase === 'pre-replacement' ? 'api_v1_replacement_still_dormant' : 'api_v1_replacement_active',
+      phase === 'pre-replacement' ? !composition.routesMounted : composition.routesMounted,
+      phase === 'pre-replacement'
+        ? 'pre-replacement verification requires the router to remain unmounted'
+        : 'active replacement verification requires the HTTP runtime to mark the router mounted',
     ),
     check(
       'complete_v1_route_surface_registered',
-      hasAllRegisteredModules(composition, WEB_CONSOLE_CUTOVER_REQUIRED_ROUTE_MODULE_IDS),
-      'all v1 descriptor route modules required for M7 merge are registered',
+      hasAllRegisteredModules(composition, WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS),
+      'all v1 descriptor route modules required for M7 replacement are registered',
     ),
   ];
 }
 
 function liveDeploymentChecks(
-  liveChecks: readonly WebConsoleCutoverLiveCheck[],
-): readonly WebConsoleCutoverVerificationItem[] {
+  liveChecks: readonly WebConsoleReplacementLiveCheck[],
+): readonly WebConsoleReplacementReadinessItem[] {
   const byId = new Map(liveChecks.map(liveCheck => [liveCheck.id, liveCheck]));
-  return WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS.map(id => {
+  return WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS.map(id => {
     const liveCheck = byId.get(id);
     if (!liveCheck) {
       return check(id, false, 'selected deployment verification result was not supplied');
@@ -114,7 +114,7 @@ function liveDeploymentChecks(
 }
 
 function hasAllRegisteredModules(
-  composition: WebConsoleCutoverVerificationOptions['composition'],
+  composition: WebConsoleReplacementReadinessOptions['composition'],
   expected: readonly string[],
 ): boolean {
   const moduleIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
@@ -125,6 +125,6 @@ function check(
   id: string,
   ready: boolean,
   detail: string,
-): WebConsoleCutoverVerificationItem {
+): WebConsoleReplacementReadinessItem {
   return { id, ready, detail };
 }

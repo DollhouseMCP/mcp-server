@@ -2,18 +2,18 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   ConsoleModuleRegistry,
-  WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS,
-  WEB_CONSOLE_CUTOVER_REQUIRED_ROUTE_MODULE_IDS,
-  verifyWebConsoleCutoverReadiness,
+  WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS,
+  WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS,
+  verifyWebConsoleReplacementReadiness,
   type WebConsoleComposition,
-  type WebConsoleCutoverLiveCheck,
+  type WebConsoleReplacementLiveCheck,
 } from '../../../src/web-console/index.js';
 
-describe('WebConsoleCutoverVerification', () => {
+describe('WebConsoleReplacementReadiness', () => {
   it('passes only when local composition and every selected-deployment check are ready', () => {
-    const result = verifyWebConsoleCutoverReadiness({
+    const result = verifyWebConsoleReplacementReadiness({
       composition: composition(),
-      phase: 'pre-mount',
+      phase: 'pre-replacement',
       liveChecks: readyLiveChecks(),
     });
 
@@ -23,16 +23,16 @@ describe('WebConsoleCutoverVerification', () => {
       'activation_profile_shared_hosted',
       'storage_backend_postgres',
       'api_v1_mount_created',
-      'api_v1_mount_still_dormant',
+      'api_v1_replacement_still_dormant',
       'complete_v1_route_surface_registered',
-      ...WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS,
+      ...WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS,
     ]));
   });
 
   it('fails closed for missing or failed selected-deployment checks', () => {
-    const result = verifyWebConsoleCutoverReadiness({
+    const result = verifyWebConsoleReplacementReadiness({
       composition: composition(),
-      phase: 'pre-mount',
+      phase: 'pre-replacement',
       liveChecks: readyLiveChecks({
         omit: 'portfolio_sync_live_repository',
         fail: 'security_invalidation_multi_replica',
@@ -52,29 +52,29 @@ describe('WebConsoleCutoverVerification', () => {
     ]));
   });
 
-  it('distinguishes pre-mount and post-mount route state', () => {
-    const preMount = verifyWebConsoleCutoverReadiness({
+  it('distinguishes pre-replacement and active replacement route state', () => {
+    const preReplacement = verifyWebConsoleReplacementReadiness({
       composition: composition({ routesMounted: true }),
-      phase: 'pre-mount',
+      phase: 'pre-replacement',
       liveChecks: readyLiveChecks(),
     });
-    const postMount = verifyWebConsoleCutoverReadiness({
+    const activeReplacement = verifyWebConsoleReplacementReadiness({
       composition: composition({ routesMounted: true }),
-      phase: 'post-mount',
+      phase: 'active-replacement',
       liveChecks: readyLiveChecks(),
     });
 
-    expect(preMount.ready).toBe(false);
-    expect(preMount.failures).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'api_v1_mount_still_dormant' }),
+    expect(preReplacement.ready).toBe(false);
+    expect(preReplacement.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'api_v1_replacement_still_dormant' }),
     ]));
-    expect(postMount.ready).toBe(true);
+    expect(activeReplacement.ready).toBe(true);
   });
 
-  it('requires the complete v1 route surface registered for M7 merge', () => {
-    const result = verifyWebConsoleCutoverReadiness({
-      composition: composition({ registeredModules: WEB_CONSOLE_CUTOVER_REQUIRED_ROUTE_MODULE_IDS.slice(1) }),
-      phase: 'pre-mount',
+  it('requires the complete v1 route surface registered for M7 replacement', () => {
+    const result = verifyWebConsoleReplacementReadiness({
+      composition: composition({ registeredModules: WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS.slice(1) }),
+      phase: 'pre-replacement',
       liveChecks: readyLiveChecks(),
     });
 
@@ -88,8 +88,8 @@ describe('WebConsoleCutoverVerification', () => {
 function readyLiveChecks(options: {
   readonly omit?: string;
   readonly fail?: string;
-} = {}): readonly WebConsoleCutoverLiveCheck[] {
-  return WEB_CONSOLE_CUTOVER_LIVE_CHECK_IDS
+} = {}): readonly WebConsoleReplacementLiveCheck[] {
+  return WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS
     .filter(id => id !== options.omit)
     .map(id => ({
       id,
@@ -107,7 +107,7 @@ function composition(overrides: {
   readonly registeredModules?: readonly string[];
 } = {}): Pick<WebConsoleComposition, 'activationProfile' | 'apiV1Mount' | 'registry' | 'routesMounted' | 'storageBackend'> {
   const registry = new ConsoleModuleRegistry();
-  for (const moduleId of overrides.registeredModules ?? WEB_CONSOLE_CUTOVER_REQUIRED_ROUTE_MODULE_IDS) {
+  for (const moduleId of overrides.registeredModules ?? WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS) {
     registry.register({
       id: moduleId,
       apiVersion: 'v1',
