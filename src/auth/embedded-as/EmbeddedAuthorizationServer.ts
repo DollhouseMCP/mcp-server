@@ -25,6 +25,7 @@ import express, { type Router, type Request, type RequestHandler, type Response 
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
+import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 import { logger } from '../../utils/logger.js';
 import type {
   AuthResult,
@@ -129,6 +130,39 @@ export function pickHeaderValue(
 ): string | undefined {
   if (Array.isArray(header)) return header[0];
   return header;
+}
+
+const authAssetLocator = new PackageResourceLocator();
+const AUTH_FONT_FILE_RE = /^[A-Za-z0-9._-]+\.woff2$/;
+
+function servePackagedAuthAsset(relativePath: string, contentType: string): RequestHandler {
+  return async (_req, res, next) => {
+    try {
+      const assetPath = await authAssetLocator.locate(relativePath);
+      if (!assetPath) {
+        res.sendStatus(404);
+        return;
+      }
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.type(contentType);
+      res.sendFile(assetPath, (err) => {
+        if (err) next(err);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+function servePackagedAuthFont(): RequestHandler {
+  return async (req, res, next) => {
+    const file = req.params.file;
+    if (typeof file !== 'string' || !AUTH_FONT_FILE_RE.test(file)) {
+      res.sendStatus(404);
+      return;
+    }
+    return servePackagedAuthAsset(`web/public/fonts/${file}`, 'font/woff2')(req, res, next);
+  };
 }
 
 export interface EmbeddedAuthorizationServerOptions {
@@ -385,6 +419,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         }
       })();
     });
+
+    // Hosted auth pages reuse the console's first-party visual assets, but the
+    // embedded AS is often mounted without the web console's static middleware.
+    // Serve only the exact logo/font assets needed by those pages.
+    router.get('/dollhouse-logo.png', servePackagedAuthAsset('web/public/dollhouse-logo.png', 'image/png'));
+    router.get('/fonts.css', servePackagedAuthAsset('web/public/fonts.css', 'text/css; charset=utf-8'));
+    router.get('/fonts/:file', servePackagedAuthFont());
 
     // Bootstrap gate (must-fix #22 / spec L923). When configured methods
     // include a multi-user identity provider, refuse all auth-flow
