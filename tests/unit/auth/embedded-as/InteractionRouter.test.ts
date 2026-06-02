@@ -301,14 +301,18 @@ describe('InteractionRouter — multi-method dispatch', () => {
       expect(consent.status).toBe(200);
       const html = await consent.text();
       expect(html).toContain('Authorize Test Client');
+      expect(html).toContain('DollhouseMCP Authorization');
+      expect(html).toContain('OAuth client authorization');
       expect(html).toContain('client.example.com');
       expect(html).toContain('openid');
       expect(html).toContain('mcp');
+      expect(html).toContain('Use DollhouseMCP tools');
       expect(html).toContain('https://mcp.example.com/mcp');
+      expect(html).toContain('Signed in with GitHub');
       expect(html).toContain('@mickdarling');
       expect(html).toContain('mick@example.com');
-      expect(html).toContain('First time this identity is authorizing this client');
-      expect(html).toContain('This client will receive OAuth tokens');
+      expect(html).toContain('New client for this account');
+      expect(html).toContain('DollhouseMCP will issue OAuth tokens');
       expect(interactionFinished).not.toHaveBeenCalled();
 
       const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
@@ -349,7 +353,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
 
       const secondConsent = await fetch(`${baseUrl}/seed-consent`);
       const secondHtml = await secondConsent.text();
-      expect(secondHtml).toContain('Previously authorized by this identity');
+      expect(secondHtml).toContain('Previously authorized by this account');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

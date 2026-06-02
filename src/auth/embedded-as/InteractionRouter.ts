@@ -617,86 +617,364 @@ async function renderOAuthClientConsentPage(
   },
 ): Promise<string> {
   const view = await buildClientConsentView(provider, details, defaultResource);
-  const scopes = view.scopes.length > 0
-    ? view.scopes.map((scope) => `<li>${escapeHtmlText(scope)}</li>`).join('\n')
-    : '<li>default OAuth access</li>';
+  const scopes = renderScopeList(view.scopes);
   const redirectList = view.registeredRedirectUris.length > 0
     ? view.registeredRedirectUris.slice(0, 5).map((uri) => `<li><code>${escapeHtmlText(uri)}</code></li>`).join('\n')
     : '<li>Not available from client metadata</li>';
   const redirectOverflow = view.registeredRedirectUris.length > 5
-    ? `<li>...and ${view.registeredRedirectUris.length - 5} more</li>`
+    ? `<li>and ${view.registeredRedirectUris.length - 5} more</li>`
     : '';
   const clientUri = view.clientUri
-    ? `<p class="muted">Client website: <a href="${escapeHtmlAttr(view.clientUri)}" rel="noreferrer">${escapeHtmlText(view.clientUri)}</a></p>`
-    : '';
+    ? `<a href="${escapeHtmlAttr(view.clientUri)}" rel="noreferrer">${escapeHtmlText(view.clientUri)}</a>`
+    : '<span class="muted">Not provided</span>';
   const identitySummary = consent.identity
-    ? renderIdentitySummary(consent.identity)
-    : escapeHtmlText('this authenticated DollhouseMCP account');
-  const clientHistory = consent.firstSeen
-    ? 'First time this identity is authorizing this client'
-    : 'Previously authorized by this identity';
+    ? renderIdentityCard(consent.identity)
+    : '<span class="muted">Authenticated DollhouseMCP account</span>';
+  const historyLabel = consent.firstSeen
+    ? 'New client for this account'
+    : 'Previously authorized by this account';
+  const historyClass = consent.firstSeen
+    ? 'badge accent'
+    : 'badge';
+  const authorizationSummary = consent.firstSeen
+    ? 'Review this client before granting access.'
+    : 'This client has been authorized before for this account.';
+  const clientWebsiteRow = view.clientUri
+    ? `<div><dt>Client website</dt><dd>${clientUri}</dd></div>`
+    : '';
 
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Authorize ${escapeHtmlText(view.clientName)}</title>
+  <title>DollhouseMCP - Authorize ${escapeHtmlText(view.clientName)}</title>
   <style>
-    body { margin: 0; font-family: system-ui, sans-serif; background: #f7f7f4; color: #181816; }
-    main { max-width: 640px; margin: 8vh auto; padding: 32px; background: white; border: 1px solid #d8d6cc; border-radius: 8px; }
-    h1 { font-size: 24px; margin: 0 0 12px; }
-    h2 { font-size: 15px; margin: 24px 0 8px; }
-    p { line-height: 1.5; }
-    dl { display: grid; grid-template-columns: 150px 1fr; gap: 10px 16px; margin: 20px 0; }
-    dt { color: #68675f; font-weight: 700; }
-    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
-    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
-    ul { margin: 8px 0 0; padding-left: 20px; }
-    form { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
-    button { border: 0; border-radius: 6px; padding: 12px 16px; font-weight: 700; cursor: pointer; }
-    button.primary { background: #185c37; color: white; }
-    button.secondary { background: #ece8dd; color: #181816; }
-    .muted { color: #68675f; font-size: 14px; }
-    .warning { border-left: 4px solid #b65b00; padding-left: 12px; color: #3a2a18; }
+    :root {
+      color-scheme: light;
+      --ink: #171717;
+      --muted: #64645f;
+      --line: #d9d7ce;
+      --panel: #ffffff;
+      --page: #f5f4ef;
+      --brand: #174c39;
+      --brand-strong: #0f3529;
+      --accent: #b65b00;
+      --soft: #f0eee5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--page);
+      color: var(--ink);
+    }
+    .shell {
+      width: min(880px, calc(100vw - 32px));
+      margin: 32px auto;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 14px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+    .brand-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 7px;
+      background: var(--brand);
+      color: white;
+      font-size: 14px;
+    }
+    .host {
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+      text-align: right;
+    }
+    main {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 18px 48px rgba(23, 23, 23, 0.08);
+      overflow: hidden;
+    }
+    .hero {
+      padding: 30px 32px 24px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfaf6;
+    }
+    .eyebrow {
+      color: var(--brand);
+      font-size: 13px;
+      font-weight: 800;
+      margin: 0 0 8px;
+      text-transform: uppercase;
+    }
+    h1 {
+      font-size: 28px;
+      line-height: 1.15;
+      margin: 0 0 10px;
+      letter-spacing: 0;
+    }
+    h2 {
+      font-size: 16px;
+      margin: 0 0 12px;
+    }
+    p {
+      line-height: 1.5;
+      margin: 0;
+    }
+    a { color: var(--brand); }
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 16px;
+      max-width: 660px;
+    }
+    .content {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 24px;
+      padding: 28px 32px 32px;
+    }
+    .section + .section { margin-top: 24px; }
+    .scope-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+    .scope-list li {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px 14px;
+      background: #fff;
+    }
+    .scope-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      font-weight: 750;
+    }
+    .scope-title code {
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .scope-desc {
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 4px;
+    }
+    .side {
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+    .summary-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--soft);
+      padding: 14px;
+    }
+    .summary-card h2 {
+      margin-bottom: 10px;
+    }
+    dl {
+      display: grid;
+      gap: 10px;
+      margin: 0;
+    }
+    dl > div {
+      min-width: 0;
+    }
+    dt {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      margin-bottom: 3px;
+      text-transform: uppercase;
+    }
+    dd {
+      margin: 0;
+      min-width: 0;
+      overflow-wrap: anywhere;
+    }
+    .identity {
+      display: grid;
+      gap: 3px;
+    }
+    .identity strong {
+      font-size: 15px;
+    }
+    .muted {
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 5px 9px;
+      background: white;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .badge.accent {
+      border-color: #e0b27a;
+      background: #fff6e8;
+      color: #6b3400;
+    }
+    details {
+      border-top: 1px solid var(--line);
+      padding-top: 18px;
+      margin-top: 24px;
+    }
+    summary {
+      cursor: pointer;
+      color: var(--brand);
+      font-weight: 800;
+    }
+    .redirect-list {
+      margin: 12px 0 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+    form {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 28px;
+    }
+    button {
+      border: 0;
+      border-radius: 7px;
+      padding: 12px 18px;
+      font-weight: 800;
+      cursor: pointer;
+      font-size: 15px;
+    }
+    button.primary {
+      background: var(--brand);
+      color: white;
+    }
+    button.primary:hover { background: var(--brand-strong); }
+    button.secondary {
+      background: #ece8dd;
+      color: var(--ink);
+    }
+    @media (max-width: 760px) {
+      .shell { width: min(100vw - 20px, 880px); margin: 16px auto; }
+      header { align-items: flex-start; flex-direction: column; }
+      .host { text-align: left; }
+      .hero, .content { padding: 22px; }
+      .content { grid-template-columns: 1fr; }
+      h1 { font-size: 24px; }
+      form { flex-direction: column; }
+      button { width: 100%; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Authorize ${escapeHtmlText(view.clientName)}</h1>
-    <p class="warning">This client will receive OAuth tokens for DollhouseMCP after approval.</p>
-    ${clientUri}
-    <dl>
-      <dt>Client ID</dt>
-      <dd><code>${escapeHtmlText(view.clientId)}</code></dd>
-      <dt>Callback domain</dt>
-      <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
-      <dt>Callback URL</dt>
-      <dd><code>${escapeHtmlText(view.redirectUri)}</code></dd>
-      <dt>Resource</dt>
-      <dd><code>${escapeHtmlText(view.resource)}</code></dd>
-      <dt>Application type</dt>
-      <dd>${escapeHtmlText(view.applicationType)}</dd>
-      <dt>Authorizing as</dt>
-      <dd>${identitySummary}</dd>
-      <dt>Client history</dt>
-      <dd>${escapeHtmlText(clientHistory)}</dd>
-    </dl>
-    <h2>Requested scopes</h2>
-    <ul>
+  <div class="shell">
+    <header>
+      <div class="brand"><span class="brand-mark">DM</span><span>DollhouseMCP Authorization</span></div>
+      <div class="host">mcp.dollhousemcp.com</div>
+    </header>
+    <main>
+      <section class="hero">
+        <p class="eyebrow">OAuth client authorization</p>
+        <h1>Authorize ${escapeHtmlText(view.clientName)}?</h1>
+        <p class="subtitle">${escapeHtmlText(view.clientName)} is requesting access to DollhouseMCP. DollhouseMCP will issue OAuth tokens to this client after approval.</p>
+      </section>
+      <section class="content">
+        <div>
+          <section class="section">
+            <h2>Requested access</h2>
+            <ul class="scope-list">
 ${scopes}
-    </ul>
-    <h2>Registered callbacks</h2>
-    <ul>
+            </ul>
+          </section>
+          <details>
+            <summary>Technical details</summary>
+            <dl>
+              <div>
+                <dt>Client ID</dt>
+                <dd><code>${escapeHtmlText(view.clientId)}</code></dd>
+              </div>
+              ${clientWebsiteRow}
+              <div>
+                <dt>Callback domain</dt>
+                <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
+              </div>
+              <div>
+                <dt>Callback URL</dt>
+                <dd><code>${escapeHtmlText(view.redirectUri)}</code></dd>
+              </div>
+              <div>
+                <dt>Resource</dt>
+                <dd><code>${escapeHtmlText(view.resource)}</code></dd>
+              </div>
+              <div>
+                <dt>Application type</dt>
+                <dd>${escapeHtmlText(view.applicationType)}</dd>
+              </div>
+            </dl>
+            <h2 style="margin-top: 20px;">Registered callbacks</h2>
+            <ul class="redirect-list">
 ${redirectList}
 ${redirectOverflow}
-    </ul>
-    <form method="post" action="/interaction/${escapeHtmlAttr(details.uid)}">
-      <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">
-      <button class="primary" type="submit" name="action" value="${CLIENT_CONSENT_APPROVE_ACTION}">Authorize Client</button>
-      <button class="secondary" type="submit" name="action" value="${CLIENT_CONSENT_DENY_ACTION}">Cancel</button>
-    </form>
-  </main>
+            </ul>
+          </details>
+          <form method="post" action="/interaction/${escapeHtmlAttr(details.uid)}">
+            <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">
+            <button class="primary" type="submit" name="action" value="${CLIENT_CONSENT_APPROVE_ACTION}">Authorize</button>
+            <button class="secondary" type="submit" name="action" value="${CLIENT_CONSENT_DENY_ACTION}">Cancel</button>
+          </form>
+        </div>
+        <aside class="side">
+          <section class="summary-card">
+            <h2>Signed in with GitHub</h2>
+            ${identitySummary}
+          </section>
+          <section class="summary-card">
+            <h2>Client status</h2>
+            <span class="${historyClass}">${escapeHtmlText(historyLabel)}</span>
+            <p class="muted" style="margin-top: 10px;">${escapeHtmlText(authorizationSummary)}</p>
+          </section>
+          <section class="summary-card">
+            <h2>Callback</h2>
+            <dl>
+              <div>
+                <dt>Domain</dt>
+                <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
+              </div>
+            </dl>
+          </section>
+        </aside>
+      </section>
+    </main>
+  </div>
 </body>
 </html>`;
 }
@@ -867,18 +1145,79 @@ async function recordClientConsentAuditEvent(
   }
 }
 
-function renderIdentitySummary(identity: ClientConsentIdentitySummary): string {
-  const parts: string[] = [];
+function renderScopeList(scopes: string[]): string {
+  if (scopes.length === 0) {
+    return `<li>
+      <div class="scope-title"><span>Default OAuth access</span><code>default</code></div>
+      <p class="scope-desc">Complete this authorization request.</p>
+    </li>`;
+  }
+  return scopes.map((scope) => {
+    const display = scopeDisplay(scope);
+    return `<li>
+      <div class="scope-title"><span>${escapeHtmlText(display.title)}</span><code>${escapeHtmlText(scope)}</code></div>
+      <p class="scope-desc">${escapeHtmlText(display.description)}</p>
+    </li>`;
+  }).join('\n');
+}
+
+function scopeDisplay(scope: string): { title: string; description: string } {
+  switch (scope) {
+    case 'mcp':
+      return {
+        title: 'Use DollhouseMCP tools',
+        description: 'Call the MCP server on your behalf.',
+      };
+    case 'offline_access':
+      return {
+        title: 'Keep access between sessions',
+        description: 'Receive a refresh token so you do not need to sign in every time.',
+      };
+    case 'openid':
+      return {
+        title: 'Confirm your identity',
+        description: 'Use your DollhouseMCP account identity for this OAuth connection.',
+      };
+    case 'profile':
+      return {
+        title: 'Read basic profile information',
+        description: 'Share your display name with this OAuth connection.',
+      };
+    case 'email':
+      return {
+        title: 'Read verified email information',
+        description: 'Share the verified email associated with this account when available.',
+      };
+    default:
+      return {
+        title: scope,
+        description: 'Requested by the client.',
+      };
+  }
+}
+
+function renderIdentityCard(identity: ClientConsentIdentitySummary): string {
   const primary = identity.providerUsername
     ? `@${identity.providerUsername}`
     : identity.displayName;
-  if (primary) parts.push(escapeHtmlText(primary));
-  if (identity.displayName && identity.displayName !== primary) {
-    parts.push(escapeHtmlText(identity.displayName));
-  }
-  if (identity.email) parts.push(escapeHtmlText(identity.email));
-  parts.push(`<code>${escapeHtmlText(identity.sub)}</code>`);
-  return parts.join('<br>');
+  const provider = identity.provider ? providerDisplayName(identity.provider) : 'Account';
+  const displayName = identity.displayName && identity.displayName !== primary
+    ? `<span class="muted">${escapeHtmlText(identity.displayName)}</span>`
+    : '';
+  const email = identity.email
+    ? `<span class="muted">${escapeHtmlText(identity.email)}</span>`
+    : '';
+  return `<div class="identity">
+    <strong>${escapeHtmlText(primary ?? identity.sub)}</strong>
+    <span class="muted">${escapeHtmlText(provider)} account</span>
+    ${displayName}
+    ${email}
+    <code>${escapeHtmlText(identity.sub)}</code>
+  </div>`;
+}
+
+function providerDisplayName(provider: string): string {
+  return provider === 'github' ? 'GitHub' : provider;
 }
 
 function ensureCsrfInForm(html: string, csrfToken: string): string {
