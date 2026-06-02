@@ -125,6 +125,8 @@ The remote wrapper additionally creates operator backups before it invokes the h
 - a Postgres dump under `backups/pre-remote-<action>-<timestamp>.sql`
 - `.env` and `.env.production` copies under `backups/`
 
+Database readiness and `pg_dump` receive bounded retries before `update`, `migrate`, and `rollback` continue. Retry delays use exponential backoff from the configured base delay. If a dump attempt writes partial output and then fails, the wrapper moves that partial output to `backups/pre-remote-<action>-<timestamp>.sql.failed-attempt-<n>` with `0600` permissions before retrying or failing.
+
 Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists.
 
 ## Configuration
@@ -160,6 +162,8 @@ Remote wrapper variables:
 | `DOLLHOUSE_REMOTE_SSH_PORT` | Optional SSH port | default SSH port |
 | `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` | Optional known-hosts file used with strict host-key checking | OpenSSH default known-hosts files |
 | `DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY` | Permit `enroll-host` to append the scanned host key after operator verification | `false` |
+| `DOLLHOUSE_REMOTE_BACKUP_RETRIES` | Attempts for remote Postgres readiness and database dump backup | `3` |
+| `DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY` | Base seconds for exponential backoff between remote backup attempts | `2` |
 | `DOLLHOUSE_REMOTE_SKIP_BACKUP` | Skip remote DB/env backups before running the helper | `false` |
 | `DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY` | Skip local public endpoint checks after the remote helper completes | `false` |
 | `DOLLHOUSE_REMOTE_KEEP_WORKDIR` | Keep the temporary remote clone for debugging | `false` |
