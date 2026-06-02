@@ -17,6 +17,7 @@ HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
 PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL:-}"
 GIT_URL="${DOLLHOUSE_HOSTED_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}"
 GIT_REF="${DOLLHOUSE_HOSTED_GIT_REF:-codex/hosted-http-integration}"
+ALLOW_CREDENTIAL_GIT_URL="${DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL:-false}"
 LOG_LEVEL="${DOLLHOUSE_HOSTED_LOG_LEVEL:-info}"
 SKIP_BACKUP="${DOLLHOUSE_REMOTE_SKIP_BACKUP:-false}"
 SKIP_LOCAL_VERIFY="${DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY:-false}"
@@ -100,6 +101,37 @@ validate_bool() {
       die "${key} must be 'true' or 'false', got: ${value}"
       ;;
   esac
+
+  return 0
+}
+
+git_url_has_credentials() {
+  local git_url="$1"
+
+  if [[ "${git_url}" =~ ^https?://[^/@]+@ ]]; then
+    return 0
+  fi
+
+  return 1
+}
+
+redact_url() {
+  local url="$1"
+
+  if [[ "${url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
+    printf '%s[redacted]@%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  printf '%s\n' "${url}"
+  return 0
+}
+
+validate_git_url_for_clone() {
+  validate_bool DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL "${ALLOW_CREDENTIAL_GIT_URL}"
+  if git_url_has_credentials "${GIT_URL}" && [[ "${ALLOW_CREDENTIAL_GIT_URL}" != "true" ]]; then
+    die "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials; use a git credential helper or deploy key on the remote host instead"
+  fi
 
   return 0
 }
@@ -240,6 +272,7 @@ validate_config() {
   validate_bool DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY "${SKIP_LOCAL_VERIFY}"
   validate_bool DOLLHOUSE_REMOTE_KEEP_WORKDIR "${KEEP_WORKDIR}"
   validate_bool DOLLHOUSE_REMOTE_DRY_RUN "${DRY_RUN}"
+  validate_git_url_for_clone
   [[ -n "${REMOTE_SSH_TARGET}" ]] || die "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
   [[ "${REMOTE_SSH_TARGET}" != *[[:space:]]* ]] || die "SSH target must not contain whitespace"
   [[ -z "${REMOTE_SSH_IDENTITY_FILE}" || -f "${REMOTE_SSH_IDENTITY_FILE}" ]] || \
@@ -267,7 +300,7 @@ run_dry_plan() {
   else
     log "dry-run: would create remote DB/env backups when an existing deployment is present"
   fi
-  log "dry-run: would clone ${GIT_URL} at ${GIT_REF} on the remote host"
+  log "dry-run: would clone $(redact_url "${GIT_URL}") at ${GIT_REF} on the remote host"
   log "dry-run: would run scripts/hosted-deploy.sh ${ACTION} on the remote host"
   if [[ "${SKIP_LOCAL_VERIFY}" == "true" ]]; then
     log "dry-run: would skip local public endpoint checks"
@@ -299,7 +332,10 @@ run_remote_action() {
     "${KEEP_WORKDIR}" <<'REMOTE_BOOTSTRAP'
 set -euo pipefail
 
+# Run the payload from a file so stdin-consuming remote commands cannot consume
+# the rest of the script while it is still being streamed over SSH.
 remote_payload="$(mktemp /tmp/dollhouse-remote-wrapper.XXXXXX.sh)"
+chmod 0600 "${remote_payload}"
 cleanup_remote_payload() {
   case "${remote_payload}" in
     /tmp/dollhouse-remote-wrapper.*.sh)
@@ -336,6 +372,18 @@ remote_log() {
 remote_warn() {
   printf '[hosted-remote] warning: %s\n' "$*" >&2
 
+  return 0
+}
+
+remote_redact_url() {
+  local url="$1"
+
+  if [[ "${url}" =~ ^(https?://)[^/@]+@(.+)$ ]]; then
+    printf '%s[redacted]@%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  printf '%s\n' "${url}"
   return 0
 }
 
@@ -443,9 +491,9 @@ clone_source() {
   remote_need git
 
   workdir="$(mktemp -d /tmp/dollhouse-hosted.XXXXXX)"
-  remote_log "cloning ${git_url} (${git_ref}) to ${workdir}"
+  remote_log "cloning $(remote_redact_url "${git_url}") (${git_ref}) to ${workdir}"
   git clone --depth 1 --branch "${git_ref}" "${git_url}" "${workdir}" || \
-    remote_die "failed to clone ${git_url} at ${git_ref}"
+    remote_die "failed to clone $(remote_redact_url "${git_url}") at ${git_ref}"
 
   return 0
 }

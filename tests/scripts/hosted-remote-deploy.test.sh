@@ -92,6 +92,10 @@ if [[ "${1:-}" == "clone" ]]; then
         ;;
     esac
   done
+  if [[ -n "${DOLLHOUSE_FAKE_GIT_FAIL_REF:-}" && "${ref}" == "${DOLLHOUSE_FAKE_GIT_FAIL_REF}" ]]; then
+    printf 'clone failed for ref=%s\n' "${ref}" >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
+    exit 42
+  fi
   mkdir -p "${dest}/scripts"
   cat > "${dest}/scripts/hosted-deploy.sh" <<'HELPER'
 #!/usr/bin/env bash
@@ -146,7 +150,7 @@ printf 'curl %s\n' "$*" >> "${DOLLHOUSE_FAKE_CURL_LOG:?}"
 
 for arg in "$@"; do
   if [[ "${arg}" == "-w" ]]; then
-    printf '401'
+    printf '%s' "${DOLLHOUSE_FAKE_CURL_MCP_STATUS:-401}"
     exit 0
   fi
 done
@@ -172,10 +176,13 @@ run_remote() {
   DOLLHOUSE_FAKE_REMOTE_LOG="${REMOTE_LOG}" \
   DOLLHOUSE_FAKE_SSH_LOG="${SSH_LOG}" \
   DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+  DOLLHOUSE_FAKE_CURL_MCP_STATUS="${DOLLHOUSE_FAKE_CURL_MCP_STATUS:-401}" \
+  DOLLHOUSE_FAKE_GIT_FAIL_REF="${DOLLHOUSE_FAKE_GIT_FAIL_REF:-}" \
   DOLLHOUSE_REMOTE_SSH_TARGET=root@example.test \
   DOLLHOUSE_HOSTED_DEPLOY_DIR="${DEPLOY_DIR}" \
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
-  DOLLHOUSE_HOSTED_GIT_REF=codex/test-ref \
+  DOLLHOUSE_HOSTED_GIT_URL="${DOLLHOUSE_TEST_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}" \
+  DOLLHOUSE_HOSTED_GIT_REF="${DOLLHOUSE_TEST_GIT_REF:-codex/test-ref}" \
     bash "${REMOTE_DEPLOY}" "$@"
 }
 
@@ -219,5 +226,28 @@ if PATH="${FAKE_BIN}:${PATH}" \
   fail "missing target unexpectedly succeeded"
 fi
 assert_contains "${MISSING_TARGET_OUTPUT}" "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
+
+log "checking credential-bearing git URL rejection"
+: > "${SSH_LOG}"
+CREDENTIAL_URL_OUTPUT="${TMP_ROOT}/credential-url.out"
+if DOLLHOUSE_TEST_GIT_URL=https://token@example.com/DollhouseMCP/mcp-server.git run_remote --dry-run update > "${CREDENTIAL_URL_OUTPUT}" 2>&1; then
+  fail "credential-bearing git URL unexpectedly succeeded"
+fi
+assert_contains "${CREDENTIAL_URL_OUTPUT}" "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials"
+[[ ! -s "${SSH_LOG}" ]] || fail "credential URL rejection should happen before ssh"
+
+log "checking remote clone failure handling"
+CLONE_FAIL_OUTPUT="${TMP_ROOT}/clone-fail.out"
+if DOLLHOUSE_TEST_GIT_REF=fail-clone DOLLHOUSE_FAKE_GIT_FAIL_REF=fail-clone run_remote --skip-backup update > "${CLONE_FAIL_OUTPUT}" 2>&1; then
+  fail "clone failure unexpectedly succeeded"
+fi
+assert_contains "${CLONE_FAIL_OUTPUT}" "failed to clone https://github.com/DollhouseMCP/mcp-server.git at fail-clone"
+
+log "checking public mcp verification failure"
+VERIFY_FAIL_OUTPUT="${TMP_ROOT}/verify-fail.out"
+if DOLLHOUSE_FAKE_CURL_MCP_STATUS=200 run_remote --skip-backup update > "${VERIFY_FAIL_OUTPUT}" 2>&1; then
+  fail "public verification failure unexpectedly succeeded"
+fi
+assert_contains "${VERIFY_FAIL_OUTPUT}" "expected /mcp to return 401 without a bearer token, got 200"
 
 log "remote wrapper behavior passed"
