@@ -12,9 +12,9 @@ import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage
 const DCR_RATE_LIMIT_SCOPE = 'open_dcr_registration';
 
 class FakeClient implements DcrClientInstance {
-  static clients = new Map<string, Record<string, unknown>>();
+  static readonly clients = new Map<string, Record<string, unknown>>();
 
-  static adapter = {
+  static readonly adapter = {
     async upsert(id: string, payload: Record<string, unknown>): Promise<void> {
       FakeClient.clients.set(id, payload);
     },

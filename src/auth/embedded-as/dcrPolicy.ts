@@ -140,23 +140,10 @@ export function validateRedirectUriShape(
   const host = normalizeUrlHostname(parsed.hostname);
   const loopback = isLoopbackHost(host);
 
-  if (!host) errors.push('must include a hostname');
-  if (host.includes('*')) errors.push('must not contain wildcards');
-  if (host.endsWith('.')) errors.push('must not use a trailing-dot hostname');
-  if (host.includes('%')) errors.push('must not include IPv6 zone identifiers');
-  if (parsed.username || parsed.password) errors.push('must not include username or password components');
-  if (parsed.hash) errors.push('must not include a URL fragment');
+  errors.push(...validateRedirectUriComponents(parsed, host));
+  errors.push(...validateRedirectUriProtocol(parsed.protocol, loopback, options.applicationType));
 
-  if (parsed.protocol === 'http:') {
-    if (!loopback) errors.push('http callbacks are allowed only for loopback clients');
-    if (loopback && options.applicationType !== 'native') {
-      errors.push('http loopback callbacks require application_type "native"');
-    }
-  } else if (parsed.protocol !== 'https:') {
-    errors.push('must use https, or http for loopback clients');
-  }
-
-  if (!loopback && isPrivateIpLiteral(host)) {
+  if (isDisallowedCallbackIp(host, loopback)) {
     errors.push('must not use a private, link-local, or unspecified IP literal');
   }
 
@@ -167,6 +154,40 @@ export function validateRedirectUriShape(
     isLoopback: loopback,
     errors,
   };
+}
+
+function validateRedirectUriComponents(parsed: URL, host: string): string[] {
+  const errors: string[] = [];
+  if (!host) errors.push('must include a hostname');
+  if (host.includes('*')) errors.push('must not contain wildcards');
+  if (host.endsWith('.')) errors.push('must not use a trailing-dot hostname');
+  if (host.includes('%')) errors.push('must not include IPv6 zone identifiers');
+  if (parsed.username || parsed.password) errors.push('must not include username or password components');
+  if (parsed.hash) errors.push('must not include a URL fragment');
+  return errors;
+}
+
+function validateRedirectUriProtocol(
+  protocol: string,
+  loopback: boolean,
+  applicationType: string | undefined,
+): string[] {
+  const errors: string[] = [];
+  if (protocol === 'http:') {
+    if (!loopback) errors.push('http callbacks are allowed only for loopback clients');
+    if (loopback && applicationType !== 'native') {
+      errors.push('http loopback callbacks require application_type "native"');
+    }
+    return errors;
+  }
+  if (protocol !== 'https:') {
+    errors.push('must use https, or http for loopback clients');
+  }
+  return errors;
+}
+
+function isDisallowedCallbackIp(host: string, loopback: boolean): boolean {
+  return !loopback && isPrivateIpLiteral(host);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -377,7 +398,7 @@ function isPrivateIpLiteral(host: string): boolean {
 function parseIpv4(host: string): [number, number, number, number] | null {
   const parts = host.split('.');
   if (parts.length !== 4) return null;
-  const octets = parts.map((part) => Number(part));
+  const octets = parts.map(Number);
   if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return null;
   return octets as [number, number, number, number];
 }

@@ -276,51 +276,81 @@ async function handlePost(
   }
 
   const action = bodyValue(req, 'action');
-  if (action === CLIENT_CONSENT_APPROVE_ACTION || action === CLIENT_CONSENT_DENY_ACTION) {
-    const csrfOk = await verifyAndConsumeCsrf(req, res, storage, details.uid);
-    if (!csrfOk) return;
+  if (isClientConsentAction(action)) {
+    await handleClientConsentPost(req, res, provider, storage, defaultResource, details, action);
+    return;
+  }
 
-    const pending = await storage.genericGet(PENDING_CLIENT_CONSENT_MODEL, details.uid) as
-      | PendingClientConsentIdentity
-      | null;
-    await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
+  await handleAuthMethodPost(req, res, provider, methods, storage, defaultResource, details);
+}
 
-    if (action === CLIENT_CONSENT_DENY_ACTION) {
-      await recordClientConsentAuditEvent(storage, 'auth.client_consent.denied', {
-        details,
-        pending,
-        defaultResource,
-      });
-      await provider.interactionFinished(req, res, {
-        error: 'access_denied',
-        error_description: 'End-User denied client authorization',
-      }, { mergeWithLastSubmission: false });
-      return;
-    }
+function isClientConsentAction(action: string | undefined): action is
+  | typeof CLIENT_CONSENT_APPROVE_ACTION
+  | typeof CLIENT_CONSENT_DENY_ACTION {
+  return action === CLIENT_CONSENT_APPROVE_ACTION || action === CLIENT_CONSENT_DENY_ACTION;
+}
 
-    if (!pending?.accountId) {
-      sendError(res, 400, 'invalid_interaction', 'no pending client consent found; restart sign-in');
-      return;
-    }
+async function handleClientConsentPost(
+  req: Request,
+  res: Response,
+  provider: OidcProviderForInteractions,
+  storage: IAuthStorageLayer,
+  defaultResource: string,
+  details: OidcInteractionDetails,
+  action: typeof CLIENT_CONSENT_APPROVE_ACTION | typeof CLIENT_CONSENT_DENY_ACTION,
+): Promise<void> {
+  const csrfOk = await verifyAndConsumeCsrf(req, res, storage, details.uid);
+  if (!csrfOk) return;
 
-    await markClientConsentSeen(storage, pending.accountId, paramString(details.params.client_id));
-    await recordClientConsentAuditEvent(storage, 'auth.client_consent.approved', {
+  const pending = await storage.genericGet(PENDING_CLIENT_CONSENT_MODEL, details.uid) as
+    | PendingClientConsentIdentity
+    | null;
+  await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
+
+  if (action === CLIENT_CONSENT_DENY_ACTION) {
+    await recordClientConsentAuditEvent(storage, 'auth.client_consent.denied', {
       details,
       pending,
       defaultResource,
     });
-    await finishInteractionWithIdentity(
-      req,
-      res,
-      provider,
-      details,
-      pending.accountId,
-      storage,
-      defaultResource,
-    );
+    await provider.interactionFinished(req, res, {
+      error: 'access_denied',
+      error_description: 'End-User denied client authorization',
+    }, { mergeWithLastSubmission: false });
     return;
   }
 
+  if (!pending?.accountId) {
+    sendError(res, 400, 'invalid_interaction', 'no pending client consent found; restart sign-in');
+    return;
+  }
+
+  await markClientConsentSeen(storage, pending.accountId, paramString(details.params.client_id));
+  await recordClientConsentAuditEvent(storage, 'auth.client_consent.approved', {
+    details,
+    pending,
+    defaultResource,
+  });
+  await finishInteractionWithIdentity(
+    req,
+    res,
+    provider,
+    details,
+    pending.accountId,
+    storage,
+    defaultResource,
+  );
+}
+
+async function handleAuthMethodPost(
+  req: Request,
+  res: Response,
+  provider: OidcProviderForInteractions,
+  methods: readonly IAuthMethod[],
+  storage: IAuthStorageLayer,
+  defaultResource: string,
+  details: OidcInteractionDetails,
+): Promise<void> {
   const resolution = await resolveMethodForRequest(req, details, methods, storage);
   if (resolution.kind === 'chooser') {
     // POST without a stored method choice — the user submitted the

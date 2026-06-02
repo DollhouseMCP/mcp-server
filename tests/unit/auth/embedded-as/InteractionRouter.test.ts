@@ -73,7 +73,7 @@ function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
     interactionFinished: opts.interactionFinished ?? (async (_req, res) => {
       if (!res.headersSent) res.redirect(303, '/finished');
     }),
-    Grant: FakeGrant as unknown as OidcProviderForInteractions['Grant'],
+    Grant: FakeGrant,
     Client: {
       async find() {
         return {

@@ -165,6 +165,12 @@ function servePackagedAuthFont(): RequestHandler {
   };
 }
 
+function dcrProviderFromOidcProvider(provider: InstanceType<typeof OidcProvider>): DcrProvider {
+  return {
+    Client: provider.Client as unknown as DcrProvider['Client'],
+  };
+}
+
 export interface EmbeddedAuthorizationServerOptions {
   publicBaseUrl?: string;
   mcpPath?: string;
@@ -479,7 +485,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       router.post('/reg', ...createOpenDcrRegistrationHandlers({
         ensureProvider: async () => {
           const state = await this.ensureInitialized();
-          return state.provider as unknown as DcrProvider;
+          return dcrProviderFromOidcProvider(state.provider);
         },
         rateLimitStore: this.rateLimitStore,
         storage: this.storage,
