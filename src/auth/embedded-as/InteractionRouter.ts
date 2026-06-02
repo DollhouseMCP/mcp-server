@@ -36,6 +36,7 @@ import type {
   InteractionStep,
 } from './IAuthMethod.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import { allowCspFormActionOrigin } from './securityHeaders.js';
 
 const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
@@ -536,6 +537,7 @@ export async function renderClientConsentForIdentity(
   );
   const csrfToken = randomBytes(32).toString('base64url');
   await storage.genericSet(CSRF_MODEL, details.uid, { token: csrfToken }, CSRF_TTL_SECONDS);
+  allowOAuthRedirectFormAction(res, details);
   const html = await renderOAuthClientConsentPage(provider, details, csrfToken, defaultResource, {
     identity,
     firstSeen,
@@ -1413,6 +1415,18 @@ async function findClientForConsent(
 
 function paramString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function allowOAuthRedirectFormAction(res: Response, details: OidcInteractionDetails): void {
+  const redirectUri = paramString(details.params.redirect_uri);
+  if (!redirectUri) return;
+
+  try {
+    allowCspFormActionOrigin(res, new URL(redirectUri).origin);
+  } catch {
+    // oidc-provider validates redirect_uri before creating the interaction.
+    // Keep the CSP opt-in fail-closed if provider details are unexpected.
+  }
 }
 
 function firstString(value: unknown): string | undefined {

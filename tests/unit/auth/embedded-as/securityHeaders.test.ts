@@ -16,7 +16,10 @@
 import { describe, it, expect } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
-import { securityHeaders } from '../../../../src/auth/embedded-as/securityHeaders.js';
+import {
+  allowCspFormActionOrigin,
+  securityHeaders,
+} from '../../../../src/auth/embedded-as/securityHeaders.js';
 
 const STYLE_SRC_NONCE_PATTERN = /style-src 'self' 'nonce-([^']+)'/;
 
@@ -32,6 +35,14 @@ async function bootApp(): Promise<{ url: string; close: () => Promise<void> }> {
   app.use(securityHeaders());
   app.get('/x', (_req, res) => {
     res.type('html').send('<!doctype html><html><head><style>body{color:#181816}</style></head><body>ok</body></html>');
+  });
+  app.get('/oauth-consent', (_req, res) => {
+    allowCspFormActionOrigin(res, 'https://claude.ai');
+    res.type('html').send('<!doctype html><html><head><style>body{color:#181816}</style></head><body>ok</body></html>');
+  });
+  app.get('/invalid-form-action', (_req, res) => {
+    allowCspFormActionOrigin(res, 'javascript:alert(1)');
+    res.type('html').send('<!doctype html><html><body>ok</body></html>');
   });
   return new Promise((resolve, reject) => {
     const server = app.listen(0, '127.0.0.1', () => {
@@ -89,6 +100,29 @@ describe('securityHeaders middleware', () => {
     try {
       const resp = await fetch(`${url}/x`);
       expect(resp.headers.get('pragma')).toBe('no-cache');
+    } finally {
+      await close();
+    }
+  });
+
+  it('can allow the active OAuth callback origin for consent form redirects', async () => {
+    const { url, close } = await bootApp();
+    try {
+      const resp = await fetch(`${url}/oauth-consent`);
+      const csp = resp.headers.get('content-security-policy') ?? '';
+      expect(csp).toContain("form-action 'self' https://claude.ai");
+    } finally {
+      await close();
+    }
+  });
+
+  it('ignores non-HTTP form-action origins', async () => {
+    const { url, close } = await bootApp();
+    try {
+      const resp = await fetch(`${url}/invalid-form-action`);
+      const csp = resp.headers.get('content-security-policy') ?? '';
+      expect(csp).toContain("form-action 'self'");
+      expect(csp).not.toContain('javascript:');
     } finally {
       await close();
     }

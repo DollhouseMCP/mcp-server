@@ -39,13 +39,22 @@ import { randomBytes } from 'node:crypto';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 const STYLE_TAG_WITHOUT_NONCE = /<style\b(?![^>]*\bnonce=)([^>]*)>/gi;
+const FORM_ACTION_EXTRA_ORIGINS_LOCAL = 'dollhouseCspFormActionExtraOrigins';
 
-export function buildContentSecurityPolicy(styleNonce: string): string {
+interface SecurityHeaderLocals {
+  [FORM_ACTION_EXTRA_ORIGINS_LOCAL]?: string[];
+}
+
+export function buildContentSecurityPolicy(
+  styleNonce: string,
+  extraFormActionOrigins: readonly string[] = [],
+): string {
+  const formActionSources = buildFormActionSources(extraFormActionOrigins);
   return [
     "default-src 'none'",
     "base-uri 'none'",
     "frame-ancestors 'none'",
-    "form-action 'self'",
+    `form-action ${formActionSources.join(' ')}`,
     "img-src 'self' data:",
     "font-src 'self'",
     "connect-src 'self'",
@@ -55,8 +64,47 @@ export function buildContentSecurityPolicy(styleNonce: string): string {
   ].join('; ');
 }
 
+export function allowCspFormActionOrigin(res: Response, origin: string): void {
+  const normalized = normalizeHttpOrigin(origin);
+  if (!normalized) return;
+
+  const locals = res.locals as SecurityHeaderLocals;
+  const existing = locals[FORM_ACTION_EXTRA_ORIGINS_LOCAL] ?? [];
+  if (existing.includes(normalized)) return;
+  locals[FORM_ACTION_EXTRA_ORIGINS_LOCAL] = [...existing, normalized];
+}
+
 function createCspNonce(): string {
   return randomBytes(16).toString('base64url');
+}
+
+function buildFormActionSources(extraFormActionOrigins: readonly string[]): string[] {
+  const sources = ["'self'"];
+  const seen = new Set(sources);
+  for (const origin of extraFormActionOrigins) {
+    const normalized = normalizeHttpOrigin(origin);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    sources.push(normalized);
+  }
+  return sources;
+}
+
+function normalizeHttpOrigin(origin: string): string | null {
+  try {
+    const parsed = new URL(origin);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+    return parsed.origin;
+  } catch {
+    return null;
+  }
+}
+
+function getExtraFormActionOrigins(res: Response): readonly string[] {
+  const locals = res.locals as SecurityHeaderLocals;
+  return locals[FORM_ACTION_EXTRA_ORIGINS_LOCAL] ?? [];
 }
 
 function addStyleNonce(body: unknown, styleNonce: string): unknown {
@@ -71,10 +119,19 @@ export function securityHeaders(): RequestHandler {
   return (_req: Request, res: Response, next: NextFunction): void => {
     const styleNonce = createCspNonce();
     const send = res.send.bind(res);
+    const setContentSecurityPolicy = (): void => {
+      res.setHeader(
+        'Content-Security-Policy',
+        buildContentSecurityPolicy(styleNonce, getExtraFormActionOrigins(res)),
+      );
+    };
 
-    res.send = ((body?: unknown): Response => send(addStyleNonce(body, styleNonce))) as Response['send'];
+    res.send = ((body?: unknown): Response => {
+      setContentSecurityPolicy();
+      return send(addStyleNonce(body, styleNonce));
+    }) as Response['send'];
 
-    res.setHeader('Content-Security-Policy', buildContentSecurityPolicy(styleNonce));
+    setContentSecurityPolicy();
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');

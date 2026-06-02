@@ -23,6 +23,7 @@ import type {
   InteractionStep,
 } from '../../../../src/auth/embedded-as/IAuthMethod.js';
 import type { AuthMethodId } from '../../../../src/auth/embedded-as/AuthMethodFactory.js';
+import { securityHeaders } from '../../../../src/auth/embedded-as/securityHeaders.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
 const MAGIC_LINK_ID = 'magic-link';
@@ -343,6 +344,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
 
     const app = express();
     app.disable('x-powered-by');
+    app.use(securityHeaders());
     app.get('/seed-consent', (_req, res, next) => {
       renderClientConsentForIdentity(
         res,
@@ -374,6 +376,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
     try {
       const consent = await fetch(`${baseUrl}/seed-consent`);
       expect(consent.status).toBe(200);
+      expect(consent.headers.get('content-security-policy')).toContain("form-action 'self' https://client.example.com");
       const html = await consent.text();
       expect(html).toContain('Authorize Test Client');
       expect(html).toContain('DollhouseMCP Authorization');
