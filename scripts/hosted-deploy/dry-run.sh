@@ -61,7 +61,8 @@ dry_run_start_or_update() {
   else
     log "dry-run: would start or update the full compose stack"
   fi
-  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
+  log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
   return 0
 }
@@ -103,7 +104,8 @@ dry_run_rollback() {
     log "dry-run: no server.prev-* rollback candidate found yet"
   fi
   log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
-  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp for up to ${VERIFY_READY_TIMEOUT}s"
+  log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
   return 0
 }
@@ -112,9 +114,9 @@ dry_run_verify() {
   resolve_public_base_url
   resolve_hostname
   validate_render_inputs
-  log "dry-run: would check ${PUBLIC_BASE_URL}/healthz"
-  log "dry-run: would check ${PUBLIC_BASE_URL}/readyz"
-  log "dry-run: would check ${PUBLIC_BASE_URL}/mcp returns 401 without a bearer token"
+  log "dry-run: would check ${PUBLIC_BASE_URL}/healthz for up to ${VERIFY_READY_TIMEOUT}s"
+  log "dry-run: would check ${PUBLIC_BASE_URL}/readyz for up to ${VERIFY_READY_TIMEOUT}s"
+  log "dry-run: would check ${PUBLIC_BASE_URL}/mcp returns 401 without a bearer token for up to ${VERIFY_READY_TIMEOUT}s"
 
   return 0
 }

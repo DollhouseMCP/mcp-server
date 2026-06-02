@@ -35,6 +35,22 @@ env_value() {
   awk -F= -v key="${key}" '$1 == key { value = substr($0, length(key) + 2) } END { print value }' "${file}"
 }
 
+set_env_value() {
+  local key="$1"
+  local value="$2"
+  local file="$3"
+  local tmp
+  tmp="$(mktemp)"
+  awk -v key="${key}" -v value="${value}" '
+    $0 ~ "^" key "=" {
+      print key "=" value
+      next
+    }
+    { print }
+  ' "${file}" > "${tmp}"
+  mv "${tmp}" "${file}"
+}
+
 render_with_dcr() {
   local deploy_dir="$1"
   local dcr_value="$2"
@@ -72,7 +88,10 @@ render_with_dcr "${DEPLOY_DIR}" ""
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
+assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.com"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: \${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-true}"
+assert_contains "${COMPOSE_FILE}" "dollhousemcp-migrate:"
+assert_contains "${COMPOSE_FILE}" "target: builder"
 assert_contains "${CADDY_FILE}" 'mcp.example.com {'
 assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
@@ -95,6 +114,74 @@ second_postgres_password="$(env_value POSTGRES_PASSWORD "${ENV_FILE}")"
 second_cookie_secret="$(env_value DOLLHOUSE_COOKIE_SIGNING_SECRET "${ENV_FILE}")"
 [[ "${first_postgres_password}" == "${second_postgres_password}" ]] || fail "POSTGRES_PASSWORD changed on re-render"
 [[ "${first_cookie_secret}" == "${second_cookie_secret}" ]] || fail "DOLLHOUSE_COOKIE_SIGNING_SECRET changed on re-render"
+
+log "checking legacy .env import for existing deployments"
+LEGACY_DEPLOY_DIR="${TMP_ROOT}/legacy-deploy"
+mkdir -p "${LEGACY_DEPLOY_DIR}"
+cat > "${LEGACY_DEPLOY_DIR}/.env" <<'EOF'
+POSTGRES_ADMIN_PASSWORD=legacy-admin-password
+POSTGRES_PASSWORD=legacy-app-password
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=legacy-client
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=legacy-secret
+EOF
+cat > "${LEGACY_DEPLOY_DIR}/.env.production" <<'EOF'
+POSTGRES_ADMIN_PASSWORD=generated-admin-password
+POSTGRES_PASSWORD=generated-app-password
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=generated-client
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=generated-secret
+EOF
+LEGACY_IMPORT_OUTPUT="${TMP_ROOT}/legacy-import.out"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LEGACY_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render > "${LEGACY_IMPORT_OUTPUT}"
+assert_contains "${LEGACY_IMPORT_OUTPUT}" "POSTGRES_ADMIN_PASSWORD"
+if grep -Fq "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET" "${LEGACY_IMPORT_OUTPUT}"; then
+  fail "existing .env.production should not import GitHub secret from legacy .env"
+fi
+if grep -Fq "legacy-secret" "${LEGACY_IMPORT_OUTPUT}"; then
+  fail "legacy import log should not expose imported secret values"
+fi
+[[ "$(env_value POSTGRES_ADMIN_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-admin-password" ]] || \
+  fail "legacy POSTGRES_ADMIN_PASSWORD was not imported"
+[[ "$(env_value POSTGRES_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-app-password" ]] || \
+  fail "legacy POSTGRES_PASSWORD was not imported"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "${LEGACY_DEPLOY_DIR}/.env.production")" == "generated-client" ]] || \
+  fail "legacy GitHub client ID should not replace existing .env.production"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "${LEGACY_DEPLOY_DIR}/.env.production")" == "generated-secret" ]] || \
+  fail "legacy GitHub client secret should not replace existing .env.production"
+cat > "${LEGACY_DEPLOY_DIR}/.env" <<'EOF'
+POSTGRES_ADMIN_PASSWORD=stale-admin-password
+POSTGRES_PASSWORD=stale-app-password
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=stale-client
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=stale-secret
+EOF
+set_env_value POSTGRES_PASSWORD "rotated-app-password" "${LEGACY_DEPLOY_DIR}/.env.production"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LEGACY_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render
+[[ "$(env_value POSTGRES_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "rotated-app-password" ]] || \
+  fail "legacy import should run only once"
+
+log "checking legacy import only copies allowlisted keys"
+ALLOWLIST_DEPLOY_DIR="${TMP_ROOT}/legacy-allowlist-deploy"
+mkdir -p "${ALLOWLIST_DEPLOY_DIR}"
+cat > "${ALLOWLIST_DEPLOY_DIR}/.env" <<'EOF'
+POSTGRES_PASSWORD=allowlisted-app-password
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=allowlisted-github-secret
+UNRELATED_LEGACY_SETTING=should-not-copy
+EOF
+ALLOWLIST_IMPORT_OUTPUT="${TMP_ROOT}/legacy-allowlist-import.out"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${ALLOWLIST_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render > "${ALLOWLIST_IMPORT_OUTPUT}"
+[[ "$(env_value POSTGRES_PASSWORD "${ALLOWLIST_DEPLOY_DIR}/.env.production")" == "allowlisted-app-password" ]] || \
+  fail "allowlisted legacy key was not imported"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "${ALLOWLIST_DEPLOY_DIR}/.env.production")" == "allowlisted-github-secret" ]] || \
+  fail "allowlisted GitHub secret should be imported when .env.production is created"
+[[ -z "$(env_value UNRELATED_LEGACY_SETTING "${ALLOWLIST_DEPLOY_DIR}/.env.production")" ]] || \
+  fail "unrelated legacy key should not be imported"
+assert_contains "${ALLOWLIST_IMPORT_OUTPUT}" "POSTGRES_PASSWORD"
+assert_contains "${ALLOWLIST_IMPORT_OUTPUT}" "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET"
 
 log "checking dry-run render does not write files"
 DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"

@@ -118,6 +118,7 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_DEPLOY_DIR` | Deployment root | `/opt/dollhousemcp` |
 | `DOLLHOUSE_HOSTED_DRY_RUN` | Preview operations without writes, Docker, git clone, or HTTP checks | `false` |
 | `DOLLHOUSE_HOSTED_LOG_LEVEL` | Logging mode: `quiet`, `info`, or `debug` | `info` |
+| `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV` | Import selected secrets/config from an existing `.env` into `.env.production` during upgrade | `true` |
 | `DOLLHOUSE_HOSTED_HOSTNAME` | Public hostname, for example `mcp.example.com` | none |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | Public URL, for example `https://mcp.example.com` | derived from hostname |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
@@ -130,8 +131,11 @@ Common environment variables:
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` | Optional GitHub username to pre-claim as the first admin | none |
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` | Optional numeric GitHub ID to pre-claim as the first admin and skip API lookup | none |
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
+| `DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT` | Seconds to wait for public `/healthz`, `/readyz`, and `/mcp` checks after app restart | `60` |
 
-Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs.
+Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected values are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. When `.env.production` already exists, only database/connection keys are reconciled from `.env`; auth and runtime secrets already present in `.env.production` are preserved. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
+
+All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
@@ -167,6 +171,8 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
   npm run hosted:deploy -- install
 ```
 
+If no bootstrap identity is supplied and no admin has been claimed yet, `/readyz` can report `bootstrap_required` after the stack starts. `install`, `update`, and `rollback` treat that as an expected pre-bootstrap state and print a warning instead of failing the deployment. Run `bootstrap-admin` once the intended admin identity is available. The standalone `verify` action remains strict and expects `/readyz` to return 200.
+
 ### `update`
 
 Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, and verifies:
@@ -180,8 +186,10 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
 Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Postgres, and runs:
 
 ```bash
-docker compose run --rm dollhousemcp npm run db:migrate
+docker compose --env-file .env.production run --rm dollhousemcp-migrate
 ```
+
+The `dollhousemcp-migrate` service is built from the Dockerfile `builder` target so `drizzle-kit` and the Drizzle config are available without adding migration tooling to the runtime production image.
 
 Use this when the database needs to be brought current without staging new source:
 
@@ -219,6 +227,8 @@ Checks:
 - `/readyz`
 - `/mcp` returns `401` without a bearer token
 
+Each public HTTP check retries for up to `DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT` seconds. This absorbs the brief 502 window that can occur while Caddy reconnects to a just-restarted app container.
+
 ```bash
 DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com npm run hosted:deploy -- verify
 ```
@@ -239,6 +249,24 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- install
 ```
 
 Or enter them at the prompt during an interactive install. In noninteractive mode, add them manually to `.env.production`.
+
+## Troubleshooting
+
+### Legacy `.env` Import
+
+On upgrade from an earlier helper-generated deployment, the helper imports selected keys from `/opt/dollhousemcp/.env` into `.env.production` once, then writes `.legacy-env-imported`. If `.env.production` already exists, the import is limited to database/connection keys so existing GitHub OAuth, cookie, audit, and encryption secrets are not overwritten by stale legacy values. The import log lists key names for auditability, but never prints values.
+
+If the import is not desired, set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` before running the helper. If `.env` exists but cannot be read, fix its permissions or disable the import. To intentionally repeat the import, remove `.legacy-env-imported` after confirming `.env` contains the values you want to preserve.
+
+### Bootstrap Required
+
+`bootstrap_required` means the server is running but no first admin has been claimed. Set `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` or `DOLLHOUSE_BOOTSTRAP_GITHUB_ID`, then run:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
+  npm run hosted:deploy -- bootstrap-admin
+```
 
 ## Dynamic Client Registration
 

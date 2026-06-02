@@ -12,11 +12,11 @@ run_action() {
       ;;
     install)
       start_or_update all
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     update)
       start_or_update app
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     migrate)
       run_migrations
@@ -26,7 +26,7 @@ run_action() {
       ;;
     rollback)
       rollback_server
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     verify)
       verify_deploy
@@ -45,6 +45,7 @@ hosted_deploy_main() {
   parse_args "$@"
   validate_log_level
   validate_bool DOLLHOUSE_HOSTED_DRY_RUN "${DRY_RUN}"
+  validate_bool DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV "${IMPORT_LEGACY_ENV}"
   debug "action=${ACTION} dry_run=${DRY_RUN} deploy_dir=${DEPLOY_DIR}"
 
   if is_dry_run && [[ "${ACTION}" != "help" ]]; then
