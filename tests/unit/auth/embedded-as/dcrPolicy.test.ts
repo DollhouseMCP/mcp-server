@@ -53,6 +53,32 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     expect(decision.errors.join('\n')).toContain('must not include a URL fragment');
   });
 
+  it('rejects private IPv4-mapped IPv6 callback and metadata URLs', () => {
+    const decision = validateDcrClientMetadata({
+      redirect_uris: [`https://${ipv6Literal(ipv4Mapped([192, 168, 1, 1]))}/callback`],
+      client_uri: `https://${ipv6Literal(ipv4Mapped([10, 0, 0, 1]))}/app`,
+      scope: 'mcp',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.errors.join('\n')).toContain(
+      'redirect_uris entry https://[::ffff:192.168.1.1]/callback: must not use a private, link-local, or unspecified IP literal',
+    );
+    expect(decision.errors.join('\n')).toContain(
+      'client_uri must not use a private, link-local, or unspecified IP literal',
+    );
+  });
+
+  it('allows public IPv4-mapped IPv6 callback URLs', () => {
+    const decision = validateDcrClientMetadata({
+      redirect_uris: [`https://${ipv6Literal(ipv4Mapped([8, 8, 8, 8]))}/callback`],
+      scope: 'mcp',
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.redirectHosts).toEqual(['::ffff:808:808']);
+  });
+
   it('rejects wildcard hosts and unsupported OAuth grant shapes', () => {
     const decision = validateDcrClientMetadata({
       redirect_uris: ['https://*.example.com/callback'],
@@ -116,4 +142,12 @@ function loopbackHttpBase(host: string, port: number): string {
   // Test-only helper: loopback HTTP is intentionally allowed for native OAuth
   // redirects, but static analysis flags literal IPv6 http:// fixtures.
   return `${['h', 't', 't', 'p'].join('')}://${host}:${port}`;
+}
+
+function ipv6Literal(host: string): string {
+  return `[${host}]`;
+}
+
+function ipv4Mapped(octets: [number, number, number, number]): string {
+  return `::ffff:${octets.join('.')}`;
 }

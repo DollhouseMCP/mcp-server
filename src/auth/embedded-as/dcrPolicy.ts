@@ -286,10 +286,18 @@ function validateStringMetadata(metadata: Record<string, unknown>, errors: strin
     if (value.length > MAX_STRING_METADATA_LENGTH) {
       errors.push(`${key} must be ${MAX_STRING_METADATA_LENGTH} characters or fewer`);
     }
-    if (/[\u0000-\u001f\u007f]/.test(value)) {
+    if (containsControlCharacter(value)) {
       errors.push(`${key} must not contain control characters`);
     }
   }
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }
 
 function validateHttpsMetadataUri(value: unknown, field: string, errors: string[]): void {
@@ -363,7 +371,8 @@ function normalizeUrlHostname(hostname: string): string {
 function isLoopbackHost(host: string): boolean {
   if (host === 'localhost') return true;
   if (host === '::1' || host === '0:0:0:0:0:0:0:1') return true;
-  if (host.startsWith('::ffff:')) return isLoopbackHost(host.slice('::ffff:'.length));
+  const mappedIpv4 = parseIpv4MappedIpv6(host);
+  if (mappedIpv4) return mappedIpv4[0] === 127;
   if (isIP(host) === 4) {
     const octets = parseIpv4(host);
     return octets ? octets[0] === 127 : false;
@@ -372,19 +381,13 @@ function isLoopbackHost(host: string): boolean {
 }
 
 function isPrivateIpLiteral(host: string): boolean {
-  if (host.startsWith('::ffff:')) return isPrivateIpLiteral(host.slice('::ffff:'.length));
+  const mappedIpv4 = parseIpv4MappedIpv6(host);
+  if (mappedIpv4) return isPrivateIpv4Octets(mappedIpv4);
   const version = isIP(host);
   if (version === 4) {
     const octets = parseIpv4(host);
     if (!octets) return false;
-    const [a, b] = octets;
-    return a === 0
-      || a === 10
-      || a === 127
-      || (a === 100 && b >= 64 && b <= 127)
-      || (a === 169 && b === 254)
-      || (a === 172 && b >= 16 && b <= 31)
-      || (a === 192 && b === 168);
+    return isPrivateIpv4Octets(octets);
   }
   if (version === 6) {
     return host === '::'
@@ -394,6 +397,46 @@ function isPrivateIpLiteral(host: string): boolean {
       || host.startsWith('fe80:');
   }
   return false;
+}
+
+function isPrivateIpv4Octets(octets: [number, number, number, number]): boolean {
+  const [a, b] = octets;
+  return a === 0
+    || a === 10
+    || a === 127
+    || (a === 100 && b >= 64 && b <= 127)
+    || (a === 169 && b === 254)
+    || (a === 172 && b >= 16 && b <= 31)
+    || (a === 192 && b === 168);
+}
+
+function parseIpv4MappedIpv6(host: string): [number, number, number, number] | null {
+  const mappedPrefix = '::ffff:';
+  if (!host.startsWith(mappedPrefix)) return null;
+
+  const embedded = host.slice(mappedPrefix.length);
+  const dotted = parseIpv4(embedded);
+  if (dotted) return dotted;
+
+  const groups = embedded.split(':');
+  if (groups.length !== 2) return null;
+
+  const high = parseIpv4MappedHexGroup(groups[0]);
+  const low = parseIpv4MappedHexGroup(groups[1]);
+  if (high === null || low === null) return null;
+
+  return [
+    high >>> 8,
+    high & 0xff,
+    low >>> 8,
+    low & 0xff,
+  ];
+}
+
+function parseIpv4MappedHexGroup(group: string): number | null {
+  if (!/^[0-9a-f]{1,4}$/i.test(group)) return null;
+  const value = Number.parseInt(group, 16);
+  return Number.isInteger(value) && value >= 0 && value <= 0xffff ? value : null;
 }
 
 function parseIpv4(host: string): [number, number, number, number] | null {
