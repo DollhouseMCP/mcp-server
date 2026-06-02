@@ -82,12 +82,48 @@ set -euo pipefail
 
 printf 'curl %s\n' "$*" >> "${DOLLHOUSE_FAKE_CURL_LOG:?}"
 
-for arg in "$@"; do
-  if [[ "${arg}" == "-w" ]]; then
-    printf '401'
-    exit 0
-  fi
+output_file=""
+write_format=""
+url=""
+
+while (( $# > 0 )); do
+  case "${1}" in
+    -o)
+      output_file="${2:?}"
+      shift 2
+      ;;
+    -w)
+      write_format="${2:?}"
+      shift 2
+      ;;
+    -*)
+      shift
+      ;;
+    *)
+      url="${1}"
+      shift
+      ;;
+  esac
 done
+
+status="200"
+body=""
+case "${url}" in
+  */readyz)
+    status="${DOLLHOUSE_FAKE_READYZ_STATUS:-200}"
+    body="${DOLLHOUSE_FAKE_READYZ_BODY:-}"
+    ;;
+  */mcp)
+    status="401"
+    ;;
+esac
+
+if [[ -n "${output_file}" ]]; then
+  printf '%s' "${body}" > "${output_file}"
+fi
+if [[ -n "${write_format}" ]]; then
+  printf '%s' "${status}"
+fi
 
 exit 0
 EOF
@@ -150,6 +186,7 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 [[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 
 log "checking credential-bearing git URL rejection"
 CREDENTIAL_URL_OUTPUT="${TMP_ROOT}/credential-url.out"
@@ -164,6 +201,21 @@ if PATH="${FAKE_BIN}:${PATH}" \
   fail "credential-bearing git URL unexpectedly succeeded"
 fi
 assert_contains "${CREDENTIAL_URL_OUTPUT}" "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials"
+
+log "checking bootstrap_required readiness warning"
+BOOTSTRAP_OUTPUT="${TMP_ROOT}/bootstrap-required.out"
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_FAKE_READYZ_STATUS=503 \
+DOLLHOUSE_FAKE_READYZ_BODY='{"reason":"bootstrap_required"}' \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/bootstrap-required-deploy" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  bash "${HOSTED_DEPLOY}" install > "${BOOTSTRAP_OUTPUT}" 2>&1
+assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 
 log "running install workflow"
 run_hosted install

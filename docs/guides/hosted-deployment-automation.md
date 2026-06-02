@@ -170,6 +170,8 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
   npm run hosted:deploy -- install
 ```
 
+If no bootstrap identity is supplied and no admin has been claimed yet, `/readyz` can report `bootstrap_required` after the stack starts. `install`, `update`, and `rollback` treat that as an expected pre-bootstrap state and print a warning instead of failing the deployment. Run `bootstrap-admin` once the intended admin identity is available. The standalone `verify` action remains strict and expects `/readyz` to return 200.
+
 ### `update`
 
 Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, and verifies:
@@ -244,6 +246,24 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- install
 ```
 
 Or enter them at the prompt during an interactive install. In noninteractive mode, add them manually to `.env.production`.
+
+## Troubleshooting
+
+### Legacy `.env` Import
+
+On upgrade from an earlier helper-generated deployment, the helper imports selected keys from `/opt/dollhousemcp/.env` into `.env.production` once, then writes `.legacy-env-imported`. The import log lists key names for auditability, but never prints values.
+
+If the import is not desired, set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` before running the helper. If `.env` exists but cannot be read, fix its permissions or disable the import. To intentionally repeat the import, remove `.legacy-env-imported` after confirming `.env` contains the values you want to preserve.
+
+### Bootstrap Required
+
+`bootstrap_required` means the server is running but no first admin has been claimed. Set `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` or `DOLLHOUSE_BOOTSTRAP_GITHUB_ID`, then run:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
+  npm run hosted:deploy -- bootstrap-admin
+```
 
 ## Dynamic Client Registration
 

@@ -12,11 +12,11 @@ run_action() {
       ;;
     install)
       start_or_update all
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     update)
       start_or_update app
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     migrate)
       run_migrations
@@ -26,7 +26,7 @@ run_action() {
       ;;
     rollback)
       rollback_server
-      verify_deploy
+      verify_deploy allow-bootstrap-required
       ;;
     verify)
       verify_deploy

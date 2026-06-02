@@ -37,6 +37,14 @@ env_value() {
   return 0
 }
 
+ensure_legacy_env_readable() {
+  [[ -f "${LEGACY_ENV_FILE}" ]] || return 0
+  [[ -r "${LEGACY_ENV_FILE}" ]] || \
+    die "${LEGACY_ENV_FILE} exists but is not readable; fix permissions or set DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false"
+
+  return 0
+}
+
 upsert_env_value() {
   local key="$1"
   local value="$2"
@@ -65,8 +73,9 @@ upsert_env_value() {
 ensure_env_file() {
   if [[ ! -f "${ENV_FILE}" ]]; then
     if [[ "${IMPORT_LEGACY_ENV}" == "true" && -f "${LEGACY_ENV_FILE}" ]]; then
-      log "creating ${ENV_FILE} from existing ${LEGACY_ENV_FILE}"
-      install -m 0600 "${LEGACY_ENV_FILE}" "${ENV_FILE}"
+      ensure_legacy_env_readable
+      log "creating ${ENV_FILE}; selected values will be imported from ${LEGACY_ENV_FILE}"
+      install -m 0600 /dev/null "${ENV_FILE}"
     else
       log "creating ${ENV_FILE}"
       install -m 0600 /dev/null "${ENV_FILE}"
@@ -82,9 +91,11 @@ sync_legacy_env_values() {
   [[ "${IMPORT_LEGACY_ENV}" == "true" ]] || return 0
   [[ -f "${LEGACY_ENV_FILE}" ]] || return 0
   [[ ! -f "${LEGACY_IMPORT_MARKER}" ]] || return 0
+  ensure_legacy_env_readable
 
-  local key legacy_value current_value imported_count
+  local key legacy_value current_value imported_count imported_keys
   imported_count=0
+  imported_keys=""
 
   while IFS= read -r key; do
     legacy_value="$(env_file_value "${LEGACY_ENV_FILE}" "${key}")"
@@ -94,6 +105,7 @@ sync_legacy_env_values() {
     if [[ "${current_value}" != "${legacy_value}" ]]; then
       upsert_env_value "${key}" "${legacy_value}"
       imported_count=$((imported_count + 1))
+      imported_keys="${imported_keys:+${imported_keys}, }${key}"
     fi
   done <<'EOF'
 POSTGRES_ADMIN_PASSWORD
@@ -112,7 +124,7 @@ DOLLHOUSE_MASTER_ENCRYPTION_KEY
 EOF
 
   if (( imported_count > 0 )); then
-    log "imported ${imported_count} existing secret/config value(s) from ${LEGACY_ENV_FILE}"
+    log "imported ${imported_count} existing secret/config key(s) from ${LEGACY_ENV_FILE}: ${imported_keys}"
   fi
   date -u +%Y-%m-%dT%H:%M:%SZ > "${LEGACY_IMPORT_MARKER}"
   chmod 0600 "${LEGACY_IMPORT_MARKER}"

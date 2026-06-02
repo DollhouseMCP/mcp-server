@@ -130,9 +130,15 @@ POSTGRES_PASSWORD=generated-app-password
 DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=generated-client
 DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=generated-secret
 EOF
+LEGACY_IMPORT_OUTPUT="${TMP_ROOT}/legacy-import.out"
 DOLLHOUSE_HOSTED_DEPLOY_DIR="${LEGACY_DEPLOY_DIR}" \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
-  bash "${HOSTED_DEPLOY}" render
+  bash "${HOSTED_DEPLOY}" render > "${LEGACY_IMPORT_OUTPUT}"
+assert_contains "${LEGACY_IMPORT_OUTPUT}" "POSTGRES_ADMIN_PASSWORD"
+assert_contains "${LEGACY_IMPORT_OUTPUT}" "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET"
+if grep -Fq "legacy-secret" "${LEGACY_IMPORT_OUTPUT}"; then
+  fail "legacy import log should not expose imported secret values"
+fi
 [[ "$(env_value POSTGRES_ADMIN_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-admin-password" ]] || \
   fail "legacy POSTGRES_ADMIN_PASSWORD was not imported"
 [[ "$(env_value POSTGRES_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-app-password" ]] || \
@@ -153,6 +159,23 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   bash "${HOSTED_DEPLOY}" render
 [[ "$(env_value POSTGRES_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "rotated-app-password" ]] || \
   fail "legacy import should run only once"
+
+log "checking legacy import only copies allowlisted keys"
+ALLOWLIST_DEPLOY_DIR="${TMP_ROOT}/legacy-allowlist-deploy"
+mkdir -p "${ALLOWLIST_DEPLOY_DIR}"
+cat > "${ALLOWLIST_DEPLOY_DIR}/.env" <<'EOF'
+POSTGRES_PASSWORD=allowlisted-app-password
+UNRELATED_LEGACY_SETTING=should-not-copy
+EOF
+ALLOWLIST_IMPORT_OUTPUT="${TMP_ROOT}/legacy-allowlist-import.out"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${ALLOWLIST_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render > "${ALLOWLIST_IMPORT_OUTPUT}"
+[[ "$(env_value POSTGRES_PASSWORD "${ALLOWLIST_DEPLOY_DIR}/.env.production")" == "allowlisted-app-password" ]] || \
+  fail "allowlisted legacy key was not imported"
+[[ -z "$(env_value UNRELATED_LEGACY_SETTING "${ALLOWLIST_DEPLOY_DIR}/.env.production")" ]] || \
+  fail "unrelated legacy key should not be imported"
+assert_contains "${ALLOWLIST_IMPORT_OUTPUT}" "POSTGRES_PASSWORD"
 
 log "checking dry-run render does not write files"
 DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"

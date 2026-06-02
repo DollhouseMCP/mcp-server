@@ -147,6 +147,44 @@ run_migrations() {
   return 0
 }
 
+response_excerpt() {
+  local file="$1"
+
+  tr '\n' ' ' < "${file}" | cut -c 1-240
+
+  return 0
+}
+
+check_readyz() {
+  local mode="$1"
+  local body_file status excerpt
+
+  body_file="$(mktemp)"
+  if ! status="$(curl -sS -o "${body_file}" -w '%{http_code}' "${PUBLIC_BASE_URL}/readyz")"; then
+    rm -f "${body_file}"
+    die "failed to request ${PUBLIC_BASE_URL}/readyz"
+  fi
+
+  if [[ "${status}" == "200" ]]; then
+    rm -f "${body_file}"
+    return 0
+  fi
+
+  if [[ "${mode}" == "allow-bootstrap-required" && "${status}" == "503" ]] && \
+    grep -Fq 'bootstrap_required' "${body_file}"; then
+    rm -f "${body_file}"
+    warn "/readyz reports bootstrap_required; run bootstrap-admin after setting DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID"
+    return 0
+  fi
+
+  excerpt="$(response_excerpt "${body_file}")"
+  rm -f "${body_file}"
+  if [[ -n "${excerpt}" ]]; then
+    die "expected /readyz to return 200, got ${status}: ${excerpt}"
+  fi
+  die "expected /readyz to return 200, got ${status}"
+}
+
 rollback_server() {
   local previous timestamp current_backup previous_name
 
@@ -178,6 +216,9 @@ rollback_server() {
 }
 
 verify_deploy() {
+  local readyz_mode="${1:-strict}"
+  local status
+
   need_command curl
   resolve_public_base_url
   resolve_hostname
@@ -185,10 +226,11 @@ verify_deploy() {
   log "checking ${PUBLIC_BASE_URL}/healthz"
   curl -fsS "${PUBLIC_BASE_URL}/healthz" >/dev/null
   log "checking ${PUBLIC_BASE_URL}/readyz"
-  curl -fsS "${PUBLIC_BASE_URL}/readyz" >/dev/null
+  check_readyz "${readyz_mode}"
 
-  local status
-  status="$(curl -sS -o /dev/null -w '%{http_code}' "${PUBLIC_BASE_URL}/mcp")"
+  if ! status="$(curl -sS -o /dev/null -w '%{http_code}' "${PUBLIC_BASE_URL}/mcp")"; then
+    die "failed to request ${PUBLIC_BASE_URL}/mcp"
+  fi
   [[ "${status}" == "401" ]] || die "expected /mcp to return 401 without a bearer token, got ${status}"
   log "verification passed"
 

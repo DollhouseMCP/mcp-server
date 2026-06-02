@@ -62,6 +62,7 @@ dry_run_start_or_update() {
     log "dry-run: would start or update the full compose stack"
   fi
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+  log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
   return 0
 }
@@ -104,6 +105,7 @@ dry_run_rollback() {
   fi
   log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+  log "dry-run: would warn, not fail, if /readyz reports bootstrap_required before the first admin is claimed"
 
   return 0
 }
