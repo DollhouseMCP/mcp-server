@@ -20,6 +20,7 @@ import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/
 import {
   type ASHarness,
   type CookieJar,
+  approveClientConsentPage,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,
@@ -163,12 +164,18 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       interactionUrl, jar,
       code: 'gh-fake-code',
     });
-    expect([302, 303]).toContain(callback.status);
-    jar.ingest(callback.headers);
+    expect(callback.status).toBe(200);
+    const clientConsent = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: callback,
+      jar,
+    });
+    expect([302, 303]).toContain(clientConsent.status);
+    jar.ingest(clientConsent.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: callback.headers.get('location'),
+      start: clientConsent.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });
@@ -216,12 +223,18 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       const cb = await simulateGithubCallback({
         publicBaseUrl: harness.publicBaseUrl, interactionUrl, jar, code: 'gh-fake-code-1',
       });
-      expect([302, 303]).toContain(cb.status);
+      expect(cb.status).toBe(200);
       // Drive the flow to completion so a grant is created in storage.
-      jar.ingest(cb.headers);
+      const clientConsent = await approveClientConsentPage({
+        baseUrl: harness.baseUrl,
+        response: cb,
+        jar,
+      });
+      expect([302, 303]).toContain(clientConsent.status);
+      jar.ingest(clientConsent.headers);
       await followToCodeRedirect({
         baseUrl: harness.baseUrl,
-        start: cb.headers.get('location'),
+        start: clientConsent.headers.get('location'),
         jar,
         redirectUriPrefix: REDIRECT_URI,
       });
@@ -241,7 +254,7 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       const cb = await simulateGithubCallback({
         publicBaseUrl: harness.publicBaseUrl, interactionUrl, jar, code: 'gh-fake-code-2',
       });
-      expect([302, 303]).toContain(cb.status);
+      expect(cb.status).toBe(200);
     }
 
     // Audit event recorded with previous→new email + grants revoked.
@@ -359,12 +372,18 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       publicBaseUrl: harness.publicBaseUrl,
       interactionUrl, jar, code: 'gh-fake-code-admin',
     });
-    expect([302, 303]).toContain(callback.status);
-    jar.ingest(callback.headers);
+    expect(callback.status).toBe(200);
+    const clientConsent = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: callback,
+      jar,
+    });
+    expect([302, 303]).toContain(clientConsent.status);
+    jar.ingest(clientConsent.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: callback.headers.get('location'),
+      start: clientConsent.headers.get('location'),
       jar, redirectUriPrefix: REDIRECT_URI,
     });
     const tokenResp = await fetch(authServer.token_endpoint, {

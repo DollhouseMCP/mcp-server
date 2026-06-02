@@ -24,7 +24,8 @@
  *   2. User authorizes on github.com.
  *   3. GitHub redirects to our /auth/social/github/callback?code=..&state=..
  *      handler, which calls processCallback() to do the OAuth exchange and
- *      identity fetch, then drives provider.interactionFinished out-of-band.
+ *      identity fetch, then renders hosted OAuth-client consent before
+ *      provider.interactionFinished can issue an authorization code.
  *
  * @module auth/embedded-as/methods/GithubSocialMethod
  */
@@ -41,7 +42,7 @@ import type {
   InteractionStep,
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
-import { finishInteractionWithIdentity } from '../InteractionRouter.js';
+import { renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
@@ -270,7 +271,23 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
+          await renderClientConsentForIdentity(
+            res,
+            provider,
+            details,
+            result.identity.sub,
+            deps.storage,
+            deps.defaultResource,
+            {
+              sub: result.identity.sub,
+              displayName: result.identity.displayName,
+              email: result.identity.email,
+              provider: GITHUB_PROVIDER,
+              providerUsername: typeof result.identity.raw?.githubUsername === 'string'
+                ? result.identity.raw.githubUsername
+                : undefined,
+            },
+          );
         } catch (err) {
           next(err);
         }
@@ -304,6 +321,7 @@ export class GithubSocialMethod implements IAuthMethod {
       displayName: profile.name ?? profile.login,
       email: profile.verifiedPrimaryEmail,
       emailVerified: true, // We only got here if the verified-primary lookup succeeded.
+      raw: { githubUsername: profile.login },
     };
 
     // Sign-in allowlist gate. Runs BEFORE any account write so a denied

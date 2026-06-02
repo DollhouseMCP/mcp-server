@@ -25,6 +25,7 @@ import express, { type Router, type Request, type RequestHandler, type Response 
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
+import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 import { logger } from '../../utils/logger.js';
 import type {
   AuthResult,
@@ -37,6 +38,9 @@ import type { IAuthMethod } from './IAuthMethod.js';
 import {
   createInteractionRouter,
 } from './InteractionRouter.js';
+import {
+  createOpenDcrRegistrationHandlers,
+} from './dcrPolicyMiddleware.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
@@ -65,6 +69,7 @@ import {
   type RotationRequestContext,
 } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import type { IRateLimitStore } from './storage/IRateLimitStore.js';
 import { EmbeddedASBootstrap } from './EmbeddedASBootstrap.js';
 import { EmbeddedASAdmin } from './EmbeddedASAdmin.js';
 import { EmbeddedASOidcAccount } from './EmbeddedASOidcAccount.js';
@@ -124,6 +129,39 @@ export function pickHeaderValue(
 ): string | undefined {
   if (Array.isArray(header)) return header[0];
   return header;
+}
+
+const authAssetLocator = new PackageResourceLocator();
+const AUTH_FONT_FILE_RE = /^[A-Za-z0-9._-]+\.woff2$/;
+
+function servePackagedAuthAsset(relativePath: string, contentType: string): RequestHandler {
+  return async (_req, res, next) => {
+    try {
+      const assetPath = await authAssetLocator.locate(relativePath);
+      if (!assetPath) {
+        res.sendStatus(404);
+        return;
+      }
+      res.setHeader('Cache-Control', 'public, max-age=3600');
+      res.type(contentType);
+      res.sendFile(assetPath, (err) => {
+        if (err) next(err);
+      });
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+function servePackagedAuthFont(): RequestHandler {
+  return async (req, res, next) => {
+    const file = req.params.file;
+    if (typeof file !== 'string' || !AUTH_FONT_FILE_RE.test(file)) {
+      res.sendStatus(404);
+      return;
+    }
+    return servePackagedAuthAsset(`web/public/fonts/${file}`, 'font/woff2')(req, res, next);
+  };
 }
 
 export interface EmbeddedAuthorizationServerOptions {
@@ -187,6 +225,8 @@ export interface EmbeddedAuthorizationServerOptions {
    * to exercise the open-DCR code path without mutating env.
    */
   openDCR?: boolean;
+  /** Shared rate-limit state store. Required when openDCR=true. */
+  rateLimitStore?: IRateLimitStore;
 
   /**
    * Phase 4.5: optional injected ISigningKeyStore. When present,
@@ -223,6 +263,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly refreshRotationCheckIpUa: boolean;
   private readonly cookieSecretEnvOverride: string | undefined;
   private readonly openDCR: boolean;
+  private readonly rateLimitStore: IRateLimitStore | null;
   private readonly signingKeyStore: ISigningKeyStore | null;
   private readonly bootstrap: EmbeddedASBootstrap;
   private readonly admin: EmbeddedASAdmin;
@@ -261,6 +302,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
+    this.rateLimitStore = options.rateLimitStore ?? null;
     this.signingKeyStore = options.signingKeyStore ?? null;
     this.bootstrap = new EmbeddedASBootstrap(
       this.methods,
@@ -377,6 +419,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       })();
     });
 
+    // Hosted auth pages reuse the console's first-party visual assets, but the
+    // embedded AS is often mounted without the web console's static middleware.
+    // Serve only the exact logo/font assets needed by those pages.
+    router.get('/dollhouse-logo.png', servePackagedAuthAsset('web/public/dollhouse-logo.png', 'image/png'));
+    router.get('/fonts.css', servePackagedAuthAsset('web/public/fonts.css', 'text/css; charset=utf-8'));
+    router.get('/fonts/:file', servePackagedAuthFont());
+
     // Bootstrap gate (must-fix #22 / spec L923). When configured methods
     // include a multi-user identity provider, refuse all auth-flow
     // traffic until the operator has run the admin-bootstrap CLI.
@@ -417,6 +466,23 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);
+    }
+
+    // Issue #2220: when open DCR is enabled for hosted MCP clients, keep
+    // registration dynamic but constrain unsafe callback/metadata shapes.
+    // Default/IAT-gated DCR remains handled by oidc-provider below.
+    if (this.openDCR) {
+      if (!this.rateLimitStore) {
+        throw new Error('EmbeddedAuthorizationServer openDCR=true requires a shared rateLimitStore');
+      }
+      router.post('/reg', ...createOpenDcrRegistrationHandlers({
+        ensureProvider: async () => {
+          const state = await this.ensureInitialized();
+          return state.provider;
+        },
+        rateLimitStore: this.rateLimitStore,
+        storage: this.storage,
+      }));
     }
 
     // Mount oidc-provider's full OAuth/OIDC surface (/auth, /token, /jwks,
@@ -570,7 +636,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       response_types_supported: ['code'],
       grant_types_supported: ['authorization_code', 'refresh_token'],
       code_challenge_methods_supported: ['S256'],
-      token_endpoint_auth_methods_supported: ['none', 'client_secret_basic', 'client_secret_post'],
+      token_endpoint_auth_methods_supported: this.supportedTokenEndpointAuthMethods(),
       // Cycle 24: include standard OIDC scopes (profile, email) so MCP
       // clients that auto-register with these in their DCR payload
       // (Gemini CLI, claude.ai, others) pass scope validation. These are
@@ -786,6 +852,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         introspectionSigningAlgValues: ['ES256'],
         requestObjectSigningAlgValues: ['ES256'],
       },
+      clientAuthMethods: this.supportedTokenEndpointAuthMethods(),
       features: {
         // RFC 7591 Dynamic Client Registration. initialAccessToken: true
         // means /reg requires an InitialAccessToken bearer. Without this
@@ -937,6 +1004,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     };
 
     const provider = new OidcProvider(this.issuer, config);
+    this.attachAuditEventHandlers(provider);
 
     // Cycle-8 fix (B1): align oidc-provider's proxy setting with the
     // operator's trust-proxy configuration. `proxy` controls whether
@@ -992,10 +1060,61 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
 
     return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };
   }
+
+  private attachAuditEventHandlers(provider: InstanceType<typeof OidcProvider>): void {
+    const recordTokenIssued = (eventName: string) => (token: unknown) => {
+      const accountId = stringProperty(token, 'accountId');
+      void this.storage.recordIdentityEvent({
+        type: 'auth.oauth.token_issued',
+        sub: accountId,
+        details: {
+          providerEvent: eventName,
+          tokenKind: stringProperty(token, 'kind'),
+          clientId: stringProperty(token, 'clientId'),
+          grantId: stringProperty(token, 'grantId'),
+          scope: stringProperty(token, 'scope'),
+          audience: stringOrStringArrayProperty(token, 'aud'),
+        },
+        timestamp: Date.now(),
+      }).catch((err) => {
+        logger.warn('[EmbeddedAuthorizationServer] failed to record token-issued audit event', {
+          providerEvent: eventName,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    };
+
+    provider.on('access_token.issued', recordTokenIssued('access_token.issued'));
+    provider.on('access_token.saved', recordTokenIssued('access_token.saved'));
+    provider.on('refresh_token.saved', recordTokenIssued('refresh_token.saved'));
+  }
+
+  private supportedTokenEndpointAuthMethods(): ['none'] | ['none', 'client_secret_basic', 'client_secret_post'] {
+    return this.openDCR
+      ? ['none']
+      : ['none', 'client_secret_basic', 'client_secret_post'];
+  }
 }
 
 
 function normalizePath(rawPath: string): string {
   if (!rawPath || rawPath === '/') return '/mcp';
   return rawPath.startsWith('/') ? rawPath : `/${rawPath}`;
+}
+
+function stringProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = (value as Record<string, unknown>)[key];
+  return typeof raw === 'string' && raw.length > 0 ? raw : undefined;
+}
+
+function stringOrStringArrayProperty(value: unknown, key: string): string | string[] | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw === 'string' && raw.length > 0) return raw;
+  if (Array.isArray(raw)) {
+    const strings = raw.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    return strings.length > 0 ? strings : undefined;
+  }
+  return undefined;
 }

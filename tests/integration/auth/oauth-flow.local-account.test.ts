@@ -25,6 +25,7 @@ import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/In
 import { randomBytes } from 'node:crypto';
 import {
   type ASHarness,
+  approveClientConsentPage,
   CookieJar,
   followToCodeRedirect,
   startAuthorizeFlow,
@@ -116,13 +117,20 @@ describe('LocalAccountMethod — OAuth E2E', () => {
       invite: inviteToken,
       password: VALID_PASSWORD,
     });
-    expect([302, 303]).toContain(consentPost.status);
-    jar.ingest(consentPost.headers);
+    expect(consentPost.status).toBe(200);
+
+    const approvePost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: consentPost,
+      jar,
+    });
+    expect([302, 303]).toContain(approvePost.status);
+    jar.ingest(approvePost.headers);
 
     // Follow oidc-provider's redirect chain to the client redirect_uri with code.
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: consentPost.headers.get('location'),
+      start: approvePost.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });
@@ -155,6 +163,22 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     const decoded = decodeJwt(tokenBody.access_token);
     expect(typeof decoded.auth_time).toBe('number');
     expect(decoded.auth_time).toBeGreaterThan(0);
+
+    const tokenEvents = await storage.listIdentityEvents({ type: 'auth.oauth.token_issued' });
+    expect(tokenEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sub: 'local_alice',
+          details: expect.objectContaining({
+            providerEvent: 'access_token.issued',
+            tokenKind: 'AccessToken',
+            clientId: CLIENT_ID,
+            scope: 'mcp',
+            audience: `${harness.publicBaseUrl}/mcp`,
+          }),
+        }),
+      ]),
+    );
 
     // Account row in storage carries the password hash on credentials,
     // not rawProfile (B4).
@@ -195,12 +219,19 @@ describe('LocalAccountMethod — OAuth E2E', () => {
       invite: inviteToken,
       password: VALID_PASSWORD,
     });
-    expect([302, 303]).toContain(consentPost.status);
-    jar.ingest(consentPost.headers);
+    expect(consentPost.status).toBe(200);
+
+    const approvePost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: consentPost,
+      jar,
+    });
+    expect([302, 303]).toContain(approvePost.status);
+    jar.ingest(approvePost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: consentPost.headers.get('location'),
+      start: approvePost.headers.get('location'),
       jar, redirectUriPrefix: REDIRECT_URI,
     });
     const tokenResp = await fetch(authServer.token_endpoint, {
@@ -277,12 +308,19 @@ describe('LocalAccountMethod — OAuth E2E', () => {
       username: 'bob',
       password: VALID_PASSWORD,
     });
-    expect([302, 303]).toContain(consentPost.status);
-    jar.ingest(consentPost.headers);
+    expect(consentPost.status).toBe(200);
+
+    const approvePost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: consentPost,
+      jar,
+    });
+    expect([302, 303]).toContain(approvePost.status);
+    jar.ingest(approvePost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: consentPost.headers.get('location'),
+      start: approvePost.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });

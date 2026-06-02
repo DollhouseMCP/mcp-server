@@ -24,6 +24,7 @@ import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,
@@ -221,12 +222,19 @@ describe('Multi-method (GitHub + MagicLink) — OAuth E2E', () => {
       },
       body: new URLSearchParams({ token: tokenParam }),
     });
-    expect([302, 303]).toContain(verifyPost.status);
-    jar.ingest(verifyPost.headers);
+    expect(verifyPost.status).toBe(200);
+
+    const consentPost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: verifyPost,
+      jar,
+    });
+    expect([302, 303]).toContain(consentPost.status);
+    jar.ingest(consentPost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: verifyPost.headers.get('location'),
+      start: consentPost.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });

@@ -39,6 +39,7 @@ import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/Triv
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
   followToCodeRedirect,
   startASHarness,
   startAuthorizeFlow,
@@ -51,6 +52,7 @@ async function fetchAuthServerMetadata(baseUrl: string) {
     token_endpoint: string;
     issuer: string;
     scopes_supported?: string[];
+    token_endpoint_auth_methods_supported?: string[];
   }>;
 }
 
@@ -102,12 +104,35 @@ describe('Cycle 24 smoke-test regressions', () => {
         body: JSON.stringify({
           redirect_uris: ['http://127.0.0.1:9999/cb'],
           scope: 'openid offline_access mcp profile email',
+          application_type: 'native',
         }),
       });
       expect(res.status).toBe(201);
       const body = (await res.json()) as { client_id?: string };
       expect(typeof body.client_id).toBe('string');
       expect(body.client_id?.length ?? 0).toBeGreaterThan(0);
+    });
+
+    it('openDCR=true: /reg rejects unsafe non-loopback HTTP callbacks', async () => {
+      const storage = new InMemoryAuthStorageLayer();
+      harness = await startASHarness({
+        methods: [new TrivialConsentMethod({ defaultSubject: 'test-user' })],
+        storage,
+        openDCR: true,
+      });
+
+      const res = await fetch(`${harness.baseUrl}/reg`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: ['http://client.example.com/callback'],
+          scope: 'mcp',
+        }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string; error_description?: string };
+      expect(body.error).toBe('invalid_client_metadata');
+      expect(body.error_description).toContain('http callbacks are allowed only for loopback clients');
     });
   });
 
@@ -134,6 +159,7 @@ describe('Cycle 24 smoke-test regressions', () => {
           body: JSON.stringify({
             redirect_uris: ['http://127.0.0.1:9999/cb'],
             scope,
+            application_type: 'native',
           }),
         });
         expect(res.status).toBe(201);
@@ -152,6 +178,7 @@ describe('Cycle 24 smoke-test regressions', () => {
       expect(meta.scopes_supported).toEqual(
         expect.arrayContaining(['openid', 'offline_access', 'mcp', 'profile', 'email']),
       );
+      expect(meta.token_endpoint_auth_methods_supported).toEqual(['none']);
     });
   });
 
@@ -218,7 +245,8 @@ describe('Cycle 24 smoke-test regressions', () => {
       expect(csrfMatch).not.toBeNull();
       const csrfToken = csrfMatch![1];
 
-      // POST consent — this is what the user clicking "Approve" does.
+      // POST method consent — this authenticates the user and then renders
+      // the hosted OAuth-client consent page.
       const postConsent = await fetch(interactionUrl, {
         method: 'POST',
         redirect: 'manual',
@@ -228,8 +256,15 @@ describe('Cycle 24 smoke-test regressions', () => {
         },
         body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
       });
-      expect(postConsent.status).toBe(303);
-      jar.ingest(postConsent.headers);
+      expect(postConsent.status).toBe(200);
+
+      const clientConsent = await approveClientConsentPage({
+        baseUrl: harness.baseUrl,
+        response: postConsent,
+        jar,
+      });
+      expect(clientConsent.status).toBe(303);
+      jar.ingest(clientConsent.headers);
 
       // Walk the post-consent redirect chain. With the cycle-24 dual-
       // dimension grant binding, this lands on REDIRECT_URI?code=... in
@@ -237,7 +272,7 @@ describe('Cycle 24 smoke-test regressions', () => {
       // /interaction and the helper throws.
       const code = await followToCodeRedirect({
         baseUrl: harness.baseUrl,
-        start: postConsent.headers.get('location'),
+        start: clientConsent.headers.get('location'),
         jar,
         redirectUriPrefix: REDIRECT_URI,
       });

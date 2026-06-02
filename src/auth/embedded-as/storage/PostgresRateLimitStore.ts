@@ -57,7 +57,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
         `) as RateLimitRow[];
         const current = rows[0];
         const next = compute((current?.state ?? null) as TState | null);
-        const expiresAt = options.expiresAt === undefined ? null : new Date(options.expiresAt);
+        const expiresAt = options.expiresAt === undefined ? null : new Date(options.expiresAt).toISOString();
 
         if (next.state === null) {
           if (!current) return next;
@@ -81,7 +81,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           // the winner's compute() result with ours.
           const inserted = await tx.execute(sql`
             INSERT INTO rate_limit_state (scope, key, state, expires_at)
-            VALUES (${scope}, ${key}, ${JSON.stringify(next.state)}::jsonb, ${expiresAt})
+            VALUES (${scope}, ${key}, ${JSON.stringify(next.state)}::jsonb, ${expiresAt}::timestamptz)
             ON CONFLICT (scope, key) DO NOTHING
             RETURNING version
           `) as unknown[];
@@ -92,7 +92,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           UPDATE rate_limit_state
           SET state = ${JSON.stringify(next.state)}::jsonb,
               version = version + 1,
-              expires_at = ${expiresAt},
+              expires_at = ${expiresAt}::timestamptz,
               updated_at = NOW()
           WHERE scope = ${scope} AND key = ${key} AND version = ${current.version}
           RETURNING version

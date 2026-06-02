@@ -30,6 +30,7 @@ import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
   CookieJar,
   followToCodeRedirect,
   startAuthorizeFlow,
@@ -103,12 +104,19 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
     const consentPost = await postConsentForm(interactionUrl, jar, {
       action: 'set-password', invite: inviteToken, password: 'a-very-long-password',
     });
-    expect([302, 303]).toContain(consentPost.status);
-    jar.ingest(consentPost.headers);
+    expect(consentPost.status).toBe(200);
+
+    const approvePost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: consentPost,
+      jar,
+    });
+    expect([302, 303]).toContain(approvePost.status);
+    jar.ingest(approvePost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: consentPost.headers.get('location'),
+      start: approvePost.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });

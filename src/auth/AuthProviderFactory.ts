@@ -249,6 +249,7 @@ async function createEmbeddedProvider(
     // in filesystem mode → EmbeddedAuthorizationServer falls back to the
     // legacy persistKeys / cookieSecret file paths.
     signingKeyStore: config.signingKeyStore,
+    rateLimitStore: config.rateLimitStore,
   });
 }
 
