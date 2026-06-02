@@ -294,8 +294,8 @@ function validateStringMetadata(metadata: Record<string, unknown>, errors: strin
 
 function containsControlCharacter(value: string): boolean {
   for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || code === 0x7f) return true;
+    const code = char.codePointAt(0);
+    if (code !== undefined && (code <= 0x1f || code === 0x7f)) return true;
   }
   return false;
 }

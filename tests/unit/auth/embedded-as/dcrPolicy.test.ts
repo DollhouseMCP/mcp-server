@@ -76,7 +76,7 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     });
 
     expect(decision.allowed).toBe(true);
-    expect(decision.redirectHosts).toEqual(['::ffff:808:808']);
+    expect(decision.redirectHosts).toEqual([normalizedIpv6Host(ipv4Mapped([8, 8, 8, 8]))]);
   });
 
   it('rejects wildcard hosts and unsupported OAuth grant shapes', () => {
@@ -150,4 +150,9 @@ function ipv6Literal(host: string): string {
 
 function ipv4Mapped(octets: [number, number, number, number]): string {
   return `::ffff:${octets.join('.')}`;
+}
+
+function normalizedIpv6Host(host: string): string {
+  const parsed = new URL(`https://${ipv6Literal(host)}/`);
+  return parsed.hostname.replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
 }
