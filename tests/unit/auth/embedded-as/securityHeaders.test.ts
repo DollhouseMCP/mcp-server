@@ -18,8 +18,10 @@ import express from 'express';
 import type { AddressInfo } from 'node:net';
 import { securityHeaders } from '../../../../src/auth/embedded-as/securityHeaders.js';
 
+const STYLE_SRC_NONCE_PATTERN = /style-src 'self' 'nonce-([^']+)'/;
+
 function extractStyleNonce(csp: string): string {
-  const match = csp.match(/style-src 'self' 'nonce-([^']+)'/);
+  const match = STYLE_SRC_NONCE_PATTERN.exec(csp);
   expect(match).not.toBeNull();
   return match?.[1] ?? '';
 }
