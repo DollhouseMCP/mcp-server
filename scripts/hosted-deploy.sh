@@ -210,8 +210,8 @@ write_env_defaults() {
 }
 
 load_env_file() {
-  # shellcheck disable=SC1090
   set -a
+  # shellcheck disable=SC1090
   . "${ENV_FILE}"
   set +a
 }
