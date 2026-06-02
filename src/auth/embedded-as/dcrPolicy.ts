@@ -392,11 +392,26 @@ function isPrivateIpLiteral(host: string): boolean {
   if (version === 6) {
     return host === '::'
       || host === '::1'
-      || host.startsWith('fc')
-      || host.startsWith('fd')
-      || host.startsWith('fe80:');
+      || isIpv6UniqueLocal(host)
+      || isIpv6LinkLocal(host);
   }
   return false;
+}
+
+function isIpv6UniqueLocal(host: string): boolean {
+  const firstHextet = parseFirstIpv6Hextet(host);
+  return firstHextet !== null && firstHextet >= 0xfc00 && firstHextet <= 0xfdff;
+}
+
+function isIpv6LinkLocal(host: string): boolean {
+  const firstHextet = parseFirstIpv6Hextet(host);
+  return firstHextet !== null && firstHextet >= 0xfe80 && firstHextet <= 0xfebf;
+}
+
+function parseFirstIpv6Hextet(host: string): number | null {
+  const [first] = host.split(':', 1);
+  if (!first || !/^[0-9a-f]{1,4}$/i.test(first)) return null;
+  return Number.parseInt(first, 16);
 }
 
 function isPrivateIpv4Octets(octets: [number, number, number, number]): boolean {

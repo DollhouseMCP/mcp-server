@@ -69,6 +69,13 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     );
   });
 
+  it('rejects IPv6 link-local callback URLs across the full fe80::/10 range', () => {
+    const result = validateRedirectUriShape(`https://${ipv6Literal(compressedIpv6('febf'))}/callback`);
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain('must not use a private, link-local, or unspecified IP literal');
+  });
+
   it('allows public IPv4-mapped IPv6 callback URLs', () => {
     const decision = validateDcrClientMetadata({
       redirect_uris: [`https://${ipv6Literal(ipv4Mapped([8, 8, 8, 8]))}/callback`],
@@ -150,6 +157,10 @@ function ipv6Literal(host: string): string {
 
 function ipv4Mapped(octets: [number, number, number, number]): string {
   return `::ffff:${octets.join('.')}`;
+}
+
+function compressedIpv6(firstHextet: string): string {
+  return `${firstHextet}::1`;
 }
 
 function normalizedIpv6Host(host: string): string {
