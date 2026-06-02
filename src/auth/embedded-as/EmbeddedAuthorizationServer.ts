@@ -40,7 +40,6 @@ import {
 } from './InteractionRouter.js';
 import {
   createOpenDcrRegistrationHandlers,
-  type DcrProvider,
 } from './dcrPolicyMiddleware.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
@@ -162,12 +161,6 @@ function servePackagedAuthFont(): RequestHandler {
       return;
     }
     return servePackagedAuthAsset(`web/public/fonts/${file}`, 'font/woff2')(req, res, next);
-  };
-}
-
-function dcrProviderFromOidcProvider(provider: InstanceType<typeof OidcProvider>): DcrProvider {
-  return {
-    Client: provider.Client as unknown as DcrProvider['Client'],
   };
 }
 
@@ -485,7 +478,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       router.post('/reg', ...createOpenDcrRegistrationHandlers({
         ensureProvider: async () => {
           const state = await this.ensureInitialized();
-          return dcrProviderFromOidcProvider(state.provider);
+          return state.provider;
         },
         rateLimitStore: this.rateLimitStore,
         storage: this.storage,

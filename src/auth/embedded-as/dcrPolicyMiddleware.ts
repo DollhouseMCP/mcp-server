@@ -30,7 +30,7 @@ export interface DcrClientInstance {
 export interface DcrClientConstructor {
   new (metadata: Record<string, unknown>): DcrClientInstance;
   find(id: string): Promise<DcrClientInstance | undefined>;
-  adapter: {
+  adapter?: {
     upsert(id: string, payload: Record<string, unknown>): Promise<void>;
   };
 }
@@ -119,7 +119,7 @@ export function createOpenDcrRegistrationHandlers(options: {
         const provider = await options.ensureProvider();
         const metadata = await buildClientMetadata(req.body, provider.Client);
         const client = new provider.Client(metadata);
-        await provider.Client.adapter.upsert(client.clientId, client.metadata());
+        await upsertClientMetadata(provider.Client, client.clientId, client.metadata());
         await recordDcrAuditEvent(options.storage, {
           type: 'auth.dcr.registration_accepted',
           details: buildDcrAuditDetails(metadata, ip, {
@@ -199,6 +199,17 @@ async function buildClientMetadata(input: unknown, Client: DcrClientConstructor)
   delete metadata.client_secret_expires_at;
 
   return metadata;
+}
+
+async function upsertClientMetadata(
+  Client: DcrClientConstructor,
+  clientId: string,
+  metadata: Record<string, unknown>,
+): Promise<void> {
+  if (!Client.adapter) {
+    throw new Error('dynamic client adapter is unavailable');
+  }
+  await Client.adapter.upsert(clientId, metadata);
 }
 
 async function generateUniqueClientId(Client: DcrClientConstructor): Promise<string> {

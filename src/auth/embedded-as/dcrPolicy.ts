@@ -140,31 +140,31 @@ export function validateRedirectUriShape(
   const host = normalizeUrlHostname(parsed.hostname);
   const loopback = isLoopbackHost(host);
 
-  errors.push(...validateRedirectUriComponents(parsed, host));
-  errors.push(...validateRedirectUriProtocol(parsed.protocol, loopback, options.applicationType));
-
-  if (isDisallowedCallbackIp(host, loopback)) {
-    errors.push('must not use a private, link-local, or unspecified IP literal');
-  }
+  const validationErrors = [
+    ...errors,
+    ...validateRedirectUriComponents(parsed, host),
+    ...validateRedirectUriProtocol(parsed.protocol, loopback, options.applicationType),
+    ...validateRedirectUriIp(host, loopback),
+  ];
 
   return {
-    ok: errors.length === 0,
+    ok: validationErrors.length === 0,
     uri,
     host,
     isLoopback: loopback,
-    errors,
+    errors: validationErrors,
   };
 }
 
 function validateRedirectUriComponents(parsed: URL, host: string): string[] {
-  const errors: string[] = [];
-  if (!host) errors.push('must include a hostname');
-  if (host.includes('*')) errors.push('must not contain wildcards');
-  if (host.endsWith('.')) errors.push('must not use a trailing-dot hostname');
-  if (host.includes('%')) errors.push('must not include IPv6 zone identifiers');
-  if (parsed.username || parsed.password) errors.push('must not include username or password components');
-  if (parsed.hash) errors.push('must not include a URL fragment');
-  return errors;
+  return [
+    ...(!host ? ['must include a hostname'] : []),
+    ...(host.includes('*') ? ['must not contain wildcards'] : []),
+    ...(host.endsWith('.') ? ['must not use a trailing-dot hostname'] : []),
+    ...(host.includes('%') ? ['must not include IPv6 zone identifiers'] : []),
+    ...(parsed.username || parsed.password ? ['must not include username or password components'] : []),
+    ...(parsed.hash ? ['must not include a URL fragment'] : []),
+  ];
 }
 
 function validateRedirectUriProtocol(
@@ -172,22 +172,21 @@ function validateRedirectUriProtocol(
   loopback: boolean,
   applicationType: string | undefined,
 ): string[] {
-  const errors: string[] = [];
   if (protocol === 'http:') {
-    if (!loopback) errors.push('http callbacks are allowed only for loopback clients');
-    if (loopback && applicationType !== 'native') {
-      errors.push('http loopback callbacks require application_type "native"');
-    }
-    return errors;
+    return [
+      ...(!loopback ? ['http callbacks are allowed only for loopback clients'] : []),
+      ...(loopback && applicationType !== 'native'
+        ? ['http loopback callbacks require application_type "native"']
+        : []),
+    ];
   }
-  if (protocol !== 'https:') {
-    errors.push('must use https, or http for loopback clients');
-  }
-  return errors;
+  return protocol === 'https:' ? [] : ['must use https, or http for loopback clients'];
 }
 
-function isDisallowedCallbackIp(host: string, loopback: boolean): boolean {
-  return !loopback && isPrivateIpLiteral(host);
+function validateRedirectUriIp(host: string, loopback: boolean): string[] {
+  return !loopback && isPrivateIpLiteral(host)
+    ? ['must not use a private, link-local, or unspecified IP literal']
+    : [];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
