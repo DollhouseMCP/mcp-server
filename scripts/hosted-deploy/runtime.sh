@@ -43,6 +43,13 @@ validate_postgres_timeout() {
   return 0
 }
 
+validate_verify_timeout() {
+  [[ "${VERIFY_READY_TIMEOUT}" =~ ^[0-9]+$ ]] || \
+    die "DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT must be an integer number of seconds; try 30, 60, or 120"
+
+  return 0
+}
+
 wait_for_postgres() {
   validate_postgres_timeout
   log "starting postgres"
@@ -155,34 +162,106 @@ response_excerpt() {
   return 0
 }
 
+curl_status() {
+  local url="$1"
+  local body_file="$2"
+  local status
+
+  if ! status="$(curl -sS -o "${body_file}" -w '%{http_code}' "${url}" 2>/dev/null)"; then
+    status="000"
+  fi
+  printf '%s\n' "${status}"
+
+  return 0
+}
+
+check_healthz() {
+  validate_verify_timeout
+
+  local body_file status excerpt elapsed
+  elapsed=0
+  while true; do
+    body_file="$(mktemp)"
+    status="$(curl_status "${PUBLIC_BASE_URL}/healthz" "${body_file}")"
+    if [[ "${status}" == "200" ]]; then
+      rm -f "${body_file}"
+      return 0
+    fi
+
+    if (( elapsed >= VERIFY_READY_TIMEOUT )); then
+      excerpt="$(response_excerpt "${body_file}")"
+      rm -f "${body_file}"
+      if [[ -n "${excerpt}" ]]; then
+        die "expected /healthz to return 200 within ${VERIFY_READY_TIMEOUT}s, got ${status}: ${excerpt}"
+      fi
+      die "expected /healthz to return 200 within ${VERIFY_READY_TIMEOUT}s, got ${status}"
+    fi
+    rm -f "${body_file}"
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
 check_readyz() {
   local mode="$1"
-  local body_file status excerpt
+  validate_verify_timeout
 
-  body_file="$(mktemp)"
-  if ! status="$(curl -sS -o "${body_file}" -w '%{http_code}' "${PUBLIC_BASE_URL}/readyz")"; then
+  local body_file status excerpt elapsed
+  elapsed=0
+  while true; do
+    body_file="$(mktemp)"
+    status="$(curl_status "${PUBLIC_BASE_URL}/readyz" "${body_file}")"
+    if [[ "${status}" == "200" ]]; then
+      rm -f "${body_file}"
+      return 0
+    fi
+
+    if [[ "${mode}" == "allow-bootstrap-required" && "${status}" == "503" ]] && \
+      grep -Fq 'bootstrap_required' "${body_file}"; then
+      rm -f "${body_file}"
+      warn "/readyz reports bootstrap_required; run bootstrap-admin after setting DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID"
+      return 0
+    fi
+
+    if (( elapsed >= VERIFY_READY_TIMEOUT )); then
+      excerpt="$(response_excerpt "${body_file}")"
+      rm -f "${body_file}"
+      if [[ -n "${excerpt}" ]]; then
+        die "expected /readyz to return 200 within ${VERIFY_READY_TIMEOUT}s, got ${status}: ${excerpt}"
+      fi
+      die "expected /readyz to return 200 within ${VERIFY_READY_TIMEOUT}s, got ${status}"
+    fi
     rm -f "${body_file}"
-    die "failed to request ${PUBLIC_BASE_URL}/readyz"
-  fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
 
-  if [[ "${status}" == "200" ]]; then
+check_mcp_unauthenticated() {
+  validate_verify_timeout
+
+  local body_file status excerpt elapsed
+  elapsed=0
+  while true; do
+    body_file="$(mktemp)"
+    status="$(curl_status "${PUBLIC_BASE_URL}/mcp" "${body_file}")"
+    if [[ "${status}" == "401" ]]; then
+      rm -f "${body_file}"
+      return 0
+    fi
+
+    if (( elapsed >= VERIFY_READY_TIMEOUT )); then
+      excerpt="$(response_excerpt "${body_file}")"
+      rm -f "${body_file}"
+      if [[ -n "${excerpt}" ]]; then
+        die "expected /mcp to return 401 without a bearer token within ${VERIFY_READY_TIMEOUT}s, got ${status}: ${excerpt}"
+      fi
+      die "expected /mcp to return 401 without a bearer token within ${VERIFY_READY_TIMEOUT}s, got ${status}"
+    fi
     rm -f "${body_file}"
-    return 0
-  fi
-
-  if [[ "${mode}" == "allow-bootstrap-required" && "${status}" == "503" ]] && \
-    grep -Fq 'bootstrap_required' "${body_file}"; then
-    rm -f "${body_file}"
-    warn "/readyz reports bootstrap_required; run bootstrap-admin after setting DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID"
-    return 0
-  fi
-
-  excerpt="$(response_excerpt "${body_file}")"
-  rm -f "${body_file}"
-  if [[ -n "${excerpt}" ]]; then
-    die "expected /readyz to return 200, got ${status}: ${excerpt}"
-  fi
-  die "expected /readyz to return 200, got ${status}"
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
 }
 
 rollback_server() {
@@ -217,21 +296,17 @@ rollback_server() {
 
 verify_deploy() {
   local readyz_mode="${1:-strict}"
-  local status
 
   need_command curl
   resolve_public_base_url
   resolve_hostname
   validate_render_inputs
-  log "checking ${PUBLIC_BASE_URL}/healthz"
-  curl -fsS "${PUBLIC_BASE_URL}/healthz" >/dev/null
-  log "checking ${PUBLIC_BASE_URL}/readyz"
+  log "checking ${PUBLIC_BASE_URL}/healthz for up to ${VERIFY_READY_TIMEOUT}s"
+  check_healthz
+  log "checking ${PUBLIC_BASE_URL}/readyz for up to ${VERIFY_READY_TIMEOUT}s"
   check_readyz "${readyz_mode}"
-
-  if ! status="$(curl -sS -o /dev/null -w '%{http_code}' "${PUBLIC_BASE_URL}/mcp")"; then
-    die "failed to request ${PUBLIC_BASE_URL}/mcp"
-  fi
-  [[ "${status}" == "401" ]] || die "expected /mcp to return 401 without a bearer token, got ${status}"
+  log "checking ${PUBLIC_BASE_URL}/mcp for unauthenticated 401 for up to ${VERIFY_READY_TIMEOUT}s"
+  check_mcp_unauthenticated
   log "verification passed"
 
   return 0

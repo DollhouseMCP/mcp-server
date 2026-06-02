@@ -82,6 +82,42 @@ set -euo pipefail
 
 printf 'curl %s\n' "$*" >> "${DOLLHOUSE_FAKE_CURL_LOG:?}"
 
+next_status() {
+  local name="$1"
+  local default_status="$2"
+  local sequence_var="DOLLHOUSE_FAKE_${name}_STATUS_SEQUENCE"
+  local sequence="${!sequence_var:-}"
+  local state_dir="${DOLLHOUSE_FAKE_CURL_STATE_DIR:-}"
+  local count_file count index
+
+  if [[ -z "${sequence}" ]]; then
+    printf '%s\n' "${default_status}"
+    return 0
+  fi
+  [[ -n "${state_dir}" ]] || {
+    printf '%s\n' "${default_status}"
+    return 0
+  }
+
+  mkdir -p "${state_dir}"
+  count_file="${state_dir}/${name}.count"
+  count=0
+  if [[ -f "${count_file}" ]]; then
+    count="$(cat "${count_file}")"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "${count}" > "${count_file}"
+
+  IFS=',' read -r -a statuses <<< "${sequence}"
+  index=$((count - 1))
+  if (( index >= ${#statuses[@]} )); then
+    index=$((${#statuses[@]} - 1))
+  fi
+  printf '%s\n' "${statuses[${index}]}"
+
+  return 0
+}
+
 output_file=""
 write_format=""
 url=""
@@ -109,12 +145,15 @@ done
 status="200"
 body=""
 case "${url}" in
+  */healthz)
+    status="$(next_status HEALTHZ 200)"
+    ;;
   */readyz)
-    status="${DOLLHOUSE_FAKE_READYZ_STATUS:-200}"
+    status="$(next_status READYZ "${DOLLHOUSE_FAKE_READYZ_STATUS:-200}")"
     body="${DOLLHOUSE_FAKE_READYZ_BODY:-}"
     ;;
   */mcp)
-    status="401"
+    status="$(next_status MCP 401)"
     ;;
 esac
 
@@ -188,6 +227,26 @@ assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 
+log "checking HTTP verification retries"
+: > "${CURL_LOG}"
+RETRY_OUTPUT="${TMP_ROOT}/retry-verify.out"
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_FAKE_CURL_STATE_DIR="${TMP_ROOT}/retry-curl-state" \
+DOLLHOUSE_FAKE_HEALTHZ_STATUS_SEQUENCE=502,200 \
+DOLLHOUSE_FAKE_READYZ_STATUS_SEQUENCE=502,200 \
+DOLLHOUSE_FAKE_MCP_STATUS_SEQUENCE=502,401 \
+DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT=3 \
+DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com \
+  bash "${HOSTED_DEPLOY}" verify > "${RETRY_OUTPUT}"
+assert_contains "${RETRY_OUTPUT}" "verification passed"
+healthz_attempts="$(grep -Fc 'https://mcp.example.com/healthz' "${CURL_LOG}")"
+readyz_attempts="$(grep -Fc 'https://mcp.example.com/readyz' "${CURL_LOG}")"
+mcp_attempts="$(grep -Fc 'https://mcp.example.com/mcp' "${CURL_LOG}")"
+(( healthz_attempts >= 2 )) || fail "expected /healthz verification to retry"
+(( readyz_attempts >= 2 )) || fail "expected /readyz verification to retry"
+(( mcp_attempts >= 2 )) || fail "expected /mcp verification to retry"
+
 log "checking credential-bearing git URL rejection"
 CREDENTIAL_URL_OUTPUT="${TMP_ROOT}/credential-url.out"
 if PATH="${FAKE_BIN}:${PATH}" \
@@ -223,7 +282,7 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml build dollhousemcp dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml run --rm dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml up -d"
-assert_contains "${CURL_LOG}" "curl -fsS https://mcp.example.com/healthz"
+assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
 
 log "running update workflow"
 commit_source_version "v2"

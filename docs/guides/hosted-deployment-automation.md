@@ -131,6 +131,7 @@ Common environment variables:
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` | Optional GitHub username to pre-claim as the first admin | none |
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` | Optional numeric GitHub ID to pre-claim as the first admin and skip API lookup | none |
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
+| `DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT` | Seconds to wait for public `/healthz`, `/readyz`, and `/mcp` checks after app restart | `60` |
 
 Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected values are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. When `.env.production` already exists, only database/connection keys are reconciled from `.env`; auth and runtime secrets already present in `.env.production` are preserved. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
 
@@ -225,6 +226,8 @@ Checks:
 - `/healthz`
 - `/readyz`
 - `/mcp` returns `401` without a bearer token
+
+Each public HTTP check retries for up to `DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT` seconds. This absorbs the brief 502 window that can occur while Caddy reconnects to a just-restarted app container.
 
 ```bash
 DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com npm run hosted:deploy -- verify
